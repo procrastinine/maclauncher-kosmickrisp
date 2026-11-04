@@ -92,5 +92,19 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires pixel and sample interlock for ROV support and D3D FL12_1; the multisample envelope is selected only for shaders using pixel interlock with multisampling.",
     "off_consequence": "Pixel interlock is unavailable, including its native single-sample route; vkd3d-proton loses ROV support and D3D FL12_1. Native sample interlock and ordered color attachment access remain available."
+  },
+  {
+    "name": "pipeline_statistics",
+    "description": "Stage-dependent pipeline statistics for explicitly active queries.",
+    "cost_class": "shader counters / compute reports",
+    "cost_note": "Inactive fragment and pre-geometry counter regions specialize away. An active fragment invocation loads its counter address and performs one low-word device atomic, with a high-word atomic on overflow. Active IA and geometry queries use their selected report paths. GPU timing is unmeasured.",
+    "extensions": [],
+    "features": [
+      "pipelineStatisticsQuery"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "The macfx-vkd3d translator requires pipelineStatisticsQuery for D3D feature level 11_0; inactive queries retain the default-false shader specialization.",
+    "off_consequence": "Core Vulkan pipeline-statistics queries are unavailable. The macfx-vkd3d feature-level 11_0 capability check fails. This entry does not disable shader demote, helper invocation semantics, mesh queries or primitives-generated queries."
   }
 ]
