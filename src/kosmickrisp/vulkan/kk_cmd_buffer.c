@@ -577,7 +577,17 @@ static void
 cs_end_internal(struct kk_cmd_buffer *cmd, bool ordered)
 {
    assert(cmd);
+   const bool publish_suspended = ordered && cmd->whole_pass.suspended;
    kk_whole_pass_flush_suspended(cmd);
+   if (publish_suspended) {
+      /* The saved EndRendering backend can recursively close the render pass
+       * and its meta resolves before this ordered close resumes. Those closed
+       * encoders can only publish through a later consumer now. */
+      cmd->pending_barrier.src |= cmd->closed_encoder_stages;
+      cmd->pending_barrier.dst = MTL_STAGE_ALL;
+      cmd->pending_barrier.visibility = MAX2(cmd->pending_barrier.visibility,
+                                            MTL_VISIBILITY_DEVICE);
+   }
 
    /* Render first as it may open a compute encoder for post render writes. */
    bool ordered_compute = ordered;
@@ -753,7 +763,8 @@ emit_scoped_barrier(struct kk_cmd_buffer *cmd, struct kk_barrier_scope scope)
    if (!encoder) {
       cmd->pending_barrier.src |= scope.src;
       cmd->pending_barrier.dst |= scope.dst;
-      cmd->pending_barrier.visibility |= scope.visibility;
+      cmd->pending_barrier.visibility =
+         MAX2(cmd->pending_barrier.visibility, scope.visibility);
       return;
    }
    const enum mtl_stages supported =
