@@ -786,6 +786,27 @@ kk_cmd_buffer_defer_native_recording(struct kk_cmd_buffer *cmd)
 }
 
 VkResult
+kk_cmd_buffer_record_occlusion_query(struct kk_cmd_buffer *cmd)
+{
+   cmd->uses_occlusion_queries = true;
+   if (cmd->record_dispatch != &kk_cmd_buffer_device(cmd)->vk.dispatch_table)
+      return VK_SUCCESS;
+
+   /* A prior direct pass may have been created without visibility storage.
+    * End and preserve it before recording the first query as a submit-owned
+    * suffix. Its retained descriptor must gain storage before the new encoder,
+    * rather than changing the encoder that already contains the prefix. */
+   VkResult result = kk_cmd_buffer_defer_native_recording(cmd);
+   if (result != VK_SUCCESS)
+      return result;
+   if (cmd->state.gfx.render_pass_descriptor)
+      mtl_render_pass_descriptor_set_visibility_buffer(
+         cmd->state.gfx.render_pass_descriptor,
+         kk_cmd_buffer_device(cmd)->occlusion_queries.bo->map);
+   return VK_SUCCESS;
+}
+
+VkResult
 kk_cmd_buffer_resume_native_recording(struct kk_cmd_buffer *cmd)
 {
    assert(cmd->scene_native_tail && !cmd->metal.cmd_buf);

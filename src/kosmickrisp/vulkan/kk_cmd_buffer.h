@@ -547,6 +547,7 @@ void kk_cmd_pipeline_barriers(struct kk_cmd_buffer *cmd, uint32_t count,
                               const VkDependencyInfo *dependencies);
 bool kk_mesh_split_command_buffer(struct kk_cmd_buffer *cmd);
 VkResult kk_cmd_buffer_defer_native_recording(struct kk_cmd_buffer *cmd);
+VkResult kk_cmd_buffer_record_occlusion_query(struct kk_cmd_buffer *cmd);
 VkResult kk_cmd_buffer_resume_native_recording(struct kk_cmd_buffer *cmd);
 void kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd,
                                         uint64_t addr);

@@ -89,14 +89,35 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
     kk_cmd_record_rendering_attachments(cmd, pRenderingInfo);
     % elif e.name in ('CmdBeginQuery', 'CmdBeginQueryIndexedEXT'):
     VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
-    cmd->uses_occlusion_queries |= pool->vk.query_type == VK_QUERY_TYPE_OCCLUSION;
+    if (pool->vk.query_type == VK_QUERY_TYPE_OCCLUSION &&
+        kk_cmd_buffer_record_occlusion_query(cmd) != VK_SUCCESS)
+        return;
+    % elif e.name == 'CmdBindDescriptorBuffersEXT':
+    if (bufferCount && kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
+        return;
+    % elif e.name == 'CmdSetDescriptorBufferOffsetsEXT':
+    if (setCount && kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
+        return;
+    % elif e.name == 'CmdSetDescriptorBufferOffsets2EXT':
+    if (pSetDescriptorBufferOffsetsInfo->stageFlags && pSetDescriptorBufferOffsetsInfo->setCount &&
+        kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
+        return;
+    % elif e.name == 'CmdBindDescriptorBufferEmbeddedSamplersEXT':
+    if (kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
+        return;
+    % elif e.name == 'CmdBindDescriptorBufferEmbeddedSamplers2EXT':
+    if (pBindDescriptorBufferEmbeddedSamplersInfo->stageFlags &&
+        kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
+        return;
     % elif e.name == 'CmdExecuteCommands':
     for (uint32_t i = 0; i < commandBufferCount &&
          (!cmd->deferred_render_chain || !cmd->transient_candidate ||
           !cmd->uses_occlusion_queries); i++) {
         VK_FROM_HANDLE(kk_cmd_buffer, secondary, pCommandBuffers[i]);
         cmd->transient_candidate |= secondary->transient_candidate;
-        cmd->uses_occlusion_queries |= secondary->uses_occlusion_queries;
+        if (secondary->uses_occlusion_queries &&
+            kk_cmd_buffer_record_occlusion_query(cmd) != VK_SUCCESS)
+            return;
         if (secondary->deferred_render_chain &&
             kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
             return;
