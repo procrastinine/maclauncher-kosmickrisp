@@ -7,7 +7,6 @@
 #include "kosmickrisp/bridge/mtl_compiler.h"
 #include "vk_common_entrypoints.h"
 #include "vk_pipeline.h"
-#include "util/blob.h"
 #include "util/os_time.h"
 #include <pthread.h>
 
@@ -32,21 +31,15 @@ struct kk_async_compute {
    struct kk_async_compute_owner *owner;
    VkResult (*compile)(struct kk_device *, struct kk_shader *);
    void *task;
-   /* Borrowed from shader: destruction joins task retirement before freeing
-    * the shader or its embedded cache object. An owning reference here would
-    * prevent that destruction from cancelling an otherwise unneeded job. */
-   struct vk_pipeline_cache_object *cache_object;
-   struct blob cache_blob;
    struct kk_perf_compile_scope scope;
    uint64_t request_id, parent_id, start, build_id;
-   bool bound, used;
+   bool bound, used, cache_miss_reported;
 };
 
 static void
 job_unref(struct kk_async_compute *job)
 {
    if (!p_atomic_dec_zero(&job->refs)) return;
-   blob_finish(&job->cache_blob);
    mtl_release(job->task);
    pthread_mutex_destroy(&job->mutex);
    free(job);
@@ -66,8 +59,6 @@ job_result(struct kk_async_compute *job, VkResult result)
    job->result = result;
    /* Release publication covers the native handle and all function metadata. */
    p_atomic_set(&job->ready, true);
-   struct vk_pipeline_cache_object *object = job->cache_object;
-   job->cache_object = NULL;
    pthread_mutex_unlock(&job->mutex);
    if (job->dev->perf) {
       job->scope.cancelled = p_atomic_read(&job->cancel_requested);
@@ -75,15 +66,6 @@ job_result(struct kk_async_compute *job, VkResult result)
       kk_perf_compiler(job->dev->perf, -1);
       kk_perf_async_compute(job->dev->perf, 0, -1);
       kk_perf_add(job->dev->perf, KK_PERF_SHADER_COMPILE, kk_perf_now() - job->start);
-   }
-   if (result == VK_SUCCESS && object) {
-      struct blob *blob = &job->cache_blob;
-      blob_init(blob);
-      /* The authoritative common object codec invokes our now-ready shader
-       * serializer. It never sees a caller cache pointer or half-made PSO. */
-      if (object->ops->serialize(object, blob) && !blob->out_of_memory)
-         mtl_compiler_store_shader(job->dev->mtl_compiler_handle,
-            object->key_data, object->key_size, blob->data, blob->size);
    }
 }
 
@@ -276,6 +258,10 @@ kk_async_compute_dispatch(struct kk_shader *shader)
       kk_perf_build_event(job->dev->perf, job->build_id, "first-dispatch", NULL, 0);
 }
 
+/* The serialized shader is its MSL and metadata, never the native pipeline,
+ * and a restored shader defers its native build again. A pending build is
+ * therefore cached at creation, so a later launch skips NIR and MSL for it
+ * even if this process never builds it; only a failed build is not cached. */
 bool
 kk_async_compute_serializable(struct kk_shader *shader)
 {
@@ -284,18 +270,16 @@ kk_async_compute_serializable(struct kk_shader *shader)
    if (!job) return true;
    pthread_mutex_lock(&job->mutex);
    bool ready = job->ready;
-   if (!ready && !job->cache_object && !job->dev->vk.disable_internal_cache) {
-      struct vk_pipeline_cache_object *object = &shader->vk.pipeline.cache_obj;
-      if (object->ops && object->key_data) {
-         job->cache_object = object;
-         if (job->build_id)
-            kk_perf_build_event(job->dev->perf, job->build_id, "cache-key-miss",
-               object->key_data, object->key_size);
-      }
-   }
-   bool success = ready && job->result == VK_SUCCESS;
+   bool report = !ready && job->build_id && !job->cache_miss_reported;
+   if (report) job->cache_miss_reported = true;
+   bool cacheable = !ready || job->result == VK_SUCCESS;
    pthread_mutex_unlock(&job->mutex);
-   return success;
+   if (report) {
+      struct vk_pipeline_cache_object *object = &shader->vk.pipeline.cache_obj;
+      kk_perf_build_event(job->dev->perf, job->build_id, "cache-key-miss",
+         object->key_data, object->key_data ? object->key_size : 0);
+   }
+   return cacheable;
 }
 
 /* Called when the last reference to the shader goes away, so no pipeline,

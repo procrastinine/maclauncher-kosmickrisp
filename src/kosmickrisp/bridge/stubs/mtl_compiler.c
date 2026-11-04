@@ -210,8 +210,6 @@ struct mtl_compile_trace mtl_compiler_set_trace(struct mtl_compile_trace trace)
    return (struct mtl_compile_trace){0};
 }
 
-void mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,
-   size_t key_size, const void *bytes, size_t size) {}
 
 mtl_library *mtl_new_library_async_wait(mtl_compiler *compiler, const char *src,
    enum mtl_language_version version, enum mtl_math_mode mode,

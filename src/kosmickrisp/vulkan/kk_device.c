@@ -188,19 +188,6 @@ kk_compiler_cache_store_piece(void *data, const void *bytes, size_t size,
    return complete;
 }
 
-/* Same portable object key and factory namespace as vk_pipeline_cache.c;
- * native archive parent keys are deliberately not used for shader blobs. */
-static void
-kk_compiler_cache_store_shader(void *data, const void *key, size_t key_size,
-                                const void *bytes, size_t size)
-{
-   struct kk_compiler_cache *cache = data;
-   if (!size || !kk_compiler_cache_init(cache)) return;
-   cache_key disk_key;
-   disk_cache_compute_key(cache->disk, key, key_size, disk_key);
-   disk_cache_put(cache->disk, disk_key, bytes, size, NULL);
-}
-
 static void
 kk_compiler_cache_destroy(void *data)
 {
@@ -240,7 +227,6 @@ kk_new_compiler(struct kk_device *dev)
       .store = kk_compiler_cache_store,
       .load_piece = kk_compiler_cache_load_piece,
       .store_piece = kk_compiler_cache_store_piece,
-      .store_shader = kk_compiler_cache_store_shader,
       .destroy = kk_compiler_cache_destroy,
    };
    return mtl_new_cached_compiler(dev->mtl_handle, &ops, cache);

@@ -43,8 +43,6 @@ struct mtl_compiler_cache_ops {
    void *(*load_piece)(void *data, const uint8_t id[32], size_t *size);
    /* Complete the piece write before allowing an index to reference it. */
    bool (*store_piece)(void *data, const void *bytes, size_t size, uint8_t id[32]);
-   void (*store_shader)(void *data, const void *key, size_t key_size,
-                        const void *bytes, size_t size);
    void (*destroy)(void *data);
 };
 mtl_compiler *mtl_new_cached_compiler(mtl_device *device,
@@ -149,8 +147,6 @@ void *mtl_compiler_task_raise(void *task);
 void mtl_compiler_task_raise_end(void *raised);
 void *mtl_compiler_foreground_begin(mtl_compiler *compiler);
 void mtl_compiler_foreground_end(void *token);
-void mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,
-   size_t key_size, const void *bytes, size_t size);
 
 /* Library */
 mtl_library *

@@ -440,17 +440,6 @@ mtl_compiler_task_raise_end(void *raised)
    if (raised) pthread_override_qos_class_end_np(raised);
 }
 
-void
-mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,
-   size_t key_size, const void *bytes, size_t size)
-{
-   KKPipelineArchive *cache = kk_compiler_archive(compiler);
-   if (!cache) return;
-   [cache load];
-   if (cache->available && cache->operations.store_shader)
-      cache->operations.store_shader(cache->cache_data, key, key_size, bytes, size);
-}
-
 /* Library */
 static MTL4LibraryDescriptor *
 mtl_library_descriptor(const char *src, enum mtl_language_version msl_version,
