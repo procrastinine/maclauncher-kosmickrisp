@@ -21,9 +21,8 @@ kk_rt_emit_function(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
       offsetof(struct kk_rt_cps_context, lane));
    P_IND(ctx, "uint gl_SubGroupSize = *(device uint*)(kk_rt_context + %zu);\n",
       offsetof(struct kk_rt_cps_context, subgroup_size));
-   /* Values that live across a call are already in the continuation frame.
-    * Arrays that later lowering places in scratch are local to this part. */
-   emit_local_vars(ctx, impl->function->shader);
+   /* Every invocation-private value, scratch included, is in the
+    * continuation frame, so a part declares no local scratch array. */
    predeclare_ssa_values(ctx, impl);
    foreach_list_typed(nir_cf_node, node, node, &impl->body)
       cf_node_to_metal(ctx, node);

@@ -310,6 +310,34 @@ kk_rt_shader_frame_fits(nir_shader *shader)
    return bound<=UINT32_MAX-16;
 }
 
+/* Arrays that the MSL preprocessing placed in scratch survive shader calls
+ * like any other invocation-private value, so scratch addresses the same
+ * continuation frame. Those bytes precede the frame's explicit variables. */
+static bool
+lower_scratch_to_frame(nir_builder *b, nir_intrinsic_instr *in, void *unused)
+{
+   if (in->intrinsic != nir_intrinsic_load_scratch &&
+       in->intrinsic != nir_intrinsic_store_scratch)
+      return false;
+   b->cursor = nir_before_instr(&in->instr);
+   const bool load = in->intrinsic == nir_intrinsic_load_scratch;
+   nir_def *address = nir_iadd(b, nir_load_scratch_base_ptr(b, 1, 64, .base = 0),
+                               nir_u2u64(b, in->src[load ? 0 : 1].ssa));
+   if (load) {
+      nir_def *value = nir_load_global(b, in->def.num_components, in->def.bit_size, address,
+                                       .align_mul = nir_intrinsic_align_mul(in),
+                                       .align_offset = nir_intrinsic_align_offset(in));
+      nir_def_replace(&in->def, value);
+   } else {
+      nir_store_global(b, in->src[0].ssa, address,
+                       .align_mul = nir_intrinsic_align_mul(in),
+                       .align_offset = nir_intrinsic_align_offset(in),
+                       .write_mask = nir_intrinsic_write_mask(in));
+      nir_instr_remove(&in->instr);
+   }
+   return true;
+}
+
 bool
 kk_rt_split_shader_mode(nir_shader *shader, void *mem_ctx,
                     struct kk_rt_shader_parts *parts, bool internal)
@@ -348,6 +376,7 @@ kk_rt_split_shader_mode(nir_shader *shader, void *mem_ctx,
    widen_derefs(shader, nir_var_function_temp | nir_var_shader_temp);
    NIR_PASS(_, shader, nir_lower_explicit_io,
       nir_var_function_temp | nir_var_shader_temp, nir_address_format_64bit_global);
+   nir_shader_intrinsics_pass(shader, lower_scratch_to_frame, nir_metadata_control_flow, NULL);
    nir_shader_intrinsics_pass(shader, prepare_call, nir_metadata_none, internal ? parts : NULL);
    NIR_PASS(_, shader, nir_opt_dead_cf);
 
