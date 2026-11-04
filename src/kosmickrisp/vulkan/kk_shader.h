@@ -436,12 +436,19 @@ VkResult kk_sampler_compute_pipeline(struct kk_device *device,
 mtl_compute_pipeline_state *kk_cmd_sampler_compute_pipeline_used(
    struct kk_cmd_buffer *cmd, struct kk_shader *shader,
    mtl_compute_pipeline_state *base);
+void kk_cmd_compute_pipeline_missing(struct kk_cmd_buffer *cmd,
+   struct kk_shader *shader);
+/* Every caller skips its dispatch when this returns NULL, so a missing native
+ * pipeline fails the recording here instead of dropping that work silently. */
 static inline mtl_compute_pipeline_state *
 kk_cmd_sampler_compute_pipeline(struct kk_cmd_buffer *cmd,
    struct kk_shader *shader, mtl_compute_pipeline_state *base)
 {
-   return shader->info.uses_sampler_emulation ?
-      kk_cmd_sampler_compute_pipeline_used(cmd, shader, base) : base;
+   if (shader->info.uses_sampler_emulation)
+      return kk_cmd_sampler_compute_pipeline_used(cmd, shader, base);
+   if (unlikely(!base))
+      kk_cmd_compute_pipeline_missing(cmd, shader);
+   return base;
 }
 bool kk_attachment_sampler_emulation_changed(struct kk_cmd_buffer *cmd,
    struct kk_shader *shader);

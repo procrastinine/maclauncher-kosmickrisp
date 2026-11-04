@@ -877,6 +877,44 @@ mtl_copy_render_pipeline_descriptor_with_fragment(mtl_render_pipeline_descriptor
    }
 }
 
+/* The program a failed pipeline names in its log line: the descriptor's label,
+ * else the library function of its first stage, through any specialization. */
+static const char *
+kk_pipeline_program_label(MTL4PipelineDescriptor *desc)
+{
+   if (desc.label.length) return desc.label.UTF8String;
+   id function = nil;
+   for (NSString *key in @[@"computeFunctionDescriptor", @"vertexFunctionDescriptor",
+                           @"meshFunctionDescriptor", @"objectFunctionDescriptor",
+                           @"fragmentFunctionDescriptor"]) {
+      if ([desc respondsToSelector:NSSelectorFromString(key)] &&
+          (function = [desc valueForKey:key]))
+         break;
+   }
+   for (unsigned depth = 0; function && depth < 4; ++depth) {
+      if ([function isKindOfClass:[MTL4LibraryFunctionDescriptor class]])
+         return ((MTL4LibraryFunctionDescriptor *)function).name.UTF8String ?: "(unnamed)";
+      if (![function isKindOfClass:[MTL4SpecializedFunctionDescriptor class]]) break;
+      function = ((MTL4SpecializedFunctionDescriptor *)function).functionDescriptor;
+   }
+   return function ? NSStringFromClass([function class]).UTF8String : "(no function)";
+}
+
+/* Metal reports an interrupted or timed-out compiler service (for example
+ * XPC_ERROR_CONNECTION_INTERRUPTED when the service exits under memory or CPU
+ * pressure) as an ordinary failed pipeline. That failure says nothing about
+ * the program, so its compile is repeated once. */
+static bool
+kk_pipeline_error_transient(NSError *error)
+{
+   NSString *text = error.localizedDescription;
+   if (!text) return false;
+   for (NSString *mark in @[@"XPC_ERROR", @"interrupted", @"timed out", @"timeout"])
+      if ([text rangeOfString:mark options:NSCaseInsensitiveSearch].location != NSNotFound)
+         return true;
+   return false;
+}
+
 /* Compute pipeline */
 mtl_compute_pipeline_state *
 mtl_new_compute_pipeline_state(mtl_compiler *compiler,
@@ -901,6 +939,13 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
       if (!pipeline) {
          pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc, native,
             [native newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
+         if (!pipeline && !kk_current_operation.cancelled && kk_pipeline_error_transient(error)) {
+            mesa_loge("MTLComputePipelineState %s: %s; compiling it again",
+                      kk_pipeline_program_label(desc), error.localizedDescription.UTF8String);
+            error = nil;
+            pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc, native,
+               [native newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
+         }
          mtl_compiler_cache_recapture(compiler, KK_RECAPTURE_BATCH);
       }
 
@@ -909,7 +954,8 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
          return NULL;
       }
       if (pipeline == nil) {
-         fprintf(stderr, "Failed to create MTLComputePipelineState: %s\n", [error.localizedDescription UTF8String]);
+         mesa_loge("Failed to create MTLComputePipelineState %s: %s",
+                   kk_pipeline_program_label(desc), error.localizedDescription.UTF8String);
       }
 
       if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
@@ -1031,11 +1077,19 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
       if (!pipeline) {
          pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc, native,
             [native newRenderPipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
+         if (!pipeline && kk_pipeline_error_transient(error)) {
+            mesa_loge("MTLRenderPipelineState %s: %s; compiling it again",
+                      kk_pipeline_program_label(desc), error.localizedDescription.UTF8String);
+            error = nil;
+            pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc, native,
+               [native newRenderPipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
+         }
          mtl_compiler_cache_recapture(compiler, KK_RECAPTURE_BATCH);
       }
 
       if (pipeline == nil) {
-         fprintf(stderr, "Failed to create MTLRenderPipelineState: %s\n", [error.localizedDescription UTF8String]);
+         mesa_loge("Failed to create MTLRenderPipelineState %s: %s",
+                   kk_pipeline_program_label(desc), error.localizedDescription.UTF8String);
       }
 
       return pipeline;

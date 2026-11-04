@@ -275,6 +275,16 @@ kk_cmd_sampler_compute_pipeline_used(struct kk_cmd_buffer *cmd,
    return result == VK_SUCCESS ? pipeline : NULL;
 }
 
+void
+kk_cmd_compute_pipeline_missing(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
+{
+   /* One line per command buffer: later misses add nothing to the first. */
+   if (cmd->vk.record_result == VK_SUCCESS)
+      mesa_loge("%s shader has no native compute pipeline for a recorded dispatch; "
+                "the command buffer fails", mesa_shader_stage_name(shader->info.stage));
+   vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INVALID_SHADER_NV);
+}
+
 bool
 kk_attachment_sampler_emulation_changed(struct kk_cmd_buffer *cmd,
                                           struct kk_shader *shader)
