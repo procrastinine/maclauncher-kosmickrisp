@@ -277,6 +277,8 @@ struct kk_graphics_state {
    uint64_t xfb_query[POLY_MAX_VERTEX_STREAMS];
    uint64_t xfb_generated_counters;
    uint64_t primitives_query[POLY_MAX_VERTEX_STREAMS];
+   /* PG streams, followed by XFB streams; maintained at query Begin/End. */
+   uint32_t geometry_query_mask;
    bool xfb_enabled;
 
    mtl_depth_stencil_state *depth_stencil_state;

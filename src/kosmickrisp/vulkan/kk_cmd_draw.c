@@ -1458,11 +1458,13 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
        VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT);
-   /* Absent reports use null destinations. Only actual pipeline statistics
-    * and the GS's own dynamic counts need scratch storage. */
+   /* Polygon capture writes dynamic counts even without queries. The
+    * ordinary GS path only consumes them for XFB or actual reports. */
+   bool count_storage = gfx->polygon_points || cmd->interlock_heap_active ||
+      info->xfb || statistics || gfx->geometry_query_mask;
    uint32_t statistics_bytes = statistics ?
       KK_GEOMETRY_STAT_COUNT * sizeof(uint32_t) : 0;
-   uint32_t count_bytes = info->count_words && !info->prefix_sum ?
+   uint32_t count_bytes = count_storage && info->count_words && !info->prefix_sum ?
       info->count_words * sizeof(uint32_t) : 0;
    uint64_t scratch = 0;
    if (statistics_bytes || count_bytes) {
@@ -2666,9 +2668,13 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
        VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT);
-   for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; ++i)
-      queries |= gfx->xfb_query[i] || gfx->primitives_query[i];
+   queries |= gfx->geometry_query_mask != 0;
    if (gs->info.geometry.xfb || queries) {
+      VkResult result = kk_shader_ensure_geometry_reports(kk_cmd_buffer_device(cmd), vs, 3);
+      if (result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&cmd->vk, result);
+         return (struct kk_draw_data){.grid = kk_grid_1d(0)};
+      }
       if (vs->info.gs_aux_mask & BITFIELD_BIT(0)) {
          mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
          mtl_compute_set_pipeline_state(enc, vs->pipeline.gfx.gs_aux[0]);

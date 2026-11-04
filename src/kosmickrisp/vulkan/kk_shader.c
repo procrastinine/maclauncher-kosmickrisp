@@ -258,6 +258,9 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_SPARSE_IMAGE_QUERY);
    if (feats->pipelineStatisticsQuery)
       key |= BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS);
+   if (feats->transformFeedback || feats->primitivesGeneratedQuery ||
+       feats->pipelineStatisticsQuery)
+      key |= BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS);
    if (feats->meshShaderQueries || feats->pipelineStatisticsQuery)
       key |= BITFIELD_BIT(KK_FEAT_MESH_QUERIES);
    return key;
@@ -1678,7 +1681,9 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          (u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_TRIANGLES ||
           u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_LINES ||
           u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_POINTS));
-      NIR_PASS(_, nir, poly_nir_lower_gs_capture, &count, &rast, &pre_gs,
+      const bool reports = nir->xfb_info || opts->geometry_reports;
+      NIR_PASS(_, nir, poly_nir_lower_gs_capture, reports ? &count : NULL, &rast,
+               reports ? &pre_gs : NULL,
                &shader->info.gs, &shader->info.polygon,
                (polygon || pixel_envelope) ? &capture : NULL,
                (polygon || pixel_envelope) ? &capture_xfb : NULL);
@@ -2360,6 +2365,8 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
 
 #include "kk_mesh_pipeline.h"
 
+#include "kk_geometry_reports.h"
+
 struct kk_lazy_polygon {
    util_once_flag once;
    VkResult result;
@@ -2400,11 +2407,6 @@ kk_compile_graphics_prerender(struct kk_device *device, struct kk_shader *vs,
          return VK_ERROR_INVALID_SHADER_NV;
    }
 
-   u_foreach_bit(i, vs->info.gs_aux_mask) {
-      result = kk_compile_compute_pipeline(device, &vs->gs_aux[i],
-         i ? 1 : KK_POLY_WG_SIZE, &pipe->gfx.gs_aux[i]);
-      if (result != VK_SUCCESS) return result;
-   }
    *raster_stage = vs_stage;
    return VK_SUCCESS;
 }
@@ -2529,6 +2531,8 @@ kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader)
 static VkResult
 kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
 {
+   u_foreach_bit(i, vs->info.gs_aux_mask)
+      vs->pipeline.gfx.gs_aux_once[i] = (util_once_flag)UTIL_ONCE_FLAG_INIT;
    if (vs->info.conservative) {
       VkResult result = kk_device_init_conservative_lib(device);
       if (result != VK_SUCCESS)
@@ -2992,6 +2996,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       .per_vertex_map = &per_vertex_map,
       .mesh_queries = features & BITFIELD_BIT(KK_FEAT_MESH_QUERIES),
       .pipeline_statistics = features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS),
+      .geometry_reports = features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS),
       .conservative_fs = conservative_fs,
    };
    for (uint32_t i = 0; i < total_shaders; i++) {

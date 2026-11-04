@@ -26,9 +26,13 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
        VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT);
-   for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; ++i)
-      queries |= gfx->xfb_query[i] || gfx->primitives_query[i];
+   queries |= gfx->geometry_query_mask != 0;
    if (gs->info.geometry.xfb || queries) {
+      VkResult result = kk_shader_ensure_geometry_reports(kk_cmd_buffer_device(cmd), vs, 2);
+      if (result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&cmd->vk, result);
+         return (struct kk_draw_data){.grid = kk_grid_1d(0)};
+      }
       if (gs->info.geometry.prefix_sum)
          libkk_prefix_sum_geometry(cmd,
             kk_grid_1d(1024 * gs->info.geometry.count_words), true, geometry_params);

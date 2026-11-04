@@ -53,6 +53,7 @@ bool poly_nir_lower_gs(struct nir_shader *gs, struct nir_shader **gs_count,
                        struct nir_shader **gs_copy, struct nir_shader **pre_gs,
                        struct poly_gs_info *info);
 
+/* gs_count and pre_gs may be NULL when report programs are unreachable. */
 bool poly_nir_lower_gs_capture(struct nir_shader *gs,
    struct nir_shader **gs_count, struct nir_shader **gs_copy,
    struct nir_shader **pre_gs, struct poly_gs_info *info,

@@ -511,11 +511,13 @@ kk_begin_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
    }
    if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
       cmd->state.gfx.xfb_query[index] = kk_query_report_addr(kk_cmd_buffer_device(cmd), pool, query);
+      cmd->state.gfx.geometry_query_mask |= BITFIELD_BIT(POLY_MAX_VERTEX_STREAMS + index);
       kk_update_xfb_generated_reports(cmd);
       return;
    }
    if (pool->vk.query_type == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {
       cmd->state.gfx.primitives_query[index] = kk_query_report_addr(kk_cmd_buffer_device(cmd), pool, query);
+      cmd->state.gfx.geometry_query_mask |= BITFIELD_BIT(index);
       return;
    }
    cmd->state.gfx.occlusion.mode = flags & VK_QUERY_CONTROL_PRECISE_BIT
@@ -544,9 +546,11 @@ kk_end_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
       cmd->state.gfx.mesh_primitives_query = 0;
    } else if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
       cmd->state.gfx.xfb_query[index] = 0;
+      cmd->state.gfx.geometry_query_mask &= ~BITFIELD_BIT(POLY_MAX_VERTEX_STREAMS + index);
       kk_update_xfb_generated_reports(cmd);
    } else if (pool->vk.query_type == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {
       cmd->state.gfx.primitives_query[index] = 0;
+      cmd->state.gfx.geometry_query_mask &= ~BITFIELD_BIT(index);
    } else {
       cmd->state.gfx.occlusion.mode = MTL_VISIBILITY_RESULT_MODE_DISABLED;
       cmd->state.gfx.dirty |= KK_DIRTY_OCCLUSION;

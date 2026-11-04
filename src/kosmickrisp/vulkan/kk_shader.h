@@ -22,6 +22,7 @@
 #include "kk_fragment_shading_rate_cache.h"
 
 #include "vk_shader.h"
+#include "util/u_call_once.h"
 
 /* Feature enumerators are bit indices, assigned once by the compiler.
  * New shader-affecting features belong here without explicit values. */
@@ -46,6 +47,7 @@ enum kk_feature_bit {
    KK_FEAT_IMAGE_ARRAY_ALIAS,
    KK_FEAT_SPARSE_IMAGE_QUERY,
    KK_FEAT_WRITABLE_MSAA,
+   KK_FEAT_GEOMETRY_REPORTS,
    KK_FEAT_COUNT,
 };
 
@@ -229,6 +231,8 @@ struct kk_pipeline_handles {
           * pipeline. */
          mtl_compute_pipeline_state *pre_render[4];
          mtl_compute_pipeline_state *gs_aux[2];
+         util_once_flag gs_aux_once[2];
+         VkResult gs_aux_result[2];
          mtl_depth_stencil_state *ds_handle;
          uint32_t pre_render_count;
       } gfx;
@@ -376,6 +380,8 @@ VkResult kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
                                struct kk_shader **shader_out);
 
 VkResult kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader);
+VkResult kk_shader_ensure_geometry_reports(struct kk_device *dev,
+   struct kk_shader *shader, unsigned mask);
 
 mtl_render_pipeline_state *kk_attachment_pipeline(struct kk_cmd_buffer *cmd,
    struct kk_shader *shader, unsigned kind);

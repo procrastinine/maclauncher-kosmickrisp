@@ -1391,11 +1391,11 @@ poly_nir_lower_gs_capture(nir_shader *gs, nir_shader **gs_count,
    /* All those variables we created should've gone away by now */
    NIR_PASS(_, gs, nir_remove_dead_variables, nir_var_function_temp, NULL);
 
-   /* If there is any unknown count, we need a geometry count shader */
-   if (info->count_words > 0)
-      *gs_count = create_geometry_count_shader(gs, &gs_state);
-   else
-      *gs_count = NULL;
+   /* Report-only output may be omitted when the driver cannot use queries
+    * or transform feedback. Raster topology still uses the same analysis. */
+   if (gs_count)
+      *gs_count = info->count_words > 0 ?
+         create_geometry_count_shader(gs, &gs_state) : NULL;
 
    /* Strip stores and atomics */
    do {
@@ -1445,6 +1445,9 @@ poly_nir_lower_gs_capture(nir_shader *gs, nir_shader **gs_count,
 
    NIR_PASS(_, gs, nir_shader_intrinsics_pass, lower_id,
             nir_metadata_control_flow, NULL);
+
+   if (!pre_gs)
+      return true;
 
    /* Gather information required for transform feedback / query programs */
    struct nir_xfb_info *xfb = gs->xfb_info;
