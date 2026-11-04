@@ -388,6 +388,14 @@ kk_archive_remove_stale_temporaries(void)
 #endif
 #define KK_RESIDENT_ARCHIVE_LIMIT 256
 
+/* A checkpoint waits at most this long behind a continuous load once this
+ * many captures are pending: a forced quit or crash during a first load then
+ * loses only the last stretch of compiles instead of every one of them. */
+#ifndef KK_DRAIN_INTERVAL_NS
+#define KK_DRAIN_INTERVAL_NS (8ull * 1000000000ull)
+#endif
+#define KK_DRAIN_CAPTURES 16
+
 /* In-process MTLLibrary cache keyed by kk_library_key (source digest and
  * compile options). Bounds the native object count only: entries retain no
  * source text, so large translated sources (DX12 titles average about 200 KB)
@@ -440,7 +448,13 @@ kk_archive_remove_stale_temporaries(void)
    NSMutableArray *recapture;
    unsigned recapture_count;
    uint64_t generation, checkpointed, last_compile;
+   /* Start of the current uncheckpointed stretch of captures. */
+   uint64_t capture_since;
    bool available, scheduled, finished, gate_ready;
+   /* Set while a checkpoint waits for in-flight captures to finish. New
+    * descriptor compiles take the non-capturing compiler meanwhile, so a
+    * continuous load cannot hold the gate shared indefinitely. */
+   bool draining;
    struct mtl_compiler_cache_stats stats;
 }
 - (id)initWithDevice:(id<MTLDevice>)dev operations:(const struct mtl_compiler_cache_ops *)ops data:(void *)data;
@@ -452,9 +466,12 @@ kk_archive_remove_stale_temporaries(void)
 - (void)captureLocked:(NSData *)hint;
 - (BOOL)publishPiece:(NSData *)identity captured:(NSDictionary *)captured;
 - (void)scheduleLocked;
+- (void)scheduleLocked:(uint64_t)delay;
 - (void)checkpoint:(BOOL)final;
 - (void)finish;
 @end
+
+static id<MTL4Compiler> kk_archive_bypass_compiler(KKPipelineArchive *cache);
 
 static void
 kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identity)
@@ -650,10 +667,16 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
    generation++;
    if (hint) pending_hints[hint] = @YES;
    last_compile = kk_archive_now();
+   if (!capture_since) capture_since = last_compile;
    [self scheduleLocked];
 }
 
 - (void)scheduleLocked
+{
+   [self scheduleLocked:500000000];
+}
+
+- (void)scheduleLocked:(uint64_t)delay
 {
    if (scheduled || finished || generation == checkpointed) return;
    if (!checkpoint_queue) {
@@ -665,7 +688,7 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
    scheduled = true;
    /* The copied block keeps the cache alive even if Stop/device teardown races
     * its delay; it never captures or dereferences the native compiler. */
-   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500000000), checkpoint_queue, ^{
+   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay), checkpoint_queue, ^{
       @autoreleasepool { [self checkpoint:NO]; }
    });
 }
@@ -725,7 +748,21 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
    /* Captures share read access; only the short snapshot is exclusive. */
    if (final) pthread_rwlock_wrlock(&capture_gate);
    else if (pthread_rwlock_trywrlock(&capture_gate)) {
-      @synchronized(self) { [self scheduleLocked]; }
+      /* Under a sustained load some capture always holds the gate. Once
+       * enough captures have waited long enough, divert new compiles to the
+       * non-capturing compiler and retry while the in-flight ones finish. */
+      bool drain = false;
+      @synchronized(self) {
+         uint64_t now = kk_archive_now();
+         drain = draining ||
+            (generation - checkpointed >= KK_DRAIN_CAPTURES && capture_since &&
+             now - capture_since >= KK_DRAIN_INTERVAL_NS);
+      }
+      if (drain && !kk_archive_bypass_compiler(self)) drain = false;
+      @synchronized(self) {
+         if (drain) __atomic_store_n(&draining, true, __ATOMIC_RELEASE);
+         [self scheduleLocked:drain ? 20000000 : 500000000];
+      }
       return;
    }
    uint64_t target;
@@ -748,9 +785,15 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
    } @catch (NSException *exception) {
       serialized = NO;
    } @finally {
+      __atomic_store_n(&draining, false, __ATOMIC_RELEASE);
       pthread_rwlock_unlock(&capture_gate);
    }
-   @synchronized(self) { stats.snapshot_ns += kk_archive_now() - begin; }
+   @synchronized(self) {
+      uint64_t now = kk_archive_now();
+      stats.snapshot_ns += now - begin;
+      /* Captures made during the snapshot start the next stretch. */
+      capture_since = generation != target ? now : 0;
+   }
    /* All IO, hashing, piece/index storage and verification follow unlock. */
    NSData *data = serialized ? [NSData dataWithContentsOfFile:path] : nil;
    if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
@@ -971,7 +1014,8 @@ mtl_compiler_cache_begin_pipeline(mtl_compiler *compiler, mtl_compiler **native)
    if (!cache) return NULL;
    [cache load];
    if (!cache->available || !cache->serializer) return NULL;
-   if (!pthread_rwlock_tryrdlock(&cache->capture_gate)) return cache;
+   if (!__atomic_load_n(&cache->draining, __ATOMIC_ACQUIRE) &&
+       !pthread_rwlock_tryrdlock(&cache->capture_gate)) return cache;
    id<MTL4Compiler> bypass = kk_archive_bypass_compiler(cache);
    if (bypass) {
       *native = (mtl_compiler *)bypass;
@@ -1017,6 +1061,7 @@ mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit)
    if (!cache || !__atomic_load_n(&cache->recapture_count, __ATOMIC_ACQUIRE)) return;
    for (unsigned i = 0; i < limit; ++i) @autoreleasepool {
       NSArray *entry = nil;
+      if (__atomic_load_n(&cache->draining, __ATOMIC_ACQUIRE)) break;
       @synchronized(cache) {
          if (cache->finished || !cache->recapture.count) break;
          entry = [[cache->recapture objectAtIndex:0] retain];
