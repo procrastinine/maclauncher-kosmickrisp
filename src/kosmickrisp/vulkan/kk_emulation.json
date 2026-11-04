@@ -422,7 +422,7 @@
     "name": "device_generated_commands",
     "description": "Generated graphics and compute sequences with push-data and vertex/index-buffer tokens.",
     "cost_class": "GPU token expansion / native Metal ICB",
-    "cost_note": "Used sequences snapshot token bytes and expand root, draw and vertex-input data on the GPU before native ICB execution. Native expansion and command encoding share one dispatch per 512-sequence slice; graphics crosses from compute to render. Poly stages retain their own expansion. The shared runtime library is compiled only for generated-command or indirect-count execution; application shaders gain no DGC MSL.",
+    "cost_note": "Used sequences snapshot token bytes and expand root, draw and vertex-input data on the GPU before native ICB execution. Native expansion and command encoding share one dispatch per native ICB slice; graphics crosses from compute to render. Poly stages retain their own expansion. The shared runtime library is compiled only for generated-command or indirect-count execution; application shaders gain no DGC MSL.",
     "extensions": [
       "VK_EXT_device_generated_commands"
     ],
@@ -453,7 +453,7 @@
     "name": "draw_indirect_count",
     "description": "GPU-counted ordinary multi-draw indirect commands.",
     "cost_class": "GPU count filtering / native Metal ICB",
-    "cost_note": "Large native batches expand active draw records and encode ICB commands in one dispatch per 512-draw slice. Other selected routes filter indirect arguments on the GPU and retain their own stage work. Counts remain GPU-resident. No count command adds application-shader MSL. The shared maxDrawIndirectCount limit also serves native fixed-count draws and is retained.",
+    "cost_note": "Large native batches expand active draw records and encode ICB commands in one dispatch per native ICB slice. Other selected routes filter indirect arguments on the GPU and retain their own stage work. Counts remain GPU-resident. No count command adds application-shader MSL. The shared maxDrawIndirectCount limit also serves native fixed-count draws and is retained.",
     "extensions": [
       "VK_KHR_draw_indirect_count",
       "VK_AMD_draw_indirect_count"
