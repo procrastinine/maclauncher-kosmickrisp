@@ -213,9 +213,11 @@ static struct kk_dgc_params kk_dgc_state(struct kk_cmd_buffer *cmd,
    root.sparse_state = cmd->state.cs.descriptors.root.sparse_state;
    p.base_root = kk_upload_descriptor_root_data(cmd, &root, sizeof(root),
                                                 &descriptors);
-   struct kk_per_draw_data draw = state->state.gfx.per_draw_data;
-   draw.draw_id = 0;
-   p.base_draw = kk_pool_upload(cmd, &draw, sizeof(draw), 8).gpu;
+   if (!compute) {
+      struct kk_per_draw_data draw = state->state.gfx.per_draw_data;
+      draw.draw_id = 0;
+      p.base_draw = kk_pool_upload(cmd, &draw, sizeof(draw), 8).gpu;
+   }
    struct kk_dgc_patch patches[129];
    for (uint32_t i = 0; i < l->n_pc_layouts; ++i) {
       const struct vk_indirect_command_push_constant_layout *pc =
@@ -231,7 +233,7 @@ static struct kk_dgc_params kk_dgc_state(struct kk_cmd_buffer *cmd,
           kk_pool_upload(cmd, patches, p.patch_count * sizeof(patches[0]), 8)
               .gpu;
    struct kk_dgc_attribute attributes[KK_MAX_ATTRIBS];
-   if (!compute) {
+   if (!compute && l->n_vb_layouts) {
       const struct vk_dynamic_graphics_state *dyn =
           &state->vk.dynamic_graphics_state;
       struct kk_shader *vs = state->state.shaders[MESA_SHADER_VERTEX];
@@ -315,6 +317,38 @@ static void kk_dgc_set_graphics_indirect(struct kk_cmd_buffer *cmd, bool indirec
    cmd->state.dirty_shaders |= BITFIELD_BIT(MESA_SHADER_VERTEX);
 }
 
+static void
+kk_dgc_compact_records(struct kk_dgc_params *p, bool compute, bool poly)
+{
+   static_assert(offsetof(struct kk_per_draw_data, geometry_statistics) +
+                    sizeof(((struct kk_per_draw_data *)0)->geometry_statistics) ==
+                    sizeof(struct kk_per_draw_data),
+                 "generated native records omit only the statistics tail");
+   /* Shared Poly preparation needs a complete root for every sequence. Native
+    * commands can point at the immutable base root when no token changes it. */
+   if (poly)
+      return;
+   if (!p->patch_count && !p->attribute_count) {
+      p->root_size = 0;
+      p->vertex_input_size = 0;
+   }
+   if (compute) {
+      /* Compute never reads the graphics per-draw data or index binding. */
+      p->draw_offset = p->args_offset = ALIGN_POT(p->root_size, 8);
+      p->index_offset = 0;
+      p->record_stride = ALIGN_POT(p->args_offset + 20, 64);
+   } else {
+      /* Native eligibility excludes GS and active queries. Only shared Poly
+       * shaders need the statistics tail, including its inactive zeros. */
+      p->draw_offset = ALIGN_POT(p->root_size, 8);
+      p->args_offset = ALIGN_POT(p->draw_offset +
+         offsetof(struct kk_per_draw_data, geometry_statistics), 8);
+      p->index_offset = ALIGN_POT(p->args_offset + 20, 8);
+      p->vertex_input_offset = ALIGN_POT(p->index_offset + 16, 8);
+      p->record_stride = ALIGN_POT(p->vertex_input_offset + p->vertex_input_size, 64);
+   }
+}
+
 static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
                                       struct kk_dgc_params p, bool compute)
 {
@@ -324,7 +358,7 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
       return;
    }
    kk_sparse_refresh_shader(cmd, cmd, compute ? MESA_SHADER_COMPUTE : MESA_SHADER_VERTEX);
-   if (!p.base_root || !p.base_draw || (p.patch_count && !p.patches) ||
+   if (!p.base_root || (!compute && !p.base_draw) || (p.patch_count && !p.patches) ||
        (p.attribute_count && !p.attributes))
       return;
    /* Vulkan index tokens may select UINT8 on the GPU. Metal ICBs accept
@@ -344,23 +378,13 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
                 (p.action == 1 &&
                  (p.index_size == 1 ||
                   (p.index_token != UINT32_MAX && !p.dx_index))));
+   kk_dgc_compact_records(&p, compute, poly);
    if (layered)
       kk_dgc_set_graphics_indirect(cmd, false);
    uint32_t maximum = p.maximum;
    p.execution_range = kk_pool_alloc(cmd, 8, 4).gpu;
    if (!p.execution_range)
       return;
-   void *icb =
-       poly ? NULL
-            : kk_dgc_new_icb(dev, MIN2(maximum, KK_DGC_ICB_SLICE), compute);
-   if (!poly && !icb) {
-      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
-      return;
-   }
-   if (icb) {
-      kk_device_add_buffer_to_residency_set(dev, icb);
-      util_dynarray_append(&cmd->dgc_commands, icb);
-   }
    uint64_t scratch =
        kk_pool_alloc(
            cmd, (uint64_t)MIN2(maximum, KK_DGC_ICB_SLICE) * p.record_stride, 64)
@@ -370,9 +394,29 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
    if (!compute && !poly) {
       kk_dgc_set_graphics_indirect(cmd, true);
       kk_dgc_flush_graphics(cmd);
+      if (cmd->vk.record_result != VK_SUCCESS) {
+         kk_dgc_set_graphics_indirect(cmd, false);
+         return;
+      }
+      p.layer_replay = dev->poly_layer_argument &&
+         cmd->state.shaders[MESA_SHADER_VERTEX]->info.poly_layer_replay;
       p.linked_vs_buffer = cmd->state.gfx.dgc_linked_vs_buffer;
       p.linked_fs_buffer = cmd->state.gfx.dgc_linked_fs_buffer;
-      p.interlock_guard = dev->interlock_guard ? dev->interlock_guard->gpu : 0;
+      const struct kk_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+      p.interlock_guard = fs && fs->info.dgc_interlock_guard && dev->interlock_guard
+         ? dev->interlock_guard->gpu : 0;
+   }
+   void *icb =
+       poly ? NULL
+            : kk_dgc_new_icb(dev, MIN2(maximum, KK_DGC_ICB_SLICE), compute, &p);
+   if (!poly && !icb) {
+      if (!compute) kk_dgc_set_graphics_indirect(cmd, false);
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return;
+   }
+   if (icb) {
+      kk_device_add_buffer_to_residency_set(dev, icb);
+      util_dynarray_append(&cmd->dgc_commands, icb);
    }
    for (uint32_t first = 0; first < maximum; first += KK_DGC_ICB_SLICE) {
       uint32_t count = MIN2(maximum - first, KK_DGC_ICB_SLICE);

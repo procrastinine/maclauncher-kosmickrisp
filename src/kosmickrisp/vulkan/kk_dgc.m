@@ -68,7 +68,8 @@ void kk_dgc_finish(struct kk_device *dev)
    free(dev->dgc);
    dev->dgc = NULL;
 }
-void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute)
+void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute,
+                     const struct kk_dgc_params *params)
 {
    @autoreleasepool {
       MTLIndirectCommandBufferDescriptor *desc =
@@ -80,9 +81,10 @@ void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute)
       desc.inheritBuffers = NO;
       const unsigned buffer_count = kk_argument_table_buffer_count(
          (struct kk_argument_table_usage){
-            .linked_graphics = !compute,
-            .poly_layer_replay = !compute && dev->poly_layer_argument,
-            .interlock_guard = !compute && dev->interlock_guard != NULL,
+            .linked_graphics = !compute &&
+               (params->linked_vs_buffer || params->linked_fs_buffer),
+            .poly_layer_replay = !compute && params->layer_replay,
+            .interlock_guard = !compute && params->interlock_guard,
          });
       desc.maxVertexBufferBindCount = buffer_count;
       desc.maxFragmentBufferBindCount = buffer_count;

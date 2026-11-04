@@ -712,6 +712,12 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    dev->vk.enabled_features.samplerFilterMinmax |=
       dev->vk.enabled_extensions.EXT_sampler_filter_minmax;
 
+   /* These original extensions have no feature structure. Their count entry
+    * points need the same replay metadata and attachment cache as core 1.2. */
+   dev->vk.enabled_features.drawIndirectCount |=
+      dev->vk.enabled_extensions.KHR_draw_indirect_count ||
+      dev->vk.enabled_extensions.AMD_draw_indirect_count;
+
    dev->dgc_once = (util_once_flag)UTIL_ONCE_FLAG_INIT;
    kk_descriptor_heap_init(dev);
    result = kk_vrs_device_init(dev);

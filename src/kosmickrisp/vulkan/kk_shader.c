@@ -2721,9 +2721,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
 
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */
-   const bool dgc_graphics = infos[0].stage != MESA_SHADER_COMPUTE &&
-      (features & BITFIELD_BIT(KK_FEAT_DGC_REPLAY));
+   const bool dgc_graphics = (features & BITFIELD_BIT(KK_FEAT_DGC_REPLAY)) &&
+      infos[0].stage <= MESA_SHADER_FRAGMENT;
    bool dgc_replay = false;
+   bool dgc_interlock_guard = false;
    uint32_t push_size = 0;
    uint32_t heap_push_size = 0;
    nir_shader *nir_shaders[shader_count + 2u];
@@ -2814,6 +2815,11 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       }
       if (dgc_graphics && !dgc_replay)
          dgc_replay = kk_dgc_shader_needs_replay(nir);
+      if (dgc_graphics && nir->info.stage == MESA_SHADER_FRAGMENT)
+         dgc_interlock_guard = nir->info.fs.pixel_interlock_ordered ||
+            nir->info.fs.pixel_interlock_unordered ||
+            nir->info.fs.sample_interlock_ordered ||
+            nir->info.fs.sample_interlock_unordered;
 
       /* Stages before the tessellator or a GS run as compute */
       bool emulated_stage =
@@ -3090,11 +3096,19 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          dgc_replay |= shaders[i]->info.stage == MESA_SHADER_FRAGMENT &&
                        shaders[i]->info.fs.emulates_per_vertex_inputs;
    }
+   const bool indirect_bindable =
+      infos[0].flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
+   /* Shader objects are zero-allocated. Leave unused DGC metadata cold rather
+    * than writing it for every stage of an ordinary pipeline. */
+   if (dgc_replay || dgc_interlock_guard || indirect_bindable) {
+      for (uint32_t i = 0; i < total_shaders; ++i) {
+         shaders[i]->info.dgc_replay = dgc_replay;
+         shaders[i]->info.dgc_interlock_guard = dgc_interlock_guard;
+         shaders[i]->info.indirect_bindable = indirect_bindable;
+      }
+   }
    push_size = MAX2(push_size, heap_push_size);
    for (uint32_t i = 0; i < total_shaders; ++i) {
-      shaders[i]->info.dgc_replay = dgc_replay;
-      shaders[i]->info.indirect_bindable =
-         infos[0].flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
       shaders[i]->info.push_size = push_size;
       shaders[i]->info.descriptor_heap = infos[0].flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
    }

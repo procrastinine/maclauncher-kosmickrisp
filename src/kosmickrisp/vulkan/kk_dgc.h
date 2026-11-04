@@ -21,6 +21,7 @@ struct kk_dgc_params {
    uint64_t stream, count, output, base_root, base_draw, patches, attributes;
    uint64_t samplers, index, condition;
    uint32_t maximum, first, stream_stride, record_stride;
+   /* Native records with root_size == 0 bind the immutable base_root. */
    uint32_t root_size, draw_offset, args_offset, index_offset;
    uint32_t patch_count, attribute_count, action_offset, index_token;
    uint32_t root_push, root_strides, root_bases, root_clamps;
@@ -33,8 +34,9 @@ struct kk_dgc_params {
    uint32_t vertex_fetch_size, vertex_fetch_stride;
    uint64_t linked_vs_buffer, linked_fs_buffer;
    uint64_t interlock_guard;
+   uint32_t layer_replay;
 };
-static_assert(sizeof(struct kk_dgc_params) == 248, "DGC parameter ABI");
+static_assert(sizeof(struct kk_dgc_params) == 256, "DGC parameter ABI");
 struct kk_device;
 struct kk_cmd_buffer;
 struct kk_dgc_metal;
@@ -48,7 +50,8 @@ VkResult kk_compile_indirect_compute_pipeline(struct kk_device *device, const st
 VkResult kk_dgc_eager_graphics_pipeline(struct kk_device *device, struct kk_shader *shader);
 bool kk_dgc_init(struct kk_device *dev);
 void kk_dgc_finish(struct kk_device *dev);
-void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute);
+void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute,
+                     const struct kk_dgc_params *params);
 uint64_t kk_dgc_icb_id(void *icb);
 bool kk_dgc_encode(struct kk_cmd_buffer *cmd, mtl_compute_encoder *enc,
                    uint64_t parameters, uint32_t count,

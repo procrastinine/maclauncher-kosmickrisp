@@ -131,6 +131,7 @@ struct kk_shader_info {
    uint32_t push_size;
    bool descriptor_heap;
    bool dgc_replay;
+   bool dgc_interlock_guard;
    bool indirect_bindable;
    bool has_geometry;
    bool geometry_statistics;
