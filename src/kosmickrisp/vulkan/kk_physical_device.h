@@ -36,7 +36,8 @@ struct kk_queue_family {
 struct kk_memory_heap {
    uint64_t size;
    VkMemoryHeapFlags flags;
-   uint64_t (*budget)(struct kk_physical_device *pdev);
+   uint64_t (*budget)(struct kk_physical_device *pdev,
+                      const struct kk_memory_heap *heap, uint64_t used);
    uint64_t (*used)(struct kk_physical_device *pdev);
 };
 

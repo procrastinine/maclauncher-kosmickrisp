@@ -1366,16 +1366,15 @@ kk_get_sysmem_heap_used(struct kk_physical_device *pdev)
 }
 
 static uint64_t
-kk_get_sysmem_heap_budget(struct kk_physical_device *pdev)
+kk_get_sysmem_heap_budget(struct kk_physical_device *pdev,
+                          const struct kk_memory_heap *heap, uint64_t used)
 {
-   uint64_t heap_size = kk_get_sysmem_heap_size(pdev);
-   uint64_t used = kk_get_sysmem_heap_used(pdev);
-
    /* Budget is calculated using the default Mesa logic, based on available
-    * system memory. Available memory is reduced to 90% to avoid thrashing. */
+    * system memory. Available memory is reduced to 90% to avoid thrashing.
+    * The usage and heap size are the values reported next to the budget. */
    const float available_percent = 0.9f;
    return vk_physical_device_heap_budget_from_system(
-      &pdev->vk, available_percent, heap_size, used);
+      &pdev->vk, available_percent, heap->size, used);
 }
 
 static void
@@ -1737,8 +1736,11 @@ kk_GetPhysicalDeviceMemoryProperties2(
 
          for (unsigned i = 0; i < pdev->mem_heap_count; i++) {
             const struct kk_memory_heap *heap = &pdev->mem_heaps[i];
-            p->heapBudget[i] = heap->budget ? heap->budget(pdev) : 0;
+            /* One usage read serves both values, so the budget never comes
+             * from an older usage than the one reported beside it. */
             p->heapUsage[i] = heap->used ? heap->used(pdev) : 0;
+            p->heapBudget[i] =
+               heap->budget ? heap->budget(pdev, heap, p->heapUsage[i]) : 0;
          }
 
          /* From the Vulkan 1.3.278 spec:
