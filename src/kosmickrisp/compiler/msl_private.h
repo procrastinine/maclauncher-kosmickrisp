@@ -17,9 +17,6 @@ struct io_slot_info {
    bool sample;
    bool uses_interpolant;
    bool per_vertex;
-   /* Mesh outputs: accessed through per-vertex or per-primitive intrinsics. */
-   bool mesh_vertex;
-   bool mesh_primitive;
 };
 
 /* Metal accepts [[point_size]] only in point-topology Mesh vertices. Other

@@ -3210,18 +3210,31 @@ done:
    return result;
 }
 
+struct kk_forwarded_primitive_id {
+   unsigned slot;
+   bool per_primitive;
+};
+
 static bool
 move_primitive_id(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
-   const unsigned *slot = data;
+   const struct kk_forwarded_primitive_id *forward = data;
+   const unsigned *slot = &forward->slot;
 
-   /* Metal requires the vertex output and fragment input types to match */
+   /* Metal requires the vertex output and fragment input types to match.
+    * A Mesh producer stores the value per primitive; the fragment load is
+    * per primitive too, so varying linking never packs it with per-vertex
+    * flat inputs. */
    if (intr->intrinsic == nir_intrinsic_load_primitive_id &&
        b->shader->info.stage == MESA_SHADER_FRAGMENT) {
       b->cursor = nir_before_instr(&intr->instr);
-      nir_def *id = nir_load_input(b, 1, 32, nir_imm_int(b, 0),
-                                   .dest_type = nir_type_uint32,
-                                   .io_semantics.location = *slot);
+      nir_def *id = forward->per_primitive ?
+         nir_load_per_primitive_input(b, 1, 32, nir_imm_int(b, 0),
+                                      .dest_type = nir_type_uint32,
+                                      .io_semantics.location = *slot) :
+         nir_load_input(b, 1, 32, nir_imm_int(b, 0),
+                        .dest_type = nir_type_uint32,
+                        .io_semantics.location = *slot);
       nir_def_replace(&intr->def, id);
       return true;
    }
@@ -3257,12 +3270,16 @@ kk_forward_gs_primitive_id(nir_shader *gs, nir_shader *fs)
        slot < VARYING_SLOT_VAR0)
       return;
 
+   const struct kk_forwarded_primitive_id forward = {
+      .slot = slot,
+      .per_primitive = gs->info.stage == MESA_SHADER_MESH,
+   };
    /* Makes progress only if the FS reads the primitive ID */
    if (!nir_shader_intrinsics_pass(fs, move_primitive_id,
-                                   nir_metadata_control_flow, &slot))
+                                   nir_metadata_control_flow, (void *)&forward))
       return;
 
-   nir_shader_intrinsics_pass(gs, move_primitive_id, nir_metadata_all, &slot);
+   nir_shader_intrinsics_pass(gs, move_primitive_id, nir_metadata_all, (void *)&forward);
 
    BITSET_CLEAR(fs->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID);
    fs->info.inputs_read |= BITFIELD64_BIT(slot);
