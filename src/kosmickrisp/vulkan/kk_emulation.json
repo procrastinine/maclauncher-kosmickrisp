@@ -220,5 +220,20 @@
     "performance": false,
     "performance_reason": "DXVK and vkd3d-proton shader-model, feature-level and required device-creation checks do not require dynamic vertex-input state; static pipeline input remains available.",
     "off_consequence": "No D3D shader-model, feature-level or translator device-creation loss in the checked DXVK/vkd3d-proton paths; dynamic vertex-input pipelines must use static vertex layouts instead."
+  },
+  {
+    "name": "multiview_geometry_tessellation",
+    "description": "Original-view replay for geometry and tessellation multiview producers.",
+    "cost_class": "per-view producer replay",
+    "cost_note": "Advanced multiview producers execute for each active view using the original view index; single-view and ordinary native vertex amplification remain separate paths. Emitted producer instructions are repeated by view count, with a per-draw view load when used.",
+    "extensions": [],
+    "features": [
+      "multiviewGeometryShader",
+      "multiviewTessellationShader"
+    ],
+    "properties": [],
+    "performance": false,
+    "performance_reason": "These advanced multiview combinations are not required by the checked D3D maximum shader-model, feature-level or translator device-creation predicates; ordinary multiview remains available.",
+    "off_consequence": "No D3D maximum shader-model, feature-level or translator device-creation loss in checked paths; vkd3d-proton ViewInstancingTier can fall from tier 2 to unsupported when its advanced-multiview predicate requires these features."
   }
 ]
