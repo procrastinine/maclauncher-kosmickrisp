@@ -5,9 +5,9 @@
  *
  * The radix-tree topology is adapted from Mesa's common
  * src/vulkan/runtime/bvh/lbvh_main.comp (4f071f891d63396c799b267172c19ba6b0301682).
- * Leaves use their unique, already sorted ordinal as a radix key. This preserves
- * the common LBVH topology algorithm without requiring spatial sorting for
- * correctness. Every byte offset and dispatch product is 64-bit.
+ * Leaves use their unique, already sorted ordinal as a radix key. Bottom-level
+ * leaves are first placed in Morton order (kk_as_sort_*). Every byte offset and
+ * dispatch product is 64-bit.
  */
 #include "compiler/libcl/libcl.h"
 #include "kosmickrisp-as-types.h"
@@ -46,6 +46,15 @@ kk_as_initialize(global struct kk_as_header *dst,
    uint64_t id = kk_as_id();
    if (id == 0)
       *dst = *layout;
+   if (id == 0 && layout->type == KK_AS_TYPE_BOTTOM_LEVEL && layout->primitive_count > 1) {
+      global uint *bounds = (global uint *)((global uchar *)dst + layout->canonical_size +
+         kk_as_sort_size(layout->primitive_count) * sizeof(uint64_t) +
+         layout->primitive_count * (uint64_t)sizeof(struct kk_as_node));
+      for (uint axis = 0; axis < 3; ++axis) {
+         bounds[axis] = 0xffffffffu;
+         bounds[3 + axis] = 0;
+      }
+   }
    if (id < layout->node_count) {
       global struct kk_as_node *n = kk_as_node_at(dst, id);
       *n = (struct kk_as_node){0};
@@ -317,6 +326,134 @@ kk_as_micromap_copy(global struct kk_as_header *dst,
    uint64_t bytes = kk_as_micromap_triangle_bytes(record->subdivision_level, record->format);
    for (uint64_t i = 0; i < bytes; ++i)
       out[i] = src[i];
+}
+
+/* Bottom-level leaves are reordered along a 30-bit Morton curve of their
+ * centroids before the radix tree is built over the leaf ordinal, so each
+ * internal node bounds spatially adjacent leaves. Inactive leaves sort last.
+ * Ties keep primitive order, so the build is deterministic. */
+static inline global uint64_t *
+kk_as_sort_keys(global struct kk_as_header *h)
+{
+   return (global uint64_t *)((global uchar *)h + h->canonical_size);
+}
+
+static inline global struct kk_as_node *
+kk_as_sort_stage(global struct kk_as_header *h)
+{
+   return (global struct kk_as_node *)((global uchar *)kk_as_sort_keys(h) +
+      kk_as_sort_size(h->primitive_count) * sizeof(uint64_t));
+}
+
+static inline global uint *
+kk_as_sort_bounds(global struct kk_as_header *h)
+{
+   return (global uint *)(kk_as_sort_stage(h) + h->primitive_count);
+}
+
+/* Copies one node as 64-bit words. */
+static inline void
+kk_as_copy_node(global struct kk_as_node *dst, global const struct kk_as_node *src)
+{
+   for (uint i = 0; i < sizeof(struct kk_as_node) / 8; ++i)
+      ((volatile global uint64_t *)dst)[i] = ((global const uint64_t *)src)[i];
+}
+
+/* Unsigned keys that order like the floats they encode. */
+static inline uint
+kk_as_float_key(float value)
+{
+   uint bits = as_uint(value);
+   return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
+}
+
+static inline float
+kk_as_key_float(uint key)
+{
+   return as_float((key & 0x80000000u) ? (key & 0x7fffffffu) : ~key);
+}
+
+static inline uint
+kk_as_morton_expand(uint v)
+{
+   v = (v * 0x00010001u) & 0xff0000ffu;
+   v = (v * 0x00000101u) & 0x0f00f00fu;
+   v = (v * 0x00000011u) & 0xc30c30c3u;
+   v = (v * 0x00000005u) & 0x49249249u;
+   return v;
+}
+
+KERNEL(64)
+kk_as_sort_bounds_reduce(global struct kk_as_header *h)
+{
+   uint64_t id = kk_as_id();
+   if (id >= h->primitive_count)
+      return;
+   global struct kk_as_node *leaf = kk_as_node_at(h, h->primitive_count - 1 + id);
+   kk_as_copy_node(kk_as_sort_stage(h) + id, leaf);
+   if (leaf->type == KK_AS_NODE_INACTIVE)
+      return;
+   global uint *bounds = kk_as_sort_bounds(h);
+   for (uint axis = 0; axis < 3; ++axis) {
+      uint key = kk_as_float_key(0.5f * (leaf->min[axis] + leaf->max[axis]));
+      atomic_min((volatile global uint *)&bounds[axis], key);
+      atomic_max((volatile global uint *)&bounds[3 + axis], key);
+   }
+}
+
+KERNEL(64)
+kk_as_sort_keys_write(global struct kk_as_header *h)
+{
+   uint64_t id = kk_as_id(), count = h->primitive_count;
+   if (id >= kk_as_sort_size(count))
+      return;
+   global uint64_t *keys = kk_as_sort_keys(h);
+   if (id >= count) {
+      keys[id] = UINT64_MAX;
+      return;
+   }
+   global const struct kk_as_node *leaf = kk_as_sort_stage(h) + id;
+   uint code = 0xffffffffu;
+   if (leaf->type != KK_AS_NODE_INACTIVE) {
+      global const uint *bounds = kk_as_sort_bounds(h);
+      code = 0;
+      for (uint axis = 0; axis < 3; ++axis) {
+         float lo = kk_as_key_float(bounds[axis]), hi = kk_as_key_float(bounds[3 + axis]);
+         float c = 0.5f * (leaf->min[axis] + leaf->max[axis]);
+         float t = hi > lo ? (c - lo) / (hi - lo) : 0.0f;
+         uint q = (uint)clamp(t * 1024.0f, 0.0f, 1023.0f);
+         code |= kk_as_morton_expand(q) << (2 - axis);
+      }
+   }
+   keys[id] = ((uint64_t)code << 32) | id;
+}
+
+/* One bitonic merge step over the power-of-two key array. */
+KERNEL(64)
+kk_as_sort_step(global struct kk_as_header *h, uint stride, uint block)
+{
+   uint64_t i = kk_as_id(), partner = i ^ stride;
+   if (i >= kk_as_sort_size(h->primitive_count) || partner <= i)
+      return;
+   global uint64_t *keys = kk_as_sort_keys(h);
+   uint64_t a = keys[i], b = keys[partner];
+   bool ascending = (i & (uint64_t)block) == 0;
+   if ((a > b) == ascending) {
+      keys[i] = b;
+      keys[partner] = a;
+   }
+}
+
+KERNEL(64)
+kk_as_sort_place(global struct kk_as_header *h)
+{
+   uint64_t id = kk_as_id(), count = h->primitive_count;
+   if (id >= count)
+      return;
+   /* The low key word is the leaf ordinal. A 64-bit mask here becomes a
+    * 128-bit value in the SPIR-V translation; truncation does not. */
+   uint source = (uint)kk_as_sort_keys(h)[id];
+   kk_as_copy_node(kk_as_node_at(h, count - 1 + id), kk_as_sort_stage(h) + source);
 }
 
 static inline int

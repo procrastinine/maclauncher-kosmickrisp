@@ -300,6 +300,10 @@ kk_acquire_compiler(struct kk_device *dev)
 static void
 kk_release_compiler(struct kk_device *dev)
 {
+   if (dev->mtl_rt_compiler) {
+      mtl_release(dev->mtl_rt_compiler);
+      dev->mtl_rt_compiler = NULL;
+   }
    kk_perf_bind_metal_compiler(dev->perf, NULL);
    /* KK_WORKAROUND_11 */
    struct kk_physical_device *pdev = kk_device_physical(dev);

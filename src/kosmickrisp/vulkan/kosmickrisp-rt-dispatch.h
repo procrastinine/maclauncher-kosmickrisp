@@ -47,12 +47,15 @@ struct kk_rt_dispatch_root {
    KK_RT_U32 function_count,program_count,group_count,control_pc;
    KK_RT_U32 traversal_program,max_trace_depth;
    KK_RT_U64 attribute_size;
+   /* Logical launches [launch_base, launch_end) of one direct dispatch;
+    * launch_end 0 runs every launch (indirect dimensions). */
+   KK_RT_U64 launch_base,launch_end;
 };
 KK_RT_ASSERT(sizeof(struct kk_rt_function_info)==8,"VFT metadata ABI");
 KK_RT_ASSERT(sizeof(struct kk_rt_program_info)==32,"program scalar ABI");
 KK_RT_ASSERT(sizeof(struct kk_rt_indirect2)==104,"Vulkan indirect2 ABI");
 KK_RT_ASSERT(__builtin_offsetof(struct kk_rt_indirect2,width)==88,"indirect2 dimension offset");
-KK_RT_ASSERT(sizeof(struct kk_rt_dispatch_root)==240,"RT root scalar ABI");
+KK_RT_ASSERT(sizeof(struct kk_rt_dispatch_root)==256,"RT root scalar ABI");
 #ifndef __METAL_VERSION__
 char *kk_rt_dispatcher_source(void *mem_ctx);
 char *kk_rt_control_source(void *mem_ctx);

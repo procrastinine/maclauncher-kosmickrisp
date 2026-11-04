@@ -125,6 +125,8 @@ struct kk_device {
    struct kk_temporal *temporal;
    mtl_device *mtl_handle;
    mtl_compiler *mtl_compiler_handle;
+   /* Created on the first ray tracing pipeline; links visible functions. */
+   mtl_compiler *mtl_rt_compiler;
    struct kk_async_compute_owner *async_compute;
 
    /* Dispatch table exposed to the user. Required since we need to record all

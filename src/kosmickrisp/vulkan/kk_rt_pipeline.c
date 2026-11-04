@@ -90,6 +90,27 @@ kk_rt_pipeline_destroy(struct vk_device *device, void *data,
    vk_free2(&device->alloc, alloc, pipeline);
 }
 
+/* A compiler with a pipeline data set serializer that captures binaries
+ * dereferences a null binary on Metal's compiler connection queue while it
+ * records a pipeline that statically links visible functions. Ray tracing
+ * pipelines link through a device compiler without a serializer. */
+static mtl_compiler *
+kk_rt_link_compiler(struct kk_device *dev)
+{
+   mtl_compiler *compiler = p_atomic_read(&dev->mtl_rt_compiler);
+   if (compiler)
+      return compiler;
+   compiler = mtl_new_compiler(dev->mtl_handle);
+   if (!compiler)
+      return NULL;
+   mtl_compiler *existing = p_atomic_cmpxchg_ptr(&dev->mtl_rt_compiler, NULL, compiler);
+   if (existing) {
+      mtl_release(compiler);
+      return existing;
+   }
+   return compiler;
+}
+
 VkResult
 kk_rt_pipeline_realize(struct vk_device *device, const struct vk_pipeline *common,
                         const VkAllocationCallbacks *alloc, void **data)
@@ -198,8 +219,10 @@ kk_rt_pipeline_realize(struct vk_device *device, const struct vk_pipeline *commo
       pipeline->dispatcher = mtl_new_library_function_descriptor(pipeline->dispatcher_library, "main_entrypoint");
    if(pipeline->dispatcher_library) pipeline->control=mtl_new_library_function_descriptor(pipeline->dispatcher_library,"kk_rt_control");
    descriptors[count++]=pipeline->control;
-   bool linked = pipeline->dispatcher && pipeline->control && kk_rt_link_functions(dev->mtl_compiler_handle,
-      pipeline->dispatcher, count, descriptors, 32, &pipeline->native);
+   mtl_compiler *link_compiler = kk_rt_link_compiler(dev);
+   bool linked = pipeline->dispatcher && pipeline->control && link_compiler &&
+      kk_rt_link_functions(link_compiler, pipeline->dispatcher, count, descriptors, 32,
+                           &pipeline->native);
    vk_free2(&device->alloc, alloc, descriptors);
    if (!linked)
       return VK_ERROR_INVALID_SHADER_NV;

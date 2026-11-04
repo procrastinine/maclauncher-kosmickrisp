@@ -130,6 +130,15 @@ kk_as_compute_layout(uint32_t type, uint32_t flags, uint64_t geometries,
    /* Construction stages the entire converted representation before the final
     * copy. No original input pointer survives in the completed representation. */
    out.scratch_size = h->canonical_size;
+   if (type == KK_AS_TYPE_BOTTOM_LEVEL && primitives > 1) {
+      uint64_t keys, stage;
+      if (!kk_as_u64_mul(kk_as_sort_size(primitives), sizeof(uint64_t), &keys) ||
+          !kk_as_u64_mul(primitives, sizeof(struct kk_as_node), &stage) ||
+          !kk_as_u64_add(out.scratch_size, keys, &out.scratch_size) ||
+          !kk_as_u64_add(out.scratch_size, stage, &out.scratch_size) ||
+          !kk_as_u64_add(out.scratch_size, KK_AS_SORT_BOUNDS_SIZE, &out.scratch_size))
+         return false;
+   }
    *result = out;
    return true;
 }

@@ -53,8 +53,8 @@ kk_rt_sbt_record_address(struct kk_rt_sbt_region region, KK_RT_U64 index,
                           KK_RT_THREAD KK_RT_U64 *address)
 {
    KK_RT_U64 offset, end;
-   if (!region.address || (region.address & 63) || region.stride < 32 ||
-       (region.stride & 31) ||
+   /* A zero stride selects the same record for every index. */
+   if (!region.address || (region.address & 63) || (region.stride & 31) ||
        !kk_rt_u64_mul(index, region.stride, &offset) ||
        !kk_rt_u64_add(offset, sizeof(struct kk_rt_group_token), &end) ||
        end > region.size ||

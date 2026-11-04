@@ -328,6 +328,23 @@ kk_CmdBuildAccelerationStructuresKHR(VkCommandBuffer commandBuffer, uint32_t inf
       if (first) {
          struct kk_as_convert_leaves_args leaves = {scratch, input.gpu};
          kk_as_dispatch(cmd, kk_as_direct_grid(first), KK_AS_CONVERT_LEAVES, &leaves, sizeof(leaves));
+         if (layout.header.type == KK_AS_TYPE_BOTTOM_LEVEL && first > 1) {
+            /* Separate dispatches order the reduction, every merge step and
+             * the placement. */
+            uint64_t sort_size = kk_as_sort_size(first);
+            struct kk_as_sort_bounds_reduce_args reduce = {scratch};
+            kk_as_dispatch(cmd, kk_as_direct_grid(first), KK_AS_SORT_BOUNDS_REDUCE, &reduce, sizeof(reduce));
+            struct kk_as_sort_keys_write_args keys = {scratch};
+            kk_as_dispatch(cmd, kk_as_direct_grid(sort_size), KK_AS_SORT_KEYS_WRITE, &keys, sizeof(keys));
+            for (uint64_t block = 2; block <= sort_size; block <<= 1) {
+               for (uint64_t stride = block >> 1; stride; stride >>= 1) {
+                  struct kk_as_sort_step_args step = {scratch, (uint32_t)stride, (uint32_t)block};
+                  kk_as_dispatch(cmd, kk_as_direct_grid(sort_size), KK_AS_SORT_STEP, &step, sizeof(step));
+               }
+            }
+            struct kk_as_sort_place_args place = {scratch};
+            kk_as_dispatch(cmd, kk_as_direct_grid(first), KK_AS_SORT_PLACE, &place, sizeof(place));
+         }
          struct kk_as_radix_tree_args tree = {scratch};
          kk_as_dispatch(cmd, kk_as_direct_grid(first), KK_AS_RADIX_TREE, &tree, sizeof(tree));
          for (int level = 31; level >= 0; --level) {

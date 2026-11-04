@@ -34,6 +34,9 @@ Compared with upstream KosmicKrisp at the same Mesa commit, this build adds the 
 - Compute shader derivatives, fragment barycentrics and quad control
 - Subgroup operations in vertex, tessellation and geometry shaders
 
+**Ray tracing**
+- Acceleration structures, ray queries and ray tracing pipelines, built and traversed in compute without Metal ray tracing, for Direct3D 12 ray tracing tier 1.1 through vkd3d-proton; reported in conformance mode
+
 **Presentation**
 - Headless surfaces, incremental present and presentation timing
 

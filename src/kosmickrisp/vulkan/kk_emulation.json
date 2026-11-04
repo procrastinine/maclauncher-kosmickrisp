@@ -35,9 +35,9 @@
   },
   {
     "name": "ray_tracing",
-    "description": "Acceleration structures, ray queries and continuation-based ray-tracing pipelines.",
+    "description": "Acceleration structures, ray queries and continuation-based ray-tracing pipelines. Host acceleration-structure commands, indirect acceleration-structure builds and shader group capture/replay handles are not provided; the vkd3d-proton ray tracing tier 1.1 path does not use them.",
     "cost_class": "compute / software traversal",
-    "cost_note": "AS construction and traversal use compute and continuation dispatch. Work is selected by RT commands and shaders.",
+    "cost_note": "AS construction is a compute build; bottom-level leaves are first sorted along a Morton curve of their centroids by a bitonic sort, one dispatch per merge step. Traversal is a stackless shader walk shared by ray queries and pipelines. Pipeline shaders run as continuation parts called from one dispatch kernel; invocation-private arrays and values live across calls in a device-memory frame per lane, accessed through untyped loads and stores. A direct launch larger than the lane arena runs as consecutive dispatches separated by barriers. Ray tracing pipelines are not captured into the binary archive, so every run compiles and links them cold; performance mode does not report ray tracing, so its pipeline caching is unchanged. Work is selected by RT commands and shaders.",
     "extensions": [
       "VK_KHR_acceleration_structure",
       "VK_KHR_ray_tracing_pipeline",

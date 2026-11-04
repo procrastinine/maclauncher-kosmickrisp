@@ -1140,6 +1140,53 @@ src_to_packed_store(struct nir_to_msl_ctx *ctx, nir_src *src,
    P(ctx, ")");
 }
 
+/* Ray tracing stages keep invocation-private arrays in the device-memory
+ * continuation frame, where one location is written and read back with
+ * different inferred types (a 32-bit boolean stored as uint and loaded as
+ * bool, a float stored as uint). Typed pointers let Metal treat those
+ * accesses as unrelated and reorder them, and a bool pointer reads one byte
+ * of each 32-bit element. These stages access global memory as unsigned
+ * integers of the value's width and convert the value. */
+static bool
+untyped_global_access(struct nir_to_msl_ctx *ctx)
+{
+   return mesa_shader_stage_is_rt(ctx->shader->info.stage);
+}
+
+static void
+untyped_global_load(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr,
+                    const char *qualifier, const char *type)
+{
+   const char *utype = msl_uint_type(instr->def.bit_size, instr->def.num_components);
+   const char *uscalar = msl_uint_type(instr->def.bit_size, 1);
+   const bool boolean = !strncmp(type, "bool", 4);
+   P(ctx, boolean ? "%s(" : "as_type<%s>(", type);
+   if (instr->def.num_components == 1) {
+      P(ctx, "*(%s %s*)(", qualifier, uscalar);
+   } else {
+      P(ctx, "%s(*(%s packed_%s*)", utype, qualifier, utype);
+   }
+   src_to_msl(ctx, &instr->src[0]);
+   P(ctx, "))");
+}
+
+static void
+untyped_global_store(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr,
+                     const char *qualifier, const char *type)
+{
+   const unsigned n = instr->src[0].ssa->num_components;
+   const char *utype = msl_uint_type(instr->src[0].ssa->bit_size, n);
+   const bool boolean = !strncmp(type, "bool", 4);
+   src_to_packed_store(ctx, &instr->src[1], qualifier, utype, n);
+   writemask_to_msl(ctx, nir_intrinsic_write_mask(instr), instr->num_components);
+   P(ctx, n == 1 ? " = %s(" : " = packed_%s(", utype);
+   P(ctx, boolean ? "%s(" : "as_type<%s>(", utype);
+   src_to_msl(ctx, &instr->src[0]);
+   P(ctx, "))");
+   writemask_to_msl(ctx, nir_intrinsic_write_mask(instr), instr->num_components);
+   P(ctx, ";\n");
+}
+
 static const char *
 atomic_op_to_msl(nir_atomic_op op)
 {
@@ -1764,6 +1811,9 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
          P(ctx, "atomic_load_explicit((%s atomic_%s*)", qualifier, type);
          src_to_msl(ctx, &instr->src[0]);
          P(ctx, ", memory_order_relaxed);\n");
+      } else if (untyped_global_access(ctx)) {
+         untyped_global_load(ctx, instr, qualifier, type);
+         P(ctx, ";\n");
       } else {
          src_to_packed_load(ctx, &instr->src[0], qualifier, type,
                             instr->def.num_components);
@@ -1837,6 +1887,8 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
          src_to_packed(ctx, &instr->src[0], type,
                        instr->src[0].ssa->num_components);
          P(ctx, ", memory_order_relaxed);\n");
+      } else if (untyped_global_access(ctx)) {
+         untyped_global_store(ctx, instr, qualifier, type);
       } else {
          src_to_packed_store(ctx, &instr->src[1], qualifier, type,
                              instr->src[0].ssa->num_components);

@@ -152,16 +152,37 @@ kk_rt_trace(struct kk_cmd_buffer *cmd,const VkStridedDeviceAddressRegionKHR *ray
    for(uint32_t i=0;i<pipeline->program_count;++i){const struct kk_rt_shader *shader=kk_rt_shader_from_vk(pipeline->programs[i].shader);
       ((struct kk_rt_program_info*)programs.cpu)[i]=(struct kk_rt_program_info){pipeline->programs[i].function_first,pipeline->programs[i].function_count,shader->vk.scratch_size,shader->attribute_size,shader->embedded_sampler_table};}
    root.function_info=functions.gpu;root.program_info=programs.gpu;root.groups=groups.gpu;
-   struct kk_ptr args=kk_pool_upload(cmd,&root,sizeof(root),16);if(!args.gpu)return;
+   /* A direct launch larger than the lane arena runs as consecutive
+    * dispatches, each covering at most physical lanes times per_lane
+    * launches, so no thread group stays resident for the whole launch:
+    * Metal ends a command buffer with a timeout error when one dispatch runs
+    * for seconds. Each dispatch reuses the arena after the barrier. Indirect
+    * dimensions are read on the GPU, so their lanes grid-stride the launch
+    * in one dispatch. */
+   uint64_t per_lane=1,chunks=1;
+   if(!is_indirect){
+      per_lane=MAX2(DIV_ROUND_UP(launches,(uint64_t)physical*KK_RT_MAX_LAUNCH_DISPATCHES),1);
+      chunks=DIV_ROUND_UP(launches,(uint64_t)physical*per_lane);
+   }
+   struct kk_ptr args=kk_rt_arena(cmd,chunks*sizeof(root));if(!args.gpu)return;
+   for(uint64_t i=0;i<chunks;++i){
+      root.launch_base=i*physical*per_lane;
+      root.launch_end=is_indirect?0:MIN2(launches,root.launch_base+physical*per_lane);
+      memcpy((uint8_t*)args.cpu+i*sizeof(root),&root,sizeof(root));
+   }
    /* Internal RT dispatch changes the physical compute PSO. Invalidate the
     * ordinary compute binding cache through its existing encoder helper. */
    mtl_compute_encoder *encoder=cs_get_compute(cmd);
    KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder,MTL_STAGE_DISPATCH,MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
    uint64_t prior_root=cmd->state.root_addr;
-   kk_cmd_bind_root_to_argument_table(cmd,args.gpu);
    mtl_compute_set_pipeline_state(encoder,pipeline->native.pipeline);
-   mtl_dispatch_threads(encoder,(struct mtl_size){physical,1,1},(struct mtl_size){32,1,1});
-   KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder,MTL_STAGE_DISPATCH,MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
+   for(uint64_t i=0;i<chunks;++i){
+      const struct kk_rt_dispatch_root *chunk=(const struct kk_rt_dispatch_root*)((const uint8_t*)args.cpu+i*sizeof(root));
+      uint64_t threads=is_indirect?physical:MIN2(chunk->launch_end-chunk->launch_base,(uint64_t)physical);
+      kk_cmd_bind_root_to_argument_table(cmd,args.gpu+i*sizeof(root));
+      mtl_dispatch_threads(encoder,(struct mtl_size){threads,1,1},(struct mtl_size){32,1,1});
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder,MTL_STAGE_DISPATCH,MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
+   }
    kk_cmd_bind_root_to_argument_table(cmd,prior_root);
 }
 VKAPI_ATTR void VKAPI_CALL

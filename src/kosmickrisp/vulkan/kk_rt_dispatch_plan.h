@@ -5,7 +5,10 @@
 
 /* One SIMD scheduler per 32-thread group. Keep enough independent groups to
  * occupy the GPU; bound only their private arena, never the logical launch.
- * Indirect dimensions are read on the GPU and grid-stride the same arena. */
+ * A larger direct launch runs as consecutive dispatches over the same arena,
+ * at most KK_RT_MAX_LAUNCH_DISPATCHES of them. Indirect dimensions are read
+ * on the GPU and grid-stride the arena in one dispatch. */
+#define KK_RT_MAX_LAUNCH_DISPATCHES 1024u
 static inline bool
 kk_rt_dispatch_plan(uint64_t launches, bool indirect, uint64_t stride,
                     uint64_t arena_budget, uint64_t max_buffer,

@@ -22,6 +22,20 @@
 #define KK_AS_SERIAL_BLOCK_OPACITY_MICROMAP 0u
 #define KK_AS_MAX_DISPATCH_INVOCATIONS (UINT64_C(65536) * 65535 * UINT32_MAX)
 
+/* Bottom-level builds sort their leaves along a Morton curve. The sort keys,
+ * a leaf staging copy and the centroid bounds follow the canonical
+ * representation in scratch. */
+static inline uint64_t
+kk_as_sort_size(uint64_t primitives)
+{
+   uint64_t size = 1;
+   while (size < primitives)
+      size <<= 1;
+   return size;
+}
+
+#define KK_AS_SORT_BOUNDS_SIZE ((uint64_t)32)
+
 #define KK_AS_TYPE_TOP_LEVEL 0u
 #define KK_AS_TYPE_BOTTOM_LEVEL 1u
 #define KK_AS_TYPE_OPACITY_MICROMAP 2u

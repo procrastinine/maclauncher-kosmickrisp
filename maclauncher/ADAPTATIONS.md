@@ -1808,6 +1808,22 @@ Optional scene operation API3 records on the producer's actual device and Metal4
 
 Implementation: [kk_scene.m](../src/kosmickrisp/vulkan/kk_scene.m), [scene operation contract](SCENE_OPERATIONS.md).
 
+## Ray tracing
+
+### Acceleration structures, ray queries and ray tracing pipelines in compute
+
+Vulkan contract: `VK_KHR_acceleration_structure`, `VK_KHR_ray_query`, `VK_KHR_ray_tracing_pipeline`, `VK_KHR_ray_tracing_maintenance1`, `VK_KHR_pipeline_library`, `VK_EXT_pipeline_library_group_handles`, `accelerationStructure`, `rayQuery`, `rayTracingPipeline`, `rayTracingPipelineTraceRaysIndirect`, `rayTracingPipelineTraceRaysIndirect2`, `rayTraversalPrimitiveCulling`, `pipelineLibraryGroupHandles`. These are reported in conformance mode, or when `KK_EMULATION` selects `ray_tracing`.
+
+Acceleration structures are built in compute passes without Metal ray tracing. Bottom-level builds sort their leaves along a Morton curve of the leaf centroids and build a radix tree over the sorted leaves; top-level structures reference bottom-level structures by device address. Ray queries and ray tracing pipelines share one stackless traversal shader.
+
+Ray tracing pipeline shaders are split into continuation parts at every trace, callable and report call. The parts are statically linked as visible functions of one dispatch kernel, which calls them together for the lanes of a SIMD group that share a shader and resume point. Payloads, hit attributes and invocation-private values live in a device-memory frame per lane. A direct launch larger than the lane arena runs as consecutive dispatches; indirect launches read their dimensions on the GPU and grid-stride the arena in one dispatch. Ray tracing pipelines are linked by a device compiler without binary archive capture.
+
+Limits and reported properties: `maxRayRecursionDepth = 31`; `maxRayDispatchInvocationCount = 1073741824`; `maxRayHitAttributeSize = 32`; `shaderGroupHandleSize = 32`; `maxShaderGroupStride = 4096`; `maxGeometryCount = 16777215`; `maxInstanceCount = 16777215`; `maxPrimitiveCount = 536870911`. `accelerationStructureHostCommands`, `accelerationStructureIndirectBuild` and `rayTracingPipelineShaderGroupHandleCaptureReplay` are not supported.
+
+Consumers: vkd3d-proton ray tracing tier 1.1 (state objects, inline ray queries and `DispatchRays`), Vulkan ray tracing applications.
+
+Implementation: [kk_as.c](../src/kosmickrisp/vulkan/kk_as.c), [kosmickrisp-as.cl](../src/kosmickrisp/as/kosmickrisp-as.cl), [kk_ray_query.c](../src/kosmickrisp/vulkan/kk_ray_query.c), [kk_ray_traversal.c](../src/kosmickrisp/vulkan/kk_ray_traversal.c), [kk_rt_cps.c](../src/kosmickrisp/vulkan/kk_rt_cps.c), [kk_rt_traversal.c](../src/kosmickrisp/vulkan/kk_rt_traversal.c), [kk_rt_pipeline.c](../src/kosmickrisp/vulkan/kk_rt_pipeline.c), [kk_rt_metal.m](../src/kosmickrisp/vulkan/kk_rt_metal.m), [kk_rt_commands.c](../src/kosmickrisp/vulkan/kk_rt_commands.c), [kk_rt_dispatch_source.h](../src/kosmickrisp/vulkan/kk_rt_dispatch_source.h), [kk_rt_sbt.h](../src/kosmickrisp/vulkan/kk_rt_sbt.h), [kk_emulation.json](../src/kosmickrisp/vulkan/kk_emulation.json).
+
 ## Detailed specifications
 
 ### On-demand presentation capture
