@@ -43,7 +43,8 @@
       "VK_KHR_ray_tracing_pipeline",
       "VK_KHR_ray_query",
       "VK_KHR_ray_tracing_maintenance1",
-      "VK_KHR_pipeline_library"
+      "VK_KHR_pipeline_library",
+      "VK_EXT_pipeline_library_group_handles"
     ],
     "features": [
       "accelerationStructure",
@@ -53,7 +54,8 @@
       "rayTraversalPrimitiveCulling",
       "rayQuery",
       "rayTracingMaintenance1",
-      "rayTracingPipelineTraceRaysIndirect2"
+      "rayTracingPipelineTraceRaysIndirect2",
+      "pipelineLibraryGroupHandles"
     ],
     "properties": [
       "maxGeometryCount",

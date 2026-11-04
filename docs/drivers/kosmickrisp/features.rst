@@ -751,10 +751,12 @@ Feature table
      - —
    * - ``VK_KHR_acceleration_structure``, ``VK_KHR_ray_tracing_pipeline``,
        ``VK_KHR_ray_query``, ``VK_KHR_ray_tracing_maintenance1``,
-       ``VK_KHR_pipeline_library``
+       ``VK_KHR_pipeline_library``, ``VK_EXT_pipeline_library_group_handles``
      - Emulated: acceleration structures are built and traversed in compute,
        and ray-tracing pipelines run as continuation dispatches. Metal ray
-       tracing is not used.
+       tracing is not used. Shader group handles derive from the group's
+       shaders, so a pipeline library and every pipeline linked from it
+       report the same handle for a group.
      - Apple6 for Metal ray tracing, Apple9 for intersection result storage
        and intersection function buffers; emulated on all families.
      - ``ray_tracing``
