@@ -4,6 +4,7 @@
 #include "util/mesa-blake3.h"
 #include "util/simple_mtx.h"
 #include "kosmickrisp/bridge/mtl_types.h"
+#include "kosmickrisp/bridge/mtl_format.h"
 #include <vulkan/vulkan_core.h>
 struct kk_device;
 struct kk_shader;
@@ -106,6 +107,31 @@ VkResult kk_vrs_shadow_get(struct kk_device *, struct kk_vrs_source *,
  * actual application program and active query. Both use its one library. */
 VkResult kk_vrs_artifact_compute(struct kk_device *, struct kk_vrs_artifact *,
    bool statistics, mtl_compute_pipeline_state **out);
+/* Explicit coarse-use composition only. Every artifact is a canonical cache
+ * reference; the two compute handles are borrowed from those artifacts. Keep
+ * this record and the native render bundle alive until command retirement. */
+struct kk_vrs_shadow_programs {
+   struct kk_vrs_artifact *capture, *transaction, *load, *replay, *vertex;
+   mtl_compute_pipeline_state *load_pipeline, *transaction_pipeline;
+   enum mtl_pixel_format formats[8];
+   uint32_t input_stride, samples;
+   bool statistics;
+};
+struct mtl_vrs_shadow_pipelines;
+VkResult kk_vrs_shadow_programs_get(struct kk_device *, struct kk_vrs_source *,
+   const struct kk_vrs_transaction_options *, bool statistics,
+   struct kk_vrs_shadow_programs *out);
+void kk_vrs_shadow_programs_finish(struct kk_device *, struct kk_vrs_shadow_programs *);
+/* Factory consumes the actual reader/linkage and installs the supplied capture
+ * fragment. Return a +1 descriptor; its CPU construction data expires at
+ * return. Mesh uses kk_mesh_retained_fragment_descriptor, Poly its actual
+ * retained descriptor recipe. This callback never reruns application stages. */
+typedef mtl_render_pipeline_descriptor *(*kk_vrs_capture_descriptor_factory)(
+   void *data, mtl_function_descriptor *capture);
+VkResult kk_vrs_shadow_pipelines_create(struct kk_device *,
+   const struct kk_vrs_shadow_programs *, kk_vrs_capture_descriptor_factory,
+   void *data, struct mtl_vrs_shadow_pipelines **out);
+
 /* Producer and fragment are the actual bound pair. The command/attachment
  * owner holds their normal lifetime and owns the resulting native PSOs. */
 VkResult kk_vrs_native_pipelines_create(struct kk_device *dev,

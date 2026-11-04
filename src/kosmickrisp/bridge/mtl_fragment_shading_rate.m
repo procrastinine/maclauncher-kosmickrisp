@@ -393,3 +393,79 @@ mtl_vrs_prepare_mesh_job(mtl_render_encoder *encoder, const struct mtl_vrs_pipel
    mtl_set_address(table, context, KK_ARGUMENT_PER_DRAW);
    return true;
 }
+
+/* This bundle owns only native render PSOs. Its caller retains canonical
+ * program artifacts (including borrowed compute PSOs) through retirement. */
+struct mtl_vrs_shadow_pipelines {
+   id<MTLRenderPipelineState> capture, replay;
+};
+
+struct mtl_vrs_shadow_pipelines *
+mtl_vrs_new_shadow_pipelines(mtl_compiler *compiler,
+   mtl_render_pipeline_descriptor *capture,
+   mtl_function_descriptor *tile_vertex, mtl_function_descriptor *replay,
+   const enum mtl_pixel_format formats[8], uint32_t samples)
+{
+   if (!compiler || !capture || !tile_vertex || !replay || !formats ||
+       (samples != 1 && samples != 2 && samples != 4))
+      return NULL;
+   @autoreleasepool {
+      /* Mesh and vertex descriptors expose these same fragment/attachment
+       * properties. Keep the concrete original descriptor class on copy. */
+      MTL4RenderPipelineDescriptor *original = (MTL4RenderPipelineDescriptor *)capture;
+      if (!original.fragmentFunctionDescriptor)
+         return NULL;
+      struct mtl_vrs_shadow_pipelines *p = calloc(1, sizeof(*p));
+      if (!p) return NULL;
+      MTL4RenderPipelineDescriptor *coverage = [[original copy] autorelease];
+      coverage.rasterSampleCount = samples;
+      coverage.alphaToCoverageState = MTL4AlphaToCoverageStateDisabled;
+      coverage.alphaToOneState = MTL4AlphaToOneStateDisabled;
+      for (unsigned i = 0; i < 8; i++) {
+         coverage.colorAttachments[i].pixelFormat = (MTLPixelFormat)formats[i];
+         coverage.colorAttachments[i].writeMask = MTLColorWriteMaskNone;
+      }
+      /* Common creation keeps all actual required/optional constant chains
+       * and rejects an unusable function without publishing a partial PSO. */
+      p->capture = (id<MTLRenderPipelineState>)mtl_new_render_pipeline(compiler, (void *)coverage);
+      if (p->capture) {
+         MTL4RenderPipelineDescriptor *replacement =
+            [[[MTL4RenderPipelineDescriptor alloc] init] autorelease];
+         replacement.vertexFunctionDescriptor = (MTL4FunctionDescriptor *)tile_vertex;
+         replacement.fragmentFunctionDescriptor = (MTL4FunctionDescriptor *)replay;
+         replacement.rasterizationEnabled = YES;
+         replacement.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+         replacement.rasterSampleCount = samples;
+         replacement.alphaToCoverageState = MTL4AlphaToCoverageStateDisabled;
+         replacement.alphaToOneState = MTL4AlphaToOneStateDisabled;
+         for (unsigned i = 0; i < 8; i++) {
+            replacement.colorAttachments[i].pixelFormat = (MTLPixelFormat)formats[i];
+            replacement.colorAttachments[i].writeMask = formats[i] == MTL_PIXEL_FORMAT_INVALID ?
+               MTLColorWriteMaskNone : MTLColorWriteMaskAll;
+         }
+         p->replay = (id<MTLRenderPipelineState>)mtl_new_render_pipeline(compiler, (void *)replacement);
+      }
+      if (!p->capture || !p->replay) {
+         mtl_vrs_destroy_shadow_pipelines(p);
+         return NULL;
+      }
+      return p;
+   }
+}
+
+mtl_render_pipeline_state *
+mtl_vrs_shadow_pipeline(const struct mtl_vrs_shadow_pipelines *p, enum mtl_vrs_phase phase)
+{
+   if (!p) return NULL;
+   return phase == MTL_VRS_COVERAGE ? (void *)p->capture :
+      phase == MTL_VRS_REPLAY ? (void *)p->replay : NULL;
+}
+
+void
+mtl_vrs_destroy_shadow_pipelines(struct mtl_vrs_shadow_pipelines *p)
+{
+   if (!p) return;
+   [p->capture release];
+   [p->replay release];
+   free(p);
+}

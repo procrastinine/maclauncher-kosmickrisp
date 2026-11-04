@@ -2,6 +2,7 @@
 #ifndef MTL_FRAGMENT_SHADING_RATE_H
 #define MTL_FRAGMENT_SHADING_RATE_H
 #include "mtl_types.h"
+#include "mtl_format.h"
 #include <stdbool.h>
 #include "kosmickrisp/libkk/kk_fragment_shading_rate_types.h"
 struct mtl_vrs_pipelines;
@@ -82,4 +83,21 @@ bool mtl_vrs_prepare_mesh_job(mtl_render_encoder *, const struct mtl_vrs_pipelin
 bool mtl_vrs_encode_native(mtl_render_encoder *encoder, const struct mtl_vrs_pipelines *pipelines,
    mtl_argument_table *original_table, mtl_argument_table *coarse_table,
    const struct kk_vrs_context *context);
+/* Software transaction render phases. capture is a caller-created descriptor
+ * containing the actual retained raster reader and capture fragment. The
+ * constructor copies it without replacing/recompiling the reader. Replay
+ * uses only the supplied shared tile vertex and replacement fragment.
+ * No application stage or library compilation occurs here. Capture uses
+ * native DS BYPASS; replay uses replacement writes, never original tests.
+ * Both suppress native query counting. The command owner supplies pass,
+ * private/memoryless lifetime and real ordering; this constructor binds none. */
+struct mtl_vrs_shadow_pipelines;
+struct mtl_vrs_shadow_pipelines *mtl_vrs_new_shadow_pipelines(
+   mtl_compiler *, mtl_render_pipeline_descriptor *capture,
+   mtl_function_descriptor *tile_vertex, mtl_function_descriptor *replay,
+   const enum mtl_pixel_format formats[8], uint32_t samples);
+mtl_render_pipeline_state *mtl_vrs_shadow_pipeline(
+   const struct mtl_vrs_shadow_pipelines *, enum mtl_vrs_phase);
+void mtl_vrs_destroy_shadow_pipelines(struct mtl_vrs_shadow_pipelines *);
+
 #endif

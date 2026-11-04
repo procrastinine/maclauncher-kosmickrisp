@@ -842,6 +842,78 @@ kk_vrs_artifact_compute(struct kk_device *dev, struct kk_vrs_artifact *artifact,
    return result;
 }
 
+void
+kk_vrs_shadow_programs_finish(struct kk_device *dev, struct kk_vrs_shadow_programs *p)
+{
+   if (!p) return;
+   kk_vrs_artifact_unref(dev, p->vertex);
+   kk_vrs_artifact_unref(dev, p->replay);
+   kk_vrs_artifact_unref(dev, p->load);
+   kk_vrs_artifact_unref(dev, p->transaction);
+   kk_vrs_artifact_unref(dev, p->capture);
+   memset(p, 0, sizeof(*p));
+}
+
+VkResult
+kk_vrs_shadow_programs_get(struct kk_device *dev, struct kk_vrs_source *source,
+   const struct kk_vrs_transaction_options *state, bool statistics,
+   struct kk_vrs_shadow_programs *p)
+{
+   memset(p, 0, sizeof(*p));
+   VkResult result = kk_vrs_capture_get(dev, source, state, &p->capture);
+   if (result != VK_SUCCESS) goto fail;
+   result = kk_vrs_transaction_get(dev, source, state, &p->transaction);
+   if (result != VK_SUCCESS) goto fail;
+   result = kk_vrs_shadow_get(dev, source, state, KK_VRS_SHADOW_LOAD, &p->load);
+   if (result != VK_SUCCESS) goto fail;
+   result = kk_vrs_shadow_get(dev, source, state, KK_VRS_SHADOW_REPLAY, &p->replay);
+   if (result != VK_SUCCESS) goto fail;
+   result = kk_vrs_shadow_get(dev, source, state, KK_VRS_TILE_VERTEX, &p->vertex);
+   if (result != VK_SUCCESS) goto fail;
+   p->input_stride = p->capture->input_stride;
+   if (p->input_stride < 64 || p->input_stride != p->transaction->input_stride) {
+      result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
+      goto fail;
+   }
+   p->statistics = statistics && p->transaction->data.uses_pipeline_statistics;
+   result = kk_vrs_artifact_compute(dev, p->load, false, &p->load_pipeline);
+   if (result != VK_SUCCESS) goto fail;
+   result = kk_vrs_artifact_compute(dev, p->transaction, p->statistics, &p->transaction_pipeline);
+   if (result != VK_SUCCESS) goto fail;
+   p->samples = state->samples;
+   for (unsigned physical = 0; physical < state->color_count; physical++) {
+      unsigned logical = state->color_map[physical];
+      if (logical != MESA_VK_ATTACHMENT_UNUSED &&
+          state->color_formats[physical] != VK_FORMAT_UNDEFINED)
+         p->formats[logical] = vk_format_to_mtl_pixel_format(state->color_formats[physical]);
+   }
+   return VK_SUCCESS;
+fail:
+   kk_vrs_shadow_programs_finish(dev, p);
+   return result;
+}
+
+VkResult
+kk_vrs_shadow_pipelines_create(struct kk_device *dev,
+   const struct kk_vrs_shadow_programs *programs,
+   kk_vrs_capture_descriptor_factory raster, void *data,
+   struct mtl_vrs_shadow_pipelines **out)
+{
+   *out = NULL;
+   if (!programs || !programs->capture || !programs->vertex || !programs->replay ||
+       !programs->load_pipeline || !programs->transaction_pipeline || !raster)
+      return VK_ERROR_FEATURE_NOT_PRESENT;
+   /* All artifact/compute gets have dropped the device compilation mutex.
+    * Only the actual producer's factory may select its retained descriptor. */
+   mtl_render_pipeline_descriptor *capture = raster(data, programs->capture->function);
+   if (!capture) return VK_ERROR_INVALID_SHADER_NV;
+   *out = mtl_vrs_new_shadow_pipelines(dev->mtl_compiler_handle, capture,
+      programs->vertex->function, programs->replay->function,
+      programs->formats, programs->samples);
+   mtl_release(capture);
+   return *out ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
+}
+
 #include "kk_fragment_shading_rate_support_cache.h"
 
 static VkResult
