@@ -397,5 +397,35 @@
     "performance": false,
     "performance_reason": "Double precision is an optional D3D11/D3D12 capability; the pinned DXVK and vkd3d-proton SM/FL and device-creation gates do not require it, and Apple family 8 has no native binary64 ALU.",
     "off_consequence": "D3D11/D3D12 double-precision capabilities and FP64 shader creation are unavailable; the pinned translator SM/FL limits and ordinary device creation are unchanged. Integer64 support is independent."
+  },
+  {
+    "name": "device_generated_commands",
+    "description": "Generated graphics and compute sequences with push-data and vertex/index-buffer tokens.",
+    "cost_class": "GPU token expansion / native Metal ICB",
+    "cost_note": "Used sequences snapshot token bytes and expand root, draw and vertex-input data on the GPU before native ICB execution. Native expansion and command encoding share one dispatch per 512-sequence slice; graphics crosses from compute to render. Poly stages retain their own expansion. The shared runtime library is compiled only for generated-command or indirect-count execution; application shaders gain no DGC MSL.",
+    "extensions": [
+      "VK_EXT_device_generated_commands"
+    ],
+    "features": [
+      "deviceGeneratedCommands",
+      "dynamicGeneratedPipelineLayout"
+    ],
+    "properties": [
+      "maxIndirectPipelineCount",
+      "maxIndirectShaderObjectCount",
+      "maxIndirectSequenceCount",
+      "maxIndirectCommandsTokenCount",
+      "maxIndirectCommandsTokenOffset",
+      "maxIndirectCommandsIndirectStride",
+      "supportedIndirectCommandsInputModes",
+      "supportedIndirectCommandsShaderStages",
+      "supportedIndirectCommandsShaderStagesPipelineBinding",
+      "supportedIndirectCommandsShaderStagesShaderBinding",
+      "deviceGeneratedCommandsTransformFeedback",
+      "deviceGeneratedCommandsMultiDrawIndirectCount"
+    ],
+    "performance": true,
+    "performance_reason": "Keeps state-changing D3D12 ExecuteIndirect signatures working where vkd3d-proton has no complete fallback; unused DGC adds no application-shader MSL or GPU preprocessing.",
+    "off_consequence": "ExecuteIndirect tier 1.1 is unavailable; vkd3d-proton can skip state-changing indirect signatures without a DGC template. No shader-model or feature-level reduction or device-creation rejection is established for DGC alone."
   }
 ]
