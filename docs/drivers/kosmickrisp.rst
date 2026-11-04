@@ -363,9 +363,11 @@ Diagnostics
   - ``force_per_vertex_buffer`` passes the ``PerVertexKHR`` values of emulated
     shaders through memory instead of varying slots.
 
-- ``MESA_KK_GPU_CAPTURE``: ``1`` starts a Metal GPU capture at device creation
-  and ends it at device destruction. Internal driver operations carry debug
-  labels in the capture.
+- ``MESA_KK_GPU_CAPTURE``: ``1`` enables Metal GPU capture. The debug labels
+  ``capture-marker,begin_capture`` and ``capture-marker,end_capture`` start
+  and stop a capture. Internal driver operations carry debug labels.
+- ``MESA_KK_GPU_CAPTURE_IMMEDIATELY``: ``1`` starts the enabled Metal capture
+  at device creation and ends it at device destruction.
 - ``MESA_KK_GPU_CAPTURE_DIRECTORY``: writes the Metal GPU capture to
   ``<directory>/<process name>.gputrace`` when Metal supports GPU trace
   documents. Without it, the capture goes to Xcode.

@@ -184,6 +184,8 @@ struct kk_device {
     * and the per-sync publisher lifetime mutex. */
    mtx_t pending_mutex;
    struct u_cnd_monotonic pending_cond;
+
+   bool gpu_capture_active;
 };
 
 VK_DEFINE_HANDLE_CASTS(kk_device, vk.base, VkDevice, VK_OBJECT_TYPE_DEVICE)
