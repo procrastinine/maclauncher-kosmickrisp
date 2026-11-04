@@ -686,6 +686,7 @@ kk_device_add_bo_to_residency_set(struct kk_device *dev, struct kk_bo *bo)
       mtl_residency_set_add_allocation(dev->residency_set.handle, allocation);
    }
    list_addtail(&bo->residency_link, &dev->residency_set.allocations);
+   dev->residency_set.dirty = true;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -699,6 +700,7 @@ kk_device_remove_bo_from_residency_set(struct kk_device *dev, struct kk_bo *bo)
    if (last_alias)
       mtl_residency_set_remove_allocation(dev->residency_set.handle,
                                           kk_bo_allocation(bo));
+   dev->residency_set.dirty = true;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -707,6 +709,7 @@ kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap)
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_add_allocation(dev->residency_set.handle, heap);
+   dev->residency_set.dirty = true;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -715,6 +718,7 @@ kk_device_remove_heap_from_residency_set(struct kk_device *dev, mtl_heap *heap)
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_remove_allocation(dev->residency_set.handle, heap);
+   dev->residency_set.dirty = true;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -723,6 +727,7 @@ kk_device_add_buffer_to_residency_set(struct kk_device *dev, mtl_buffer *buffer)
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_add_allocation(dev->residency_set.handle, buffer);
+   dev->residency_set.dirty = true;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -732,6 +737,7 @@ kk_device_remove_buffer_from_residency_set(struct kk_device *dev,
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_remove_allocation(dev->residency_set.handle, buffer);
+   dev->residency_set.dirty = true;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -739,12 +745,20 @@ void
 kk_device_make_resources_resident(struct kk_device *dev)
 {
    simple_mtx_lock(&dev->residency_set.mutex);
-   mtl_residency_set_commit(dev->residency_set.handle);
+   if (dev->residency_set.dirty) {
+      mtl_residency_set_commit(dev->residency_set.handle);
+      dev->residency_set.dirty = false;
+   }
    /* Every Metal queue already uses this set for execution-scoped residency.
     * Pageable mode leaves idle pages to the OS instead of requesting lifetime
     * residency for every allocation. The priority set requests extra retention. */
-   if (!dev->vk.enabled_features.pageableDeviceLocalMemory)
+   /* A residency request persists until endResidency. Subsequent commits
+    * propagate membership changes to the already resident set. */
+   if (!dev->vk.enabled_features.pageableDeviceLocalMemory &&
+       !dev->residency_set.requested) {
       mtl_residency_set_request_residency(dev->residency_set.handle);
+      dev->residency_set.requested = true;
+   }
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 

@@ -34,6 +34,8 @@ struct vk_pipeline_cache;
 
 struct kk_residency_set {
    simple_mtx_t mutex;
+   bool dirty; /* Protected by mutex, including commit. */
+   bool requested; /* Persistent residency request, under the same mutex. */
    mtl_residency_set *handle;
    struct list_head allocations;
    /* Requested only for the high-priority working set, including while idle. */

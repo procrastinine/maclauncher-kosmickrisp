@@ -39,6 +39,7 @@ kk_sparse_residency(struct kk_device *dev, void *resource, bool add)
       mtl_residency_set_add_allocation(dev->residency_set.handle, resource);
    else
       mtl_residency_set_remove_allocation(dev->residency_set.handle, resource);
+   dev->residency_set.dirty = true;
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
