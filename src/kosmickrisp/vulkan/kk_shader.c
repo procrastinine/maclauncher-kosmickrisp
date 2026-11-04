@@ -1072,7 +1072,7 @@ kk_fsr_pipeline_can_coarsen(const struct vk_graphics_pipeline_state *state,
  * quad-group lowering. Conditions the reported properties exclude keep 1x1. */
 static void
 kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
-                 const struct vk_graphics_pipeline_state *state)
+                 const struct vk_graphics_pipeline_state *state, bool coarse_allowed)
 {
    const struct vk_features *f = &dev->vk.enabled_features;
    const bool dynamic = !state || !state->fsr ||
@@ -1082,7 +1082,7 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
                   VK_PIPELINE_CREATE_2_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR));
    /* Every last vertex, tessellation, geometry or mesh stage writes the rate. */
    const bool primitive = f->primitiveFragmentShadingRate;
-   bool coarse = kk_fsr_pipeline_can_coarsen(state, primitive, attachment);
+   bool coarse = coarse_allowed && kk_fsr_pipeline_can_coarsen(state, primitive, attachment);
    if (coarse && state && state->ms) {
       const struct vk_multisample_state *ms = state->ms;
       uint32_t samples = BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES)
@@ -1230,7 +1230,7 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
              const struct vk_graphics_pipeline_state *state,
              kk_feature_key features,
              const struct vk_shader_compile_info *compile_info,
-             const uint64_t *embedded, bool depth_bounds)
+             const uint64_t *embedded, bool depth_bounds, bool primitive_rate_output)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
@@ -1379,7 +1379,7 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
     * load_const, otherwise the pass will complain */
    NIR_PASS(_, nir, nir_opt_constant_folding);
 
-   if (dev->vk.enabled_features.primitiveFragmentShadingRate &&
+   if (dev->vk.enabled_features.primitiveFragmentShadingRate && primitive_rate_output &&
        kk_last_vertex_stage(nir, state, compile_info))
       NIR_PASS(_, nir, kk_lower_primitive_rate_default);
 
@@ -1394,8 +1394,10 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
       kk_lower_hw_vs(nir, state, is_point);
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, msl_nir_fs_io_types);
+      /* The pass-through fragment has no compile info and no observable
+       * per-fragment work. */
       if (kk_fsr_device(dev))
-         kk_lower_fs_rate(dev, nir, state);
+         kk_lower_fs_rate(dev, nir, state, compile_info != NULL);
    }
 
    if (nir->info.stage != MESA_SHADER_FRAGMENT)
@@ -1411,11 +1413,12 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
              const struct vk_graphics_pipeline_state *state,
              kk_feature_key features,
              const struct vk_shader_compile_info *compile_info,
-             const uint64_t *embedded, bool depth_bounds)
+             const uint64_t *embedded, bool depth_bounds, bool primitive_rate_output)
 {
    KK_PERF_VOID(dev, KK_PERF_NIR,
       kk_lower_nir_untracked(dev, nir, emulated_stage, rs, set_layout_count,
-                            set_layouts, state, features, compile_info, embedded, depth_bounds));
+                            set_layouts, state, features, compile_info, embedded, depth_bounds,
+                            primitive_rate_output));
 }
 
 static const struct vk_shader_ops kk_shader_ops;
@@ -2262,7 +2265,7 @@ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
       .null_uniform_buffer_descriptor = false,
       .null_storage_buffer_descriptor = false,
    };
-   kk_lower_nir(dev, nir, false, &no_robustness, 0u, NULL, state, features, NULL, NULL, false);
+   kk_lower_nir(dev, nir, false, &no_robustness, 0u, NULL, state, features, NULL, NULL, false, false);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    return nir;
@@ -3359,8 +3362,15 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
        (enabled_features->fragmentShaderPixelInterlock &&
         kk_interlock_multisample_pipeline(state) &&
         kk_interlock_pixel_shader(infos[shader_count - 1u].nir)));
+   /* The last vertex stage writes the 1x1 PrimitiveShadingRateKHR default only
+    * for a fragment shader that reads it, so the fragment stage is lowered first. */
+   const bool linked_fragment = shader_count &&
+      infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT;
+   const bool fragment_first = pixel_candidate ||
+      (linked_fragment && state && kk_fsr_device(dev));
+   bool primitive_rate_output = !state;
    for (uint32_t step = 0u; step < shader_count; ++step) {
-      uint32_t i = pixel_candidate ? (step ? step - 1u : shader_count - 1u) : step;
+      uint32_t i = fragment_first ? (step ? step - 1u : shader_count - 1u) : step;
       const struct vk_shader_compile_info *info = &infos[i];
       nir_shader *nir = info->nir;
       /* Collect the ordinary layout extent in the existing stage walk. */
@@ -3419,7 +3429,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       if (nir->info.stage == MESA_SHADER_FRAGMENT && !nir->info.io_lowered)
          fs_to_finish = nir;
       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
-                   info->set_layout_count, info->set_layouts, state, features, info, NULL, depth_bounds);
+                   info->set_layout_count, info->set_layouts, state, features, info, NULL, depth_bounds,
+                   primitive_rate_output);
+      if (nir->info.stage == MESA_SHADER_FRAGMENT)
+         primitive_rate_output |= !!(nir->info.inputs_read & VARYING_BIT_PRIMITIVE_SHADING_RATE);
       if (nir->info.stage == MESA_SHADER_FRAGMENT &&
           (features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS)))
          NIR_PASS(_, nir, kk_nir_statistics_fs);
