@@ -57,7 +57,27 @@ mtl_new_library_function_descriptor(mtl_library *library,
    return NULL;
 }
 
+mtl_function_descriptor *
+mtl_specialize_function_uint64(mtl_function_descriptor *function,
+                                uint32_t index, uint64_t value)
+{
+   return NULL;
+}
+
+mtl_function_descriptor *
+mtl_specialize_pipeline_statistics(mtl_function_descriptor *function)
+{
+   return NULL;
+}
+
+mtl_render_pipeline_descriptor *
+mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
+{
+   return NULL;
+}
+
 /* Compute pipeline */
+
 mtl_compute_pipeline_state *
 mtl_new_compute_pipeline_state(mtl_compiler *compiler,
                                mtl_function_descriptor *function,

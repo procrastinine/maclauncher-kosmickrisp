@@ -508,6 +508,7 @@ kk_begin_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
          cmd->state.gfx.descriptors.root.draw.fragment_statistic =
             addr + pool->statistic_offsets[7];
          cmd->state.gfx.descriptors.root_dirty = true;
+         cmd->state.gfx.dirty |= KK_DIRTY_FRAGMENT_STATISTICS;
       }
       return;
    }
@@ -547,6 +548,7 @@ kk_end_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
       if (cmd->state.gfx.descriptors.root.draw.fragment_statistic) {
          cmd->state.gfx.descriptors.root.draw.fragment_statistic = 0;
          cmd->state.gfx.descriptors.root_dirty = true;
+         cmd->state.gfx.dirty |= KK_DIRTY_FRAGMENT_STATISTICS;
       }
    } else if (pool->vk.query_type == VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT) {
       cmd->state.gfx.mesh_primitives_query = 0;

@@ -36,6 +36,7 @@ struct kk_interlock_pipeline_entry;
 struct kk_interlock_pipeline {
    mtl_render_pipeline_descriptor *descriptor[3];
    bool framebuffer_reads[3];
+   bool uses_pipeline_statistics[3];
    mtl_compute_pipeline_state *load;
    mtl_depth_stencil_state *replace;
    struct kk_interlock_pipeline_entry *entries;
@@ -48,6 +49,7 @@ void kk_interlock_pipeline_finish(struct kk_interlock_pipeline *pipeline);
 VkResult kk_interlock_pipeline_get(struct kk_device *dev,
    struct kk_interlock_pipeline *pipeline, enum kk_interlock_program program,
    const enum mtl_pixel_format formats[8], unsigned samples,
-   enum mtl_primitive_topology_class topology, mtl_render_pipeline_state **out);
+   enum mtl_primitive_topology_class topology, bool pipeline_statistics,
+   mtl_render_pipeline_state **out);
 
 #endif

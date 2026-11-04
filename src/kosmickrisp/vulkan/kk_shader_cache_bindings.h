@@ -10,7 +10,7 @@
 
 /* Native code and its canonical inputs share the build UUID and this format. */
 #define KK_SHADER_CACHE_BINDINGS_MAGIC 0x4b4b5343u
-#define KK_SHADER_CACHE_BINDINGS_VERSION 2u
+#define KK_SHADER_CACHE_BINDINGS_VERSION 3u
 #define KK_SHADER_CACHE_USES_EMBEDDED 0x1u
 static_assert(KK_EMBEDDED_SAMPLER_BINDING_SCHEMA == 1u,
               "cached embedded bindings use runtime root schema1");
@@ -84,7 +84,7 @@ kk_shader_cache_read_bindings(struct kk_device *dev, struct blob_reader *blob,
    uint32_t flags = blob_read_uint32(blob);
    uint32_t limit = kk_device_physical(dev)->vk.properties.maxDescriptorHeapEmbeddedSamplers;
    if (blob->overrun || magic != KK_SHADER_CACHE_BINDINGS_MAGIC ||
-       version != KK_SHADER_CACHE_BINDINGS_VERSION ||
+       (version != 2u && version != KK_SHADER_CACHE_BINDINGS_VERSION) ||
        schema != KK_EMBEDDED_SAMPLER_BINDING_SCHEMA ||
        state_size != sizeof(struct vk_sampler_state) || count > limit ||
        (flags & ~KK_SHADER_CACHE_USES_EMBEDDED) ||

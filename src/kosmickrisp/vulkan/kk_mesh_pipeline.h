@@ -35,10 +35,10 @@ kk_mesh_function(struct kk_device *dev, const struct msl_compile_data *data,
    if (!*library)
       return VK_ERROR_INVALID_SHADER_NV;
    char *entry = suffix ? ralloc_asprintf(NULL, "%s_%s", data->entrypoint_name, suffix) : NULL;
-   *function = mtl_new_library_function_descriptor(*library,
-      entry ? entry : data->entrypoint_name);
+   VkResult result = kk_msl_function(dev, data, *library,
+      entry ? entry : data->entrypoint_name, function);
    ralloc_free(entry);
-   return *function ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
+   return result;
 }
 
 VkResult
@@ -147,7 +147,9 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
          result = fragment_program->finish(dev, fragment_program, descriptor, pipe, kind);
       if (result == VK_SUCCESS)
          result = kk_record_render_descriptor(dev, shader, descriptor,
-                                             kind);
+            kind, fragment_program->monolithic ?
+               fragment_program->monolithic->uses_pipeline_statistics :
+               fragment_program->uses_pipeline_statistics);
    }
 out:
    mtl_release(descriptor);

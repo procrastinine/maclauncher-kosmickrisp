@@ -82,7 +82,22 @@ VkResult kk_vrs_native_pipelines_create_for_raster(struct kk_device *dev,
 VkResult kk_vrs_captured_pipelines_create(struct kk_device *,
    mtl_render_pipeline_descriptor *, const struct kk_shader *,
    struct mtl_vrs_pipelines **out);
+/* Query-aware factories share canonical source/library artifacts. An actual
+ * coarse consumer passes root.draw.fragment_statistic != 0 and lazily retains
+ * separate plain/counting bundles only if the application artifact uses the
+ * statistics function constant. Existing factories remain query-free. */
+VkResult kk_vrs_native_pipelines_create_statistics(struct kk_device *,
+   const struct kk_shader *producer, const struct kk_shader *fragment,
+   bool statistics, struct mtl_vrs_pipelines **out);
+VkResult kk_vrs_native_pipelines_create_for_raster_statistics(struct kk_device *,
+   mtl_render_pipeline_descriptor *, const struct kk_shader *fragment,
+   bool statistics, struct mtl_vrs_pipelines **out);
+VkResult kk_vrs_captured_pipelines_create_statistics(struct kk_device *,
+   mtl_render_pipeline_descriptor *, const struct kk_shader *fragment,
+   bool statistics, struct mtl_vrs_pipelines **out);
+bool kk_vrs_artifact_uses_pipeline_statistics(const struct kk_vrs_artifact *);
 void kk_vrs_artifact_unref(struct kk_device *dev, struct kk_vrs_artifact *artifact);
+
 mtl_function_descriptor *kk_vrs_artifact_function(const struct kk_vrs_artifact *artifact);
 bool kk_vrs_artifact_framebuffer_reads(const struct kk_vrs_artifact *artifact);
 /* Returns a referenced artifact after dropping the compilation mutex. Native

@@ -3337,6 +3337,14 @@ intrinsic("is_null_descriptor", src_comp=[-1], dest_comp=1, flags=[CAN_ELIMINATE
 load("buffer_ptr_kk", [], [BINDING], [CAN_ELIMINATE, CAN_REORDER])
 # Represents a pointer to the start of the per-draw data buffer
 load("per_draw_ptr_kk", [], [], [CAN_ELIMINATE, CAN_REORDER])
+# Query-active Metal function constant, preserved through captured shaders.
+intrinsic("load_pipeline_statistics_enabled_kk", src_comp=[], dest_comp=1,
+          bit_sizes=[1], flags=[CAN_ELIMINATE, CAN_REORDER])
+# Increment a packed 64-bit driver query report at the 64-bit address in src0.
+# This side effect is retained and ordered, but is not application memory and
+# must not introduce a helper-status observation through generic write lowering.
+# Native Metal helper lanes suppress its two 32-bit atomics.
+intrinsic("increment_pipeline_statistic_kk", src_comp=[1])
 # Opaque texture<T> handle, with DEST_TYPE representing T
 load("texture_handle_kk", [1], [DEST_TYPE, IMAGE_DIM, IMAGE_ARRAY, ACCESS, FLAGS], [CAN_ELIMINATE])
 # Same as above but for depth<T> textures, T is always float

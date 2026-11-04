@@ -462,6 +462,14 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
    case nir_intrinsic_load_barycentric_coord_pixel:
       set_type(types, &instr->def, TYPE_FLOAT);
       break;
+   case nir_intrinsic_increment_pipeline_statistic_kk:
+      ctx->uses_pipeline_statistics = true;
+      set_type(types, &instr->src[0], TYPE_UINT);
+      break;
+   case nir_intrinsic_load_pipeline_statistics_enabled_kk:
+      ctx->uses_pipeline_statistics = true;
+      set_type(types, &instr->def, TYPE_BOOL);
+      break;
    case nir_intrinsic_is_sparse_resident_zink:
       ctx->sparse_residency = true;
       FALLTHROUGH;
@@ -925,6 +933,7 @@ msl_infer_types(struct nir_to_msl_ctx *ctx)
    ctx->has_sampler_helpers = false;
    ctx->sparse_residency = false;
    ctx->uses_atomic64 = ctx->uses_image_atomic64 = false;
+   ctx->uses_pipeline_statistics = false;
    struct hash_table *types = _mesa_pointer_hash_table_create(NULL);
    bool progress = false;
    // First, seed the types for every instruction for every source and def

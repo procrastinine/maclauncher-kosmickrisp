@@ -13,6 +13,8 @@
 #include "kk-sampler-helper-flags.h"
 #include "nir_builder.h"
 #include "nir_builtin_builder.h"
+#include "util/set.h"
+#include "util/u_dynarray.h"
 
 static inline bool
 kk_lower_compute_derivative(nir_builder *b, nir_intrinsic_instr *intr,
@@ -62,12 +64,10 @@ kk_compute_texture_gradients(nir_builder *b, nir_tex_instr *tex, UNUSED void *da
    return true;
 }
 
+/* Called only after the entry point checks the derivative execution mode. */
 static inline void
 kk_compute_derivative_textures(nir_shader *nir)
 {
-   if (nir->info.stage != MESA_SHADER_COMPUTE ||
-       nir->info.derivative_group != DERIVATIVE_GROUP_LINEAR)
-      return;
    /* Project before differentiating. The normal texture pass subsequently
     * handles 1D, cube gradients and descriptor sampler LOD bias. */
    const nir_lower_tex_options project = {.lower_txp = ~0u};
@@ -77,19 +77,25 @@ kk_compute_derivative_textures(nir_shader *nir)
 }
 
 static inline bool
-kk_only_lod_probe(const nir_tex_instr *tex, const void *probe)
+kk_lod_probe(const nir_tex_instr *tex, const void *probes)
 {
-   return tex == probe;
+   return _mesa_set_search(probes, tex) != NULL;
 }
 
 static inline void
 kk_compute_derivative_lod(nir_shader *nir)
 {
-   if (nir->info.stage != MESA_SHADER_COMPUTE ||
-       nir->info.derivative_group != DERIVATIVE_GROUP_LINEAR)
-      return;
+   struct kk_lod_query {
+      nir_tex_instr *query, *probe;
+   } stack_queries[16];
+   struct util_dynarray queries;
+   util_dynarray_init_from_stack(&queries, stack_queries, sizeof(stack_queries));
+   struct set probes;
+   _mesa_pointer_set_init(&probes, NULL);
+
    nir_foreach_function_impl(impl, nir) {
       nir_builder b = nir_builder_create(impl);
+      bool progress = false;
       nir_foreach_block(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_tex)
@@ -101,17 +107,6 @@ kk_compute_derivative_lod(nir_shader *nir)
             nir_tex_instr *probe = nir_instr_as_tex(nir_instr_clone(nir, &tex->instr));
             probe->op = nir_texop_tex;
             nir_builder_instr_insert(&b, &probe->instr);
-            /* The descriptor pass supplied these bounds for the query. */
-            nir_def *min = nir_get_tex_src(tex, nir_tex_src_min_lod);
-            nir_def *max = nir_get_tex_src(tex, nir_tex_src_max_lod_kk);
-            nir_def *bias_src = nir_get_tex_src(tex, nir_tex_src_bias);
-            nir_def *bias = bias_src ? bias_src : nir_imm_float(&b, 0);
-            nir_def *metadata = nir_get_tex_src(tex, nir_tex_src_backend1);
-            nir_def *mode = nir_imm_int(&b, 1);
-            if (metadata) {
-               bias = nir_f2f32(&b, nir_u2u16(&b, nir_channel(&b, metadata, 0)));
-               mode = nir_channel(&b, metadata, 1);
-            }
             for (int i = probe->num_srcs - 1; i >= 0; --i)
                if (probe->src[i].src_type == nir_tex_src_min_lod ||
                    probe->src[i].src_type == nir_tex_src_max_lod_kk ||
@@ -119,30 +114,54 @@ kk_compute_derivative_lod(nir_shader *nir)
                    probe->src[i].src_type == nir_tex_src_backend1)
                   nir_tex_instr_remove_src(probe, i);
             kk_compute_texture_gradients(&b, probe, NULL);
-            /* Reuse Mesa's dimension-aware rho and cube quotient-rule math.
-             * Only this unused probe is lowered; real samples keep gradients
-             * and therefore retain anisotropic filtering. */
-            const nir_lower_tex_options options = {
-               .lower_txd_cb = kk_only_lod_probe, .lower_txd_data = probe,
-            };
-            nir_lower_tex(nir, &options);
-            nir_def *lod = nir_get_tex_src(probe, nir_tex_src_lod);
-            b.cursor = nir_before_instr(instr);
-            nir_def *unclamped = nir_fadd(&b, lod, bias);
-            nir_def *clamped = nir_fmin(&b, nir_fmax(&b, unclamped, min), max);
-            nir_def *levels = nir_build_texture_query(&b, tex,
-               nir_texop_query_levels, 1, nir_type_uint32, false, false);
-            clamped = nir_fmin(&b, nir_fmax(&b, clamped, nir_imm_float(&b, 0)),
-                               nir_u2f32(&b, nir_iadd_imm(&b, levels, -1)));
-            nir_def *nearest = nir_fadd_imm(&b,
-               nir_fceil(&b, nir_fadd_imm(&b, clamped, 0.5)), -1.0);
-            clamped = nir_bcsel(&b, nir_ieq_imm(&b, mode, 0), nearest, clamped);
-            nir_def_replace(&tex->def, nir_vec2(&b, clamped, unclamped));
-            nir_instr_remove(&probe->instr);
+            _mesa_set_add(&probes, probe);
+            struct kk_lod_query query = {tex, probe};
+            util_dynarray_append(&queries, query);
+            progress = true;
          }
       }
-      nir_progress(true, impl, nir_metadata_control_flow);
+      nir_progress(progress, impl, nir_metadata_control_flow);
    }
+
+   if (probes.entries) {
+      /* Reuse Mesa's dimension-aware rho and cube quotient-rule math in one
+       * shader pass for all queries. Real samples keep their gradients and
+       * therefore retain anisotropic filtering. */
+      const nir_lower_tex_options options = {
+         .lower_txd_cb = kk_lod_probe, .lower_txd_data = &probes,
+      };
+      nir_lower_tex(nir, &options);
+      util_dynarray_foreach(&queries, struct kk_lod_query, query) {
+         nir_tex_instr *tex = query->query, *probe = query->probe;
+         nir_builder b = nir_builder_at(nir_before_instr(&tex->instr));
+         /* The descriptor pass supplied these bounds for the query. */
+         nir_def *min = nir_get_tex_src(tex, nir_tex_src_min_lod);
+         nir_def *max = nir_get_tex_src(tex, nir_tex_src_max_lod_kk);
+         nir_def *bias_src = nir_get_tex_src(tex, nir_tex_src_bias);
+         nir_def *bias = bias_src ? bias_src : nir_imm_float(&b, 0);
+         nir_def *metadata = nir_get_tex_src(tex, nir_tex_src_backend1);
+         nir_def *mode = nir_imm_int(&b, 1);
+         if (metadata) {
+            bias = nir_f2f32(&b, nir_u2u16(&b, nir_channel(&b, metadata, 0)));
+            mode = nir_channel(&b, metadata, 1);
+         }
+         nir_def *lod = nir_get_tex_src(probe, nir_tex_src_lod);
+         nir_def *unclamped = nir_fadd(&b, lod, bias);
+         nir_def *clamped = nir_fmin(&b, nir_fmax(&b, unclamped, min), max);
+         nir_def *levels = nir_build_texture_query(&b, tex,
+            nir_texop_query_levels, 1, nir_type_uint32, false, false);
+         clamped = nir_fmin(&b, nir_fmax(&b, clamped, nir_imm_float(&b, 0)),
+                            nir_u2f32(&b, nir_iadd_imm(&b, levels, -1)));
+         nir_def *nearest = nir_fadd_imm(&b,
+            nir_fceil(&b, nir_fadd_imm(&b, clamped, 0.5)), -1.0);
+         clamped = nir_bcsel(&b, nir_ieq_imm(&b, mode, 0), nearest, clamped);
+         nir_def_replace(&tex->def, nir_vec2(&b, clamped, unclamped));
+         nir_instr_remove(&probe->instr);
+         nir_progress(true, b.impl, nir_metadata_control_flow);
+      }
+   }
+   _mesa_set_fini(&probes, NULL);
+   util_dynarray_fini(&queries);
 }
 static bool
 kk_unhandled_cube_gradient(const nir_tex_instr *tex, UNUSED const void *data)
@@ -154,8 +173,8 @@ kk_unhandled_cube_gradient(const nir_tex_instr *tex, UNUSED const void *data)
 static inline void
 kk_lower_compute_derivatives(nir_shader *nir)
 {
-   if (nir->info.stage != MESA_SHADER_COMPUTE ||
-       nir->info.derivative_group != DERIVATIVE_GROUP_LINEAR)
+   if (nir->info.derivative_group != DERIVATIVE_GROUP_LINEAR ||
+       nir->info.stage != MESA_SHADER_COMPUTE)
       return;
    kk_compute_derivative_textures(nir);
    const nir_lower_tex_options cubes = {.lower_txd_cb = kk_unhandled_cube_gradient};

@@ -55,6 +55,9 @@ typedef uint32_t kk_feature_key;
 static_assert(KK_FEAT_COUNT <= sizeof(kk_feature_key) * CHAR_BIT,
               "shader feature bits fit the shader-cache key");
 
+/* MSL query specialization and its serialized application-use metadata. */
+#define KK_STATISTICS_SHADER_ABI 2u
+
 #include "kosmickrisp/libkk/kk_mesh_types.h"
 #include "kk_mesh_pipeline_api.h"
 
@@ -250,6 +253,8 @@ struct msl_compile_data {
    char *entrypoint_name;
    bool requires_msl41;
    bool uses_matrix_coordinates;
+   bool uses_atomic64_locks;
+   bool uses_pipeline_statistics;
 };
 
 static inline enum mtl_language_version

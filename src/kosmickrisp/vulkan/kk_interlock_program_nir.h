@@ -149,6 +149,14 @@ kk_interlock_program_intrinsic(nir_builder *b, nir_intrinsic_instr *intr,
    case nir_intrinsic_load_point_coord: var = s->point_coord; break;
    case nir_intrinsic_load_helper_invocation: var = s->initial_helper; break;
    case nir_intrinsic_is_helper_invocation: var = s->helper; break;
+   case nir_intrinsic_increment_pipeline_statistic_kk:
+      /* Virtual helpers are ordinary physical lanes. Reuse their existing
+       * live predicate; driver counters must not add a native helper input. */
+      nir_push_if(b, kk_interlock_program_live(b, s));
+      nir_increment_pipeline_statistic_kk(b, intr->src[0].ssa);
+      nir_pop_if(b, NULL);
+      nir_instr_remove(&intr->instr);
+      return true;
    case nir_intrinsic_demote:
    case nir_intrinsic_demote_if:
       value = nir_load_var(b, s->helper);

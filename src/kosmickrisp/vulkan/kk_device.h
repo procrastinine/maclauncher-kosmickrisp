@@ -97,6 +97,8 @@ struct kk_precompiled_cache {
    VkResult result[LIBKK_NUM_PROGRAMS];
 };
 
+struct kk_atomic64_state;
+
 struct kk_device {
    struct vk_device vk;
    simple_mtx_t pipeline_cache_init_mutex;
@@ -153,7 +155,7 @@ struct kk_device {
    struct vk_meta_device meta;
 
    /* Geomtry heap */
-   struct kk_bo *atomic64_locks;
+   struct kk_atomic64_state *atomic64_locks;
    struct kk_bo *heap;
    struct kk_bo *interlock_guard;
    struct kk_interlock_registry *interlock_registry;

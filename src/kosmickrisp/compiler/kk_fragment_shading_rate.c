@@ -31,6 +31,12 @@ lower_application(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    case nir_intrinsic_load_frag_shading_rate: replace = v->rate; break;
    case nir_intrinsic_load_helper_invocation:
    case nir_intrinsic_is_helper_invocation: replace = v->helper; break;
+   case nir_intrinsic_increment_pipeline_statistic_kk:
+      nir_push_if(b, nir_inot(b, v->helper));
+      nir_increment_pipeline_statistic_kk(b, intr->src[0].ssa);
+      nir_pop_if(b, NULL);
+      nir_instr_remove(&intr->instr);
+      return true;
    case nir_intrinsic_load_sample_mask_in: replace = v->mask; break;
    case nir_intrinsic_load_primitive_id: replace = v->primitive; break;
    case nir_intrinsic_store_output: {
@@ -354,6 +360,14 @@ lower_native_application(nir_builder *b, nir_instr *instr, void *data)
       replace = nir_bcsel(b, nir_is_helper_invocation(b, 1), nir_imm_int(b, 0), v->mask);
       break;
    case nir_intrinsic_load_helper_invocation: replace = v->helper; break;
+   case nir_intrinsic_increment_pipeline_statistic_kk:
+      /* Native helper writes are suppressed by Metal; only the already
+       * available virtual-helper predicate needs an explicit guard here. */
+      nir_push_if(b, nir_inot(b, v->helper));
+      nir_increment_pipeline_statistic_kk(b, intr->src[0].ssa);
+      nir_pop_if(b, NULL);
+      nir_instr_remove(instr);
+      return true;
    case nir_intrinsic_is_helper_invocation:
       /* Dynamic queries (including the shared helper-write guards) must
        * continue to observe native demotion at this application point. */

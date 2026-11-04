@@ -469,7 +469,8 @@ kk_interlock_record_draw(struct kk_cmd_buffer *cmd)
          i != KK_INTERLOCK_CAPTURE ? MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE :
             p->raster_arity == 1 ? MTL_PRIMITIVE_TOPOLOGY_CLASS_POINT :
             p->raster_arity == 2 ? MTL_PRIMITIVE_TOPOLOGY_CLASS_LINE :
-            MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE, &handle);
+            MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE,
+         gfx->descriptors.root.draw.fragment_statistic != 0, &handle);
       if (result != VK_SUCCESS)
          goto fail;
       p->pipeline[i] = mtl_retain(handle);

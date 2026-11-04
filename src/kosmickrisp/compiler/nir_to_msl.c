@@ -1491,6 +1491,24 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       P(ctx, "]);\n");
       break;
    }
+   case nir_intrinsic_increment_pipeline_statistic_kk:
+      assert(instr->src[0].ssa->bit_size == 64);
+      P(ctx, "{\n");
+      ctx->indentlevel++;
+      P_IND(ctx, "device atomic_uint *kk_statistic = (device atomic_uint *)");
+      src_to_msl(ctx, &instr->src[0]);
+      P(ctx, ";\n");
+      P_IND(ctx, "uint kk_statistic_old = atomic_fetch_add_explicit(kk_statistic, 1u, memory_order_relaxed);\n");
+      P_IND(ctx, "if (kk_statistic_old == 0xffffffffu)\n");
+      ctx->indentlevel++;
+      P_IND(ctx, "atomic_fetch_add_explicit(kk_statistic + 1, 1u, memory_order_relaxed);\n");
+      ctx->indentlevel--;
+      ctx->indentlevel--;
+      P_IND(ctx, "}\n");
+      break;
+   case nir_intrinsic_load_pipeline_statistics_enabled_kk:
+      P(ctx, "kk_pipeline_statistics_active;\n");
+      break;
    case nir_intrinsic_load_buffer_ptr_kk:
       if (nir_intrinsic_binding(instr) == KK_ARGUMENT_POLY_LAYER_REPLAY) {
          P(ctx, "(ulong)poly_layer_selector;\n");
@@ -2809,9 +2827,23 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (shader->info.stage == MESA_SHADER_COMPUTE && shader->info.cs.has_cooperative_matrix)
       P(&ctx, "#include <metal_simdgroup_matrix>\n");
    P(&ctx, "using namespace metal;\n");
+   if (ctx.uses_pipeline_statistics) {
+      P(&ctx, "constant bool kk_pipeline_statistics_enabled "
+              "[[function_constant(%u)]];\n",
+        KK_FUNCTION_CONSTANT_PIPELINE_STATISTICS);
+      P(&ctx, "constant bool kk_pipeline_statistics_active = "
+              "is_function_constant_defined(kk_pipeline_statistics_enabled) ? "
+              "kk_pipeline_statistics_enabled : false;\n");
+   }
    if (kk_uses_float8(shader)) P(&ctx, "%s", kk_float8_msl);
-   if (ctx.uses_atomic64 || ctx.uses_image_atomic64)
+   bool atomic64 = ctx.uses_atomic64 || ctx.uses_image_atomic64;
+   options->uses_atomic64_locks = atomic64;
+   if (atomic64) {
+      P(&ctx, "constant ulong kk_atomic64_lock_table [[function_constant(%u)]];\n",
+        KK_FUNCTION_CONSTANT_ATOMIC64_LOCK_TABLE);
       P(&ctx, "%s", kk_atomic64_msl);
+   }
+
    if (ctx.uses_image_atomic64) P(&ctx, "%s", kk_image_atomic64_msl);
    if (fp32_preserve_helpers) P(&ctx, "%s", kk_fp32_preserve_msl);
 
@@ -2872,6 +2904,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       memcpy(options->mesh->retained_fields, ctx.mesh.retained_fields, sizeof(ctx.mesh.retained_fields));
    options->requires_msl41 = ctx.requires_msl41;
    options->uses_matrix_coordinates = ctx.uses_matrix_coordinates;
+   options->uses_pipeline_statistics = ctx.uses_pipeline_statistics;
    char *ret = ctx.text->buf;
    if (ctx.sampler_helpers) _mesa_hash_table_destroy(ctx.sampler_helpers, NULL);
    _mesa_hash_table_destroy(ctx.types, NULL);

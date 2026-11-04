@@ -242,6 +242,7 @@ struct kk_rendering_state {
 enum kk_dirty {
    KK_DIRTY_VB = BITFIELD_BIT(0),
    KK_DIRTY_OCCLUSION = BITFIELD_BIT(1),
+   KK_DIRTY_FRAGMENT_STATISTICS = BITFIELD_BIT(2),
 };
 
 #include "kk_poly_layer_replay_types.h"

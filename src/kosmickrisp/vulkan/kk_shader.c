@@ -8,6 +8,7 @@
 #include "kk_shader.h"
 #include "util/hash_table.h"
 #include "kk_depth_bias_control.h"
+#include "kk_atomic64.h"
 
 #include "kk_cmd_buffer.h"
 #include "kk_debug.h"
@@ -302,6 +303,7 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       (KK_SHADER_INFO_CACHE_VERSION << 16) | KK_FEAT_COUNT,
       sizeof(struct kk_shader_info),
       offsetof(struct kk_per_draw_data, geometry_statistics),
+      KK_STATISTICS_SHADER_ABI,
       kk_make_feature_key(enabled_features),
    };
    _mesa_blake3_update(&blake3_ctx, &feature_key, sizeof(feature_key));
@@ -1406,9 +1408,11 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    data->code = KK_PERF_CALL(dev, KK_PERF_MSL,
       nir_to_msl(nir, &translate_options));
    data->requires_msl41 = translate_options.requires_msl41;
+   data->uses_atomic64_locks = translate_options.uses_atomic64_locks;
    data->uses_matrix_coordinates = translate_options.uses_matrix_coordinates;
    if (unlikely(dev->perf))
       kk_perf_msl_source(dev->perf, nir->info.stage, data->code);
+   data->uses_pipeline_statistics = translate_options.uses_pipeline_statistics;
    const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
 
    /* We need to steal so it doesn't get destroyed with the nir. Needs to happen
@@ -1940,8 +1944,14 @@ kk_compile_compute_pipeline_mode(struct kk_device *device,
    if (library == NULL)
       return VK_ERROR_INVALID_SHADER_NV;
 
-   mtl_function_descriptor *function =
-      mtl_new_library_function_descriptor(library, data->entrypoint_name);
+   mtl_function_descriptor *function = NULL;
+   VkResult result = kk_msl_function(device, data, library, data->entrypoint_name,
+                                   &function);
+   if (result != VK_SUCCESS) {
+      mtl_release(library);
+      return result;
+   }
+
    mtl_compute_pipeline_state *pipeline = indirect
       ? KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, kk_dgc_new_compute_pipeline_state(device->mtl_compiler_handle, function,
                                            local_size_threads))
@@ -2172,6 +2182,8 @@ kk_msl_copy(struct msl_compile_data *dst, const struct msl_compile_data *src)
    dst->entrypoint_name = ralloc_strdup(NULL, src->entrypoint_name);
    dst->requires_msl41 = src->requires_msl41;
    dst->uses_matrix_coordinates = src->uses_matrix_coordinates;
+   dst->uses_atomic64_locks = src->uses_atomic64_locks;
+   dst->uses_pipeline_statistics = src->uses_pipeline_statistics;
 }
 
 /* Copies all msl shader data to the vertex and gathers information for pipeline
@@ -2368,24 +2380,28 @@ kk_configure_render_pipeline(struct kk_device *device, struct kk_shader *vs,
 static VkResult
 kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
                              mtl_render_pipeline_descriptor *descriptor,
-                             unsigned kind)
+                             unsigned kind, bool statistics)
 {
-   if (!device->vk.enabled_features.dynamicRenderingUnusedAttachments &&
-       !shader->info.vs.dynamic_rasterization_samples &&
-       !device->vk.enabled_features.deviceGeneratedCommands &&
-       !device->vk.enabled_features.drawIndirectCount &&
-       !shader->info.polygon_point && !shader->info.poly_layer_replay)
+   const bool dynamic_variants =
+      device->vk.enabled_features.dynamicRenderingUnusedAttachments ||
+      shader->info.vs.dynamic_rasterization_samples ||
+      device->vk.enabled_features.deviceGeneratedCommands ||
+      device->vk.enabled_features.drawIndirectCount ||
+      shader->info.polygon_point || shader->info.poly_layer_replay;
+   if (!dynamic_variants && !statistics)
       return VK_SUCCESS;
    if (!shader->attachment_pipelines) {
       shader->attachment_pipelines = calloc(1, sizeof(*shader->attachment_pipelines));
       if (!shader->attachment_pipelines)
          return VK_ERROR_OUT_OF_HOST_MEMORY;
+      shader->attachment_pipelines->dynamic_variants = dynamic_variants;
       simple_mtx_init(&shader->attachment_pipelines->mutex, mtx_plain);
    }
    struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
    simple_mtx_lock(&cache->mutex);
    if (!cache->descriptor[kind]) {
       cache->descriptor[kind] = mtl_retain(descriptor);
+      cache->statistics[kind] = statistics;
       cache->topology[kind] = kind == KK_PIPELINE_CONSERVATIVE ?
          MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE : kind == KK_PIPELINE_POLYGON ?
          shader->info.vs.polygon_topology : shader->info.vs.topology;
@@ -2471,13 +2487,24 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
       return VK_ERROR_INVALID_SHADER_NV;
    mtl_library *vertex_library = libraries[0];
    mtl_library *fragment_library = libraries[1];
-   mtl_function_descriptor *vertex_function =
-      mtl_new_library_function_descriptor(vertex_library,
-                                          vs_data->entrypoint_name);
+   mtl_function_descriptor *vertex_function = NULL;
+   result = kk_msl_function(device, vs_data, vertex_library,
+                            vs_data->entrypoint_name, &vertex_function);
+   if (result != VK_SUCCESS) {
+      mtl_release(fragment_library);
+      mtl_release(vertex_library);
+      return result;
+   }
 
-   mtl_function_descriptor *fragment_function =
-      mtl_new_library_function_descriptor(fragment_library,
-                                          fs_data->entrypoint_name);
+   mtl_function_descriptor *fragment_function = NULL;
+   result = kk_msl_function(device, fs_data, fragment_library,
+                            fs_data->entrypoint_name, &fragment_function);
+   if (result != VK_SUCCESS) {
+      mtl_release(vertex_function);
+      mtl_release(fragment_library);
+      mtl_release(vertex_library);
+      return result;
+   }
 
    mtl_render_pipeline_descriptor *pipeline_descriptor =
       mtl_new_render_pipeline_descriptor();
@@ -2502,7 +2529,8 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
       result = VK_ERROR_INVALID_SHADER_NV;
 
    if (render)
-      result = kk_record_render_descriptor(device, vs, pipeline_descriptor, polygon);
+      result = kk_record_render_descriptor(device, vs, pipeline_descriptor,
+                                          polygon, fs_data->uses_pipeline_statistics);
    mtl_release(pipeline_descriptor);
    mtl_release(fragment_function);
    mtl_release(fragment_library);
@@ -3201,8 +3229,10 @@ kk_msl_serialize(const struct msl_compile_data *data, struct blob *blob)
    uint32_t code_length = strlen(data->code) + 1;
    blob_write_uint32(blob, entrypoint_length);
    blob_write_uint32(blob, code_length);
-   blob_write_uint8(blob, data->requires_msl41 |
-                          (data->uses_matrix_coordinates << 1));
+   blob_write_uint8(blob, 0x80u | (data->requires_msl41 ? 1u : 0u) |
+                         (data->uses_matrix_coordinates ? 2u : 0u) |
+                         (data->uses_atomic64_locks ? 4u : 0u) |
+                         (data->uses_pipeline_statistics ? 8u : 0u));
    blob_write_bytes(blob, data->entrypoint_name, entrypoint_length);
    blob_write_bytes(blob, data->code, code_length);
 }
@@ -3256,8 +3286,10 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
    const uint32_t entrypoint_length = blob_read_uint32(blob);
    const uint32_t code_length = blob_read_uint32(blob);
    const uint8_t flags = blob_read_uint8(blob);
-   data->requires_msl41 = flags & 1;
-   data->uses_matrix_coordinates = flags & 2;
+   data->requires_msl41 = (flags & 1u) != 0;
+   data->uses_matrix_coordinates = (flags & 2u) != 0;
+   data->uses_atomic64_locks = (flags & 4u) != 0;
+   data->uses_pipeline_statistics = (flags & 8u) != 0;
    data->entrypoint_name = ralloc_array(NULL, char, entrypoint_length);
    if (data->entrypoint_name == NULL)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -3269,7 +3301,13 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
    blob_copy_bytes(blob, (void *)data->entrypoint_name, entrypoint_length);
    blob_copy_bytes(blob, (void *)data->code, code_length);
 
-   if (blob->overrun)
+   if (blob->overrun || !entrypoint_length || !code_length ||
+       data->entrypoint_name[entrypoint_length - 1] || data->code[code_length - 1] ||
+       (flags & ~0x8fu) || (!(flags & 0x80u) && (flags & 12u)))
+      return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
+   /* Old ordinary source remains reusable. Old atomic source loaded its
+    * address from root word0 and must be recompiled for specialization. */
+   if (!(flags & 0x80u) && strstr(data->code, "kk_atomic64_lock("))
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
 
    return VK_SUCCESS;
@@ -3302,6 +3340,9 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
    if (shader == NULL)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
+   /* Cache incompatibility can fail before any source is accepted. Cleanup
+    * must already know the actual stage owning that partial source. */
+   shader->info = info;
    kk_shader_init_mesh_state(shader, info.stage);
    if (shader->mesh)
       shader->mesh->info = mesh_info;
@@ -3312,8 +3353,6 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
    result = kk_msl_deserialize(blob, &shader->msl_data[info.stage]);
    if (result != VK_SUCCESS)
       goto fail;
-
-   shader->info = info;
 
    if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH)) {
       u_foreach_bit(stage, shader->info.vs.additional_stages_bits) {

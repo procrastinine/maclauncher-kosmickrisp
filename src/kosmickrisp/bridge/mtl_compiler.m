@@ -6,6 +6,7 @@
 
 #include "mtl_compiler.h"
 #include "mtl_format.h"
+#include "kosmickrisp/libkk/kk_argument_table.h"
 
 #include <Metal/MTL4ComputePipeline.h>
 #include <Metal/MTL4LibraryDescriptor.h>
@@ -174,6 +175,54 @@ mtl_new_library_function_descriptor(mtl_library *library, const char *entry_poin
       desc.name = ns_entry_point;
       desc.library = lib;
       return desc;
+   }
+}
+
+mtl_function_descriptor *
+mtl_specialize_function_uint64(mtl_function_descriptor *function,
+                               uint32_t index, uint64_t value)
+{
+   @autoreleasepool {
+      MTLFunctionConstantValues *values = [[MTLFunctionConstantValues new] autorelease];
+      if (!values)
+         return NULL;
+      [values setConstantValue:&value type:MTLDataTypeULong atIndex:index];
+      MTL4SpecializedFunctionDescriptor *desc = [MTL4SpecializedFunctionDescriptor new];
+      desc.functionDescriptor = (MTL4FunctionDescriptor *)function;
+      desc.constantValues = values;
+      return (mtl_function_descriptor *)desc;
+   }
+}
+
+mtl_function_descriptor *
+mtl_specialize_pipeline_statistics(mtl_function_descriptor *function)
+{
+   @autoreleasepool {
+      bool enabled = true;
+      MTLFunctionConstantValues *values =
+         [[MTLFunctionConstantValues new] autorelease];
+      [values setConstantValue:&enabled type:MTLDataTypeBool
+                       atIndex:KK_FUNCTION_CONSTANT_PIPELINE_STATISTICS];
+      MTL4SpecializedFunctionDescriptor *specialized =
+         [MTL4SpecializedFunctionDescriptor new];
+      /* Wrap rather than replace existing color or other specializations. */
+      specialized.functionDescriptor = (MTL4FunctionDescriptor *)function;
+      specialized.constantValues = values;
+      return specialized;
+   }
+}
+
+mtl_render_pipeline_descriptor *
+mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
+{
+   @autoreleasepool {
+      MTL4RenderPipelineDescriptor *copy =
+         [(MTL4RenderPipelineDescriptor *)descriptor copy];
+      mtl_function_descriptor *fragment = mtl_specialize_pipeline_statistics(
+         (mtl_function_descriptor *)copy.fragmentFunctionDescriptor);
+      copy.fragmentFunctionDescriptor = (MTL4FunctionDescriptor *)fragment;
+      [(id)fragment release];
+      return copy;
    }
 }
 

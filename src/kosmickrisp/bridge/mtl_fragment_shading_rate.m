@@ -12,7 +12,7 @@
 struct mtl_vrs_pipelines {
    id<MTLRenderPipelineState> coverage, coarse, replay, order, prepare;
    uint32_t result_stride, raster_samples;
-   bool uses_per_draw, early_fragment_tests;
+   bool uses_per_draw, early_fragment_tests, statistics;
 };
 
 static const char support_msl[] =
@@ -76,9 +76,15 @@ new_function_pipelines(mtl_compiler *compiler,
    bool native_application, bool replay_framebuffer_reads,
    enum mtl_language_version version, enum mtl_math_mode math,
    enum mtl_math_floating_point_functions functions, uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests,
-   mtl_library *support_library)
+   mtl_library *support_library, bool statistics)
 {
    @autoreleasepool {
+      if (statistics) {
+         mtl_function_descriptor *specialized = mtl_specialize_pipeline_statistics(
+            (mtl_function_descriptor *)application);
+         if (!specialized) return NULL;
+         application = [(MTL4FunctionDescriptor *)specialized autorelease];
+      }
       id<MTL4Compiler> c = (id<MTL4Compiler>)compiler;
       NSError *error = nil;
       id<MTLLibrary> support = support_library
@@ -90,6 +96,7 @@ new_function_pipelines(mtl_compiler *compiler,
       p->result_stride = result_stride;
       p->uses_per_draw = uses_per_draw;
       p->early_fragment_tests = early_fragment_tests;
+      p->statistics = statistics;
       MTL4RenderPipelineDescriptor *original = (MTL4RenderPipelineDescriptor *)native_pipeline;
       p->raster_samples = original.rasterSampleCount;
       MTL4RenderPipelineDescriptor *r = [[original copy] autorelease];
@@ -169,11 +176,27 @@ new_pipelines(mtl_compiler *compiler,
       result = new_function_pipelines(compiler, native_pipeline,
          function((id<MTLLibrary>)application, coarse_entrypoint),
          replay ? function((id<MTLLibrary>)replay, replay_entry) : nil,
-         native_application, replay_framebuffer_reads, version, math, functions, sizeof(struct kk_vrs_result), false, false, NULL);
+         native_application, replay_framebuffer_reads, version, math, functions, sizeof(struct kk_vrs_result), false, false, NULL, false);
    }
    mtl_release(application);
    mtl_release(replay);
    return result;
+}
+
+struct mtl_vrs_pipelines *
+mtl_vrs_new_cached_native_pipelines_for_statistics(mtl_compiler *compiler,
+   mtl_render_pipeline_descriptor *native_pipeline,
+   mtl_function_descriptor *body, mtl_function_descriptor *replay,
+   bool framebuffer_reads, enum mtl_language_version version,
+   enum mtl_math_mode math, enum mtl_math_floating_point_functions functions,
+   uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests,
+   bool statistics)
+{
+   if (!native_pipeline || !body || !replay) return NULL;
+   return new_function_pipelines(compiler, native_pipeline,
+      (MTL4FunctionDescriptor *)body, (MTL4FunctionDescriptor *)replay, true,
+      framebuffer_reads, version, math, functions, result_stride, uses_per_draw,
+      early_fragment_tests, NULL, statistics);
 }
 
 struct mtl_vrs_pipelines *
@@ -184,10 +207,25 @@ mtl_vrs_new_cached_native_pipelines(mtl_compiler *compiler,
    enum mtl_math_mode math, enum mtl_math_floating_point_functions functions,
    uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests)
 {
-   if (!native_pipeline || !body || !replay) return NULL;
+   return mtl_vrs_new_cached_native_pipelines_for_statistics(compiler,
+      native_pipeline, body, replay, framebuffer_reads, version, math, functions,
+      result_stride, uses_per_draw, early_fragment_tests, false);
+}
+
+struct mtl_vrs_pipelines *
+mtl_vrs_new_shared_native_pipelines_for_statistics(mtl_compiler *compiler,
+   mtl_render_pipeline_descriptor *native_pipeline,
+   mtl_function_descriptor *body, mtl_function_descriptor *replay,
+   bool framebuffer_reads, enum mtl_language_version version,
+   enum mtl_math_mode math, enum mtl_math_floating_point_functions functions,
+   uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests,
+   mtl_library *support_library, bool statistics)
+{
+   if (!native_pipeline || !body || !replay || !support_library) return NULL;
    return new_function_pipelines(compiler, native_pipeline,
       (MTL4FunctionDescriptor *)body, (MTL4FunctionDescriptor *)replay, true,
-      framebuffer_reads, version, math, functions, result_stride, uses_per_draw, early_fragment_tests, NULL);
+      framebuffer_reads, version, math, functions, result_stride, uses_per_draw,
+      early_fragment_tests, support_library, statistics);
 }
 
 struct mtl_vrs_pipelines *
@@ -199,11 +237,15 @@ mtl_vrs_new_shared_native_pipelines(mtl_compiler *compiler,
    uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests,
    mtl_library *support_library)
 {
-   if (!native_pipeline || !body || !replay || !support_library) return NULL;
-   return new_function_pipelines(compiler, native_pipeline,
-      (MTL4FunctionDescriptor *)body, (MTL4FunctionDescriptor *)replay, true,
-      framebuffer_reads, version, math, functions, result_stride, uses_per_draw,
-      early_fragment_tests, support_library);
+   return mtl_vrs_new_shared_native_pipelines_for_statistics(compiler,
+      native_pipeline, body, replay, framebuffer_reads, version, math, functions,
+      result_stride, uses_per_draw, early_fragment_tests, support_library, false);
+}
+
+bool
+mtl_vrs_pipelines_statistics(const struct mtl_vrs_pipelines *pipelines)
+{
+   return pipelines && pipelines->statistics;
 }
 
 void

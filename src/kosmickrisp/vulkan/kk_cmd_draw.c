@@ -1121,7 +1121,8 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
       bind_dynamic_ds = true;
    }
 
-   if ((IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) || IS_DIRTY(RS_POLYGON_MODE) ||
+   if ((gfx->dirty & KK_DIRTY_FRAGMENT_STATISTICS) ||
+       (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) || IS_DIRTY(RS_POLYGON_MODE) ||
        IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(COLOR_ATTACHMENT_MAP) ||
        IS_DIRTY(MS_RASTERIZATION_SAMPLES) || IS_DIRTY(RS_LINE_MODE)) {
       struct kk_shader *vs = cmd->state.gfx.shader;

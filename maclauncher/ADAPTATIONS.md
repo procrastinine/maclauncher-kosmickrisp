@@ -130,7 +130,7 @@ Implementation: [kk_event.c](../src/kosmickrisp/vulkan/kk_event.c), [kk_event_de
 
 Vulkan contract: `VK_KHR_compute_shader_derivatives`, `computeDerivativeGroupLinear`, `computeDerivativeGroupQuads`.
 
-Linear compute groups use four consecutive quad lanes; implicit sampling uses explicit gradients and LOD queries account for sampler bias, mipmap mode and available image levels. Sampled descriptors remain 64 bytes.
+Linear compute groups use four consecutive quad lanes; implicit sampling uses explicit gradients and LOD queries account for sampler bias, mipmap mode and available image levels. Sampled descriptors remain 64 bytes; sampler bias and mipmap mode come from immutable sampler records. LOD-query probes share one texture-lowering pass.
 
 Limits and reported properties: `computeDerivativeGroupQuads = false`; `meshAndTaskShaderDerivatives = false`.
 
@@ -142,7 +142,7 @@ Implementation: [kk_physical_device.c](../src/kosmickrisp/vulkan/kk_physical_dev
 
 Vulkan contract: Fragment helper semantics and inactive statistics storage.
 
-Fragment counters are compiled only for devices enabling pipelineStatisticsQuery, whose state participates in the graphics cache key. Instrumentation uses Metal helper-write suppression after application lowering. Null destinations disable Poly statistics writes, and inactive queries retain ordinary scratch sizes.
+Fragment counters are compiled only for devices enabling pipelineStatisticsQuery, whose state participates in the graphics cache key. A default-false Metal function constant encloses the complete counter region; active fragment queries select a lazily cached counting specialization. Private query increments use Metal helper-write suppression after application lowering and existing logical-helper predicates in captured bodies. Null destinations disable Poly statistics writes, and inactive queries retain ordinary scratch sizes. Geometry addresses occupy an optional compact per-draw tail.
 
 Scope: fragment helper and demote lowering, inactive tessellation and geometry scratch. Device support and operation restrictions are defined by the linked implementation.
 
@@ -602,11 +602,13 @@ Vulkan contract: `VK_KHR_shader_atomic_int64`, `shaderBufferInt64Atomics`, `shad
 
 Hashed locks serialize full-width operations over 32-bit atomic halves. Retry-loop results use a 32-bit pair before reconstruction. Unused native unsigned min/max retain the same lock.
 
-Scope: root descriptor upload, device allocation, atomic emission. Device support and operation restrictions are defined by the linked implementation.
+The lock table is created on first atomic function specialization. Its GPU address is a function constant; descriptor roots retain their ordinary address. Shader caches store the requirement and generic source without device addresses.
+
+Atomic helper requirements are collected during the existing type-inference seed visit. Shaders without 64-bit atomic operations emit no lock helpers and require no separate helper-discovery passes.
 
 Consumers: vkd3d-proton.
 
-Implementation: [kk_physical_device.c](../src/kosmickrisp/vulkan/kk_physical_device.c), [kk_device.h](../src/kosmickrisp/vulkan/kk_device.h), [kk_device.c](../src/kosmickrisp/vulkan/kk_device.c), [kk_cmd_buffer.c](../src/kosmickrisp/vulkan/kk_cmd_buffer.c), [nir_to_msl.c](../src/kosmickrisp/compiler/nir_to_msl.c), [kk_atomic_int64.h](../src/kosmickrisp/compiler/kk_atomic_int64.h), [kk_atomic_int64_msl.h](../src/kosmickrisp/compiler/kk_atomic_int64_msl.h).
+Implementation: [kk_physical_device.c](../src/kosmickrisp/vulkan/kk_physical_device.c), [kk_device.h](../src/kosmickrisp/vulkan/kk_device.h), [kk_device.c](../src/kosmickrisp/vulkan/kk_device.c), [kk_atomic64.c](../src/kosmickrisp/vulkan/kk_atomic64.c), [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [mtl_compiler.m](../src/kosmickrisp/bridge/mtl_compiler.m), [nir_to_msl.c](../src/kosmickrisp/compiler/nir_to_msl.c), [kk_atomic_int64.h](../src/kosmickrisp/compiler/kk_atomic_int64.h), [kk_atomic_int64_msl.h](../src/kosmickrisp/compiler/kk_atomic_int64_msl.h).
 
 ### Fixed auxiliary words in sampled-image descriptors
 

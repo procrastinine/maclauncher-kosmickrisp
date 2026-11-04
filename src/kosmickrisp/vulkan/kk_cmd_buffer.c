@@ -1237,8 +1237,7 @@ kk_upload_descriptor_root_ptr(struct kk_cmd_buffer *cmd,
    }
    if (dynamic_state)
       dynamic_state->dynamic_buffers_dirty = false;
-   struct kk_device *dev = kk_cmd_buffer_device(cmd);
-   snapshot->addr = dev->atomic64_locks ? dev->atomic64_locks->gpu : ptr.gpu;
+   snapshot->addr = ptr.gpu;
    return ptr;
 }
 

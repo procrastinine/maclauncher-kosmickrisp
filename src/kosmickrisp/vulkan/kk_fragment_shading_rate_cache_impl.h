@@ -8,7 +8,7 @@
 #include "kosmickrisp/bridge/mtl_fragment_shading_rate.h"
 
 #define KK_VRS_SOURCE_SCHEMA 6u
-#define KK_VRS_ARTIFACT_SCHEMA 2u
+#define KK_VRS_ARTIFACT_SCHEMA 3u
 #define KK_VRS_KEY_SIZE 48u
 struct kk_vrs_source {
    struct kk_vrs_source_data data;
@@ -262,9 +262,8 @@ kk_vrs_artifact_native(struct kk_device *dev, struct kk_vrs_artifact *artifact)
    artifact->library = mtl_new_library(dev->mtl_compiler_handle,
       artifact->data.code, artifact->version, artifact->math, artifact->functions);
    if (!artifact->library) return VK_ERROR_INVALID_SHADER_NV;
-   artifact->function = mtl_new_library_function_descriptor(
-      artifact->library, artifact->data.entrypoint_name);
-   return artifact->function ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
+   return kk_msl_function(dev, &artifact->data, artifact->library,
+      artifact->data.entrypoint_name, &artifact->function);
 }
 
 static const struct vk_pipeline_cache_object_ops kk_vrs_artifact_ops;
@@ -368,6 +367,12 @@ mtl_function_descriptor *
 kk_vrs_artifact_function(const struct kk_vrs_artifact *artifact)
 {
    return artifact ? artifact->function : NULL;
+}
+
+bool
+kk_vrs_artifact_uses_pipeline_statistics(const struct kk_vrs_artifact *artifact)
+{
+   return artifact && artifact->data.uses_pipeline_statistics;
 }
 
 bool
@@ -544,7 +549,7 @@ kk_vrs_fragment_get(struct kk_device *dev, struct kk_vrs_source *source,
 static VkResult
 kk_vrs_pipelines_for_source(struct kk_device *dev,
    mtl_render_pipeline_descriptor *raster_descriptor, struct kk_vrs_source *source,
-   struct mtl_vrs_pipelines **out)
+   bool statistics, struct mtl_vrs_pipelines **out)
 {
    *out = NULL;
    if (!raster_descriptor || !source)
@@ -561,12 +566,15 @@ kk_vrs_pipelines_for_source(struct kk_device *dev,
    if (result != VK_SUCCESS) goto finish;
    /* Each get has released the compilation mutex. Enter the native attachment
     * factory only with the caller's actual producer descriptor and interface. */
-   *out = mtl_vrs_new_shared_native_pipelines(dev->mtl_compiler_handle,
+   /* Only the actual application artifact owns statistics. A query cannot
+    * specialize replay/support work or manufacture another source artifact. */
+   statistics &= kk_vrs_artifact_uses_pipeline_statistics(body);
+   *out = mtl_vrs_new_shared_native_pipelines_for_statistics(dev->mtl_compiler_handle,
       raster_descriptor, body->function, replay->function,
       replay->framebuffer_reads, MAX2(body->version, replay->version),
       body->math, body->functions, source->data.result_stride,
       source->data.uses_per_draw,
-      source->data.early_fragment_tests, support->library);
+      source->data.early_fragment_tests, support->library, statistics);
    if (!*out) result = VK_ERROR_INVALID_SHADER_NV;
 finish:
    if (support) vk_pipeline_cache_object_unref(&dev->vk, &support->base);
@@ -575,12 +583,30 @@ finish:
    return result;
 }
 VkResult
+kk_vrs_native_pipelines_create_for_raster_statistics(struct kk_device *dev,
+   mtl_render_pipeline_descriptor *raster_descriptor, const struct kk_shader *fragment,
+   bool statistics, struct mtl_vrs_pipelines **out)
+{
+   return kk_vrs_pipelines_for_source(dev, raster_descriptor,
+      fragment ? fragment->vrs_source : NULL, statistics, out);
+}
+
+VkResult
 kk_vrs_native_pipelines_create_for_raster(struct kk_device *dev,
    mtl_render_pipeline_descriptor *raster_descriptor, const struct kk_shader *fragment,
    struct mtl_vrs_pipelines **out)
 {
+   return kk_vrs_native_pipelines_create_for_raster_statistics(dev,
+      raster_descriptor, fragment, false, out);
+}
+
+VkResult
+kk_vrs_captured_pipelines_create_statistics(struct kk_device *dev,
+   mtl_render_pipeline_descriptor *raster_descriptor, const struct kk_shader *fragment,
+   bool statistics, struct mtl_vrs_pipelines **out)
+{
    return kk_vrs_pipelines_for_source(dev, raster_descriptor,
-      fragment ? fragment->vrs_source : NULL, out);
+      fragment ? kk_vrs_source_captured(fragment->vrs_source) : NULL, statistics, out);
 }
 
 VkResult
@@ -588,8 +614,17 @@ kk_vrs_captured_pipelines_create(struct kk_device *dev,
    mtl_render_pipeline_descriptor *raster_descriptor, const struct kk_shader *fragment,
    struct mtl_vrs_pipelines **out)
 {
-   return kk_vrs_pipelines_for_source(dev, raster_descriptor,
-      fragment ? kk_vrs_source_captured(fragment->vrs_source) : NULL, out);
+   return kk_vrs_captured_pipelines_create_statistics(dev,
+      raster_descriptor, fragment, false, out);
+}
+
+VkResult
+kk_vrs_native_pipelines_create_statistics(struct kk_device *dev,
+   const struct kk_shader *producer, const struct kk_shader *fragment,
+   bool statistics, struct mtl_vrs_pipelines **out)
+{
+   return kk_vrs_native_pipelines_create_for_raster_statistics(dev,
+      kk_vrs_native_pipeline_descriptor(producer), fragment, statistics, out);
 }
 
 VkResult
@@ -597,7 +632,7 @@ kk_vrs_native_pipelines_create(struct kk_device *dev,
    const struct kk_shader *producer, const struct kk_shader *fragment,
    struct mtl_vrs_pipelines **out)
 {
-   return kk_vrs_native_pipelines_create_for_raster(dev,
-      kk_vrs_native_pipeline_descriptor(producer), fragment, out);
+   return kk_vrs_native_pipelines_create_statistics(dev,
+      producer, fragment, false, out);
 }
 #endif

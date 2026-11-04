@@ -69,7 +69,7 @@ kk_emit_image64(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
       src_to_msl(ctx, &intr->src[1]);
       P(ctx, nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_1D ? ".x, 0u)" : ".xy)");
       const unsigned op = load ? 9 : store ? 8 : kk_atomic64_opcode(nir_intrinsic_atomic_op(intr));
-      P(ctx, ", (device atomic_uint*)buf0.contents[0], %uu, ", op);
+      P(ctx, ", (device atomic_uint*)kk_atomic64_lock_table, %uu, ", op);
       if (load) { P(ctx, "0ul"); }
       else {
          P(ctx, "ulong("); src_to_msl(ctx, &intr->src[swap ? 4 : 3]);
@@ -121,7 +121,7 @@ kk_emit_atomic64(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
    if (shared) P(ctx, "&shared_data[%u + ", nir_intrinsic_base(intr));
    src_to_msl(ctx, &intr->src[store ? 1 : 0]);
    if (shared) P(ctx, "]");
-   P(ctx, ", (device atomic_uint*)buf0.contents[0], %uu, ", op);
+   P(ctx, ", (device atomic_uint*)kk_atomic64_lock_table, %uu, ", op);
    if (load) { P(ctx, "0ul"); }
    else {
       P(ctx, "ulong(");

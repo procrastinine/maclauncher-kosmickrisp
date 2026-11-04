@@ -43,9 +43,9 @@ struct nir_to_msl_ctx {
    bool uses_matrix_coordinates;
    bool uses_poly_layer_selector;
    unsigned short indentlevel;
-   /* Use the alignment gap before the I/O records. */
-   bool uses_atomic64;
-   bool uses_image_atomic64;
+   bool uses_pipeline_statistics;
+   bool uses_atomic64 : 1;
+   bool uses_image_atomic64 : 1;
    struct io_slot_info inputs_info[NUM_TOTAL_VARYING_SLOTS];
    struct io_slot_info outputs_info[NUM_TOTAL_VARYING_SLOTS];
    /* Initialized only for Task/Mesh. Keep this stage-local data last. */

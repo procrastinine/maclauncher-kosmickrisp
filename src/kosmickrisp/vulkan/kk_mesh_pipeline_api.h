@@ -19,6 +19,9 @@ struct kk_mesh_fragment_program {
     * includes its fragment output operations. The native form carries the
     * common linker's compiled core and state-dependent epilog. */
    const struct msl_compile_data *monolithic;
+   /* The native core/epilog owner supplies the actual application-use flag.
+    * Monolithic programs use their compiled metadata instead. */
+   bool uses_pipeline_statistics;
    const void *core;
    const void *epilog;
    VkResult (*attach)(struct kk_device *device,

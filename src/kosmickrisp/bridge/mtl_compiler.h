@@ -67,6 +67,15 @@ mtl_function_descriptor *
 mtl_new_library_function_descriptor(mtl_library *library,
                                     const char *entry_point);
 
+mtl_function_descriptor *
+mtl_specialize_function_uint64(mtl_function_descriptor *function,
+                               uint32_t index, uint64_t value);
+
+mtl_function_descriptor *mtl_specialize_pipeline_statistics(
+   mtl_function_descriptor *function);
+mtl_render_pipeline_descriptor *mtl_statistics_render_descriptor(
+   mtl_render_pipeline_descriptor *descriptor);
+
 /* Compute pipeline */
 mtl_compute_pipeline_state *
 mtl_new_compute_pipeline_state(mtl_compiler *compiler,

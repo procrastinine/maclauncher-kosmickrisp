@@ -32,6 +32,9 @@ struct nir_to_msl_options {
    bool requires_msl41;
    /* Output: an emitted FP8 matrix load/store consumes the coordinate ramp. */
    bool uses_matrix_coordinates;
+   /* Outputs from the surviving operations in this translation. */
+   bool uses_pipeline_statistics;
+   bool uses_atomic64_locks;
 
    /* Required to correctly declare fragment outputs. Shader may contain
     * shrinked writes which can lead to writting less components than the ones
