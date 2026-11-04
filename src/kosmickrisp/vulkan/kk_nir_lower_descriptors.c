@@ -474,13 +474,15 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
    if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF) {
       const enum pipe_format format = nir_intrinsic_format(intr);
       may_be_rgb32 = format == PIPE_FORMAT_NONE || kk_format_is_rgb32(format);
+      if (intr->intrinsic == nir_intrinsic_image_deref_size) {
+         nir_def *count = load_resource_deref_desc(b, 1, 32, deref,
+            offsetof(struct kk_storage_image_descriptor, texel_count), ctx);
+         nir_def_replace(&intr->def, count);
+         return true;
+      }
       nir_def *metadata = load_resource_deref_desc(
          b, 2, 32, deref,
          offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
-      if (intr->intrinsic == nir_intrinsic_image_deref_size) {
-         nir_def_replace(&intr->def, nir_channel(b, metadata, 1));
-         return true;
-      }
       if (intr->intrinsic == nir_intrinsic_image_deref_load ||
           intr->intrinsic == nir_intrinsic_image_deref_sparse_load ||
           intr->intrinsic == nir_intrinsic_image_deref_store ||
@@ -799,13 +801,16 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
    if (tex->backend_flags & KK_SAMPLE_METADATA) return true;
 
    if (tex->sampler_dim == GLSL_SAMPLER_DIM_BUF) {
+      if (tex->op == nir_texop_txs) {
+         nir_def *count = load_resource_deref_desc(b, 1, 32,
+            nir_src_as_deref(nir_src_for_ssa(texture)),
+            offsetof(struct kk_storage_image_descriptor, texel_count), ctx);
+         nir_def_replace(&tex->def, count);
+         return true;
+      }
       nir_def *metadata = load_resource_deref_desc(
          b, 2, 32, nir_src_as_deref(nir_src_for_ssa(texture)),
          offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
-      if (tex->op == nir_texop_txs) {
-         nir_def_replace(&tex->def, nir_channel(b, metadata, 1));
-         return true;
-      }
       int coord_src = nir_tex_instr_src_index(tex, nir_tex_src_coord);
       if (coord_src >= 0) {
          nir_def *coord = kk_texel_buffer_coord(b, tex->src[coord_src].src.ssa, metadata, true);
