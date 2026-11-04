@@ -16,6 +16,7 @@
 #include "kk_nir_lower_vbo.h"
 #include "kk_physical_device.h"
 #include "kk_sampler.h"
+#include "kk_embedded_sampler_runtime.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/ns_process_info.h"
@@ -976,6 +977,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
 {
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
+   kk_shader_embedded_samplers_finish(dev, shader);
    mtl_release(shader->dgc_compute);
    kk_sparse_shader_finish(shader);
    for (unsigned i = 0; i < 2; ++i)
@@ -2282,16 +2284,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       emulated_stage |= (nir->xfb_info || kk_polygon_possible(dev, state) || poly_layer_replay) && (nir->info.stage == MESA_SHADER_VERTEX ||
                                          nir->info.stage == MESA_SHADER_TESS_EVAL);
       msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
-      uint64_t *embedded = info->embedded_sampler_count ? calloc(info->embedded_sampler_count, sizeof(uint64_t)) : NULL;
-      if (info->embedded_sampler_count && !embedded)
-         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
-      for (uint32_t e = 0; e < info->embedded_sampler_count; ++e) {
-         result = kk_heap_sampler_state(dev, &info->embedded_samplers[e], &embedded[e]);
-         if (result != VK_SUCCESS) { free(embedded); return result; }
-      }
       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
-                   info->set_layout_count, info->set_layouts, state, features, info, embedded);
-      free(embedded);
+                   info->set_layout_count, info->set_layouts, state, features, info, NULL);
       if (nir->info.stage == MESA_SHADER_FRAGMENT &&
           (features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS)))
          NIR_PASS(_, nir, kk_nir_statistics_fs);
@@ -2457,6 +2451,18 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       result =
          kk_compile_shader(dev, nir_shaders[i], prev_stage, vertex_robustness,
                            state, &compile_options, pAllocator, &shaders[i]);
+      if (result == VK_SUCCESS) {
+         for (uint32_t input = 0; input < shader_count; ++input) {
+            if (infos[input].stage != shaders[i]->vk.stage) continue;
+            result = kk_shader_embedded_samplers_init(dev, shaders[i],
+               infos[input].embedded_sampler_count, infos[input].embedded_samplers);
+            break;
+         }
+         if (result != VK_SUCCESS) {
+            kk_shader_destroy(&dev->vk, shaders[i], pAllocator);
+            shaders[i] = NULL;
+         }
+      }
 
       if (result != VK_SUCCESS) {
          /* Clean up all the shaders before this point */
@@ -2725,6 +2731,11 @@ kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
    bool heap = shader && shader->info.descriptor_heap;
    desc->root_dirty |= heap != desc->descriptor_heap || push_size > desc->push_size;
    desc->descriptor_heap = heap;
+   if (heap) {
+      desc->root_dirty |= desc->heap_embedded_samplers[MESA_SHADER_COMPUTE] !=
+                           shader->embedded_sampler_table;
+      desc->heap_embedded_samplers[MESA_SHADER_COMPUTE] = shader->embedded_sampler_table;
+   }
    desc->push_size = push_size;
    cmd->state.shaders[MESA_SHADER_COMPUTE] = shader;
 }
@@ -2735,6 +2746,11 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
                             struct kk_shader *shader)
 {
    if (stage == MESA_SHADER_VERTEX) shader = kk_sparse_select_shader(cmd, shader);
+   if (shader && shader->info.descriptor_heap) {
+      cmd->state.gfx.descriptors.root_dirty |=
+         cmd->state.gfx.descriptors.heap_embedded_samplers[stage] != shader->embedded_sampler_table;
+      cmd->state.gfx.descriptors.heap_embedded_samplers[stage] = shader->embedded_sampler_table;
+   }
    cmd->state.shaders[stage] = shader;
    cmd->state.dirty_shaders |= BITFIELD_BIT(stage);
 

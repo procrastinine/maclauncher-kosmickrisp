@@ -86,6 +86,8 @@ void kk_descriptor_heap_finish(struct kk_device *dev);
 void kk_descriptor_heap_image_finish(struct kk_device *dev, struct kk_image *image);
 void kk_descriptor_heap_buffer_bind(struct kk_device *dev, struct kk_buffer *buffer);
 void kk_descriptor_heap_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer);
+VkResult kk_heap_embedded_sampler_table(struct kk_device *dev,
+   uint32_t count, const struct vk_sampler_state *states, uint64_t *gpu_address);
 VkResult kk_heap_sampler_state(struct kk_device *dev,
    const struct vk_sampler_state *state, uint64_t *gpu_address);
 

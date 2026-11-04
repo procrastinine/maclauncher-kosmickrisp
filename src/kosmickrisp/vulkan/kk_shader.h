@@ -235,8 +235,15 @@ kk_msl_language_version(const struct msl_compile_data *data,
                               : MTL_LANGUAGE_VERSION_4_0;
 }
 
+#define KK_EMBEDDED_SAMPLER_BINDING_SCHEMA 1u
+struct vk_sampler_state;
+
 struct kk_shader {
    struct vk_shader vk;
+   /* Canonical states may be serialized; these CPU/GPU pointers never are. */
+   uint32_t embedded_sampler_count;
+   struct vk_sampler_state *embedded_sampler_states;
+   uint64_t embedded_sampler_table;
    struct kk_sparse_shader_state *sparse;
 
    struct kk_attachment_pipelines *attachment_pipelines;
@@ -297,6 +304,11 @@ bool kk_nir_lower_non_seamless_cube(nir_shader *nir,
 bool kk_nir_lower_sampler_minmax(nir_shader *nir,
       uint32_t set_layout_count,
       struct vk_descriptor_set_layout *const *set_layouts);
+
+VkResult kk_shader_embedded_samplers_init(struct kk_device *dev,
+   struct kk_shader *shader, uint32_t count, const struct vk_sampler_state *states);
+void kk_shader_embedded_samplers_finish(struct kk_device *dev,
+   struct kk_shader *shader);
 
 bool kk_nir_prepare_descriptor_heaps(nir_shader *nir, uint32_t embedded_count, const uint64_t *embedded, bool sparse_buffers);
 bool kk_nir_finish_sparse_heap_buffers(nir_shader *nir);

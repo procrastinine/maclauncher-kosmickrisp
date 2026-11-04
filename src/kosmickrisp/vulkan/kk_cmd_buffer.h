@@ -61,7 +61,10 @@ struct kk_root_descriptor_table {
    /* Descriptor set base addresses */
    union {
       uint64_t sets[KK_MAX_SETS];
-      struct { uint64_t heap_resource, heap_sampler; };
+      struct {
+         uint64_t heap_resource, heap_sampler;
+         uint64_t heap_embedded_samplers[MESA_ALL_SHADER_STAGES];
+      };
    };
 
    /* Dynamic buffer bindings */
@@ -76,12 +79,18 @@ struct kk_root_descriptor_table {
    uint8_t push[KK_MAX_PUSH_SIZE];
 };
 
+static_assert(2u + MESA_ALL_SHADER_STAGES <= KK_MAX_SETS,
+              "embedded stage bindings fit the existing heap root union");
+static_assert(sizeof(((struct kk_root_descriptor_table *)0)->sets) ==
+                 KK_MAX_SETS * sizeof(uint64_t), "unchanged root union extent");
+
 struct kk_descriptor_state {
    bool root_dirty;
    uint32_t push_size;
    struct kk_root_descriptor_table root;
    uint64_t heap_resource, heap_sampler;
    bool descriptor_heap;
+   uint64_t heap_embedded_samplers[MESA_ALL_SHADER_STAGES];
 
    uint32_t set_sizes[KK_MAX_SETS];
    struct kk_descriptor_set *sets[KK_MAX_SETS];
@@ -98,6 +107,8 @@ kk_descriptor_root_apply_heap(const struct kk_descriptor_state *desc,
    if (desc->descriptor_heap) {
       snapshot->heap_resource = desc->heap_resource;
       snapshot->heap_sampler = desc->heap_sampler;
+      memcpy(snapshot->heap_embedded_samplers, desc->heap_embedded_samplers,
+             sizeof(snapshot->heap_embedded_samplers));
    }
 }
 

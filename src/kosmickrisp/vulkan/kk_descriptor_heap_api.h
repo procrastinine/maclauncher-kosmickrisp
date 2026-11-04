@@ -258,6 +258,40 @@ kk_heap_sampler_state(struct kk_device *dev,
    return result;
 }
 
+VkResult
+kk_heap_embedded_sampler_table(struct kk_device *dev, uint32_t count,
+   const struct vk_sampler_state *states, uint64_t *gpu_address)
+{
+   *gpu_address = 0;
+   if (!count) return VK_SUCCESS;
+   if (!states || count > dev->vk.physical->properties.maxDescriptorHeapEmbeddedSamplers ||
+       count > KK_HEAP_METADATA_PAGE_SIZE / sizeof(uint64_t))
+      return vk_error(dev, VK_ERROR_UNKNOWN);
+   uint64_t *addresses = vk_alloc(&dev->vk.alloc, count * sizeof(*addresses), 8,
+                                 VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+   if (!addresses) return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   simple_mtx_lock(&dev->descriptor_heap_lock);
+   VkResult result = VK_SUCCESS;
+   for (uint32_t i = 0; i < count; ++i) {
+      struct kk_heap_sampler *sampler;
+      result = kk_heap_sampler_locked(dev, &states[i], &sampler);
+      if (result != VK_SUCCESS) break;
+      result = kk_heap_sampler_metadata_locked(dev, sampler);
+      if (result != VK_SUCCESS) break;
+      addresses[i] = sampler->gpu_address;
+   }
+   if (result == VK_SUCCESS) {
+      if (count == 1)
+         *gpu_address = addresses[0];
+      else
+         result = kk_heap_metadata_alloc_locked(dev, addresses,
+            count * sizeof(*addresses), 8, gpu_address);
+   }
+   simple_mtx_unlock(&dev->descriptor_heap_lock);
+   vk_free(&dev->vk.alloc, addresses);
+   return result;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 kk_RegisterCustomBorderColorEXT(VkDevice _device,
    const VkSamplerCustomBorderColorCreateInfoEXT *pBorderColor,
