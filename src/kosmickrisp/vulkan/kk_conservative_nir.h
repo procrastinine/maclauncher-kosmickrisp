@@ -155,11 +155,18 @@ kk_conservative_fs_intrinsic(nir_builder *b, nir_intrinsic_instr *intr, void *da
    bool front = intr->intrinsic == nir_intrinsic_load_front_face;
    bool mask = intr->intrinsic == nir_intrinsic_load_sample_mask_in;
    bool fully = intr->intrinsic == nir_intrinsic_load_fully_covered;
-   if (!interpolated && !flat && !per_vertex && !barycentric && !position && !front && !mask && !fully)
+   bool fsr_primitive = intr->intrinsic == nir_intrinsic_load_raster_primitive_id_kk;
+   if (!interpolated && !flat && !per_vertex && !barycentric && !position && !front && !mask && !fully && !fsr_primitive)
       return false;
    b->cursor = nir_before_instr(&intr->instr);
    nir_def *packet = kk_conservative_packet(b), *value;
-   if (fully) {
+   if (fsr_primitive) {
+      /* All row triangles of one original primitive share its packet. It is
+       * 8-byte aligned in one 128 MiB heap, so its address in 8-byte units is
+       * injective modulo 2^32 within that heap, including an address wrap.
+       * Physical row triangle IDs can differ between a pixel's samples. */
+      value = nir_u2u32(b, nir_ushr_imm(b, packet, 3));
+   } else if (fully) {
       nir_def *xy = nir_f2i32(b, nir_ffloor(b, nir_channels(b, nir_load_frag_coord(b), 3)));
       nir_def *rectangle = nir_vec4(b, nir_channel(b, xy, 0), nir_channel(b, xy, 1),
          nir_iadd_imm(b, nir_channel(b, xy, 0), 1),

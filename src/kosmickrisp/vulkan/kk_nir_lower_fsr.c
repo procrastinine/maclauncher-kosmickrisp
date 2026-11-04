@@ -481,6 +481,29 @@ fsr_is_output(nir_intrinsic_instr *intr)
    return intr->intrinsic == nir_intrinsic_store_output;
 }
 
+/* FSR rewrites one entrypoint, including its memory effects. Sparse buffer
+ * lowering can have added outlined helpers before this point. Inline them
+ * only for this selected emulation, then refresh metadata after IO lowering. */
+void
+kk_nir_fsr_prepare(nir_shader *nir)
+{
+   nir_function_impl *entry = nir_shader_get_entrypoint(nir);
+   bool helpers = false;
+   nir_foreach_function_impl(impl, nir)
+      helpers |= impl != entry;
+   if (helpers) {
+      NIR_PASS(_, nir, nir_lower_variable_initializers, nir_var_function_temp);
+      NIR_PASS(_, nir, nir_lower_returns);
+      NIR_PASS(_, nir, nir_inline_functions);
+      nir_remove_non_entrypoints(nir);
+      NIR_PASS(_, nir, nir_opt_deref);
+      NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+      NIR_PASS(_, nir, nir_opt_copy_prop);
+      NIR_PASS(_, nir, nir_opt_dce);
+   }
+   nir_shader_gather_info(nir, entry);
+}
+
 bool
 kk_nir_fsr_supported(nir_shader *nir, bool force_fine)
 {
@@ -1146,16 +1169,10 @@ kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts)
 /* Replaces the attachment placeholder with a read of the shading-rate
  * attachment texel covering the pixel. A 2x2 aligned group never crosses an
  * 8x8 texel, so every lane of a fragment reads the same rate. The raster
- * primitive ID becomes Metal's [[primitive_id]]. */
+ * primitive identity is resolved after retained-raster lowering. */
 static bool
 fsr_late(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
 {
-   if (intr->intrinsic == nir_intrinsic_load_raster_primitive_id_kk) {
-      b->cursor = nir_before_instr(&intr->instr);
-      nir_def_replace(&intr->def, nir_load_primitive_id(b));
-      BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID);
-      return true;
-   }
    if (intr->intrinsic != nir_intrinsic_load_frag_shading_rate)
       return false;
    b->cursor = nir_before_instr(&intr->instr);
@@ -1197,6 +1214,26 @@ bool
 kk_nir_lower_fsr_late(nir_shader *nir)
 {
    return nir_shader_intrinsics_pass(nir, fsr_late, nir_metadata_none, NULL);
+}
+
+/* Keep this identity distinct from application PrimitiveId until retained
+ * raster variants can replace it with their original primitive identity. */
+static bool
+fsr_primitive(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_raster_primitive_id_kk)
+      return false;
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def_replace(&intr->def, nir_load_primitive_id(b));
+   BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID);
+   return true;
+}
+
+bool
+kk_nir_lower_fsr_primitive(nir_shader *nir)
+{
+   return nir_shader_intrinsics_pass(nir, fsr_primitive,
+                                    nir_metadata_control_flow, NULL);
 }
 
 struct fsr_root_range {

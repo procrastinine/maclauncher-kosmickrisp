@@ -25,11 +25,13 @@ struct kk_fsr_lower_options {
    uint8_t full_sample_mask;
 };
 
+void kk_nir_fsr_prepare(nir_shader *nir);
 bool kk_nir_fsr_supported(nir_shader *nir, bool force_fine);
 bool kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts);
 /* After descriptor lowering and primitive-ID forwarding: the attachment read
  * and the raster primitive ID. */
 bool kk_nir_lower_fsr_late(nir_shader *nir);
+bool kk_nir_lower_fsr_primitive(nir_shader *nir);
 bool kk_nir_fsr_uses_slots(nir_shader *nir);
 bool kk_nir_fsr_reads_root(nir_shader *nir);
 

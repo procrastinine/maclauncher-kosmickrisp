@@ -1133,6 +1133,7 @@ static bool
 kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
                  const struct vk_graphics_pipeline_state *state, bool coarse_allowed)
 {
+   kk_nir_fsr_prepare(nir);
    const struct vk_features *f = &dev->vk.enabled_features;
    const bool dynamic = !state || !state->fsr ||
       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_FSR);
@@ -1812,6 +1813,8 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
                bool *has_framebuffer_reads, uint8_t *framebuffer_read_mask)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
+   if (nir->info.stage == MESA_SHADER_FRAGMENT && kk_fsr_device(dev))
+      NIR_PASS(_, nir, kk_nir_lower_fsr_primitive);
    KK_PERF_VOID(dev, KK_PERF_NIR,
                 kk_finish_msl_nir(nir, opts && opts->pipeline_statistics));
    /* Ray tracing parts can keep undefined values, including 64-bit addresses
