@@ -133,6 +133,7 @@ void kk_sparse_sampler_removed(struct kk_device *dev, struct kk_rc_sampler *samp
 void kk_sparse_sample_rows_finish(struct kk_device *dev);
 void kk_sparse_device_finish(struct kk_device *dev);
 uint64_t kk_sparse_device_address(struct kk_device *dev);
+VkResult kk_sparse_prepare_pipeline(struct kk_device *dev, uint32_t modes);
 bool kk_sparse_submission_begin(struct kk_device *dev);
 void kk_sparse_submission_end(struct kk_device *dev);
 void kk_sparse_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer);

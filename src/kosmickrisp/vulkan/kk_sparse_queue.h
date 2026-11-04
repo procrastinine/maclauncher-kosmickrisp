@@ -31,7 +31,7 @@ static VkResult
 kk_sparse_commit_first(struct kk_queue *queue, struct kk_cmd_buffer *cmd)
 {
    struct kk_device *dev = kk_queue_device(queue);
-   if (!kk_sparse_residency_used(dev))
+   if (!cmd->uses_sparse_buffers)
       return kk_queue_commit(queue, cmd, commit_callback, dev);
    mtx_lock(&queue->mutex);
    queue->commits_in_flight++;

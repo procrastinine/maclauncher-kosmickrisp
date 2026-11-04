@@ -282,7 +282,8 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
    kk_device_make_resources_resident(dev);
 
    queue->commits_in_flight++;
-   const bool sparse_tracked = kk_sparse_submission_begin(dev);
+   const bool sparse_tracked = rerecord->uses_sparse_buffers &&
+      kk_sparse_submission_begin(dev);
    mtl_feedback_handler_callback callback = sparse_tracked ?
       kk_sparse_rerecord_commit_callback : rerecord_commit_callback;
    result = kk_queue_commit(queue, rerecord, callback, commit);

@@ -3353,10 +3353,28 @@ kk_cmd_init_matrix_coordinates(struct kk_cmd_buffer *cmd)
    cmd->state.cs.descriptors.root_dirty = true;
 }
 
-void
-kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
+static void
+kk_sparse_shader_bound(struct kk_cmd_buffer *cmd, const struct kk_shader *shader)
 {
-   shader = kk_sparse_select_shader(cmd, shader);
+   if (!shader || !(shader->info.sparse_modes & KK_SPARSE_BUFFER)) return;
+   cmd->uses_sparse_buffers = true;
+   struct kk_descriptor_state *gfx = &cmd->state.gfx.descriptors;
+   struct kk_descriptor_state *cs = &cmd->state.cs.descriptors;
+   /* Meta state restore may clear one root while the command-buffer usage
+    * bit remains set. Repair either root at bind, never at draw/dispatch. */
+   if (!gfx->root.sparse_state || !cs->root.sparse_state) {
+      uint64_t address = kk_sparse_device_address(kk_cmd_buffer_device(cmd));
+      assert(address);
+      gfx->root_dirty |= gfx->root.sparse_state != address;
+      cs->root_dirty |= cs->root.sparse_state != address;
+      gfx->root.sparse_state = cs->root.sparse_state = address;
+   }
+}
+
+static void
+kk_cmd_bind_compute_shader_selected(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
+{
+   kk_sparse_shader_bound(cmd, shader);
    if (shader && shader->msl_data[MESA_SHADER_COMPUTE].uses_matrix_coordinates &&
        !cmd->state.cs.matrix_coordinates_initialized)
       kk_cmd_init_matrix_coordinates(cmd);
@@ -3376,11 +3394,11 @@ kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
 }
 
 static void
-kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
+kk_cmd_bind_graphics_shader_selected(struct kk_cmd_buffer *cmd,
                             const mesa_shader_stage stage,
                             struct kk_shader *shader)
 {
-   if (stage == MESA_SHADER_VERTEX) shader = kk_sparse_select_shader(cmd, shader);
+   kk_sparse_shader_bound(cmd, shader);
    if (shader && shader->info.descriptor_heap) {
       cmd->state.gfx.descriptors.root_dirty |=
          cmd->state.gfx.descriptors.heap_embedded_samplers[stage] != shader->embedded_sampler_table;
@@ -3419,6 +3437,19 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
    cmd->state.gfx.pipeline_sample_count = shader->info.vs.sample_count;
 }
 
+void
+kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
+{
+   kk_cmd_bind_compute_shader_selected(cmd, kk_sparse_select_shader(cmd, shader));
+}
+
+static void
+kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd, mesa_shader_stage stage,
+                            struct kk_shader *shader)
+{
+   kk_cmd_bind_graphics_shader_selected(cmd, stage, kk_sparse_select_shader(cmd, shader));
+}
+
 static void
 kk_cmd_bind_shaders(struct vk_command_buffer *cmd_buffer, uint32_t stage_count,
                     const mesa_shader_stage *stages,
@@ -3440,13 +3471,16 @@ kk_cmd_bind_shaders(struct vk_command_buffer *cmd_buffer, uint32_t stage_count,
 /* DGC constructs its existing pipeline/parameter snapshot once per command.
  * Ordinary draws and dispatches select at bind and never call this helper. */
 void
-kk_sparse_refresh_shader(struct kk_cmd_buffer *cmd, mesa_shader_stage stage)
+kk_sparse_refresh_shader(struct kk_cmd_buffer *cmd, struct kk_cmd_buffer *state,
+                         mesa_shader_stage stage)
 {
-   struct kk_shader *shader = cmd->state.shaders[stage];
+   struct kk_shader *shader = state->state.shaders[stage];
    struct kk_shader *selected = kk_sparse_select_shader(cmd, shader);
+   kk_sparse_shader_bound(cmd, selected);
    if (selected == shader) return;
-   if (stage == MESA_SHADER_VERTEX) kk_cmd_bind_graphics_shader(cmd, stage, selected);
-   else kk_cmd_bind_compute_shader(cmd, selected);
+   if (stage == MESA_SHADER_VERTEX)
+      kk_cmd_bind_graphics_shader_selected(state, stage, selected);
+   else kk_cmd_bind_compute_shader_selected(state, selected);
 }
 
 static VkResult

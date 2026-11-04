@@ -61,6 +61,7 @@ struct kk_sparse_range_version {
 struct kk_sparse_device_state {
    simple_mtx_t mutex;
    mtl_buffer *root;
+   uint64_t root_address;
    struct kk_sparse_record_node *children[4096];
    uint32_t next_record;
    struct util_dynarray ranges, retired_maps;
@@ -95,7 +96,7 @@ kk_sparse_reclaim(struct kk_device *dev)
 bool
 kk_sparse_submission_begin(struct kk_device *dev)
 {
-   if (!kk_sparse_state(dev) || !kk_sparse_residency_used(dev)) return false;
+   if (!kk_sparse_state(dev)) return false;
    simple_mtx_lock(&kk_sparse_state(dev)->mutex);
    kk_sparse_state(dev)->submissions++;
    simple_mtx_unlock(&kk_sparse_state(dev)->mutex);
@@ -185,12 +186,22 @@ kk_sparse_device_ensure(struct kk_device *dev, uint32_t mode)
       }
       mtl_residency_set_add_allocation(dev->residency_set.handle, root);
       dev->residency_set.dirty = true;
+      state->root_address = mtl_buffer_get_gpu_address(root);
       p_atomic_set(&state->root, root);
    }
    if (created) p_atomic_set(&dev->sparse, state);
 unlock:
    simple_mtx_unlock(&dev->residency_set.mutex);
    return result;
+}
+
+VkResult
+kk_sparse_prepare_pipeline(struct kk_device *dev, uint32_t modes)
+{
+   /* GPU-written heap descriptors and physical pointers can introduce a first
+    * sparse buffer after submission. Their native code and stable root must
+    * already exist. Texture-only standard3D needs no buffer directory. */
+   return kk_sparse_device_ensure(dev, modes & KK_SPARSE_BUFFER);
 }
 
 uint32_t
@@ -211,7 +222,7 @@ kk_sparse_device_address(struct kk_device *dev)
 {
    struct kk_sparse_device_state *state = kk_sparse_state(dev);
    mtl_buffer *root = state ? p_atomic_read(&state->root) : NULL;
-   return root ? mtl_buffer_get_gpu_address(root) : 0;
+   return root ? state->root_address : 0;
 }
 
 void
@@ -496,11 +507,6 @@ kk_sparse_image_init(struct kk_device *dev, struct kk_image *image,
        image->vk.image_type, image->vk.samples, declared_usage, image->vk.tiling,
        image->vk.create_flags, &props))
       return vk_error(dev, VK_ERROR_FORMAT_NOT_SUPPORTED);
-   if (image->vk.image_type == VK_IMAGE_TYPE_3D &&
-       (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)) {
-      VkResult result = kk_sparse_device_ensure(dev, KK_SPARSE_STANDARD_3D);
-      if (result != VK_SUCCESS) return result;
-   }
    image->sparse = calloc(1, sizeof(*image->sparse));
    if (!image->sparse) return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    struct kk_image_plane *plane = &image->planes[0];
@@ -624,9 +630,11 @@ kk_sparse_image_view_query(struct kk_device *dev, struct kk_image_view *view,
       (*record).storage_level_count = view->vk.level_count;
    }
    if (!storage) {
-      VkResult result = kk_sparse_sample_row(dev, view->vk.base_mip_level,
-         view->vk.level_count, &(*record).sampler_table);
-      if (result != VK_SUCCESS) return result;
+      if (dev->vk.enabled_features.shaderResourceResidency) {
+         VkResult result = kk_sparse_sample_row(dev, view->vk.base_mip_level,
+            view->vk.level_count, &(*record).sampler_table);
+         if (result != VK_SUCCESS) return result;
+      }
       for (unsigned i = 0; i < 3; ++i) {
          unsigned extent = i == 0 ? image->vk.extent.width : i == 1 ? image->vk.extent.height : image->vk.extent.depth;
          unsigned view_size = logical_raw ? (i==0?view->vk.extent.width:i==1?view->vk.extent.height:view->vk.extent.depth) : MAX2(extent >> view->vk.base_mip_level, 1);

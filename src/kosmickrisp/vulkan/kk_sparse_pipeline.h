@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT
  * Sparse buffer variants share the normal compiler and pipeline serializer.
  * Only the compact compiler input is retained; Metal compilation is deferred
- * until the device actually creates a residency resource.
+ * until the device creates a residency resource. GPU-updated heaps and physical
+ * pointers require guards before submission, including before first resource use.
  */
 #ifndef KK_SPARSE_PIPELINE_H
 #define KK_SPARSE_PIPELINE_H
@@ -14,7 +15,7 @@ struct kk_sparse_shader_state {
    struct blob recipe;
    struct blob binary;
    blake3_hash guarded_key;
-   uint32_t required_modes;
+   uint32_t required_modes, always_modes;
    struct kk_shader *guarded[KK_SPARSE_MODES + 1];
 };
 
@@ -155,13 +156,15 @@ kk_sparse_read_layout(void *ctx, struct blob_reader *blob)
  * these sparse classes. Descriptor contents may change after compilation. */
 static uint32_t
 kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *infos,
-                         const struct vk_features *features)
+                         const struct vk_features *features, uint32_t *always_modes)
 {
    uint32_t enabled = (features->sparseResidencyBuffer ? KK_SPARSE_BUFFER : 0) |
       (features->sparseResidencyImage3D ? KK_SPARSE_STANDARD_3D : 0);
    uint32_t modes = 0;
+   *always_modes = 0;
    if (!enabled) return 0;
    for (unsigned i = 0; i < count; ++i) {
+      uint32_t stage_modes = 0, physical_modes = 0;
       nir_foreach_function_impl(impl, infos[i].nir) {
          nir_foreach_block(block, impl) {
             nir_foreach_instr(instr, block) {
@@ -172,7 +175,7 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                       tex->op == nir_texop_txl || tex->op == nir_texop_txd);
                   if (tex->sampler_dim == GLSL_SAMPLER_DIM_3D &&
                       (sampled || tex->op == nir_texop_txf))
-                     modes |= KK_SPARSE_STANDARD_3D;
+                     stage_modes |= KK_SPARSE_STANDARD_3D;
                } else if (instr->type == nir_instr_type_intrinsic) {
                   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
                   switch (intr->intrinsic) {
@@ -192,7 +195,7 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                   case nir_intrinsic_bindless_image_atomic:
                   case nir_intrinsic_bindless_image_atomic_swap:
                      if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_3D)
-                        modes |= KK_SPARSE_STANDARD_3D;
+                        stage_modes |= KK_SPARSE_STANDARD_3D;
                      break;
                   /* Explicit IO may already have been applied by a caller. */
                   case nir_intrinsic_load_ubo:
@@ -200,11 +203,14 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                   case nir_intrinsic_store_ssbo:
                   case nir_intrinsic_ssbo_atomic:
                   case nir_intrinsic_ssbo_atomic_swap:
+                     stage_modes |= KK_SPARSE_BUFFER;
+                     break;
                   case nir_intrinsic_load_global:
                   case nir_intrinsic_store_global:
                   case nir_intrinsic_global_atomic:
                   case nir_intrinsic_global_atomic_swap:
-                     modes |= KK_SPARSE_BUFFER;
+                     stage_modes |= KK_SPARSE_BUFFER;
+                     physical_modes |= KK_SPARSE_BUFFER;
                      break;
                   default: break;
                   }
@@ -212,23 +218,35 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                      nir_instr *parent = nir_def_instr(intr->src[j].ssa);
                      if (parent->type == nir_instr_type_deref &&
                          nir_deref_mode_is_one_of(nir_instr_as_deref(parent),
-                            nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_mem_global))
-                        modes |= KK_SPARSE_BUFFER;
+                            nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_mem_global)) {
+                        stage_modes |= KK_SPARSE_BUFFER;
+                        if (nir_deref_mode_is(nir_instr_as_deref(parent), nir_var_mem_global))
+                           physical_modes |= KK_SPARSE_BUFFER;
+                     }
                   }
 
                }
-               if ((modes & enabled) == enabled) return enabled;
             }
          }
       }
+      modes |= stage_modes;
+      *always_modes |= physical_modes;
+      if (infos[i].flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT)
+         *always_modes |= stage_modes;
    }
+   /* The lazy native object represents a linked VS/CS pipeline. Standalone
+    * stages and task/mesh groups retain their own native ownership. */
+   if (count && infos[0].stage != MESA_SHADER_VERTEX &&
+       infos[0].stage != MESA_SHADER_COMPUTE)
+      *always_modes |= modes;
+   *always_modes &= enabled;
    return modes & enabled;
 }
 
 static struct kk_sparse_shader_state *
 kk_sparse_capture_pipeline(uint32_t count, const struct vk_shader_compile_info *infos,
    const struct vk_graphics_pipeline_state *graphics, const struct vk_features *features,
-   uint32_t modes)
+   uint32_t modes, uint32_t always_modes)
 {
    struct kk_sparse_shader_state *state = calloc(1, sizeof(*state));
    if (!state) return NULL;
@@ -236,8 +254,10 @@ kk_sparse_capture_pipeline(uint32_t count, const struct vk_shader_compile_info *
    blob_init(&state->recipe); blob_init(&state->binary);
    struct blob *blob = &state->recipe;
    state->required_modes = modes;
+   state->always_modes = always_modes;
    blob_write_uint32(blob, count);
    blob_write_uint32(blob, modes);
+   blob_write_uint32(blob, always_modes);
    blob_write_bytes(blob, features, sizeof(*features));
    kk_sparse_write_graphics(blob, graphics);
    for (unsigned i = 0; i < count; ++i) {
@@ -264,7 +284,7 @@ kk_sparse_capture_pipeline(uint32_t count, const struct vk_shader_compile_info *
    }
    struct mesa_blake3 hash;
    _mesa_blake3_init(&hash);
-   const uint32_t variant[] = {0x53505232, modes, KK_FEAT_COUNT};
+   const uint32_t variant[] = {0x53505233, modes, always_modes, KK_FEAT_COUNT};
    _mesa_blake3_update(&hash, variant, sizeof(variant));
    _mesa_blake3_update(&hash, blob->data, blob->size);
    _mesa_blake3_final(&hash, state->guarded_key);
@@ -323,7 +343,8 @@ kk_sparse_compile_variant(struct kk_device *dev, struct kk_sparse_shader_state *
    struct blob_reader blob;
    blob_reader_init(&blob, state->recipe.data, state->recipe.size);
    unsigned count = blob_read_uint32(&blob);
-   if (blob_read_uint32(&blob) != state->required_modes) {
+   if (blob_read_uint32(&blob) != state->required_modes ||
+       blob_read_uint32(&blob) != state->always_modes) {
       ralloc_free(ctx); return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    }
    struct vk_features features;
@@ -369,6 +390,7 @@ kk_sparse_compile_variant(struct kk_device *dev, struct kk_sparse_shader_state *
                                                NULL, compiled, modes);
    if (result == VK_SUCCESS) {
       *out = container_of(compiled[0], struct kk_shader, vk);
+      (*out)->info.sparse_modes = modes;
       for (unsigned i = 1; i < count; ++i)
          kk_shader_destroy(&dev->vk, container_of(compiled[i], struct kk_shader, vk), NULL);
       if (dev->vk.mem_cache) {
@@ -396,10 +418,12 @@ kk_sparse_select_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
    /* Begin snapshots whether this recording needs sparse guards. If the
     * device first creates a sparse resource later, submit re-records this
     * command buffer before execution; draws need no activation polling. */
+   if (shader && shader->sparse_base) shader = shader->sparse_base;
    if (!shader || !shader->sparse) return shader;
    struct kk_sparse_shader_state *state = shader->sparse;
-   uint32_t modes = state->required_modes & cmd->sparse_guarded;
-   if (!modes) return shader;
+   uint32_t modes = state->always_modes |
+      (state->required_modes & cmd->sparse_guarded);
+   if (modes == state->always_modes) return shader;
    /* A native variant is immutable and published exactly once. Warm binds
     * do not need the compilation/serialization mutex. */
    struct kk_shader *selected = p_atomic_read(&state->guarded[modes]);
@@ -409,7 +433,10 @@ kk_sparse_select_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
    if (!selected) {
       VkResult result = kk_sparse_compile_variant(dev, state, modes, &selected);
       if (result != VK_SUCCESS) vk_command_buffer_set_error(&cmd->vk, result);
-      else p_atomic_set(&state->guarded[modes], selected);
+      else {
+         selected->sparse_base = shader;
+         p_atomic_set(&state->guarded[modes], selected);
+      }
    }
    simple_mtx_unlock(&state->mutex);
    return selected ? selected : shader;
@@ -421,16 +448,26 @@ kk_compile_shaders_untracked(struct vk_device *device, uint32_t count,
    const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
    struct kk_sparse_shader_state *state = NULL;
-   uint32_t modes = kk_sparse_pipeline_modes(count, infos, features);
-   if (modes) {
-      state = kk_sparse_capture_pipeline(count, infos, graphics, features, modes);
+   uint32_t always_modes;
+   uint32_t modes = kk_sparse_pipeline_modes(count, infos, features, &always_modes);
+   struct kk_device *dev = container_of(device, struct kk_device, vk);
+   VkResult result = kk_sparse_prepare_pipeline(dev, always_modes);
+   if (result != VK_SUCCESS) {
+      for (unsigned i = 0; i < count; ++i) ralloc_free(infos[i].nir);
+      return result;
+   }
+   if (modes & ~always_modes) {
+      state = kk_sparse_capture_pipeline(count, infos, graphics, features, modes, always_modes);
       if (!state) {
          for (unsigned i = 0; i < count; ++i) ralloc_free(infos[i].nir);
          return VK_ERROR_OUT_OF_HOST_MEMORY;
       }
    }
-   VkResult result = kk_compile_shaders_native(device, count, infos, graphics,
-                                               features, alloc, out, false);
+   result = kk_compile_shaders_native(device, count, infos, graphics,
+                                      features, alloc, out, always_modes);
+   if (result == VK_SUCCESS)
+      for (unsigned i = 0; i < count; ++i)
+         container_of(out[i], struct kk_shader, vk)->info.sparse_modes = always_modes;
    if (state) {
       if (result == VK_SUCCESS) container_of(out[0], struct kk_shader, vk)->sparse = state;
       else {
@@ -514,8 +551,12 @@ kk_deserialize_shader_untracked(struct vk_device *dev, struct blob_reader *blob,
          blob_reader_init(&recipe, data, size);
          blob_read_uint32(&recipe);
          state->required_modes = blob_read_uint32(&recipe);
+         state->always_modes = blob_read_uint32(&recipe);
          if (recipe.overrun || !state->required_modes ||
-             (state->required_modes & ~KK_SPARSE_MODES)) blob->overrun = true;
+             (state->required_modes & ~KK_SPARSE_MODES) ||
+             (state->always_modes & ~state->required_modes) ||
+             state->always_modes != container_of(*out, struct kk_shader, vk)->info.sparse_modes)
+            blob->overrun = true;
       }
       blob_copy_bytes(blob, state->guarded_key, sizeof(state->guarded_key));
       unsigned binary_size = blob_read_uint32(blob);
@@ -524,6 +565,9 @@ kk_deserialize_shader_untracked(struct vk_device *dev, struct blob_reader *blob,
       if (state->recipe.out_of_memory || state->binary.out_of_memory) result = VK_ERROR_OUT_OF_HOST_MEMORY;
    }
    if (blob->overrun) result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
+   if (result == VK_SUCCESS)
+      result = kk_sparse_prepare_pipeline(container_of(dev, struct kk_device, vk),
+         container_of(*out, struct kk_shader, vk)->info.sparse_modes);
    if (result != VK_SUCCESS) kk_shader_destroy(dev, container_of(*out, struct kk_shader, vk), alloc);
    return result;
 }

@@ -360,6 +360,7 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
       kk_cmd_buffer_device(cmd)->vk.enabled_features.descriptorHeap;
    struct kk_device *sparse_dev = kk_cmd_buffer_device(cmd);
    cmd->sparse_guarded = kk_sparse_residency_used(sparse_dev);
+   cmd->uses_sparse_buffers = false;
    uint64_t sparse_root = cmd->sparse_guarded ? kk_sparse_device_address(sparse_dev) : 0;
    cmd->state.gfx.descriptors.root.sparse_state = sparse_root;
    cmd->state.cs.descriptors.root.sparse_state = sparse_root;

@@ -467,6 +467,7 @@ struct kk_cmd_buffer {
    bool enqueue_commands;
    bool one_time_submit;
    uint32_t sparse_guarded;
+   bool uses_sparse_buffers;
    /* Metal command buffers are single-shot: a resubmission must re-record
     * by replaying the enqueued commands (see rerecord_cmd_buffer). */
    bool submitted;

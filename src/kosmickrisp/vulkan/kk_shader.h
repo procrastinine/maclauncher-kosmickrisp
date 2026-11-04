@@ -123,6 +123,7 @@ struct kk_shader_info {
    bool interlock_envelope;
    mesa_shader_stage stage;
    bool uses_per_draw_data;
+   uint8_t sparse_modes; /* Native code compiled for these residency classes. */
    struct kk_mesh_shader_info mesh;
    uint8_t framebuffer_read_mask;
    uint32_t push_size;
@@ -269,6 +270,7 @@ struct kk_shader {
    struct vk_sampler_state *embedded_sampler_states;
    uint64_t embedded_sampler_table;
    struct kk_sparse_shader_state *sparse;
+   struct kk_shader *sparse_base; /* Weak: base owns every immutable variant. */
    /* Fragment and compute shaders use disjoint runtime state. */
    union {
       struct kk_vrs_source *vrs_source;
@@ -307,7 +309,8 @@ void kk_mesh_release_pipeline(struct kk_device *dev, struct kk_shader *shader,
 extern const struct vk_device_shader_ops kk_device_shader_ops;
 void kk_sparse_shader_finish(struct kk_shader *shader);
 struct kk_shader *kk_sparse_select_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader);
-void kk_sparse_refresh_shader(struct kk_cmd_buffer *cmd, mesa_shader_stage stage);
+void kk_sparse_refresh_shader(struct kk_cmd_buffer *cmd, struct kk_cmd_buffer *state,
+                              mesa_shader_stage stage);
 
 static inline nir_address_format
 kk_buffer_addr_format(VkPipelineRobustnessBufferBehaviorEXT robustness)
