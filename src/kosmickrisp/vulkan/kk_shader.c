@@ -1116,17 +1116,23 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
                   VK_PIPELINE_CREATE_2_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR));
    /* Every last vertex, tessellation, geometry or mesh stage writes the rate. */
    const bool primitive = f->primitiveFragmentShadingRate;
+   const bool sample_exchange = kk_fsr_needs_sample_exchange(nir, state);
+   bool force_fine = false;
    bool coarse = coarse_allowed &&
-      (kk_fsr_needs_sample_exchange(nir, state) ||
-       kk_fsr_pipeline_can_coarsen(state, primitive, attachment));
+      (sample_exchange || kk_fsr_pipeline_can_coarsen(state, primitive, attachment));
    if (coarse && state && state->ms) {
       const struct vk_multisample_state *ms = state->ms;
       uint32_t samples = BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES)
          ? KK_MAX_SAMPLES : MAX2(ms->rasterization_samples, 1);
       uint32_t full = BITFIELD_MASK(samples);
       coarse &= !ms->sample_shading_enable;
-      coarse &= BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK) ||
-                (ms->sample_mask & full) == full;
+      const bool partial_mask =
+         !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK) &&
+         (ms->sample_mask & full) != full;
+      /* A partial API mask forces fine pixels, but surviving samples still
+       * share a memory-writing invocation. Do not bypass their exchange. */
+      force_fine = partial_mask;
+      coarse &= !partial_mask || sample_exchange;
       coarse &= !ms->sample_locations_enable ||
                 BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_LOCATIONS_ENABLE);
    }
@@ -1151,6 +1157,7 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
          (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES) ||
           state->ms->rasterization_samples > 1)),
       .full_sample_mask = 0xff,
+      .force_fine = force_fine,
    };
    if (state && state->ms && BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK)) {
       opts.dynamic_sample_mask = true;

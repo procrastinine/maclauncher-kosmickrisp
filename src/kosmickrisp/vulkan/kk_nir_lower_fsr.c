@@ -360,6 +360,8 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
       lw = nir_bcsel(b, full, lw, nir_imm_int(b, 0));
       lh = nir_bcsel(b, full, lh, nir_imm_int(b, 0));
    }
+   if (opts->force_fine)
+      lw = lh = nir_imm_int(b, 0);
    ctx->rate = nir_ior(b, nir_ishl_imm(b, lw, 2), lh);
    nir_def *wide = nir_ieq_imm(b, lw, 1), *tall = nir_ieq_imm(b, lh, 1);
    ctx->fx = nir_bcsel(b, wide, nir_imm_float(b, 2.0f), nir_imm_float(b, 1.0f));

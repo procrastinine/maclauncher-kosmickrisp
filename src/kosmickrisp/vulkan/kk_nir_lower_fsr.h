@@ -17,6 +17,8 @@ struct kk_fsr_lower_options {
    bool attachment_rate;
    /* A partial dynamic sample mask selects 1x1. */
    bool dynamic_sample_mask;
+   /* A static partial API mask requires 1x1 while retaining sample exchange. */
+   bool force_fine;
    /* Rasterization may use more than one sample. */
    bool multisampled;
    /* Sample mask bits that cover every rasterization sample. */
