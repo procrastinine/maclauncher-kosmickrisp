@@ -444,13 +444,15 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
    mtl_counter_heap *heap;
 
    if (cmd->metal.render) {
-      /* If we've already issued a timestamp write for a render stage, reuse it
-       * because reissuing might return a 0 timestamp
-       */
+      /* Metal samples each render stage once per render encoder, and records
+       * only a few samples per encoder; later writes stay 0. The first write
+       * at a stage takes the sample, and later writes at that stage, from any
+       * pool, resolve it again. Each query is written once per render pass,
+       * so no later write in the encoder replaces that entry. */
       bool reused = false;
       util_dynarray_foreach(&cmd->ts_stage_map, struct kk_ts_stage_entry,
                             entry) {
-         if (entry->stage == mtl_stage && entry->pool == pool) {
+         if (entry->stage == mtl_stage) {
             heap = entry->heap;
             heap_index = entry->index;
             reused = true;
@@ -462,8 +464,7 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
          /* A reused stage already carries its actual heap and local index.
           * Map a logical query only when a new native sample is needed. */
          heap = kk_timestamp_query_heap(pool, query, &heap_index);
-         struct kk_ts_stage_entry entry = {.pool = pool,
-                                           .heap = heap,
+         struct kk_ts_stage_entry entry = {.heap = heap,
                                            .stage = mtl_stage,
                                            .index = heap_index};
          util_dynarray_append(&cmd->ts_stage_map, entry);

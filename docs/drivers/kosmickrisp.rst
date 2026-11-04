@@ -703,3 +703,7 @@ share up to 131,072 entries, less any other timestamp heaps in the process,
 whatever their number and size. Pool creation fails with
 ``VK_ERROR_OUT_OF_DEVICE_MEMORY`` when no unit is free and Metal refuses
 another heap.
+
+Inside a render pass, Metal samples each render stage once per render encoder.
+The first timestamp written at a stage takes that sample, and later timestamps
+at the same stage in the encoder, from any pool, report it.
