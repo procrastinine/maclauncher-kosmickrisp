@@ -112,6 +112,7 @@ struct kk_attachment {
 };
 
 struct kk_rendering_state {
+   bool attachmentless;
    VkRenderingFlagBits flags;
 
    VkRect2D area;

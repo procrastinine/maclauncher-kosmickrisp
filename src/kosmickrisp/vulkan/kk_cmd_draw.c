@@ -323,6 +323,7 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
     * bound pipeline's sample count. */
    bool no_framebuffer =
       framebuffer_extent.width == 0u && framebuffer_extent.height == 0u;
+   render->attachmentless = no_framebuffer;
    if (no_framebuffer) {
       framebuffer_extent.width = MAX2(render->area.extent.width, 1u);
       framebuffer_extent.height = MAX2(render->area.extent.height, 1u);
@@ -949,7 +950,17 @@ kk_flush_render_pass(struct kk_cmd_buffer *cmd)
 {
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_rendering_state *render = &cmd->state.gfx.render;
-   bool needs_restart = kk_flush_sample_locations(cmd);
+   bool needs_restart = false;
+   /* Metal fixes the default sample count when an encoder starts. Vulkan may
+    * change it between attachmentless draws in the same rendering scope. */
+   if (render->attachmentless &&
+       render->samples != cmd->state.gfx.pipeline_sample_count) {
+      render->samples = cmd->state.gfx.pipeline_sample_count;
+      mtl_render_pass_descriptor_set_default_raster_sample_count(
+         cmd->state.gfx.render_pass_descriptor, render->samples);
+      needs_restart = true;
+   }
+   needs_restart |= kk_flush_sample_locations(cmd);
    bool color_attachment_map_changed = false;
 
    if (IS_DIRTY(COLOR_ATTACHMENT_MAP)) {

@@ -270,6 +270,7 @@ kk_get_device_features(
       .textureCompressionBC = true,
       .textureCompressionETC2 = true,
       .vertexPipelineStoresAndAtomics = true,
+      .variableMultisampleRate = true,
 
       /* Vulkan 1.1 */
       .multiview = true,
