@@ -871,6 +871,9 @@ void
 kk_perf_destroy(struct kk_perf *p)
 {
    if (!p) return;
+   /* Encoder records still held by pending submissions resolve after this; stop their delivery
+    * into p before the final flush. */
+   mtl_gpu_timing_detach(p->gpu_context);
    pthread_mutex_lock(&p->mutex);
    flush_locked(p, kk_perf_now(), true);
    pthread_mutex_unlock(&p->mutex);

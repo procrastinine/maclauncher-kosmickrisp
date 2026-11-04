@@ -23,9 +23,11 @@ static char command_key, library_key, pipeline_key, feedback_key, encoder_key;
 @interface KKGPUConfig : NSObject {
 @public
    id<MTLDevice> device;
+   uint64_t frequency;
+   /* Cleared by mtl_gpu_timing_detach before the owner frees data. */
+   os_unfair_lock callback_lock;
    void *data;
    mtl_gpu_encoder_callback callback;
-   uint64_t frequency;
    os_unfair_lock slot_lock;
    id<MTL4CounterHeap> heaps[KK_GPU_TIMING_HEAPS];
    uint32_t heap_count, free_count;
@@ -134,11 +136,25 @@ mtl_gpu_timing_configure(mtl_device *device, void *data, mtl_gpu_encoder_callbac
       config->device = (id)device;
       config->data = data;
       config->callback = callback;
+      config->callback_lock = OS_UNFAIR_LOCK_INIT;
       config->slot_lock = OS_UNFAIR_LOCK_INIT;
       config->frequency = [(id<MTLDevice>)device queryTimestampFrequency];
       __atomic_store_n(&mtl_gpu_timing_enabled, true, __ATOMIC_RELEASE);
       return config;
    }
+}
+
+/* Records outlive their device's tracking (snapshots retain them until their feedback). After
+ * this, their results are no longer delivered. */
+void
+mtl_gpu_timing_detach(void *context)
+{
+   KKGPUConfig *config = context;
+   if (!config) return;
+   os_unfair_lock_lock(&config->callback_lock);
+   config->callback = NULL;
+   config->data = NULL;
+   os_unfair_lock_unlock(&config->callback_lock);
 }
 
 void
@@ -431,7 +447,9 @@ mtl_gpu_timing_resolve(void *snapshot, bool success)
          if (result.hash_count == MTL_GPU_TIMING_HASHES) { result.hashes_truncated = true; break; }
          strncpy(result.hashes[result.hash_count++], hash.UTF8String, 64);
       }
-      r->config->callback(r->config->data, &result);
+      os_unfair_lock_lock(&r->config->callback_lock);
+      if (r->config->callback) r->config->callback(r->config->data, &result);
+      os_unfair_lock_unlock(&r->config->callback_lock);
       }
    }
 }

@@ -31,6 +31,7 @@ mtl_gpu_timing_on(void)
    return __builtin_expect(__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_RELAXED), 0);
 }
 void *mtl_gpu_timing_configure(mtl_device *, void *, mtl_gpu_encoder_callback);
+void mtl_gpu_timing_detach(void *context);
 void mtl_gpu_timing_attach_command(void *, mtl_command_buffer *);
 void mtl_gpu_timing_reset_command(mtl_command_buffer *);
 void *mtl_gpu_timing_encoder_begin(mtl_command_buffer *, bool render, void *descriptor);

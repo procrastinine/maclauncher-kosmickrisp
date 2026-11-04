@@ -5,6 +5,7 @@ void *mtl_gpu_timing_configure(mtl_device *d, void *p, mtl_gpu_encoder_callback 
 void mtl_gpu_timing_attach_command(void *d, mtl_command_buffer *c) {}
 void mtl_gpu_timing_reset_command(mtl_command_buffer *c) {}
 void *mtl_gpu_timing_encoder_begin(mtl_command_buffer *c, bool r, void *d) { return 0; }
+void mtl_gpu_timing_detach(void *c) {}
 void mtl_gpu_timing_encoder_bind(void *r, void *e) {}
 void mtl_gpu_timing_encoder_end(void *e) {}
 void mtl_gpu_timing_bind_pipeline(void *e, void *p) {}
