@@ -2731,7 +2731,6 @@ static void
 kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
    if (!kk_layered_bc_prepare_draw(cmd)) return;
-   kk_sparse_refresh_shader(cmd, MESA_SHADER_VERTEX);
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_shader *vs = cmd->state.gfx.shader;

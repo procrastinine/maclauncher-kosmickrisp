@@ -68,10 +68,16 @@ struct kk_sparse_device_state {
    unsigned submissions;
 };
 
+static struct kk_sparse_device_state *
+kk_sparse_state(struct kk_device *dev)
+{
+   return p_atomic_read(&dev->sparse);
+}
+
 static void
 kk_sparse_reclaim(struct kk_device *dev)
 {
-   struct kk_sparse_device_state *state = dev->sparse;
+   struct kk_sparse_device_state *state = kk_sparse_state(dev);
    if (state->submissions) return;
    while (state->retired) {
       struct kk_sparse_range_version *version = state->retired;
@@ -89,22 +95,22 @@ kk_sparse_reclaim(struct kk_device *dev)
 bool
 kk_sparse_submission_begin(struct kk_device *dev)
 {
-   if (!dev->sparse || !kk_sparse_residency_used(dev)) return false;
-   simple_mtx_lock(&dev->sparse->mutex);
-   dev->sparse->submissions++;
-   simple_mtx_unlock(&dev->sparse->mutex);
+   if (!kk_sparse_state(dev) || !kk_sparse_residency_used(dev)) return false;
+   simple_mtx_lock(&kk_sparse_state(dev)->mutex);
+   kk_sparse_state(dev)->submissions++;
+   simple_mtx_unlock(&kk_sparse_state(dev)->mutex);
    return true;
 }
 
 void
 kk_sparse_submission_end(struct kk_device *dev)
 {
-   if (!dev->sparse) return;
-   simple_mtx_lock(&dev->sparse->mutex);
-   assert(dev->sparse->submissions);
-   dev->sparse->submissions--;
+   if (!kk_sparse_state(dev)) return;
+   simple_mtx_lock(&kk_sparse_state(dev)->mutex);
+   assert(kk_sparse_state(dev)->submissions);
+   kk_sparse_state(dev)->submissions--;
    kk_sparse_reclaim(dev);
-   simple_mtx_unlock(&dev->sparse->mutex);
+   simple_mtx_unlock(&kk_sparse_state(dev)->mutex);
 }
 
 static int
@@ -120,7 +126,7 @@ kk_sparse_range_compare(const void *a, const void *b)
 static bool
 kk_sparse_publish_ranges(struct kk_device *dev)
 {
-   struct kk_sparse_device_state *state = dev->sparse;
+   struct kk_sparse_device_state *state = kk_sparse_state(dev);
    unsigned count = util_dynarray_num_elements(&state->ranges, struct kk_sparse_range);
    struct kk_sparse_range_version *version = NULL;
    if (count) {
@@ -149,41 +155,58 @@ kk_sparse_publish_ranges(struct kk_device *dev)
    return true;
 }
 
-VkResult
-kk_sparse_device_init(struct kk_device *dev)
+/* Resource creation is the first possible user. Serialize publication with
+ * the existing residency lock so an unused device allocates no sparse state. */
+static VkResult
+kk_sparse_device_ensure(struct kk_device *dev)
 {
-   if (!dev->vk.enabled_features.sparseResidencyBuffer) return VK_SUCCESS;
-   struct kk_sparse_device_state *state = calloc(1, sizeof(*state));
-   if (!state) return VK_ERROR_OUT_OF_HOST_MEMORY;
-   state->root = mtl_sparse_new_residency_buffer(dev->mtl_handle, 16 + 4096 * 8, false);
-   if (!state->root) { free(state); return VK_ERROR_OUT_OF_DEVICE_MEMORY; }
-   simple_mtx_init(&state->mutex, mtx_plain);
-   state->ranges = UTIL_DYNARRAY_INIT;
-   state->retired_maps = UTIL_DYNARRAY_INIT;
-   state->next_record = 1; /* zero denotes an ordinary buffer */
-   dev->sparse = state;
-   kk_sparse_residency(dev, state->root, true);
-   return VK_SUCCESS;
+   if ((!dev->vk.enabled_features.sparseResidencyBuffer &&
+        !dev->vk.enabled_features.sparseResidencyImage3D) || kk_sparse_state(dev))
+      return VK_SUCCESS;
+   simple_mtx_lock(&dev->residency_set.mutex);
+   VkResult result = VK_SUCCESS;
+   if (!kk_sparse_state(dev)) {
+      struct kk_sparse_device_state *state = calloc(1, sizeof(*state));
+      if (!state) { result = VK_ERROR_OUT_OF_HOST_MEMORY; goto unlock; }
+      state->root = mtl_sparse_new_residency_buffer(dev->mtl_handle, 16 + 4096 * 8, false);
+      if (!state->root) { free(state); result = VK_ERROR_OUT_OF_DEVICE_MEMORY; goto unlock; }
+      simple_mtx_init(&state->mutex, mtx_plain);
+      state->ranges = UTIL_DYNARRAY_INIT;
+      state->retired_maps = UTIL_DYNARRAY_INIT;
+      state->next_record = 1; /* zero denotes an ordinary buffer */
+      mtl_residency_set_add_allocation(dev->residency_set.handle, state->root);
+      dev->residency_set.dirty = true;
+      p_atomic_set(&dev->sparse, state);
+   }
+unlock:
+   simple_mtx_unlock(&dev->residency_set.mutex);
+   return result;
 }
 
-bool
+uint32_t
+kk_sparse_enabled_modes(struct kk_device *dev)
+{
+   return (dev->vk.enabled_features.sparseResidencyBuffer ? KK_SPARSE_BUFFER : 0) |
+      (dev->vk.enabled_features.sparseResidencyImage3D ? KK_SPARSE_STANDARD_3D : 0);
+}
+
+uint32_t
 kk_sparse_residency_used(struct kk_device *dev)
 {
-   return (dev->vk.enabled_features.sparseResidencyBuffer ||
-           dev->vk.enabled_features.sparseResidencyImage3D) &&
-          p_atomic_read(&dev->sparse_residency_used);
+   return p_atomic_read(&dev->sparse_residency_used);
 }
 
 uint64_t
 kk_sparse_device_address(struct kk_device *dev)
 {
-   return dev->sparse ? mtl_buffer_get_gpu_address(dev->sparse->root) : 0;
+   struct kk_sparse_device_state *state = kk_sparse_state(dev);
+   return state ? mtl_buffer_get_gpu_address(state->root) : 0;
 }
 
 void
 kk_sparse_device_finish(struct kk_device *dev)
 {
-   struct kk_sparse_device_state *state = dev->sparse;
+   struct kk_sparse_device_state *state = kk_sparse_state(dev);
    if (!state) return;
    assert(!state->submissions);
    if (state->current) {
@@ -208,15 +231,16 @@ kk_sparse_device_finish(struct kk_device *dev)
    kk_sparse_residency(dev, state->root, false);
    mtl_release(state->root);
    simple_mtx_destroy(&state->mutex);
-   free(state); dev->sparse = NULL;
+   free(state); p_atomic_set(&dev->sparse, NULL);
 }
 
 static VkResult
 kk_sparse_buffer_record(struct kk_device *dev, struct kk_buffer *buffer)
 {
-   struct kk_sparse_device_state *state = dev->sparse;
+   struct kk_sparse_device_state *state = kk_sparse_state(dev);
    /* Opaque binding alone does not require shader residency metadata. */
-   if (!state) return VK_SUCCESS;
+   if (!dev->vk.enabled_features.sparseResidencyBuffer) return VK_SUCCESS;
+   assert(state);
    simple_mtx_lock(&state->mutex);
    if (state->next_record == 0) {
       simple_mtx_unlock(&state->mutex); return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -356,6 +380,8 @@ kk_sparse_buffer_init(struct kk_device *dev, struct kk_buffer *buffer)
 {
    if (!kk_device_physical(dev)->info.placement_sparse)
       return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
+   VkResult result = kk_sparse_device_ensure(dev);
+   if (result != VK_SUCCESS) return result;
    buffer->metal.handle = mtl_new_sparse_buffer(dev->mtl_handle,
       align64(buffer->vk.size, KK_SPARSE_PAGE_SIZE));
    if (!buffer->metal.handle)
@@ -370,7 +396,7 @@ kk_sparse_buffer_init(struct kk_device *dev, struct kk_buffer *buffer)
    buffer->vk.device_address = mtl_buffer_get_gpu_address(buffer->metal.handle);
    kk_sparse_residency(dev, buffer->sparse_residency, true);
    kk_sparse_residency(dev, buffer->metal.handle, true);
-   VkResult result = kk_sparse_buffer_record(dev, buffer);
+   result = kk_sparse_buffer_record(dev, buffer);
    if (result != VK_SUCCESS) {
       kk_sparse_buffer_finish(dev, buffer);
       kk_sparse_residency(dev, buffer->metal.handle, false);
@@ -378,7 +404,7 @@ kk_sparse_buffer_init(struct kk_device *dev, struct kk_buffer *buffer)
       return result;
    }
    if (buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT)
-      p_atomic_set(&dev->sparse_residency_used, 1);
+      __atomic_fetch_or(&dev->sparse_residency_used, KK_SPARSE_BUFFER, __ATOMIC_RELEASE);
    return VK_SUCCESS;
 }
 
@@ -386,8 +412,8 @@ void
 kk_sparse_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer)
 {
    if (buffer->sparse_residency) {
-      if (dev->sparse && buffer->sparse_record) {
-         struct kk_sparse_device_state *state = dev->sparse;
+      if (kk_sparse_state(dev) && buffer->sparse_record) {
+         struct kk_sparse_device_state *state = kk_sparse_state(dev);
          simple_mtx_lock(&state->mutex);
          uint32_t index = buffer->sparse_record;
          struct kk_sparse_record_node *leaf = state->children[index >> 20]->children[(index >> 10) & 1023];
@@ -455,6 +481,11 @@ kk_sparse_image_init(struct kk_device *dev, struct kk_image *image,
        image->vk.image_type, image->vk.samples, declared_usage, image->vk.tiling,
        image->vk.create_flags, &props))
       return vk_error(dev, VK_ERROR_FORMAT_NOT_SUPPORTED);
+   if (image->vk.image_type == VK_IMAGE_TYPE_3D &&
+       (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)) {
+      VkResult result = kk_sparse_device_ensure(dev);
+      if (result != VK_SUCCESS) return result;
+   }
    image->sparse = calloc(1, sizeof(*image->sparse));
    if (!image->sparse) return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    struct kk_image_plane *plane = &image->planes[0];
@@ -475,7 +506,7 @@ kk_sparse_image_init(struct kk_device *dev, struct kk_image *image,
          return result;
       }
       kk_sparse_residency(dev, plane->mtl_handle, true);
-      p_atomic_set(&dev->sparse_residency_used, 1);
+      __atomic_fetch_or(&dev->sparse_residency_used, KK_SPARSE_STANDARD_3D, __ATOMIC_RELEASE);
       return VK_SUCCESS;
    }
    /* Opaque binding-only images retain their native granularity. */
@@ -508,8 +539,6 @@ kk_sparse_image_init(struct kk_device *dev, struct kk_image *image,
    plane->layout.size_B = image->sparse->layer_pages * image->vk.array_layers * KK_SPARSE_PAGE_SIZE;
    plane->layout.align_B = alignment_pages * KK_SPARSE_PAGE_SIZE;
    kk_sparse_residency(dev, plane->mtl_handle, true);
-   if (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)
-      p_atomic_set(&dev->sparse_residency_used, 1);
    return VK_SUCCESS;
 }
 

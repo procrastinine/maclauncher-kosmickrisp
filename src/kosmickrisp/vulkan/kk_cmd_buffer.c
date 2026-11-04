@@ -326,9 +326,12 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
       kk_cmd_buffer_device(cmd)->vk.enabled_features.descriptorHeap;
    struct kk_device *sparse_dev = kk_cmd_buffer_device(cmd);
    cmd->sparse_guarded = kk_sparse_residency_used(sparse_dev);
+   uint64_t sparse_root = cmd->sparse_guarded ? kk_sparse_device_address(sparse_dev) : 0;
+   cmd->state.gfx.descriptors.root.sparse_state = sparse_root;
+   cmd->state.cs.descriptors.root.sparse_state = sparse_root;
    cmd->one_time_submit = !cmd->enqueue_commands &&
       (pBeginInfo->flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT) &&
-      (!sparse_dev->vk.enabled_features.sparseResidencyBuffer || cmd->sparse_guarded);
+      !(kk_sparse_enabled_modes(sparse_dev) & ~cmd->sparse_guarded);
 
    /* vk_command_buffer_begin will reset the command buffer meaning the
     * allocator may be returned to the pool. Request a new one. */
@@ -1029,7 +1032,6 @@ kk_upload_descriptor_root_ptr(struct kk_cmd_buffer *cmd,
    struct kk_ptr ptr = kk_pool_upload(cmd, root, size, 8u);
    if (unlikely(!ptr.gpu)) return (struct kk_ptr){0};
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
-   ((struct kk_root_descriptor_table *)ptr.cpu)->sparse_state = kk_sparse_device_address(dev);
    ((struct kk_root_descriptor_table *)ptr.cpu)->addr =
       dev->atomic64_locks ? dev->atomic64_locks->gpu : ptr.gpu;
    return ptr;

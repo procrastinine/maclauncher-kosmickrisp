@@ -548,13 +548,6 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       memset(dev->atomic64_locks->cpu, 0, 65536 * sizeof(uint32_t));
    }
 
-   result = kk_sparse_device_init(dev);
-   if (result != VK_SUCCESS) {
-      if (dev->atomic64_locks) kk_destroy_bo(dev, dev->atomic64_locks);
-      kk_device_finish_lib(dev);
-      goto fail_sampler_heap;
-   }
-
    if (pdev->settings.gpu_capture_enabled) {
       const char *capture_directory =
          debug_get_option("MESA_KK_GPU_CAPTURE_DIRECTORY", NULL);

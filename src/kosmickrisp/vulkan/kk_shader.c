@@ -849,8 +849,12 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
    NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
       features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX),
       features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER));
-   NIR_PASS(_, nir, kk_nir_lower_sparse_sample_views, set_layout_count, set_layouts,
-      (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10);
+   /* Sparse image opcodes require shaderResourceResidency. Normal and
+    * generated non-sparse operations need neither status-plumbing walk. */
+   const bool sparse_instructions = dev->vk.enabled_features.shaderResourceResidency;
+   if (sparse_instructions)
+      NIR_PASS(_, nir, kk_nir_lower_sparse_sample_views, set_layout_count, set_layouts,
+         (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10);
 
 
    /* Descriptor lowering needs to happen after lowering blend since we will
@@ -878,7 +882,8 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
    if (features & BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR))
       NIR_PASS(_, nir, kk_nir_lower_null_images);
 
-   NIR_PASS(_, nir, kk_nir_lower_sparse);
+   if (sparse_instructions)
+      NIR_PASS(_, nir, kk_nir_lower_sparse);
 
    kk_lower_compute_derivatives(nir);
    NIR_PASS(_, nir, nir_lower_global_vars_to_local);
@@ -2442,14 +2447,21 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
                    const struct vk_graphics_pipeline_state *state,
                    const struct vk_features *enabled_features,
                    const VkAllocationCallbacks *pAllocator,
-                   struct vk_shader **shaders_out, bool sparse_guarded)
+                   struct vk_shader **shaders_out, uint32_t sparse_modes)
 {
    VkResult result = VK_SUCCESS;
    struct kk_device *dev = container_of(device, struct kk_device, vk);
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
    kk_feature_key features = kk_make_feature_key(enabled_features);
-   if (sparse_guarded) features |= BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER);
+   if (sparse_modes & KK_SPARSE_BUFFER)
+      features |= BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER);
+   if (sparse_modes & KK_SPARSE_STANDARD_3D) {
+      features |= BITFIELD_BIT(KK_FEAT_STANDARD_3D);
+      /* Retain the old readers until the standard3D owner's two call sites
+       * switch together to KK_FEAT_STANDARD_3D. */
+      features |= BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER);
+   }
 
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */
@@ -3133,10 +3145,11 @@ kk_cmd_bind_shaders(struct vk_command_buffer *cmd_buffer, uint32_t stage_count,
    }
 }
 
+/* DGC constructs its existing pipeline/parameter snapshot once per command.
+ * Ordinary draws and dispatches select at bind and never call this helper. */
 void
 kk_sparse_refresh_shader(struct kk_cmd_buffer *cmd, mesa_shader_stage stage)
 {
-   if (!kk_sparse_residency_used(kk_cmd_buffer_device(cmd))) return;
    struct kk_shader *shader = cmd->state.shaders[stage];
    struct kk_shader *selected = kk_sparse_select_shader(cmd, shader);
    if (selected == shader) return;

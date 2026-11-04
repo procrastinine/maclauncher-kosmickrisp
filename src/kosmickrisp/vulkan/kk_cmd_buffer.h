@@ -433,7 +433,7 @@ struct kk_cmd_buffer {
     * enqueueing in the trampolines since they can never be replayed. */
    bool enqueue_commands;
    bool one_time_submit;
-   bool sparse_guarded;
+   uint32_t sparse_guarded;
    /* Metal command buffers are single-shot: a resubmission must re-record
     * by replaying the enqueued commands (see rerecord_cmd_buffer). */
    bool submitted;

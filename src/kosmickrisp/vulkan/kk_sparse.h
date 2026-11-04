@@ -121,8 +121,13 @@ uint64_t kk_sparse_image_view_query_address(struct kk_image_view *view, bool sto
 void kk_sparse_storage_descriptor(struct kk_storage_image_descriptor *desc,
                                   struct kk_image_view *view);
 VkResult kk_sparse_buffer_init(struct kk_device *dev, struct kk_buffer *buffer);
-VkResult kk_sparse_device_init(struct kk_device *dev);
-bool kk_sparse_residency_used(struct kk_device *dev);
+enum kk_sparse_mode {
+   KK_SPARSE_BUFFER = 1u << 0,
+   KK_SPARSE_STANDARD_3D = 1u << 1,
+   KK_SPARSE_MODES = KK_SPARSE_BUFFER | KK_SPARSE_STANDARD_3D,
+};
+uint32_t kk_sparse_enabled_modes(struct kk_device *dev);
+uint32_t kk_sparse_residency_used(struct kk_device *dev);
 VkResult kk_sparse_sampler_added(struct kk_device *dev, struct kk_rc_sampler *sampler);
 void kk_sparse_sampler_removed(struct kk_device *dev, struct kk_rc_sampler *sampler);
 void kk_sparse_sample_rows_finish(struct kk_device *dev);

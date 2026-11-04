@@ -358,7 +358,7 @@ kk_queue_submit_internal(struct vk_queue *vk_queue, struct vk_queue_submit *subm
        * submissions. */
       if (cmd_buffer->submitted || cmd_buffer->enqueue_commands ||
           cmd_buffer->deferred_render_chain ||
-          (!cmd_buffer->sparse_guarded && kk_sparse_residency_used(dev))) {
+          (kk_sparse_residency_used(dev) & ~cmd_buffer->sparse_guarded)) {
          uint32_t consumed = 0;
          bool committed = false;
          VkResult result = rerecord_and_commit_cmd_buffers(queue,
