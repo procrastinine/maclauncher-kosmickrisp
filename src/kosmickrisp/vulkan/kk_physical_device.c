@@ -664,16 +664,29 @@ kk_get_device_properties(
                               ? MSL_MAX_SAMPLERS
                               : 4000;
 
-   uint32_t image_stride = 0, buffer_stride = 0, stride, alignment;
+   uint32_t image_stride = 0, buffer_stride = 0, buffer_alignment = 0;
+   uint32_t stride, alignment;
    const VkDescriptorType image_types[] = {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER};
    for (unsigned i = 0; i < ARRAY_SIZE(image_types); ++i) {
       kk_descriptor_stride_align_for_type(image_types[i], NULL, &stride, &alignment);
       image_stride = MAX2(image_stride, stride);
    }
-   kk_descriptor_stride_align_for_type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, NULL, &stride, &alignment);
-   buffer_stride = stride;
-   kk_descriptor_stride_align_for_type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, NULL, &stride, &alignment);
-   buffer_stride = MAX2(buffer_stride, stride);
+   /* Buffer heaps may pack texel records beside unformatted buffers and AS.
+    * Cover the complete texel record, including its Sparse tail, even when
+    * the consumer uses the buffer maximum for that mixed allocation. Texel
+    * shader resources retain their image-class indexing. */
+   const VkDescriptorType buffer_types[] = {
+      VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+      VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+      VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+      VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
+   };
+   for (unsigned i = 0; i < ARRAY_SIZE(buffer_types); ++i) {
+      kk_descriptor_stride_align_for_type(buffer_types[i], NULL, &stride, &alignment);
+      buffer_stride = MAX2(buffer_stride, stride);
+      buffer_alignment = MAX2(buffer_alignment, alignment);
+   }
    *properties = (struct vk_properties){
       .cooperativeMatrixSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT,
       .maxVectorComponents = 1024,
@@ -714,7 +727,7 @@ kk_get_device_properties(
       .bufferDescriptorSize = buffer_stride,
       .samplerDescriptorAlignment = 8,
       .imageDescriptorAlignment = 8,
-      .bufferDescriptorAlignment = 8,
+      .bufferDescriptorAlignment = buffer_alignment,
       .maxPushDataSize = KK_MAX_PUSH_SIZE,
       .maxDescriptorHeapEmbeddedSamplers = 2048,
       .samplerYcbcrConversionCount = 1,

@@ -450,6 +450,11 @@ kk_WriteSamplerDescriptorsEXT(VkDevice _device, uint32_t samplerCount,
    simple_mtx_lock(&dev->descriptor_heap_lock);
    VkResult result = VK_SUCCESS;
    for (uint32_t i = 0; i < samplerCount; ++i) {
+      if (!pDescriptors[i].address ||
+          pDescriptors[i].size < KK_HEAP_SAMPLER_DESCRIPTOR_SIZE) {
+         result = vk_error(dev, VK_ERROR_UNKNOWN);
+         break;
+      }
       VkSamplerCreateInfo info = pSamplers[i];
       VkSamplerCustomBorderColorCreateInfoEXT border = {
          .sType = VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT,
@@ -480,7 +485,6 @@ kk_WriteSamplerDescriptorsEXT(VkDevice _device, uint32_t samplerCount,
       result = kk_heap_sampler_metadata_locked(dev, sampler);
       if (result != VK_SUCCESS)
          break;
-      assert(pDescriptors[i].size >= KK_HEAP_SAMPLER_DESCRIPTOR_SIZE);
       memcpy(pDescriptors[i].address, &sampler->gpu_address,
               KK_HEAP_SAMPLER_DESCRIPTOR_SIZE);
    }
@@ -551,9 +555,9 @@ kk_descriptor_buffer_from_address_locked(struct kk_device *dev,
 
 VkResult
 kk_descriptor_write_raw_buffer(struct kk_device *dev,
-   uint64_t address, uint64_t size, void *destination, uint32_t descriptor_size)
+   uint64_t address, uint64_t size, void *destination, size_t destination_size)
 {
-   if (!destination || descriptor_size < sizeof(struct kk_buffer_address))
+   if (!destination || destination_size < sizeof(struct kk_buffer_address))
       return VK_ERROR_UNKNOWN;
    struct kk_buffer_address descriptor = {};
    if (address) {
@@ -567,7 +571,7 @@ kk_descriptor_write_raw_buffer(struct kk_device *dev,
       descriptor.size = size;
       descriptor.zero = token.record_index;
    }
-   memset(destination, 0, descriptor_size);
+   /* Only the payload bytes reported by the per-type query are written. */
    memcpy(destination, &descriptor, sizeof(descriptor));
    return VK_SUCCESS;
 }
@@ -575,11 +579,11 @@ kk_descriptor_write_raw_buffer(struct kk_device *dev,
 VkResult
 kk_descriptor_write_raw_texel_buffer(struct kk_device *dev,
    uint64_t address, uint64_t size, VkFormat format, VkDescriptorType type,
-   void *destination, uint32_t descriptor_size)
+   void *destination, size_t destination_size)
 {
    if ((type != VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER &&
         type != VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER) ||
-       !destination || descriptor_size < sizeof(struct kk_texel_buffer_descriptor))
+       !destination || destination_size < sizeof(struct kk_texel_buffer_descriptor))
       return VK_ERROR_UNKNOWN;
    struct kk_texel_buffer_descriptor descriptor = {};
    /* Nulls have no source, classification or ignored format/range access. */
@@ -604,7 +608,7 @@ kk_descriptor_write_raw_texel_buffer(struct kk_device *dev,
       descriptor.sparse = kk_sparse_token_view_descriptor(&token, block.size_B, false);
    }
    /* Known classification and validated geometry leave no fallible step. */
-   memset(destination, 0, descriptor_size);
+   /* Only the payload bytes reported by the per-type query are written. */
    memcpy(destination, &descriptor, sizeof(descriptor));
    return VK_SUCCESS;
 }
@@ -612,10 +616,10 @@ kk_descriptor_write_raw_texel_buffer(struct kk_device *dev,
 VkResult
 kk_descriptor_write_texel_buffer_locked(struct kk_device *dev,
    uint64_t address, uint64_t size, VkFormat format, VkDescriptorType type,
-   void *destination, uint32_t descriptor_size)
+   void *destination, size_t destination_size)
 {
    return kk_descriptor_write_raw_texel_buffer(dev, address, size, format,
-                                               type, destination, descriptor_size);
+                                               type, destination, destination_size);
 }
 
 VKAPI_ATTR VkDeviceSize VKAPI_CALL
@@ -665,7 +669,12 @@ kk_WriteResourceDescriptorsEXT(VkDevice _device, uint32_t resourceCount,
       const VkHostAddressRangeEXT *dst = &pDescriptors[i];
       const size_t size = kk_GetPhysicalDeviceDescriptorSizeEXT(
          vk_physical_device_to_handle(dev->vk.physical), resource->type);
-      assert(dst->size >= size);
+      /* The query is the write limit, not evidence of caller capacity.
+       * Check even null descriptors before touching their destination. */
+      if (!size || !dst->address || dst->size < size) {
+         result = vk_error(dev, VK_ERROR_UNKNOWN);
+         break;
+      }
       switch (resource->type) {
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
       case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
@@ -699,7 +708,8 @@ kk_WriteResourceDescriptorsEXT(VkDevice _device, uint32_t resourceCount,
       case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
          const VkDeviceAddressRangeEXT *range = resource->data.pAddressRange;
          result = kk_descriptor_write_raw_buffer(dev,
-            range ? range->address : 0, range ? range->size : 0, dst->address, size);
+            range ? range->address : 0, range ? range->size : 0,
+            dst->address, dst->size);
          break;
       }
       case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
@@ -708,7 +718,7 @@ kk_WriteResourceDescriptorsEXT(VkDevice _device, uint32_t resourceCount,
          result = kk_descriptor_write_raw_texel_buffer(dev,
             info ? info->addressRange.address : 0, info ? info->addressRange.size : 0,
             info ? info->format : VK_FORMAT_UNDEFINED, resource->type,
-            dst->address, size);
+            dst->address, dst->size);
          break;
       }
       case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {

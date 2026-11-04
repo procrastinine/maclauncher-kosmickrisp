@@ -153,6 +153,13 @@ access span. R64 uses stride 8. The underlying resource and residency map follow
 the selected buffer's legal-reader lifetime; copying descriptor bytes does not
 retain the resource.
 
+Heap buffer allocations reserve 32 bytes at 32-byte alignment, covering the complete texel-buffer
+record as well as unformatted buffers and acceleration structures. Per-type
+size queries report the actual payload: 32 bytes for texel buffers and 16 bytes
+for unformatted buffers and acceleration structures. Host writes validate the
+provided address and capacity before writing and leave bytes beyond the payload
+untouched. Texel-buffer shader resources retain image-class heap indexing.
+
 Address-only writers classify the exact requested range once through the existing
 complete Sparse virtual-range directory. An ordinary range needs no public buffer
 lookup. A Sparse range supplies its actual record index for bounded-buffer word 12
