@@ -2855,11 +2855,9 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (ctx.uses_sampler_emulation) {
       P(&ctx, "constant bool kk_sampler_emulation [[function_constant(%u)]];\n",
         KK_FUNCTION_CONSTANT_SAMPLER_EMULATION);
-      /* Omitted values preserve semantics for callers outside the driver;
-       * driver PSOs always provide their actual monotonic specialization. */
-      P(&ctx, "constant bool kk_sampler_emulation_active = "
-              "is_function_constant_defined(kk_sampler_emulation) ? "
-              "kk_sampler_emulation : true;\n");
+      /* Required Bool10 is supplied by the actual stage specialization.
+       * The existing C8 validator rejects a descriptor missing this value. */
+      P(&ctx, "constant bool kk_sampler_emulation_active = kk_sampler_emulation;\n");
    } else if (ctx.has_sampler_helpers) {
       /* Native QueryLOD/cube corrections are base Vulkan work. They need
        * neither sampler-state specialization nor a runtime device check. */
