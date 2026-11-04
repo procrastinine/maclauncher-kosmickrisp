@@ -946,7 +946,9 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       nir_def_replace(&tex->def, result);
    }
 
-   if (sampler != NULL) {
+   /* Queries and integer fetches may retain a sampler dereference from a
+    * cloned sample, but do not consume a native sampler object. */
+   if (sampler != NULL && nir_tex_instr_need_sampler(tex)) {
       unsigned offs =
          offsetof(struct kk_sampled_image_descriptor, sampler_index);
 
