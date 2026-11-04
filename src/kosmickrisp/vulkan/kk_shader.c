@@ -1324,6 +1324,7 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
 #include "kk_conservative_nir.h"
 #include "kk_polygon_scalar_io.h"
 #include "kk_poly_layer_replay_nir.h"
+#include "kk_poly_retained_raster_types.h"
 #include "kk_poly_layer_multiview_nir.h"
 
 static void
@@ -1346,6 +1347,28 @@ kk_vrs_finish_captured_fragment(nir_shader *point_fs,
          nir_shader_intrinsics_pass(point_fs, kk_interlock_trim_native_output,
             nir_metadata_control_flow, (void *)state);
       NIR_PASS(_, point_fs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
+}
+
+mtl_render_pipeline_descriptor *
+kk_poly_retained_pipeline_descriptor(const struct kk_shader *shader, bool conservative)
+{
+   return shader && shader->attachment_pipelines ?
+      shader->attachment_pipelines->descriptor[conservative ? 2 : 1] : NULL;
+}
+
+void
+kk_poly_retained_lower_fragment(nir_shader *nir, const struct kk_shader_info *producer,
+   const struct vk_graphics_pipeline_state *state)
+{
+   bool effects = state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+      state->rs->line.stipple.enable ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
+   if (producer->polygon.primitive_vertices != 1)
+      nir_shader_intrinsics_pass(nir, kk_polygon_point_coord,
+         nir_metadata_control_flow, effects ? (void *)1 : NULL);
+   kk_line_fragment(nir, true, state);
+   kk_poly_layer_lower_fs(nir);
 }
 
 static VkResult
@@ -2406,6 +2429,12 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
     * the application has no Layer output. Mesh owns its canonical reader. */
    poly_layer_replay |= layer_producer != MESA_SHADER_NONE && state &&
       state->mv && state->mv->view_mask;
+   /* Compile the existing captured sibling for an explicitly enabled VRS
+    * consumer. The ordinary native pair remains selected until begin(). */
+   poly_layer_replay |= layer_producer != MESA_SHADER_NONE &&
+      (enabled_features->pipelineFragmentShadingRate ||
+       enabled_features->primitiveFragmentShadingRate ||
+       enabled_features->attachmentFragmentShadingRate);
    bool force_per_vertex = kk_barycentric_force_per_vertex(
       shader_count, infos, state, enabled_features);
 

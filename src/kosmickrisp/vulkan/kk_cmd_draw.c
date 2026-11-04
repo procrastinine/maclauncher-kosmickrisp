@@ -897,7 +897,8 @@ kk_polygon_expansion_active(struct kk_cmd_buffer *cmd)
    const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    const struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
    if (!vs || !vs->info.polygon_point) return false;
-   if (cmd->state.gfx.layer_replay.bind && vs->info.poly_layer_replay) return true;
+   if ((cmd->state.gfx.layer_replay.bind || cmd->state.gfx.poly_retained.consume) &&
+       vs->info.poly_layer_replay) return true;
    bool controlled_bias = dyn->rs.depth_bias.enable &&
       (dyn->rs.depth_bias.exact || dyn->rs.depth_bias.representation !=
          VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
@@ -2313,6 +2314,7 @@ upload_base_instance(struct kk_cmd_buffer *cmd, const struct kk_draw_data *data)
 /* Prepares emulation data for stages like tessellation. It also upload system
  * values not present in Metal such as drawID. gs_restart is set when a GS draw
  * unrolls primitive restart. */
+#include "kk_poly_retained_raster_command.h"
 #include "kk_poly_layer_replay_command.h"
 
 static void
@@ -2390,6 +2392,7 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
 
    mtl_set_address(cmd->argument_table, shader_data_gpu.gpu, KK_ARGUMENT_PER_DRAW);
    if (gfx->layer_replay.bind) gfx->layer_replay.per_draw_address = shader_data_gpu.gpu;
+   if (gfx->poly_retained.consume) gfx->poly_retained.per_draw_address = shader_data_gpu.gpu;
 }
 
 static void
@@ -2915,7 +2918,7 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    struct kk_shader *vs = cmd->state.gfx.shader;
    uint32_t view_mask = gfx->render.view_mask;
    bool cached_views = vs->info.poly_layer_replay &&
-      (gfx->render.layered_bc || kk_polygon_expansion_active(cmd) ||
+      (gfx->render.layered_bc || gfx->poly_retained.consume || kk_polygon_expansion_active(cmd) ||
        !vs->info.polygon_native);
    if (!view_mask || !(vs->info.api_geometry || cached_views ||
                       cmd->state.shaders[MESA_SHADER_TESS_EVAL])) {

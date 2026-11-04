@@ -223,9 +223,11 @@ enum kk_dirty {
 };
 
 #include "kk_poly_layer_replay_types.h"
+#include "kk_poly_retained_raster_types.h"
 
 struct kk_graphics_state {
    struct kk_poly_layer_replay_state layer_replay;
+   struct kk_poly_retained_state poly_retained;
    struct kk_shader *shader;
    uint64_t mesh_primitives_query;
    uint64_t mesh_payloads, mesh_records, mesh_batch, mesh_slices;

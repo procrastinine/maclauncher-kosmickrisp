@@ -9,6 +9,7 @@
 #include "poly/geometry_capture.h"
 #include "poly/prim.h"
 #include "kk_polygon.h"
+#include "kk_poly_retained.h"
 #include "kk_line_dashes.h"
 
 static global struct poly_geometry_capture *
@@ -319,11 +320,8 @@ libkk_polygon_output_setup(global struct poly_geometry_params *geometry,
    bool geometry_stipple = p->line_stipple_flags & KK_LINE_STIPPLE_GEOMETRY;
    uint packet_stride = p->vertex_stride + 16 + (geometry_stipple ? 16 : 0);
    p->output = (uintptr_t)poly_heap_alloc(heap, count * packet_stride, 16);
-   uint line_vertices = p->line_mode == 2 ? 2u * (uint)(p->line_width + 0.5f) : 6u;
-   if (geometry_stipple && p->line_mode == 2) line_vertices = 2;
-   p->draw[0] = geometry_stipple && p->line_mode != 2 ? count / 4u * 6u :
-      p->line_expand ? count / 2u * line_vertices :
-      count * (p->polygon_mode == 2 ? 6 : 1);
+   p->draw[0] = kk_poly_retained_vertex(count, p->polygon_mode, p->line_expand,
+      p->line_mode, p->line_width, geometry_stipple, false);
 }
 
 static float
@@ -560,6 +558,28 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
          as_uint(original_along), as_uint(original_length));
       if (geometry_stipple) output[packed + 1] = as_uint4(original_endpoints);
    }
+}
+
+/* GPU scheduling can select an original assembled primitive or an explicit
+ * batch. The inclusive prefix keeps every clipped/expanded subdivision in one
+ * draw; the original linked PrimitiveID/Layer/rate remain in the packets. */
+KERNEL(1)
+libkk_polygon_retained_draw(global struct poly_geometry_params *geometry,
+   constant struct kk_poly_retained_range *range, global uint *draw,
+   uint conservative)
+{
+   global struct poly_geometry_capture *p = polygon_capture(geometry);
+   uint first = min(range->first, p->clip_grid[0]);
+   uint end = first + min(range->count, p->clip_grid[0] - first);
+   global uint *counts = (global uint *)p->clip_counts;
+   uint a = first ? counts[first - 1] : 0;
+   uint b = end ? counts[end - 1] : 0;
+   uint geometry_stipple = p->line_stipple_flags & KK_LINE_STIPPLE_GEOMETRY;
+   uint start = kk_poly_retained_vertex(a, p->polygon_mode, p->line_expand,
+      p->line_mode, p->line_width, geometry_stipple, conservative);
+   uint stop = kk_poly_retained_vertex(b, p->polygon_mode, p->line_expand,
+      p->line_mode, p->line_width, geometry_stipple, conservative);
+   draw[0] = stop - start; draw[1] = 1; draw[2] = start; draw[3] = 0;
 }
 
 #include "kk_conservative.cl"

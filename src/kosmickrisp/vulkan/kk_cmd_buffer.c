@@ -169,10 +169,12 @@ kk_new_command_argument_table(struct kk_device *dev)
       mtl_set_max_buffer_binding_count(desc,
          kk_argument_table_buffer_count((struct kk_argument_table_usage){
             .interlock_guard = dev->interlock_guard != NULL,
-            .poly_layer_replay = dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader || dev->vk.enabled_features.multiview,
+            .poly_layer_replay = dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader || (dev->vk.enabled_features.multiview || dev->vk.enabled_features.pipelineFragmentShadingRate ||
+          dev->vk.enabled_features.primitiveFragmentShadingRate || dev->vk.enabled_features.attachmentFragmentShadingRate),
          }));
       table = mtl_new_argument_table(dev->mtl_handle, desc);
-      if (dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader || dev->vk.enabled_features.multiview)
+      if (dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader || (dev->vk.enabled_features.multiview || dev->vk.enabled_features.pipelineFragmentShadingRate ||
+          dev->vk.enabled_features.primitiveFragmentShadingRate || dev->vk.enabled_features.attachmentFragmentShadingRate))
          mtl_set_address(table, 0, KK_ARGUMENT_POLY_LAYER_REPLAY);
       mtl_set_address(table, dev->samplers.table.bo->gpu, KK_ARGUMENT_SAMPLERS);
       if (dev->interlock_guard)

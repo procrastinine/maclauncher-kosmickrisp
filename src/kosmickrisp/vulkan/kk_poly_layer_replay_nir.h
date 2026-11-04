@@ -37,7 +37,16 @@ kk_poly_layer_lower_vs(nir_shader *nir)
          }
       }
    }
-   assert(position && layer && position->instr.block == layer->instr.block);
+   assert(position);
+   if (!layer) {
+      nir_builder zero = nir_builder_at(nir_after_instr(&position->instr));
+      nir_store_output(&zero, nir_imm_int(&zero, 0), nir_imm_int(&zero, 0),
+         .src_type = nir_type_uint32, .io_semantics.location = VARYING_SLOT_LAYER,
+         .io_semantics.num_slots = 1);
+      layer = nir_instr_as_intrinsic(zero.cursor.instr);
+      nir->info.outputs_written |= VARYING_BIT_LAYER;
+   }
+   assert(position->instr.block == layer->instr.block);
    nir_intrinsic_instr *last = nir_instr_is_before(&layer->instr, &position->instr) ?
       position : layer;
    nir_builder b = nir_builder_at(nir_after_instr(&last->instr));

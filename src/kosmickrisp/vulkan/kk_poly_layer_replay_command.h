@@ -8,7 +8,8 @@ kk_poly_layer_argument_available(struct kk_cmd_buffer *cmd)
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    return dev->vk.enabled_features.shaderOutputLayer ||
           dev->vk.enabled_features.geometryShader ||
-          dev->vk.enabled_features.multiview;
+          (dev->vk.enabled_features.multiview || dev->vk.enabled_features.pipelineFragmentShadingRate ||
+          dev->vk.enabled_features.primitiveFragmentShadingRate || dev->vk.enabled_features.attachmentFragmentShadingRate);
 }
 
 bool
@@ -65,7 +66,7 @@ kk_poly_layer_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    const struct kk_poly_layer_replay_state replay = gfx->layer_replay;
    if (!replay.bind) {
-      kk_dispatch_draw(cmd, draw);
+      kk_poly_retained_dispatch_draw(cmd, draw);
       return;
    }
    const struct kk_shader *vs = gfx->shader;
@@ -94,6 +95,8 @@ kk_poly_layer_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
          struct kk_ptr data = kk_pool_upload(cmd, &selector, sizeof(selector), 8u);
          if (unlikely(!data.gpu)) return;
          mtl_set_address(cmd->argument_table, data.gpu, KK_ARGUMENT_POLY_LAYER_REPLAY);
+         gfx->poly_retained.layer_selector_address = data.gpu;
+         gfx->poly_retained.logical_layer = layer;
       }
       /* Attachment aliases have physical index zero. Never amplify the
        * cached draw again after the original view has been produced. */
@@ -101,7 +104,8 @@ kk_poly_layer_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
          uint32_t physical_layer = 0;
          mtl_set_vertex_amplification_count(cs_get_render(cmd), &physical_layer, 1);
       }
-      kk_dispatch_draw(cmd, draw);
+      kk_poly_retained_dispatch_draw(cmd, draw);
+      if (cmd->vk.record_result != VK_SUCCESS) return;
    }
 }
 #endif
