@@ -190,7 +190,8 @@ kk_heap_sampler_locked(struct kk_device *dev,
       .borderColor = state->border_color,
       .unnormalizedCoordinates = state->unnormalized_coordinates,
    };
-   VkResult result = kk_create_heap_sampler(dev, &info, &entry->sampler);
+   VkResult result = kk_create_heap_sampler(dev, &info, &entry->sampler,
+                                             KK_SAMPLER_PARAMS_HEAP_LOCK_HELD);
    if (result == VK_SUCCESS) {
       VkDescriptorImageInfo descriptor = {.sampler = entry->sampler};
       get_sampled_image_view_desc(VK_DESCRIPTOR_TYPE_SAMPLER, &descriptor,
@@ -226,6 +227,8 @@ kk_heap_sampler_locked(struct kk_device *dev,
    return result;
 }
 
+#include "kk_sampler_params_impl.h"
+
 static VkResult
 kk_heap_sampler_metadata_locked(struct kk_device *dev,
                                 struct kk_heap_sampler *entry)
@@ -235,27 +238,8 @@ kk_heap_sampler_metadata_locked(struct kk_device *dev,
    const uint32_t size = sizeof(entry->descriptor);
    static_assert(sizeof(entry->descriptor) <= KK_HEAP_METADATA_PAGE_SIZE,
                  "sampler metadata fits an arena page");
-   struct kk_heap_metadata_page *page = dev->heap_metadata_pages;
-   uint32_t offset = page ? ALIGN_POT(page->used, 16) : 0;
-   if (!page || offset > KK_HEAP_METADATA_PAGE_SIZE - size) {
-      page = vk_zalloc(&dev->vk.alloc, sizeof(*page), 8,
-                       VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-      if (!page)
-         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
-      VkResult result = kk_alloc_bo(dev, &dev->vk.base,
-         KK_HEAP_METADATA_PAGE_SIZE, 16, &page->bo);
-      if (result != VK_SUCCESS) {
-         vk_free(&dev->vk.alloc, page);
-         return result;
-      }
-      page->next = dev->heap_metadata_pages;
-      dev->heap_metadata_pages = page;
-      offset = 0;
-   }
-   memcpy((uint8_t *)page->bo->cpu + offset, entry->descriptor, size);
-   entry->gpu_address = page->bo->gpu + offset;
-   page->used = offset + size;
-   return VK_SUCCESS;
+   return kk_heap_metadata_alloc_locked(dev, entry->descriptor, size, 16,
+                                        &entry->gpu_address);
 }
 
 VkResult

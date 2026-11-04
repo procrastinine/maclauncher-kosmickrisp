@@ -15,6 +15,7 @@
 #include "kosmickrisp/bridge/mtl_types.h"
 
 #include "vk_sampler.h"
+#include "kk_sampler_params_api.h"
 #include "vk_ycbcr_conversion.h"
 
 #include "vk_format.h"
@@ -44,6 +45,7 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_sampler, vk.base, VkSampler,
                                VK_OBJECT_TYPE_SAMPLER)
 
 VkResult kk_create_heap_sampler(struct kk_device *dev,
-   const VkSamplerCreateInfo *info, VkSampler *sampler);
+   const VkSamplerCreateInfo *info, VkSampler *sampler,
+   enum kk_sampler_params_lock_context params_lock_context);
 
 #endif /* KK_SAMPLER_H */

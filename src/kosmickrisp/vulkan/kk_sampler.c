@@ -157,7 +157,8 @@ kk_sampler_create(struct kk_device *dev,
 static VkResult
 kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
                   const VkAllocationCallbacks *pAllocator, VkSampler *pSampler,
-                  bool native_only)
+                  bool native_only,
+                  enum kk_sampler_params_lock_context params_lock_context)
 {
    VK_FROM_HANDLE(kk_device, dev, device);
    struct kk_physical_device *pdev = kk_device_physical(dev);
@@ -290,6 +291,10 @@ kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
                                ? _mesa_float_to_half(pCreateInfo->mipLodBias)
                                : 0;
 
+   /* The composed sampler finalizer receives explicit caller context. */
+   assert(params_lock_context == KK_SAMPLER_PARAMS_UNLOCKED ||
+          params_lock_context == KK_SAMPLER_PARAMS_HEAP_LOCK_HELD);
+   (void)params_lock_context;
    *pSampler = kk_sampler_to_handle(sampler);
 
    return VK_SUCCESS;
@@ -299,14 +304,17 @@ VKAPI_ATTR VkResult VKAPI_CALL
 kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
                   const VkAllocationCallbacks *pAllocator, VkSampler *pSampler)
 {
-   return kk_create_sampler(device, pCreateInfo, pAllocator, pSampler, false);
+   return kk_create_sampler(device, pCreateInfo, pAllocator, pSampler, false,
+                            KK_SAMPLER_PARAMS_UNLOCKED);
 }
 
 VkResult
 kk_create_heap_sampler(struct kk_device *dev, const VkSamplerCreateInfo *info,
-                        VkSampler *sampler)
+                        VkSampler *sampler,
+                        enum kk_sampler_params_lock_context params_lock_context)
 {
-   return kk_create_sampler(kk_device_to_handle(dev), info, NULL, sampler, true);
+   return kk_create_sampler(kk_device_to_handle(dev), info, NULL, sampler, true,
+                            params_lock_context);
 }
 
 VKAPI_ATTR void VKAPI_CALL
