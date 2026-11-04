@@ -87,6 +87,9 @@ struct kk_mesh_retained_batch {
    struct kk_mesh_retained_batch_id id;
    struct kk_mesh_retained_layout layout;
    uint32_t group_capacity, logical_layer, view_index;
+   /* Upper bound on the physical groups this slice holds, known when the
+    * draw's grid is on the CPU (direct draws); otherwise group_capacity. */
+   uint32_t group_bound;
    bool layer_filtered;
 };
 typedef VkResult (*kk_mesh_retained_consume)(struct kk_cmd_buffer *,

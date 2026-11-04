@@ -515,7 +515,8 @@ kk_mesh_render_slices_native(struct kk_cmd_buffer *cmd, struct kk_pipeline_handl
 static void
 kk_mesh_render_retained(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *capture,
    mtl_argument_table *table, uint64_t grid, uint64_t parameters,
-   struct kk_mesh_retained_batch_id id, uint32_t group_capacity)
+   struct kk_mesh_retained_batch_id id, uint32_t group_capacity,
+   uint32_t group_bound)
 {
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    const struct kk_poly_layer_replay_state replay = gfx->layer_replay;
@@ -604,7 +605,8 @@ kk_mesh_render_retained(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *c
                .vertices_per_primitive = vpp,
                .max_vertices = info->max_vertices, .max_primitives = info->max_primitives,
             },
-            .group_capacity = group_capacity, .logical_layer = layer,
+            .group_capacity = group_capacity, .group_bound = group_bound,
+            .logical_layer = layer,
             .view_index = gfx->per_draw_data.multiview_index,
             .layer_filtered = replay.bind != NULL,
          };
@@ -638,16 +640,20 @@ static void
 kk_mesh_render_slices(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *pipe,
                         mtl_argument_table *table, uint64_t grids,
                         uint64_t parameters, uint32_t slice_count, bool virtual,
-                        uint32_t draw_id, uint32_t task_base, uint32_t span)
+                        uint32_t draw_id, uint32_t task_base, uint32_t span,
+                        uint64_t groups)
 {
    if (kk_mesh_retained_active(cmd)) {
       for (uint32_t i = 0; i < slice_count; ++i) {
          if (!kk_mesh_begin_batch(cmd, 1, false)) return;
          kk_mesh_reset_canonical_heap(cmd);
+         /* Slices are linear spans of the physical groups (filter/prefix). */
+         uint64_t base = (uint64_t)i * span;
+         uint32_t bound = groups > base ? MIN2(groups - base, (uint64_t)span) : 0;
          kk_mesh_render_retained(cmd, pipe, table,
             grids + (uint64_t)i * 3u * sizeof(uint32_t),
             parameters + (uint64_t)i * sizeof(struct kk_mesh_params),
-            (struct kk_mesh_retained_batch_id){draw_id, task_base, i, i * span}, span);
+            (struct kk_mesh_retained_batch_id){draw_id, task_base, i, i * span}, span, bound);
          if (cmd->vk.record_result != VK_SUCCESS) return;
       }
       return;
@@ -787,7 +793,7 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          libkk_mesh_filter_slices(cmd, kk_grid_1d(1), true, args,
             slice_grids, slice_count);
          kk_mesh_render_slices(cmd, pipe, table, slice_grids,
-                                slice_params, slice_count, false, draw, 0, span);
+                                slice_params, slice_count, false, draw, 0, span, groups);
          continue;
       }
       uint32_t batches = DIV_ROUND_UP(groups, task_limit);
@@ -813,8 +819,10 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          kk_cmd_bind_compute_arguments(cmd, enc, cmd->argument_table);
          libkk_mesh_prefix_slices(cmd, kk_grid_1d(1), true, args.gpu,
             slice_grids, slice_count);
+         uint64_t tasks = MIN2(groups - p.task_base, (uint64_t)task_limit);
          kk_mesh_render_slices(cmd, pipe, table, slice_grids,
-                                slice_params, slice_count, true, draw, p.task_base, span);
+                                slice_params, slice_count, true, draw, p.task_base, span,
+                                tasks * MAX2(shader->mesh->info.task_grid_bound, 1u));
       }
    }
 finish:

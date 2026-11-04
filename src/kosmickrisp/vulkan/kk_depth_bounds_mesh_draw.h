@@ -12,7 +12,9 @@ kk_depth_bounds_record_mesh_batch(struct kk_cmd_buffer *cmd,
    (void)data;
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_shader *producer = gfx->shader;
-   uint64_t maximum = (uint64_t)source->group_capacity * source->layout.max_primitives;
+   /* Primitive slots of the groups this slice can hold, not of its arena. */
+   uint64_t maximum = (uint64_t)MIN2(source->group_bound, source->group_capacity) *
+      source->layout.max_primitives;
    if (!maximum || cmd->vk.dynamic_graphics_state.rs.rasterizer_discard_enable)
       return VK_SUCCESS;
    if (maximum > UINT32_MAX)
