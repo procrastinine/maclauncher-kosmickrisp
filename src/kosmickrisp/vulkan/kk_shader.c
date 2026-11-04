@@ -4954,9 +4954,17 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
       uint32_t local_size_threads = shader->info.cs.local_size.x *
                                     shader->info.cs.local_size.y *
                                     shader->info.cs.local_size.z;
-      result = kk_compile_compute_pipeline(
-         dev, shader, &shader->msl_data[MESA_SHADER_COMPUTE], local_size_threads,
-         &shader->pipeline.cs);
+      /* A cache hit restores the same MSL a fresh compile produces, so the
+       * native build defers exactly as it does after a fresh compile: an
+       * ordinary vkCreateComputePipelines on a warm cache no longer waits
+       * for the Metal library and pipeline on the application thread. */
+      bool deferred = kk_defer_compute && !shader->info.indirect_bindable &&
+         !shader->msl_data[MESA_SHADER_COMPUTE].uses_atomic64_locks &&
+         kk_async_compute_start(dev, shader, kk_compile_async_compute);
+      if (!deferred)
+         result = kk_compile_compute_pipeline(
+            dev, shader, &shader->msl_data[MESA_SHADER_COMPUTE], local_size_threads,
+            &shader->pipeline.cs);
       if (result == VK_SUCCESS && shader->info.indirect_bindable &&
           !kk_dgc_get_compute_pipeline(dev, shader))
          result = VK_ERROR_INVALID_SHADER_NV;
