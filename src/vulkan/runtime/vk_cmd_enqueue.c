@@ -169,6 +169,61 @@ finish:
 }
 #endif
 
+/* Micromap usage counts are given either as an array or as an array of
+ * pointers; the copy is always the flat array. */
+static const VkMicromapUsageKHR *
+vk_cmd_enqueue_copy_micromap_usage(linear_ctx *ctx, uint32_t count,
+                                   const VkMicromapUsageKHR *usage,
+                                   const VkMicromapUsageKHR *const *pp_usage)
+{
+   if (!count || (!usage && !pp_usage))
+      return NULL;
+   VkMicromapUsageKHR *copy = linear_alloc_child(ctx, count * sizeof(*copy));
+   if (copy) {
+      for (uint32_t i = 0; i < count; i++)
+         copy[i] = usage ? usage[i] : *pp_usage[i];
+   }
+   return copy;
+}
+
+/* The geometry structures that build commands read through pNext: opacity
+ * micromap data on a micromap geometry and an opacity micromap attachment on
+ * triangles. Other chained structures are not consumed at execution. */
+static const void *
+vk_cmd_enqueue_copy_geometry_chain(linear_ctx *ctx, const void *chain, bool *oom)
+{
+   const void *head = NULL;
+   void **tail = (void **)&head;
+   vk_foreach_struct_const(stype, ext, chain) {
+      switch (stype) {
+      case VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR: {
+         VkAccelerationStructureGeometryMicromapDataKHR *copy = linear_alloc_child(ctx, sizeof(*copy));
+         if (!copy) { *oom = true; return NULL; }
+         *copy = *(const VkAccelerationStructureGeometryMicromapDataKHR *)ext;
+         copy->pUsageCounts = vk_cmd_enqueue_copy_micromap_usage(ctx, copy->usageCountsCount,
+                                                                 copy->pUsageCounts, copy->ppUsageCounts);
+         copy->ppUsageCounts = NULL;
+         copy->pNext = NULL;
+         *tail = copy;
+         tail = (void **)&copy->pNext;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_TRIANGLES_OPACITY_MICROMAP_KHR: {
+         VkAccelerationStructureTrianglesOpacityMicromapKHR *copy = linear_alloc_child(ctx, sizeof(*copy));
+         if (!copy) { *oom = true; return NULL; }
+         *copy = *(const VkAccelerationStructureTrianglesOpacityMicromapKHR *)ext;
+         copy->pNext = NULL;
+         *tail = copy;
+         tail = (void **)&copy->pNext;
+         break;
+      }
+      default:
+         break;
+      }
+   }
+   return head;
+}
+
 VKAPI_ATTR void VKAPI_CALL
 vk_cmd_enqueue_CmdBuildAccelerationStructuresKHR(
    VkCommandBuffer commandBuffer, uint32_t infoCount,
@@ -215,7 +270,20 @@ vk_cmd_enqueue_CmdBuildAccelerationStructuresKHR(
                memcpy(&geometries[j], pInfos[i].ppGeometries[j], sizeof(VkAccelerationStructureGeometryKHR));
          }
 
+         bool oom = false;
+         for (uint32_t j = 0; j < build->infos[i].geometryCount; j++) {
+            if (geometries[j].pNext)
+               geometries[j].pNext = vk_cmd_enqueue_copy_geometry_chain(queue->ctx, geometries[j].pNext, &oom);
+            if (geometries[j].geometryType == VK_GEOMETRY_TYPE_TRIANGLES_KHR &&
+                geometries[j].geometry.triangles.pNext)
+               geometries[j].geometry.triangles.pNext =
+                  vk_cmd_enqueue_copy_geometry_chain(queue->ctx, geometries[j].geometry.triangles.pNext, &oom);
+         }
+         if (oom)
+            goto err;
+
          build->infos[i].pGeometries = geometries;
+         ((VkAccelerationStructureBuildGeometryInfoKHR *)build->infos)[i].ppGeometries = NULL;
       }
    }
    if (ppBuildRangeInfos) {
@@ -228,6 +296,12 @@ vk_cmd_enqueue_CmdBuildAccelerationStructuresKHR(
          (void *)build->pp_build_range_infos;
 
       for (uint32_t i = 0; i < infoCount; i++) {
+         /* Opacity micromap builds have no range information. */
+         if (!ppBuildRangeInfos[i]) {
+            pp_build_range_infos[i] = NULL;
+            continue;
+         }
+
          uint32_t build_range_size =
             build->infos[i].geometryCount * sizeof(VkAccelerationStructureBuildRangeInfoKHR);
          VkAccelerationStructureBuildRangeInfoKHR *p_build_range_infos =
