@@ -707,8 +707,8 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
  * its low byte is the render pass epoch (the low byte of the draw serial).
  * Even and odd epochs use separate halves of the table, and a slot is free
  * when it is zero or holds the tag of a pass at least FSR_SLOT_AGE epochs
- * older; the slot index is a hash of the tag, probed linearly within the
- * half. Metal runs the fragments of all draws of a pass tile by tile, so a
+ * older; the slot index is a hash of the tag, probed with an odd stride
+ * within the half. Metal runs the fragments of all draws of a pass tile by tile, so a
  * fragment of the last draw can run before one of the first draw in another
  * tile: a claim never replaces a slot of the current pass, and the previous
  * pass, which can still be running, uses the other half. A waiting
@@ -722,7 +722,7 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
 #define FSR_SLOT_SAMPLES 8
 #define FSR_SLOT_DATA (FSR_SLOT_PRESENCE + 4 * FSR_SLOT_SAMPLES)
 #define FSR_PRESENCE_TRIES 64
-#define FSR_SLOT_PROBES 64
+#define FSR_SLOT_PROBES (1u << 12)
 #define FSR_SLOT_AGE 2
 #define FSR_SLOT_TRIES (1u << 12)
 
@@ -787,6 +787,10 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
    assert(bits > 0 && bits < 31);
    nir_def *base = nir_ushr_imm(b, nir_imul_imm(b, nir_ixor(b, h, nir_ushr_imm(b, h, 16)), 0x7feb352du),
                                 32 - bits);
+   /* An odd stride visits distinct entries in the power-of-two half.
+    * Linear clusters could exhaust the short probe window while much of
+    * the table was free, triggering unshared per-sample fallback. */
+   nir_def *step = nir_ior_imm(b, nir_imul_imm(b, h, 0x9e3779b9u), 1);
    nir_def *half = nir_ishl_imm(b, nir_iand_imm(b, serial, 1), bits);
    nir_def *active = nir_ine_imm(b, slots, 0);
    nir_def *sid = nir_iand_imm(b, nir_load_sample_id(b), FSR_SLOT_SAMPLES - 1);
@@ -810,7 +814,7 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
       nir_push_loop(b);
       {
          nir_def *i = nir_load_var(b, probe);
-         nir_def *index = nir_ior(b, nir_iand_imm(b, nir_iadd(b, base, i), BITFIELD_MASK(bits)),
+         nir_def *index = nir_ior(b, nir_iand_imm(b, nir_iadd(b, base, nir_imul(b, i, step)), BITFIELD_MASK(bits)),
                                   half);
          nir_def *addr = nir_iadd(b, slots, nir_u2u64(b, nir_imul_imm(b, index, stride)));
          nir_def *old = fsr_slot_read(b, addr);
