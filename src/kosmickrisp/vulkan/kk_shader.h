@@ -313,10 +313,6 @@ bool kk_nir_lower_non_seamless_cube(nir_shader *nir,
       uint32_t set_layout_count,
       struct vk_descriptor_set_layout *const *set_layouts);
 
-bool kk_nir_lower_sampler_minmax(nir_shader *nir,
-      uint32_t set_layout_count,
-      struct vk_descriptor_set_layout *const *set_layouts);
-
 VkResult kk_shader_embedded_samplers_init(struct kk_device *dev,
    struct kk_shader *shader, uint32_t count, const void *state_bytes);
 void kk_shader_embedded_samplers_finish(struct kk_device *dev,

@@ -3,10 +3,8 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: MIT
  *
- * Footprint construction follows Mesa nir_lower_tex.c. The centered-tap
- * reduction technique is also used by MetalSharp's SPIRV-Cross adaptation.
- * Metal gather has no explicit mip-level operand; explicit-level taps keep
- * mip selection, addressing and border handling in the shared texture path.
+ * Shared LOD and cube-coordinate utilities for sampler emulation.
+ * Sample footprints are emitted by the common MSL sampler helpers.
  */
 #ifndef KK_SAMPLER_MINMAX_H
 #define KK_SAMPLER_MINMAX_H
@@ -52,12 +50,6 @@ kk_minmax_combine(nir_builder *b, nir_def *a, nir_def *c, nir_def *mode, bool sp
    return sparse ? nir_vector_insert_imm(b, nir_pad_vector(b, value, 5), status, 4) : value;
 }
 
-static bool
-kk_minmax_probe_only(const nir_tex_instr *tex, const void *probe)
-{
-   return tex == probe;
-}
-
 /* Use Mesa's dimension-aware gradient calculation, including the cube
  * quotient rule. The probe is never sampled and no original sample is
  * converted to scalar LOD, so its native anisotropic path is preserved. */
@@ -93,11 +85,10 @@ kk_minmax_lod(nir_builder *b, nir_tex_instr *tex, nir_def *dx, nir_def *dy)
    probe->op = nir_texop_txd;
    nir_tex_instr_add_src(probe, nir_tex_src_ddx, dx);
    nir_tex_instr_add_src(probe, nir_tex_src_ddy, dy);
-   const nir_lower_tex_options options = {
-      .lower_txd_cb = kk_minmax_probe_only,
-      .lower_txd_data = probe,
-   };
-   nir_lower_tex(b->shader, &options);
+   /* Only the temporary probe needs lowering. Walking the growing shader
+    * here for every sample would make LOD construction quadratic. */
+   const nir_lower_tex_options options = {0};
+   nir_lower_tex_instr_gradient(b, probe, &options);
    lod = nir_get_tex_src(probe, nir_tex_src_lod);
    b->cursor = nir_before_instr(&probe->instr);
    nir_def *bias = nir_get_tex_src(tex, nir_tex_src_bias);
@@ -248,137 +239,4 @@ kk_minmax_level(nir_builder *b, nir_tex_instr *tex, nir_def *level,
    return result;
 }
 
-static bool
-kk_lower_minmax_sample(nir_builder *b, nir_tex_instr *tex, void *data)
-{
-   const struct lower_descriptors_ctx *ctx = data;
-   if (tex->is_shadow ||
-       (tex->op != nir_texop_tex && tex->op != nir_texop_txb &&
-        tex->op != nir_texop_txl && tex->op != nir_texop_txd && tex->op != nir_texop_lod))
-      return false;
-   nir_def *sampler_src = nir_get_tex_src(tex, nir_tex_src_sampler_deref);
-   if (!sampler_src)
-      return false;
-   nir_deref_instr *sampler = nir_src_as_deref(nir_src_for_ssa(sampler_src));
-   nir_variable *var = nir_deref_instr_get_variable(sampler);
-   const struct kk_descriptor_set_binding_layout *binding = var ?
-      get_binding_layout(var->data.descriptor_set, var->data.binding, ctx) : NULL;
-   if (binding && binding->immutable_samplers) {
-      bool any = false;
-      for (unsigned i = 0; i < binding->array_size; ++i)
-         any |= binding->immutable_samplers[i]->reduction_mode != 0;
-      if (!any)
-         return false;
-   }
-   if (tex->op == nir_texop_lod) {
-      /* The native sampler is configured for individual taps. Its unclamped
-       * query remains valid; reconstruct the requested sampler's clamped
-       * query using the original metadata rather than the tap sampler. */
-      b->cursor = nir_after_instr(&tex->instr);
-      nir_def *mode = kk_minmax_metadata(b, tex, sampler,
-         offsetof(struct kk_sampled_image_descriptor, sampler_reduction_mode), ctx);
-      nir_def *min = nir_f2f32(b, kk_minmax_metadata(b, tex, sampler,
-         offsetof(struct kk_sampled_image_descriptor, sampler_lod_min_fp16), ctx));
-      nir_def *max = nir_f2f32(b, kk_minmax_metadata(b, tex, sampler,
-         offsetof(struct kk_sampled_image_descriptor, sampler_lod_max_fp16), ctx));
-      nir_def *mipmap = kk_minmax_metadata(b, tex, sampler,
-         offsetof(struct kk_sampled_image_descriptor, sampler_mipmap_mode), ctx);
-      nir_def *lod = nir_channel(b, &tex->def, 1);
-      nir_def *clamped = nir_fmin(b, nir_fmax(b, lod, min), max);
-      nir_def *levels = nir_build_texture_query(b, tex, nir_texop_query_levels,
-         1, nir_type_uint32, false, false);
-      clamped = nir_fclamp(b, clamped, nir_imm_float(b, 0),
-         nir_u2f32(b, nir_iadd_imm(b, levels, -1)));
-      nir_def *nearest = nir_fmax(b, nir_fadd_imm(b,
-         nir_fceil(b, nir_fadd_imm(b, clamped, 0.5)), -1), nir_imm_float(b, 0));
-      clamped = nir_bcsel(b, nir_ieq_imm(b, mipmap, VK_SAMPLER_MIPMAP_MODE_NEAREST),
-                          nearest, clamped);
-      nir_def *value = nir_bcsel(b, nir_ine_imm(b, mode, 0),
-                                 nir_vec2(b, clamped, lod), &tex->def);
-      nir_def_rewrite_uses_after(&tex->def, value);
-      return true;
-   }
-   b->cursor = nir_before_instr(&tex->instr);
-   nir_def *mode = kk_minmax_metadata(b, tex, sampler,
-      offsetof(struct kk_sampled_image_descriptor, sampler_reduction_mode), ctx);
-   nir_def *coord = nir_get_tex_src(tex, nir_tex_src_coord);
-   nir_def *dx = nir_get_tex_src(tex, nir_tex_src_ddx);
-   nir_def *dy = nir_get_tex_src(tex, nir_tex_src_ddy);
-   bool implicit = tex->op == nir_texop_tex || tex->op == nir_texop_txb;
-   if (implicit) {
-      nir_def *spatial = tex->is_array ? nir_trim_vector(b, coord, coord->num_components - 1) : coord;
-      dx = nir_ddx(b, spatial);
-      dy = nir_ddy(b, spatial);
-   }
-   nir_push_if(b, nir_ine_imm(b, mode, 0));
-   nir_def *lod = kk_minmax_lod(b, tex, dx, dy);
-   nir_def *min = nir_f2f32(b, kk_minmax_metadata(b, tex, sampler,
-      offsetof(struct kk_sampled_image_descriptor, sampler_lod_min_fp16), ctx));
-   nir_def *max = nir_f2f32(b, kk_minmax_metadata(b, tex, sampler,
-      offsetof(struct kk_sampled_image_descriptor, sampler_lod_max_fp16), ctx));
-   lod = nir_fmin(b, nir_fmax(b, lod, min), max);
-   nir_def *image_min = nir_get_tex_src(tex, nir_tex_src_min_lod);
-   if (image_min)
-      lod = nir_fmax(b, lod, nir_f2f32(b, image_min));
-   nir_def *filter = kk_minmax_metadata(b, tex, sampler,
-      offsetof(struct kk_sampled_image_descriptor, sampler_filter_bits), ctx);
-   nir_def *linear = nir_ine_imm(b, nir_iand(b, filter,
-      nir_bcsel(b, nir_fle_imm(b, lod, 0), nir_imm_intN_t(b, 2, 16),
-                nir_imm_intN_t(b, 1, 16))), 0);
-   nir_def *levels = nir_build_texture_query(b, tex, nir_texop_query_levels,
-      1, nir_type_uint32, false, false);
-   lod = nir_fclamp(b, lod, nir_imm_float(b, 0), nir_u2f32(b, nir_iadd_imm(b, levels, -1)));
-   nir_def *mipmap = kk_minmax_metadata(b, tex, sampler,
-      offsetof(struct kk_sampled_image_descriptor, sampler_mipmap_mode), ctx);
-   nir_def *mip_linear = nir_ieq_imm(b, mipmap, VK_SAMPLER_MIPMAP_MODE_LINEAR);
-   nir_def *nearest = nir_fmax(b, nir_fadd_imm(b, nir_fceil(b, nir_fadd_imm(b, lod, 0.5)), -1),
-                               nir_imm_float(b, 0));
-   nir_def *low = nir_f2u32(b, nir_bcsel(b, mip_linear, nir_ffloor(b, lod), nearest));
-   nir_def *address = kk_minmax_metadata(b, tex, sampler,
-      offsetof(struct kk_sampled_image_descriptor, sampler_address_modes), ctx);
-   nir_def *unnormalized = nir_test_mask(b, address, 1u << 9);
-   nir_def *result = kk_minmax_level(b, tex, low, linear, mode, unnormalized, false, NULL, NULL);
-   nir_def *next = nir_iadd_imm(b, low, 1);
-   nir_push_if(b, nir_iand(b, mip_linear, nir_iand(b,
-      nir_flt(b, nir_u2f32(b, low), lod), nir_ult(b, next, levels))));
-   nir_def *upper = kk_minmax_level(b, tex, next, linear, mode, unnormalized, false, NULL, NULL);
-   nir_def *combined = kk_minmax_combine(b, result, upper, mode, tex->is_sparse, tex->dest_type);
-   nir_pop_if(b, NULL);
-   result = nir_if_phi(b, combined, result);
-   nir_push_else(b, NULL);
-   nir_tex_instr *native = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
-   nir_builder_instr_insert(b, &native->instr);
-   b->cursor = nir_before_instr(&native->instr);
-   if (implicit) {
-      nir_def *bias_value = nir_get_tex_src(tex, nir_tex_src_bias);
-      if (bias_value) {
-         nir_def *scale = nir_fexp2(b, nir_f2f32(b, bias_value));
-         dx = nir_fmul(b, dx, scale);
-         dy = nir_fmul(b, dy, scale);
-      }
-      int bias = nir_tex_instr_src_index(native, nir_tex_src_bias);
-      if (bias >= 0)
-         nir_tex_instr_remove_src(native, bias);
-      native->op = nir_texop_txd;
-      nir_tex_instr_add_src(native, nir_tex_src_ddx, dx);
-      nir_tex_instr_add_src(native, nir_tex_src_ddy, dy);
-   }
-   b->cursor = nir_after_instr(&native->instr);
-   nir_pop_if(b, NULL);
-   nir_def *phi = nir_if_phi(b, result, &native->def);
-   nir_def_replace(&tex->def, phi);
-   return true;
-}
-
-bool
-kk_nir_lower_sampler_minmax(nir_shader *nir, uint32_t set_layout_count,
-                            struct vk_descriptor_set_layout *const *set_layouts)
-{
-   struct lower_descriptors_ctx ctx = {};
-   assert(set_layout_count <= KK_MAX_SETS);
-   for (unsigned i = 0; i < set_layout_count; ++i)
-      if (set_layouts[i])
-         ctx.set_layouts[i] = vk_to_kk_descriptor_set_layout(set_layouts[i]);
-   return nir_shader_tex_pass(nir, kk_lower_minmax_sample, nir_metadata_none, &ctx);
-}
 #endif

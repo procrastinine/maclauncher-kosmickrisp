@@ -11,3 +11,5 @@ The [shared shader cache key](KOSMICKRISP_SHADER_CACHE.md) distinguishes sampler
 Depth formats support reduction with comparison disabled. Vulkan requires weighted-average reduction when sampler comparison or YCbCr conversion is enabled. Sparse samples combine the residency codes of the contributing taps with bitwise OR.
 
 The implementation uses Mesa NIR and Metal texture operations. Native reduction follows the same Metal capability boundary as [MoltenVK](https://github.com/KhronosGroup/MoltenVK); the centered-sample technique is also used by [MetalSharp's SPIRV-Cross adaptation](https://github.com/metalsharp/VKD3D-Proton-MacOS). The [Vulkan sampler reduction specification](https://docs.vulkan.org/refpages/latest/refpages/source/VkSamplerReductionMode.html) defines the reduction modes.
+
+The shared sampler helper calculates LOD with Mesa's dimension-aware gradient lowering, applied directly to one temporary instruction. Cube derivatives retain the quotient rule. The original sampling instruction retains its gradient and anisotropic semantics; explicit LOD instructions use their supplied value directly.

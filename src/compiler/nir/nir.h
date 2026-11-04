@@ -6659,6 +6659,13 @@ typedef struct nir_lower_tex_options {
 
 unsigned nir_tex_parse_txd_coords(nir_shader *shader, nir_tex_instr *tex, nir_instr **ddxy_instrs);
 
+/** Convert one TXD to TXL using its gradients, without walking the shader.
+ * The instruction must be inserted; generated calculations precede it.
+ * The caller is responsible for preserving or invalidating NIR metadata.
+ */
+void nir_lower_tex_instr_gradient(nir_builder *b, nir_tex_instr *tex,
+                                 const nir_lower_tex_options *options);
+
 /** Lowers complex texture instructions to simpler ones */
 bool nir_lower_tex(nir_shader *shader,
                    const nir_lower_tex_options *options);

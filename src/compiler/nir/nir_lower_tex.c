@@ -851,10 +851,13 @@ lower_gradient_cube_map(nir_builder *b, nir_tex_instr *tex,
    replace_gradient_with_lod(b, lod, tex);
 }
 
-static void
-lower_gradient(nir_builder *b, nir_tex_instr *tex,
-               const nir_lower_tex_options *options)
+void
+nir_lower_tex_instr_gradient(nir_builder *b, nir_tex_instr *tex,
+                             const nir_lower_tex_options *options)
 {
+   assert(tex->op == nir_texop_txd);
+   b->cursor = nir_before_instr(&tex->instr);
+
    /* Cubes are more complicated and have their own function */
    if (tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE) {
       lower_gradient_cube_map(b, tex, options);
@@ -1841,7 +1844,7 @@ nir_lower_tex_block(nir_block *block, nir_builder *b,
            (options->lower_txd_array && tex->is_array) ||
            (options->lower_txd_cb &&
             options->lower_txd_cb(tex, options->lower_txd_data)))) {
-         lower_gradient(b, tex, options);
+         nir_lower_tex_instr_gradient(b, tex, options);
          progress = true;
          continue;
       }
