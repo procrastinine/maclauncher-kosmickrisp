@@ -71,7 +71,7 @@ gpu_encoders_flush_locked(struct kk_perf *p)
    if (!g) return;
    qsort(g->encoders,g->encoders_count,sizeof(g->encoders[0]),gpu_encoder_compare);
    qsort(g->pipelines,g->pipelines_count,sizeof(g->pipelines[0]),gpu_pipeline_compare);
-   fprintf(p->log, ",\"gpu_encoder_scope\":\"synchronous_Metal4_counter_heap_encoder_boundaries\","
+   fprintf(p->log, ",\"gpu_encoder_scope\":\"synchronous_Metal4_counter_heap_encoder_work_spans\","
       "\"gpu_pipeline_scope\":\"inclusive_encoder_membership_not_independent_shader_time\","
       "\"gpu_encoder_unavailable\":%"PRIu64",\"gpu_encoder_dropped\":%"PRIu64
       ",\"gpu_encoder_hashes_truncated\":%"PRIu64",\"gpu_encoders\":[",g->unavailable,g->dropped,g->truncated);

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_dgc.h"
+#include "kosmickrisp/bridge/mtl_gpu_timing.h"
 #include "kk_bo.h"
 #include "kk_device.h"
 #include "kk_cmd_buffer.h"
@@ -183,6 +184,10 @@ bool kk_dgc_encode(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder,
       [enc setComputePipelineState:pipeline];
       [enc dispatchThreads:MTLSizeMake(count, 1, 1)
           threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+      if (mtl_gpu_timing_on()) {
+         mtl_gpu_timing_bind_pipeline(enc, pipeline);
+         mtl_gpu_timing_work(enc, MTL_GPU_TIMING_DISPATCH, count, 1, 1);
+      }
       [enc barrierAfterEncoderStages:MTLStageDispatch
                  beforeEncoderStages:MTLStageDispatch
                    visibilityOptions:MTL4VisibilityOptionResourceAlias];
@@ -198,6 +203,7 @@ void kk_dgc_execute_compute(mtl_compute_encoder *encoder, void *icb,
 {
    id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
    if (pipeline) [enc setComputePipelineState:(id<MTLComputePipelineState>)pipeline];
+   if (pipeline && mtl_gpu_timing_on()) mtl_gpu_timing_bind_pipeline(enc, pipeline);
    [enc executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)icb
                  indirectBuffer:range];
 }

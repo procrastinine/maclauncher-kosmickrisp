@@ -3,11 +3,22 @@
 #include "util/mesa-blake3.h"
 #import <Metal/Metal.h>
 #import <objc/runtime.h>
+#include <os/lock.h>
 #include <string.h>
 
 /* Set only from the once-read kk_perf configuration, never from bridge env. */
 bool mtl_gpu_timing_enabled;
-static char command_key, library_key, pipeline_key, feedback_key;
+static char command_key, library_key, pipeline_key, feedback_key, encoder_key;
+
+/* AGX allows a process 32 live timestamp heaps, shared with the application's timestamp query
+ * pools; past that the allocation fails, and faults when its error argument is NULL. Metal
+ * rejects heaps over 4096 entries (32 KB). A device therefore times encoders through at most two
+ * heaps of 4096 entries, allocated on first use, and each encoder takes a begin/end slot pair
+ * that returns to the free list when its record is released. With every slot in use, or after
+ * Metal refused a heap, an encoder is reported as unavailable; recording never waits. */
+#define KK_GPU_TIMING_HEAP_ENTRIES 4096
+#define KK_GPU_TIMING_HEAPS 2
+#define KK_GPU_TIMING_SLOTS (KK_GPU_TIMING_HEAPS * KK_GPU_TIMING_HEAP_ENTRIES / 2)
 
 @interface KKGPUConfig : NSObject {
 @public
@@ -15,18 +26,72 @@ static char command_key, library_key, pipeline_key, feedback_key;
    void *data;
    mtl_gpu_encoder_callback callback;
    uint64_t frequency;
+   os_unfair_lock slot_lock;
+   id<MTL4CounterHeap> heaps[KK_GPU_TIMING_HEAPS];
+   uint32_t heap_count, free_count;
+   bool heap_failed;
+   uint32_t free_slots[KK_GPU_TIMING_SLOTS];
 }
 @end
 @implementation KKGPUConfig
-
+- (void)dealloc
+{
+   for (uint32_t i = 0; i < heap_count; ++i) [heaps[i] release];
+   [super dealloc];
+}
 @end
+
+static bool
+take_slot(KKGPUConfig *config, uint32_t *slot)
+{
+   os_unfair_lock_lock(&config->slot_lock);
+   if (!config->free_count && !config->heap_failed && config->heap_count < KK_GPU_TIMING_HEAPS) {
+      MTL4CounterHeapDescriptor *desc = [MTL4CounterHeapDescriptor new];
+      desc.type = MTL4CounterHeapTypeTimestamp;
+      desc.count = KK_GPU_TIMING_HEAP_ENTRIES;
+      NSError *error = nil;
+      id<MTL4CounterHeap> heap = [config->device newCounterHeapWithDescriptor:desc error:&error];
+      [desc release];
+      if (heap) {
+         const uint32_t base = config->heap_count * (KK_GPU_TIMING_HEAP_ENTRIES / 2);
+         config->heaps[config->heap_count++] = heap;
+         for (uint32_t i = KK_GPU_TIMING_HEAP_ENTRIES / 2; i--;)
+            config->free_slots[config->free_count++] = base + i;
+      } else {
+         config->heap_failed = true;
+      }
+   }
+   const bool taken = config->free_count != 0;
+   if (taken) *slot = config->free_slots[--config->free_count];
+   os_unfair_lock_unlock(&config->slot_lock);
+   return taken;
+}
+
+static void
+give_slot(KKGPUConfig *config, uint32_t slot)
+{
+   os_unfair_lock_lock(&config->slot_lock);
+   config->free_slots[config->free_count++] = slot;
+   os_unfair_lock_unlock(&config->slot_lock);
+}
+
+static inline id<MTL4CounterHeap>
+slot_heap(KKGPUConfig *config, uint32_t slot)
+{
+   return config->heaps[slot / (KK_GPU_TIMING_HEAP_ENTRIES / 2)];
+}
+
+static inline uint32_t
+slot_index(uint32_t slot)
+{
+   return slot % (KK_GPU_TIMING_HEAP_ENTRIES / 2) * 2;
+}
 
 @interface KKGPUCommand : NSObject {
 @public
    KKGPUConfig *config;
    NSMutableArray *records;
    uint32_t meta_depth;
-   id<MTL4CommandBuffer> command; /* Borrowed; never a retain cycle. */
 }
 @end
 @implementation KKGPUCommand
@@ -36,16 +101,28 @@ static char command_key, library_key, pipeline_key, feedback_key;
 @interface KKGPURecord : NSObject {
 @public
    KKGPUConfig *config;
+   /* Borrowed and used only while the buffer records: an encoder record writes its timestamps
+    * into its encoder, an external record into the command buffer between encoders. */
    id<MTL4CommandBuffer> command;
-   id<MTL4CounterHeap> heap;
+   id native; /* The encoder of an encoder record, from bind to its end. */
+   uint32_t slot;
+   bool has_slot, encoder, render;
+   NSDictionary *bound;  /* Metadata of the bound pipeline. */
+   NSDictionary *merged; /* The bound metadata whose hashes are in hashes. */
+   char bound_kind[32];  /* Its kind when not "application"; empty otherwise. */
    NSMutableOrderedSet *hashes;
    struct mtl_gpu_encoder_result result;
    bool ended, overlap, extent_mixed;
+   bool unbound; /* An encoder record ended without its encoder: no timestamps. */
    unsigned in_flight;
 }
 @end
 @implementation KKGPURecord
-- (void)dealloc { [config release]; [heap release]; [hashes release]; [super dealloc]; }
+- (void)dealloc
+{
+   if (has_slot) give_slot(config, slot);
+   [config release]; [bound release]; [merged release]; [hashes release]; [super dealloc];
+}
 @end
 
 void *
@@ -57,6 +134,7 @@ mtl_gpu_timing_configure(mtl_device *device, void *data, mtl_gpu_encoder_callbac
       config->device = (id)device;
       config->data = data;
       config->callback = callback;
+      config->slot_lock = OS_UNFAIR_LOCK_INIT;
       config->frequency = [(id<MTLDevice>)device queryTimestampFrequency];
       __atomic_store_n(&mtl_gpu_timing_enabled, true, __ATOMIC_RELEASE);
       return config;
@@ -71,7 +149,6 @@ mtl_gpu_timing_attach_command(void *context, mtl_command_buffer *command)
    KKGPUCommand *trace = [KKGPUCommand new];
    if (!trace) return;
    trace->config = [config retain];
-   trace->command = (id)command;
    trace->records = [NSMutableArray new];
    objc_setAssociatedObject((id)command, &command_key, trace, OBJC_ASSOCIATION_RETAIN);
    [trace release];
@@ -91,7 +168,7 @@ mtl_gpu_timing_reset_command(mtl_command_buffer *command)
 }
 
 static KKGPURecord *
-new_record(mtl_command_buffer *command, const char *kind)
+new_record(mtl_command_buffer *command, const char *kind, bool encoder)
 {
    KKGPUCommand *trace = objc_getAssociatedObject((id)command, &command_key);
    if (!trace) return nil;
@@ -110,21 +187,21 @@ new_record(mtl_command_buffer *command, const char *kind)
    if (!record) return nil;
    record->config = [trace->config retain];
    record->command = (id)command;
-   record->hashes = [NSMutableOrderedSet new];
    strncpy(record->result.kind, trace->meta_depth ? "meta" : kind, sizeof(record->result.kind)-1);
-   MTL4CounterHeapDescriptor *desc = [[MTL4CounterHeapDescriptor new] autorelease];
-   desc.type = MTL4CounterHeapTypeTimestamp;
-   desc.count = 2;
-   record->heap = [trace->config->device newCounterHeapWithDescriptor:desc error:NULL];
+   record->has_slot = take_slot(record->config, &record->slot);
+   record->encoder = encoder;
    [trace->records addObject:record];
-   if (record->heap) [record->command writeTimestampIntoHeap:record->heap atIndex:0];
+   if (record->has_slot && !encoder)
+      [record->command writeTimestampIntoHeap:slot_heap(record->config, record->slot)
+                                      atIndex:slot_index(record->slot)];
    return record;
 }
 
 void *
 mtl_gpu_timing_encoder_begin(mtl_command_buffer *command, bool render, void *descriptor)
 {
-   KKGPURecord *r = new_record(command, render ? "render" : "compute");
+   KKGPURecord *r = new_record(command, render ? "render" : "compute", true);
+   if (r) r->render = render;
    if (r && render) {
       MTL4RenderPassDescriptor *d = (id)descriptor;
       r->result.width = d.renderTargetWidth;
@@ -142,89 +219,163 @@ mtl_gpu_timing_encoder_begin(mtl_command_buffer *command, bool render, void *des
    return r;
 }
 
+/* Encoder timestamps use relaxed granularity, which never splits the encoder; on a render
+ * encoder the first follows the vertex stage of nothing and the last the fragment stage of all
+ * of its work. Writing them inside the encoder costs a fraction of a command buffer timestamp
+ * between encoders. */
+static void
+write_encoder_timestamp(KKGPURecord *record, bool end)
+{
+   id<MTL4CounterHeap> heap = slot_heap(record->config, record->slot);
+   const uint32_t index = slot_index(record->slot) + end;
+   if (record->render)
+      [(id<MTL4RenderCommandEncoder>)record->native
+         writeTimestampWithGranularity:MTL4TimestampGranularityRelaxed
+                            afterStage:end ? MTLRenderStageFragment : MTLRenderStageVertex
+                              intoHeap:heap
+                               atIndex:index];
+   else
+      [(id<MTL4ComputeCommandEncoder>)record->native
+         writeTimestampWithGranularity:MTL4TimestampGranularityRelaxed
+                              intoHeap:heap
+                               atIndex:index];
+}
+
 static void
 end_record(KKGPURecord *record)
 {
    if (!record || record->ended) return;
-   if (record->heap) [record->command writeTimestampIntoHeap:record->heap atIndex:1];
+   if (record->encoder) {
+      if (record->native && record->has_slot) write_encoder_timestamp(record, true);
+      record->unbound = !record->native;
+   } else if (record->has_slot) {
+      [record->command writeTimestampIntoHeap:slot_heap(record->config, record->slot)
+                                      atIndex:slot_index(record->slot) + 1];
+   }
+   record->native = nil;
    record->ended = true;
 }
 
-/* Only enabled encoders use a forwarding receiver. Ordinary draws/binds keep
- * their original native receiver, with no new per-draw/bind branch or lookup.
- * The proxy is never passed into a native commit or used as a native argument. */
-@interface KKGPUEncoder : NSProxy {
-   id native;
-   KKGPURecord *record;
-   NSDictionary *bound_pipeline;
-}
-- (id)initWithNative:(id)encoder record:(KKGPURecord *)r;
-@end
-@implementation KKGPUEncoder
-- (id)initWithNative:(id)encoder record:(KKGPURecord *)r
-{ native = encoder; record = [r retain]; return self; }
-- (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
-{ return [native methodSignatureForSelector:selector]; }
-- (void)forwardInvocation:(NSInvocation *)invocation
-{
-   const char *selector = sel_getName(invocation.selector);
-   if (!strcmp(selector, "setRenderPipelineState:") || !strcmp(selector, "setComputePipelineState:")) {
-      id pipeline = nil;
-      [invocation getArgument:&pipeline atIndex:2];
-      NSDictionary *metadata = objc_getAssociatedObject(pipeline, &pipeline_key);
-      [metadata retain]; [bound_pipeline release]; bound_pipeline = metadata;
-   }
-   if (!strncmp(selector, "draw", 4) || !strncmp(selector, "dispatch", 8)) {
-      if (!bound_pipeline) record->result.pipeline_unknown = true;
-      for (NSString *hash in bound_pipeline[@"hashes"]) {
-         if ([record->hashes containsObject:hash]) continue;
-         if (record->hashes.count < MTL_GPU_TIMING_HASHES) [record->hashes addObject:hash];
-         else record->result.hashes_truncated = true;
-      }
-      NSString *kind = bound_pipeline[@"kind"];
-      if (kind && ![kind isEqual:@"application"])
-         strncpy(record->result.kind, kind.UTF8String, sizeof(record->result.kind)-1);
-   }
-   if (!strncmp(selector, "draw", 4)) {
-      record->result.draws++;
-      if (!strncmp(selector, "drawMesh", 8) && !strcmp(record->result.kind, "render"))
-         strncpy(record->result.kind, "mesh", sizeof(record->result.kind));
-   } else if (!strncmp(selector, "dispatch", 8)) {
-      record->result.dispatches++;
-      if (!strncmp(selector, "dispatchThreads:", 16) || !strncmp(selector, "dispatchThreadgroups:", 21)) {
-         MTLSize size;
-         [invocation getArgument:&size atIndex:2];
-         if (!strncmp(selector, "dispatchThreadgroups:", 21)) {
-            MTLSize threads; [invocation getArgument:&threads atIndex:3];
-            size.width *= threads.width; size.height *= threads.height; size.depth *= threads.depth;
-         }
-         if (record->result.dispatches > 1 &&
-             (record->result.width != size.width || record->result.height != size.height || record->result.depth != size.depth))
-            record->extent_mixed = true;
-         record->result.width = size.width; record->result.height = size.height; record->result.depth = size.depth;
-         record->result.extent_known = !record->extent_mixed;
-      } else { record->extent_mixed = true; record->result.extent_known = false; }
-   } else if (!strncmp(selector, "copy", 4) || !strncmp(selector, "fill", 4)) {
-      record->result.blits++;
-      if (!record->result.dispatches && !record->result.draws)
-         strncpy(record->result.kind, "meta_blit", sizeof(record->result.kind));
-   }
-   [invocation invokeWithTarget:native];
-   if (invocation.selector == @selector(endEncoding)) end_record(record);
-}
-- (void)dealloc { [native release]; [record release]; [bound_pipeline release]; [super dealloc]; }
-@end
+/* The record of an encoder being recorded: associated with the native encoder from creation to
+ * endEncoding (Metal may hand out the same encoder object again afterwards), and remembered for
+ * the recording thread's latest encoder. Only the timing entry points look it up; with timing
+ * off, the encoder entry points test one flag (mtl_gpu_timing_on). */
+static _Thread_local struct {
+   void *encoder;
+   KKGPURecord *record; /* Retained. */
+} current;
 
-void *
-mtl_gpu_timing_encoder_wrap(void *record, void *native)
+static void
+remember(void *encoder, KKGPURecord *record)
 {
-   if (!record || !native) return native;
-   return [[KKGPUEncoder alloc] initWithNative:(id)native record:record];
+   if (current.record != record) {
+      [record retain];
+      [current.record release];
+      current.record = record;
+   }
+   current.encoder = record ? encoder : NULL;
+}
+
+static KKGPURecord *
+encoder_record(void *encoder)
+{
+   if (!encoder) return nil;
+   if (current.encoder == encoder && !current.record->ended) return current.record;
+   KKGPURecord *record = objc_getAssociatedObject((id)encoder, &encoder_key);
+   if (record && record->ended) record = nil;
+   remember(encoder, record);
+   return record;
+}
+
+void
+mtl_gpu_timing_encoder_bind(void *record, void *encoder)
+{
+   KKGPURecord *r = record;
+   if (!r || !encoder) return;
+   r->native = (id)encoder;
+   if (r->has_slot) write_encoder_timestamp(r, false);
+   objc_setAssociatedObject((id)encoder, &encoder_key, (id)record, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+   remember(encoder, record);
+}
+
+/* Before the encoder's endEncoding: writes its last timestamp. */
+void
+mtl_gpu_timing_encoder_end(void *encoder)
+{
+   KKGPURecord *record = encoder_record(encoder);
+   if (!record) return;
+   end_record(record);
+   objc_setAssociatedObject((id)encoder, &encoder_key, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+   remember(NULL, nil);
+}
+
+void
+mtl_gpu_timing_bind_pipeline(void *encoder, void *pipeline)
+{
+   KKGPURecord *record = encoder_record(encoder);
+   if (!record) return;
+   NSDictionary *metadata = pipeline ? objc_getAssociatedObject((id)pipeline, &pipeline_key) : nil;
+   [metadata retain]; [record->bound release]; record->bound = metadata;
+}
+
+void
+mtl_gpu_timing_work(void *encoder, enum mtl_gpu_timing_work work,
+                    uint32_t width, uint32_t height, uint32_t depth)
+{
+   KKGPURecord *record = encoder_record(encoder);
+   if (!record) return;
+   struct mtl_gpu_encoder_result *result = &record->result;
+   if (work != MTL_GPU_TIMING_BLIT) {
+      NSDictionary *bound = record->bound;
+      if (!bound) result->pipeline_unknown = true;
+      else if (bound != record->merged) {
+         if (!record->hashes) record->hashes = [NSMutableOrderedSet new];
+         for (NSString *hash in bound[@"hashes"]) {
+            if ([record->hashes containsObject:hash]) continue;
+            if (record->hashes.count < MTL_GPU_TIMING_HASHES) [record->hashes addObject:hash];
+            else result->hashes_truncated = true;
+         }
+         NSString *kind = bound[@"kind"];
+         record->bound_kind[0] = 0;
+         if (kind && ![kind isEqual:@"application"])
+            strncpy(record->bound_kind, kind.UTF8String, sizeof(record->bound_kind)-1);
+         [bound retain]; [record->merged release]; record->merged = bound;
+      }
+      if (bound && record->bound_kind[0])
+         memcpy(result->kind, record->bound_kind, sizeof(result->kind));
+   }
+   switch (work) {
+   case MTL_GPU_TIMING_MESH_DRAW:
+      if (!strcmp(result->kind, "render"))
+         strncpy(result->kind, "mesh", sizeof(result->kind));
+      result->draws++;
+      break;
+   case MTL_GPU_TIMING_DRAW:
+      result->draws++;
+      break;
+   case MTL_GPU_TIMING_DISPATCH:
+      result->dispatches++;
+      if (result->dispatches > 1 &&
+          (result->width != width || result->height != height || result->depth != depth))
+         record->extent_mixed = true;
+      result->width = width; result->height = height; result->depth = depth;
+      result->extent_known = !record->extent_mixed;
+      break;
+   case MTL_GPU_TIMING_INDIRECT_DISPATCH:
+      result->dispatches++;
+      record->extent_mixed = true; result->extent_known = false;
+      break;
+   case MTL_GPU_TIMING_BLIT:
+      result->blits++;
+      if (!result->dispatches && !result->draws)
+         strncpy(result->kind, "meta_blit", sizeof(result->kind));
+      break;
+   }
 }
 
 void *mtl_gpu_timing_external_begin(mtl_command_buffer *command, const char *kind, uint32_t width, uint32_t height)
 {
-   KKGPURecord *r = new_record(command, kind);
+   KKGPURecord *r = new_record(command, kind, false);
    if (r) { r->result.width = width; r->result.height = height; r->result.depth = 1; r->result.extent_known = width && height; }
    return r;
 }
@@ -247,17 +398,32 @@ mtl_gpu_timing_snapshot(mtl_command_buffer **commands, uint32_t count)
 void
 mtl_gpu_timing_resolve(void *snapshot, bool success)
 {
+   /* One CPU resolve per heap per snapshot, over the entries its records use. */
+   KKGPUConfig *config = nil;
+   NSData *data[KK_GPU_TIMING_HEAPS] = { nil };
+   uint32_t used[KK_GPU_TIMING_HEAPS] = { 0 };
+   for (KKGPURecord *r in (NSArray *)snapshot) {
+      if (!r->has_slot) continue;
+      if (!config) config = r->config;
+      if (r->config != config) continue; /* One device per submission. */
+      const uint32_t heap = r->slot / (KK_GPU_TIMING_HEAP_ENTRIES / 2);
+      used[heap] = MAX(used[heap], slot_index(r->slot) + 2);
+   }
    for (KKGPURecord *r in (NSArray *)snapshot) {
       @synchronized(r) {
       struct mtl_gpu_encoder_result result = r->result;
-      NSData *data = nil;
-      @try {
-         if (success && !r->overlap && r->ended && r->heap)
-            data = [r->heap resolveCounterRange:NSMakeRange(0,2)];
-      } @catch (NSException *exception) { (void)exception; }
+      const MTL4TimestampHeapEntry *timestamps = NULL;
+      if (success && !r->overlap && r->ended && r->has_slot && r->config == config && !r->unbound) {
+         const uint32_t heap = r->slot / (KK_GPU_TIMING_HEAP_ENTRIES / 2);
+         @try {
+            if (!data[heap])
+               data[heap] = [slot_heap(config, r->slot) resolveCounterRange:NSMakeRange(0, used[heap])];
+         } @catch (NSException *exception) { (void)exception; }
+         if (data[heap].length == used[heap] * sizeof(MTL4TimestampHeapEntry))
+            timestamps = (const MTL4TimestampHeapEntry *)data[heap].bytes + slot_index(r->slot);
+      }
       if (r->in_flight && !--r->in_flight) r->overlap = false;
-      if (data.length == 2 * sizeof(MTL4TimestampHeapEntry) && r->config->frequency) {
-         const MTL4TimestampHeapEntry *timestamps = data.bytes;
+      if (timestamps && r->config->frequency) {
          result.valid = timestamps[0].timestamp && timestamps[1].timestamp >= timestamps[0].timestamp;
          if (result.valid) result.ms = (double)(timestamps[1].timestamp - timestamps[0].timestamp) * 1000.0 / r->config->frequency;
       }

@@ -20,6 +20,8 @@ mtl_end_encoding(void *encoder)
 {
    KK_MTL_REPLAY_POOL({
       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_encoder_end(encoder);
       [enc endEncoding];
    });
 }
@@ -133,10 +135,11 @@ mtl_new_compute_command_encoder(mtl_command_buffer *cmd_buffer)
 {
    KK_MTL_REPLAY_POOL({
       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)cmd_buffer;
-      void *record = __atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)
+      void *record = mtl_gpu_timing_on()
          ? mtl_gpu_timing_encoder_begin(cmd_buffer, false, NULL) : NULL;
       id encoder = [[cmd_buf computeCommandEncoder] retain];
-      return record ? mtl_gpu_timing_encoder_wrap(record, encoder) : encoder;
+      if (record) mtl_gpu_timing_encoder_bind(record, encoder);
+      return encoder;
    });
 }
 
@@ -148,6 +151,8 @@ mtl_fill_buffer(mtl_compute_encoder *encoder, mtl_buffer *buffer,
       id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
       [enc fillBuffer:(id<MTLBuffer>)buffer range:NSMakeRange(offset, size)
                 value:value];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_BLIT, 0, 0, 0);
    });
 }
 
@@ -162,6 +167,8 @@ mtl_copy_from_buffer_to_buffer(mtl_compute_encoder *encoder,
       id<MTLBuffer> mtl_src_buffer = (id<MTLBuffer>)src_buf;
       id<MTLBuffer> mtl_dst_buffer = (id<MTLBuffer>)dst_buf;
       [enc copyFromBuffer:mtl_src_buffer sourceOffset:src_offset toBuffer:mtl_dst_buffer destinationOffset:dst_offset size:size];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_BLIT, 0, 0, 0);
    });
 }
 
@@ -185,6 +192,8 @@ mtl_copy_from_buffer_to_texture(mtl_compute_encoder *encoder,
          destinationLevel:data->image_level
         destinationOrigin:origin
                   options:(MTLBlitOption)data->options];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_BLIT, 0, 0, 0);
    });
 }
 
@@ -208,6 +217,8 @@ mtl_copy_from_texture_to_buffer(mtl_compute_encoder *encoder,
     destinationBytesPerRow:data->buffer_stride_B
   destinationBytesPerImage:data->buffer_2d_image_size_B
                    options:(MTLBlitOption)data->options];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_BLIT, 0, 0, 0);
    });
 }
 
@@ -235,6 +246,8 @@ mtl_copy_from_texture_to_texture(mtl_compute_encoder *encoder,
           destinationSlice:dst_slice
           destinationLevel:dst_level
          destinationOrigin:mtl_dst_origin];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_BLIT, 0, 0, 0);
    });
 }
 
@@ -246,6 +259,8 @@ mtl_compute_set_pipeline_state(mtl_compute_encoder *encoder,
       id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
       id<MTLComputePipelineState> state = (id<MTLComputePipelineState>)state_handle;
       [enc setComputePipelineState:state];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_bind_pipeline(encoder, state_handle);
    });
 }
 
@@ -271,6 +286,8 @@ mtl_dispatch_threads(mtl_compute_encoder *encoder,
                                                     local_size.z);
 
       [enc dispatchThreads:thread_count threadsPerThreadgroup:threads_per_threadgroup];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_DISPATCH, grid_size.x, grid_size.y, grid_size.z);
    });
 }
 
@@ -285,6 +302,9 @@ mtl_dispatch_threadgroups(mtl_compute_encoder *encoder,
                                                     local_size.z);
       [enc dispatchThreadgroups:threadgroups
              threadsPerThreadgroup:threads_per_threadgroup];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_DISPATCH, groups.x * local_size.x,
+                             groups.y * local_size.y, groups.z * local_size.z);
    });
 }
 
@@ -300,6 +320,8 @@ mtl_dispatch_threadgroups_with_indirect_buffer(mtl_compute_encoder *encoder,
                                                     local_size.z);
 
       [enc dispatchThreadgroupsWithIndirectBuffer:addr threadsPerThreadgroup:threads_per_threadgroup];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_INDIRECT_DISPATCH, 0, 0, 0);
    });
 }
 
@@ -310,6 +332,8 @@ mtl_dispatch_threads_with_indirect_buffer(mtl_compute_encoder *encoder,
    KK_MTL_REPLAY_POOL({
       id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
       [enc dispatchThreadsWithIndirectBuffer:addr];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_INDIRECT_DISPATCH, 0, 0, 0);
    });
 }
 
@@ -323,10 +347,11 @@ mtl_new_render_command_encoder_with_descriptor(
    KK_MTL_REPLAY_POOL({
       id<MTL4CommandBuffer> cmd = (id<MTL4CommandBuffer>)command_buffer;
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
-      void *record = __atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)
+      void *record = mtl_gpu_timing_on()
          ? mtl_gpu_timing_encoder_begin(command_buffer, true, descriptor) : NULL;
       id encoder = [[cmd renderCommandEncoderWithDescriptor:desc] retain];
-      return record ? mtl_gpu_timing_encoder_wrap(record, encoder) : encoder;
+      if (record) mtl_gpu_timing_encoder_bind(record, encoder);
+      return encoder;
    });
 }
 
@@ -360,6 +385,8 @@ mtl_render_set_pipeline_state(mtl_render_encoder *encoder,
       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
       id<MTLRenderPipelineState> pipe = (id<MTLRenderPipelineState>)pipeline;
       [enc setRenderPipelineState:pipe];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_bind_pipeline(encoder, pipeline);
    });
 }
 
@@ -490,6 +517,8 @@ mtl_draw_primitives(mtl_render_encoder *encoder,
       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
       MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
       [enc drawPrimitives:type vertexStart:vertexStart vertexCount:vertexCount instanceCount:instanceCount baseInstance:baseInstance];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_DRAW, 0, 0, 0);
    });
 }
 
@@ -514,6 +543,8 @@ mtl_draw_indexed_primitives(mtl_render_encoder *encoder,
                    instanceCount:instance_count
                       baseVertex:base_vertex
                     baseInstance:base_instance];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_DRAW, 0, 0, 0);
    });
 }
 
@@ -525,6 +556,8 @@ mtl_draw_primitives_indirect(mtl_render_encoder *encoder,
    KK_MTL_REPLAY_POOL({
       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
       [enc drawPrimitives:(MTLPrimitiveType)primitve_type indirectBuffer:addr];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_DRAW, 0, 0, 0);
    });
 }
 
@@ -545,6 +578,8 @@ mtl_draw_indexed_primitives_indirect(mtl_render_encoder *encoder,
                      indexBuffer:index_addr
                indexBufferLength:index_buffer_length
                   indirectBuffer:addr];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_DRAW, 0, 0, 0);
    });
 }
 

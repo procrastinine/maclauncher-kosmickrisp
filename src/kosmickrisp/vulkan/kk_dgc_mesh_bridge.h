@@ -180,6 +180,10 @@ kk_dgc_mesh_encode(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder,
    [enc setComputePipelineState:(id<MTLComputePipelineState>)pipeline];
    [enc dispatchThreads:MTLSizeMake(count, 1, 1)
       threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+   if (mtl_gpu_timing_on()) {
+      mtl_gpu_timing_bind_pipeline(enc, pipeline);
+      mtl_gpu_timing_work(enc, MTL_GPU_TIMING_DISPATCH, count, 1, 1);
+   }
    [enc barrierAfterEncoderStages:MTLStageDispatch beforeEncoderStages:MTLStageDispatch
                visibilityOptions:MTL4VisibilityOptionResourceAlias];
    [table setAddress:cmd->state.root_addr atIndex:KK_ARGUMENT_ROOT];

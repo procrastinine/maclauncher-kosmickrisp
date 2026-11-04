@@ -404,13 +404,28 @@ Tracking is disabled by default. The variables are read at device creation:
 GPU encoder timing
 ==================
 
-``KK_PERF_TRACKING_GPU_ENCODERS=1`` adds GPU encoder boundary timestamps using
-Metal 4 counter heaps. Synchronous CPU resolution runs in the existing
-submission feedback path after GPU completion. Render, compute, virtual Mesh,
-internal meta and blit work is identified; opaque MetalFX and other temporal
-scene callbacks are reported as named groups. No timestamp heap or samples are
-created when the option is unset. Ordinary draw and pipeline-bind calls retain
-their native encoder receiver.
+``KK_PERF_TRACKING_GPU_ENCODERS=1`` adds GPU encoder timing using Metal 4
+counter heaps. Each timed encoder writes relaxed-granularity timestamps as its
+first and last commands (a render encoder's last timestamp follows its
+fragment stage), so its span covers the work the encoder executes. The fixed
+GPU cost of starting and ending an encoder, tens of microseconds, lies outside
+the spans and remains in the submission ranges of ``gpu_frames``; the
+``gpu_encoder_scope`` field names this as ``encoder_work_spans``. Temporal
+scene callbacks are timed by command buffer timestamps around their encoders.
+Synchronous CPU resolution runs in the
+existing submission feedback path after GPU completion. Render, compute, virtual
+Mesh, internal meta and blit work is identified; opaque MetalFX and other
+temporal scene callbacks are reported as named groups. Draws, dispatches, blits
+and pipeline binds are attributed in the driver's encoder calls, which test one
+flag when the option is unset; no timestamp heap or samples are created then.
+
+A device times encoders through at most two timestamp heaps of 4,096 entries,
+allocated on first use. Metal allows a process 32 live timestamp heaps of at
+most 4,096 entries, which application timestamp query pools share. Each timed
+encoder holds two entries until its record is released, after its submission's
+feedback or the command buffer's next recording. An encoder that starts while
+all 4,096 entry pairs are held, or after Metal refused a heap, is reported as
+unavailable; recording never waits for an entry.
 
 Each interval reports the twenty largest ``gpu_encoders`` groups by total
 GPU milliseconds, with source hashes, draw/dispatch/blit counts, target extent,

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include "mtl_gpu_timing.h"
 #include "mtl_compiler.h"
 #include "mtl_encoder.h"
 #include "kosmickrisp/vulkan/kk_mesh_pipeline_api.h"
@@ -36,6 +37,8 @@ mtl_draw_mesh_threadgroups(mtl_render_encoder *encoder, struct mtl_size groups,
       [enc drawMeshThreadgroups:MTLSizeMake(groups.x, groups.y, groups.z)
          threadsPerObjectThreadgroup:MTLSizeMake(object_size.x, object_size.y, object_size.z)
            threadsPerMeshThreadgroup:MTLSizeMake(mesh_size.x, mesh_size.y, mesh_size.z)];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_MESH_DRAW, 0, 0, 0);
    }
 }
 
@@ -49,6 +52,8 @@ mtl_draw_mesh_threadgroups_indirect(mtl_render_encoder *encoder, uint64_t addres
       [enc drawMeshThreadgroupsWithIndirectBuffer:address
          threadsPerObjectThreadgroup:MTLSizeMake(object_size.x, object_size.y, object_size.z)
            threadsPerMeshThreadgroup:MTLSizeMake(mesh_size.x, mesh_size.y, mesh_size.z)];
+      if (mtl_gpu_timing_on())
+         mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_MESH_DRAW, 0, 0, 0);
    }
 }
 
