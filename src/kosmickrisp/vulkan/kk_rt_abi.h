@@ -31,6 +31,12 @@ enum kk_rt_action {
    KK_RT_TRAVERSAL_DONE,
    KK_RT_EXECUTE,
 };
+/* hit_object_mode of a TRACE: record the result in the hit object at
+ * hit_object_lo/hi instead of invoking closest-hit or miss. */
+enum kk_rt_hit_object_mode {
+   KK_RT_HIT_OBJECT_NONE,
+   KK_RT_HIT_OBJECT_RECORD,
+};
 struct kk_rt_cps_context {
    KK_RT_ABI_U64 root;
    KK_RT_ABI_U64 stack_base;

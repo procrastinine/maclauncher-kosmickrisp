@@ -190,14 +190,27 @@ prepare_call(nir_builder *b, nir_intrinsic_instr *in, void *unused)
       if (unused) return false;
       store_field(b, action, nir_imm_int(b, KK_RT_CALLABLE));
       break;
+   case nir_intrinsic_trace_ray:
+      store_field(b, hit_object_mode, nir_imm_int(b, KK_RT_HIT_OBJECT_NONE));
+      return true;
+   case nir_intrinsic_hit_object_trace_ray:
    case nir_intrinsic_hit_object_execute_shader: {
       /* The hit object lives in this invocation's explicit frame, which
        * stays allocated while the call runs. */
       nir_def *address = nir_unpack_64_2x32(b, nir_u2u64(b, in->src[0].ssa));
       store_field(b, hit_object_lo, nir_channel(b, address, 0));
       store_field(b, hit_object_hi, nir_channel(b, address, 1));
-      store_field(b, action, nir_imm_int(b, KK_RT_EXECUTE));
-      nir_execute_callable(b, nir_imm_int(b, 0), in->src[1].ssa);
+      if (in->intrinsic == nir_intrinsic_hit_object_execute_shader) {
+         store_field(b, action, nir_imm_int(b, KK_RT_EXECUTE));
+         nir_execute_callable(b, nir_imm_int(b, 0), in->src[1].ssa);
+      } else {
+         store_field(b, hit_object_mode, nir_imm_int(b, KK_RT_HIT_OBJECT_RECORD));
+         nir_def *origin = in->src[7].ssa, *direction = in->src[8].ssa;
+         nir_trace_ray(b, in->src[1].ssa, in->src[2].ssa, in->src[3].ssa, in->src[4].ssa,
+                       in->src[5].ssa, in->src[6].ssa, nir_trim_vector(b, origin, 3),
+                       nir_channel(b, origin, 3), nir_trim_vector(b, direction, 3),
+                       nir_channel(b, direction, 3), in->src[9].ssa);
+      }
       nir_instr_remove(&in->instr);
       return true;
    }
