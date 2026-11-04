@@ -1032,6 +1032,29 @@ kk_CmdDrawMeshTasksIndirectCountEXT(VkCommandBuffer commandBuffer, VkBuffer buff
       vk_buffer_address(&c->vk, countOffset), maxDrawCount, stride, false);
 }
 
+/* Device-address forms share the same GPU snapshot/continuation path. A
+ * zero draw limit is a no-op before touching command state or input addresses. */
+VKAPI_ATTR void VKAPI_CALL
+kk_CmdDrawMeshTasksIndirect2EXT(VkCommandBuffer commandBuffer,
+   const VkDrawIndirect2InfoKHR *info)
+{
+   if (!info->drawCount) return;
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   kk_draw_mesh(cmd, (struct mtl_size){0}, info->addressRange.address, 0,
+      info->drawCount, info->addressRange.stride, false);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+kk_CmdDrawMeshTasksIndirectCount2EXT(VkCommandBuffer commandBuffer,
+   const VkDrawIndirectCount2InfoKHR *info)
+{
+   if (!info->maxDrawCount) return;
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   kk_draw_mesh(cmd, (struct mtl_size){0}, info->addressRange.address,
+      info->countAddressRange.address, info->maxDrawCount,
+      info->addressRange.stride, false);
+}
+
 /* Installed only on a device that enabled software bounds. All devices that
  * do not use the feature retain the original Mesh entry points above. */
 static int
@@ -1079,6 +1102,28 @@ kk_depth_bounds_draw_mesh_indirect_count(VkCommandBuffer commandBuffer, VkBuffer
    if (selected < 0) return;
    kk_CmdDrawMeshTasksIndirectCountEXT(commandBuffer, buffer, offset,
       countBuffer, countOffset, maxDrawCount, stride);
+   if (selected) kk_mesh_retained_transaction_end(kk_cmd_buffer_from_handle(commandBuffer));
+}
+
+static void VKAPI_CALL
+kk_depth_bounds_draw_mesh_indirect2(VkCommandBuffer commandBuffer,
+   const VkDrawIndirect2InfoKHR *info)
+{
+   if (!info->drawCount) return;
+   int selected = kk_depth_bounds_mesh_begin(commandBuffer);
+   if (selected < 0) return;
+   kk_CmdDrawMeshTasksIndirect2EXT(commandBuffer, info);
+   if (selected) kk_mesh_retained_transaction_end(kk_cmd_buffer_from_handle(commandBuffer));
+}
+
+static void VKAPI_CALL
+kk_depth_bounds_draw_mesh_indirect_count2(VkCommandBuffer commandBuffer,
+   const VkDrawIndirectCount2InfoKHR *info)
+{
+   if (!info->maxDrawCount) return;
+   int selected = kk_depth_bounds_mesh_begin(commandBuffer);
+   if (selected < 0) return;
+   kk_CmdDrawMeshTasksIndirectCount2EXT(commandBuffer, info);
    if (selected) kk_mesh_retained_transaction_end(kk_cmd_buffer_from_handle(commandBuffer));
 }
 
@@ -1154,6 +1199,8 @@ kk_depth_bounds_init_dispatch(struct kk_device *dev)
    dev->vk.dispatch_table.CmdDrawMeshTasksEXT = kk_depth_bounds_draw_mesh;
    dev->vk.dispatch_table.CmdDrawMeshTasksIndirectEXT = kk_depth_bounds_draw_mesh_indirect;
    dev->vk.dispatch_table.CmdDrawMeshTasksIndirectCountEXT = kk_depth_bounds_draw_mesh_indirect_count;
+   dev->vk.dispatch_table.CmdDrawMeshTasksIndirect2EXT = kk_depth_bounds_draw_mesh_indirect2;
+   dev->vk.dispatch_table.CmdDrawMeshTasksIndirectCount2EXT = kk_depth_bounds_draw_mesh_indirect_count2;
 }
 
 #endif
