@@ -676,10 +676,12 @@ Feature table
      - Experimental
      - —
    * - ``VK_EXT_image_view_min_lod``
-     - Emulated: the shader clamps the LOD to the view's minimum.
-     - None listed; emulated on all families.
+     - Native on Apple11 with macOS 27 and a driver built with the macOS 27
+       SDK. Other devices clamp the LOD in the shader when the experimental
+       image-view-min-LOD feature is enabled.
+     - Apple11 for native texture-view minimum LOD.
      - —
-     - Experimental
+     - Native when supported; otherwise experimental
      - —
    * - ``VK_KHR_sampler_ycbcr_conversion``,
        ``VK_EXT_ycbcr_2plane_444_formats``
@@ -698,12 +700,12 @@ Feature table
      - —
      - Always
      - —
-   * - ``R32G32B32`` formats
-     - Native read-only texel buffers on Apple11 with macOS 27 when the
-       aligned view permits whole RGB texels. Writable, sparse and other
-       texel-buffer cases use a single-channel view three times as wide.
-       Images use four-channel textures with a hidden fourth component;
-       transfers keep the 12-byte layout through staging.
+   * - Three-component RGB formats
+     - Native read-only RGB8, RGB16 and RGB32 texel buffers on Apple11 with
+       macOS 27 when the aligned view permits whole RGB texels. RGB32 writable,
+       sparse and other texel-buffer cases use a single-channel view three
+       times as wide. RGB32 images use four-channel textures with a hidden
+       fourth component; transfers keep the 12-byte layout through staging.
      - Apple11 for read-only RGB texture buffers; other cases remain emulated.
      - —
      - Always

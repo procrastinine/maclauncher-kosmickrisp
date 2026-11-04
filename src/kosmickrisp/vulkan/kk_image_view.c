@@ -300,7 +300,7 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
          view_layout.base_level = 0u;
          if (layered_bc)
             {
-            view_layout.min_lod_clamp = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0f);
+            view_layout.min_lod_clamp = MAX2(view_layout.min_lod_clamp - view->vk.base_mip_level, 0.0f);
             view_layout.view_type = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
          }
          view_layout.num_levels = subres_layout.levels;
