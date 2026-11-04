@@ -513,8 +513,15 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
       available = operations.load_piece && operations.store_piece &&
          (!operations.available || operations.available(cache_data));
       if (!available) return;
-      dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
-         @autoreleasepool { kk_archive_remove_stale_temporaries(); }
+      /* One scan per process. Each device used to queue its own scan of the
+       * whole temporary directory; with many devices those background scans
+       * occupied the background workers that deferred compiles and their
+       * operation completion depend on, and a waiting draw stalled. */
+      static dispatch_once_t stale_scan;
+      dispatch_once(&stale_scan, ^{
+         dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+            @autoreleasepool { kk_archive_remove_stale_temporaries(); }
+         });
       });
       size_t length = 0;
       void *bytes = operations.load(cache_data, &length);
