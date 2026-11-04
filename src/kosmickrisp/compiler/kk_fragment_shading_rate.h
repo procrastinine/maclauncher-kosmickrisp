@@ -20,6 +20,14 @@ bool kk_nir_vrs_uses_per_draw(nir_shader *nir);
 void kk_nir_vrs_lower_fine_rate(nir_shader *nir);
 bool kk_nir_lower_linked_replay_fragment(nir_shader *nir, unsigned samples);
 struct nir_builder;
+/* Borrowed shader globals filled by the shared transaction before its sole
+ * call. Fine inputs/exports/DS/demotion stay in that existing wrapper. */
+struct kk_vrs_logical_variables {
+   nir_variable *logical_lane, *initial_helper, *rate, *original_per_draw;
+};
+bool kk_nir_vrs_lower_transaction_body(nir_shader *, nir_function *application,
+   const struct kk_vrs_logical_variables *);
+bool kk_nir_vrs_rebase_fine_draw(nir_function *, nir_variable *original_per_draw);
 /* Compilation clone only. Keep the actual named body and typed globals;
  * remove its sole call from the existing fine wrapper without inlining or
  * repeating any finishing pass. The caller later selects its transaction

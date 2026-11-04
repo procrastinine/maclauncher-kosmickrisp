@@ -630,9 +630,11 @@ kk_nir_vrs_result_stride(nir_shader *nir)
  * explicit derivatives. Descriptor/sampler/helper sources retain their actual
  * identity and tail; array-layer coordinates are not footprint dimensions. */
 static bool
-native_implicit_gradients(nir_shader *nir)
+native_implicit_gradients(nir_shader *nir, nir_function_impl *only)
 {
    nir_foreach_function_impl(impl, nir) {
+      if (only && impl != only)
+         continue;
       nir_builder b = nir_builder_create(impl);
       nir_foreach_block(block, impl) nir_foreach_instr_safe(instr, block) {
          if (instr->type != nir_instr_type_tex) continue;
@@ -666,9 +668,120 @@ native_implicit_gradients(nir_shader *nir)
 static bool
 native_reduce_only(const nir_intrinsic_instr *intr, const void *data)
 {
-   return intr->intrinsic == nir_intrinsic_reduce ||
-          intr->intrinsic == nir_intrinsic_inclusive_scan ||
-          intr->intrinsic == nir_intrinsic_exclusive_scan;
+   return (!data || nir_cf_node_get_function(&intr->instr.block->cf_node) == data) &&
+      (intr->intrinsic == nir_intrinsic_reduce ||
+       intr->intrinsic == nir_intrinsic_inclusive_scan ||
+       intr->intrinsic == nir_intrinsic_exclusive_scan);
+}
+
+static bool
+vrs_logical_operation(nir_intrinsic_op op)
+{
+   switch (op) {
+   case nir_intrinsic_load_per_draw_ptr_kk:
+   case nir_intrinsic_load_frag_shading_rate:
+   case nir_intrinsic_load_subgroup_invocation:
+   case nir_intrinsic_ballot:
+   case nir_intrinsic_first_invocation:
+   case nir_intrinsic_elect:
+   case nir_intrinsic_read_first_invocation:
+   case nir_intrinsic_read_invocation:
+   case nir_intrinsic_shuffle:
+   case nir_intrinsic_shuffle_up:
+   case nir_intrinsic_shuffle_down:
+   case nir_intrinsic_shuffle_xor:
+   case nir_intrinsic_quad_broadcast:
+   case nir_intrinsic_quad_swap_horizontal:
+   case nir_intrinsic_quad_swap_vertical:
+   case nir_intrinsic_quad_swap_diagonal:
+   case nir_intrinsic_vote_any:
+   case nir_intrinsic_vote_all:
+   case nir_intrinsic_vote_feq:
+   case nir_intrinsic_vote_ieq:
+   case nir_intrinsic_ddx: case nir_intrinsic_ddx_fine: case nir_intrinsic_ddx_coarse:
+   case nir_intrinsic_ddy: case nir_intrinsic_ddy_fine: case nir_intrinsic_ddy_coarse:
+      return true;
+   default: return false;
+   }
+}
+
+static bool
+vrs_scalar_variable(const nir_variable *var, unsigned bits)
+{
+   return var && var->data.mode == nir_var_shader_temp &&
+      glsl_type_is_scalar(var->type) && glsl_get_bit_size(var->type) == bits;
+}
+
+bool
+kk_nir_vrs_lower_transaction_body(nir_shader *nir, nir_function *application,
+   const struct kk_vrs_logical_variables *inputs)
+{
+   if (!nir || nir->info.stage != MESA_SHADER_FRAGMENT || !nir->info.io_lowered ||
+       !application || !application->impl || application->num_params || !inputs ||
+       !vrs_scalar_variable(inputs->logical_lane, 32) ||
+       !vrs_scalar_variable(inputs->initial_helper, 1) ||
+       !vrs_scalar_variable(inputs->rate, 32) ||
+       !vrs_scalar_variable(inputs->original_per_draw, 64))
+      return false;
+   bool owned = false, reduce = false;
+   nir_foreach_function(function, nir)
+      owned |= function == application;
+   if (!owned || !native_implicit_gradients(nir, application->impl))
+      return false;
+   nir_foreach_block(block, application->impl) nir_foreach_instr(instr, block)
+      if (instr->type == nir_instr_type_intrinsic)
+         reduce |= native_reduce_only(nir_instr_as_intrinsic(instr), application->impl);
+   if (reduce) {
+      const nir_lower_subgroups_options options = {
+         .subgroup_size = 32, .ballot_bit_size = 32, .ballot_components = 1,
+         .lower_reduce = true, .filter = native_reduce_only,
+         .filter_data = application->impl,
+      };
+      NIR_PASS(_, nir, nir_lower_subgroups, &options);
+   }
+   struct native_coarse_values values = {.application = _mesa_pointer_set_create(NULL)};
+   if (!values.application)
+      return false;
+   nir_foreach_block(block, application->impl) nir_foreach_instr(instr, block)
+      if (instr->type == nir_instr_type_intrinsic &&
+          vrs_logical_operation(nir_instr_as_intrinsic(instr)->intrinsic))
+         _mesa_set_add(values.application, instr);
+   nir_builder b = nir_builder_create(application->impl);
+   b.cursor = nir_before_cf_list(&application->impl->body);
+   /* Loads are in the named body, never SSA references across functions.
+    * The shared wrapper fills these actual globals before its sole call. */
+   values.logical = nir_load_var(&b, inputs->logical_lane);
+   values.helper = nir_load_var(&b, inputs->initial_helper);
+   values.rate = nir_load_var(&b, inputs->rate);
+   values.original_per_draw = nir_load_var(&b, inputs->original_per_draw);
+   nir_function_instructions_pass(application->impl, lower_native_application,
+      nir_metadata_none, &values);
+   _mesa_set_destroy(values.application, NULL);
+   nir_progress(true, application->impl, nir_metadata_none);
+   /* DS virtual lowering subsequently resolves the generated dynamic helper
+    * queries and native demotion. This function does neither a body call nor
+    * native coverage/publication/DS work. The fine function is untouched. */
+   return true;
+}
+
+static bool
+vrs_rebase_per_draw(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_per_draw_ptr_kk)
+      return false;
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def_replace(&intr->def, nir_load_var(b, data));
+   return true;
+}
+
+bool
+kk_nir_vrs_rebase_fine_draw(nir_function *fine, nir_variable *original_per_draw)
+{
+   if (!fine || !fine->impl || !vrs_scalar_variable(original_per_draw, 64))
+      return false;
+   nir_function_intrinsics_pass(fine->impl, vrs_rebase_per_draw,
+      nir_metadata_none, original_per_draw);
+   return true;
 }
 
 static bool
@@ -676,7 +789,7 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
 {
    if (nir->info.stage != MESA_SHADER_FRAGMENT ||
        (!linked && nir->info.outputs_written != BITFIELD64_BIT(FRAG_RESULT_DATA0))) return false;
-   if (!native_implicit_gradients(nir)) return false;
+   if (!native_implicit_gradients(nir, NULL)) return false;
    bool needs_centroid = false, needs_reduce = false;
    nir_foreach_function_impl(impl, nir) nir_foreach_block(block, impl)
       nir_foreach_instr(instr, block) {
