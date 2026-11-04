@@ -19,7 +19,10 @@
  * vkGetPipelineCacheData reports the same size before and after the build.
  * The translated MSL and metadata are stored in the Mesa disk cache under a
  * digest of the recipe; a later build of the same recipe restores them and
- * compiles only the native pipeline, as a restored shader does.
+ * compiles only the native pipeline, as a restored shader does. After the
+ * native build the shader releases its MSL; the indirect-command pipeline of
+ * device-generated commands, the one later build from source, translates
+ * again (kk_lazy_compute_indirect_pipeline).
  */
 #ifndef KK_LAZY_COMPUTE_H
 #define KK_LAZY_COMPUTE_H
@@ -160,16 +163,20 @@ kk_lazy_compute_adopt(struct kk_shader *shader, struct kk_shader *built)
    shader->cache_uses_embedded_samplers = built->cache_uses_embedded_samplers;
 }
 
-/* The deferred build of a lazily created shader, on a compiler worker. */
+/* The translation of a lazily created shader, with the default allocator:
+ * restored from the disk cache, otherwise translated from the recipe and
+ * stored, or the failure marked. It has MSL and metadata and no native
+ * pipeline. */
 static VkResult
-kk_compile_lazy_compute(struct kk_device *dev, struct kk_shader *shader)
+kk_lazy_compute_translate(struct kk_device *dev, const struct kk_lazy_compute *lazy,
+                          struct kk_shader **out)
 {
-   const struct kk_lazy_compute *lazy = shader->lazy;
    const VkAllocationCallbacks *alloc = vk_default_allocator();
    struct disk_cache *disk = dev->vk.physical->disk_cache;
    cache_key key;
    struct kk_shader *built = NULL;
    VkResult result = VK_INCOMPLETE;
+   const bool translate_only = kk_translate_only;
    kk_translate_only = true;
    if (disk) {
       kk_lazy_compute_key(disk, lazy->recipe, lazy->recipe_size, lazy->modes, key);
@@ -179,7 +186,7 @@ kk_compile_lazy_compute(struct kk_device *dev, struct kk_shader *shader)
    if (!restored)
       result = kk_recipe_compile(dev, lazy->recipe, lazy->recipe_size, lazy->required_modes,
                                  lazy->modes, lazy->modes, alloc, &built);
-   kk_translate_only = false;
+   kk_translate_only = translate_only;
    if (result == VK_SUCCESS && !restored &&
        (built->info.stage != MESA_SHADER_COMPUTE || !built->msl_data[MESA_SHADER_COMPUTE].code ||
         built->info.indirect_bindable || built->embedded_sampler_count)) {
@@ -197,9 +204,49 @@ kk_compile_lazy_compute(struct kk_device *dev, struct kk_shader *shader)
    }
    if (!restored && disk)
       kk_lazy_compute_store(dev, disk, key, built);
+   *out = built;
+   return VK_SUCCESS;
+}
+
+/* The deferred build of a lazily created shader, on a compiler worker. Once
+ * the native pipeline is built the shader releases its MSL: binds use the
+ * pipeline, sampler emulation variants specialize the retained Metal
+ * function, and serialization writes the recipe. */
+static VkResult
+kk_compile_lazy_compute(struct kk_device *dev, struct kk_shader *shader)
+{
+   struct kk_shader *built = NULL;
+   VkResult result = kk_lazy_compute_translate(dev, shader->lazy, &built);
+   if (result != VK_SUCCESS)
+      return result;
    kk_lazy_compute_adopt(shader, built);
-   kk_shader_destroy(&dev->vk, built, alloc);
-   return kk_compile_async_compute(dev, shader);
+   kk_shader_destroy(&dev->vk, built, vk_default_allocator());
+   result = kk_compile_async_compute(dev, shader);
+   if (result == VK_SUCCESS) {
+      ralloc_free((void *)shader->msl_data[MESA_SHADER_COMPUTE].code);
+      shader->msl_data[MESA_SHADER_COMPUTE].code = NULL;
+   }
+   return result;
+}
+
+/* The indirect-command pipeline that device-generated commands build from
+ * source, for a lazily created shader whose build released its MSL: the
+ * translation is restored from the disk cache or translated again from the
+ * recipe, and released once the pipeline is built. */
+VkResult
+kk_lazy_compute_indirect_pipeline(struct kk_device *dev, struct kk_shader *shader,
+                                  uint32_t threads, mtl_compute_pipeline_state **pipe)
+{
+   if (!shader->lazy)
+      return VK_ERROR_INVALID_SHADER_NV;
+   struct kk_shader *built = NULL;
+   VkResult result = kk_lazy_compute_translate(dev, shader->lazy, &built);
+   if (result != VK_SUCCESS)
+      return result;
+   result = kk_compile_indirect_compute_pipeline(dev, shader, &built->msl_data[MESA_SHADER_COMPUTE],
+                                                 threads, pipe);
+   kk_shader_destroy(&dev->vk, built, vk_default_allocator());
+   return result;
 }
 
 /* Creates the published shader and starts its deferred build. The recipe is
@@ -326,6 +373,29 @@ kk_lazy_compute_serialize(const struct kk_shader *shader, struct blob *blob)
    return ok;
 }
 
+/* A shader restored from a recipe in a creation that cannot defer keeps the
+ * recipe, so it serializes as the recipe again rather than as its MSL. */
+static void
+kk_lazy_compute_keep(struct kk_shader *shader, const struct kk_sparse_shader_state *state,
+                     const void *recipe, size_t size, uint64_t checksum,
+                     uint32_t required_modes, uint32_t modes)
+{
+   struct kk_lazy_compute *lazy = malloc(sizeof(*lazy));
+   void *own = state ? NULL : malloc(size);
+   if (!lazy || (!state && !own)) {
+      free(lazy);
+      free(own);
+      return;
+   }
+   if (own)
+      memcpy(own, recipe, size);
+   *lazy = (struct kk_lazy_compute) {
+      .recipe = state ? state->recipe.data : own, .recipe_size = size, .own = own,
+      .checksum = checksum, .required_modes = required_modes, .modes = modes,
+   };
+   shader->lazy = lazy;
+}
+
 /* A restored recipe defers its translation again when the creation defers;
  * otherwise it compiles now from the same input. */
 static VkResult
@@ -409,6 +479,8 @@ kk_lazy_compute_deserialize(struct kk_device *dev, struct blob_reader *blob,
              !shader->embedded_sampler_count)
             kk_lazy_compute_store(dev, disk, key, shader);
       }
+      if (result == VK_SUCCESS && !shader->lazy)
+         kk_lazy_compute_keep(shader, state, recipe, size, checksum, required_modes, modes);
    }
    if (result != VK_SUCCESS) {
       if (state) {

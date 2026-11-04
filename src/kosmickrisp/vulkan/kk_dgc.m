@@ -245,7 +245,11 @@ mtl_compute_pipeline_state *kk_dgc_get_compute_pipeline(struct kk_device *dev, s
    if (!shader->dgc_compute) {
       uint32_t threads = shader->info.cs.local_size.x * shader->info.cs.local_size.y * shader->info.cs.local_size.z;
       mtl_compute_pipeline_state *pipeline = NULL;
-      kk_compile_indirect_compute_pipeline(dev, shader, &shader->msl_data[MESA_SHADER_COMPUTE], threads, &pipeline);
+      /* A lazily translated shader released its MSL after its build. */
+      if (shader->msl_data[MESA_SHADER_COMPUTE].code)
+         kk_compile_indirect_compute_pipeline(dev, shader, &shader->msl_data[MESA_SHADER_COMPUTE], threads, &pipeline);
+      else
+         kk_lazy_compute_indirect_pipeline(dev, shader, threads, &pipeline);
       p_atomic_set(&shader->dgc_compute, pipeline);
    }
    mtl_compute_pipeline_state *pipeline = shader->dgc_compute;

@@ -513,7 +513,7 @@ Pipeline cache data whose compiler input does not match its checksum is
 rejected, and the pipeline compiles from SPIR-V. A pipeline restored from that
 data in a creation that cannot defer, such as one with creation feedback,
 restores the stored translation, or translates during creation and stores the
-translation. A pipeline whose build did not run in its process, for example
+translation; it is serialized as its compiler input again. A pipeline whose build did not run in its process, for example
 because the pipeline or device was destroyed first, has no stored translation
 in a later process: binding it there before its build runs translates and
 compiles it on the binding thread, unless it was predicted.
@@ -523,6 +523,13 @@ checksum of the compiler input. Later creations of that input, fresh or from
 a pipeline cache, translate during creation and return the error from
 ``vkCreateComputePipelines``. Builds do not call debug messengers: the
 result of a failed build is reported when the binding thread joins it.
+
+Once its native pipeline is built, such a pipeline releases its MSL. Later
+binds, sampler emulation variants and pipeline cache data use the native
+pipeline, the retained Metal function and the compiler input. When
+device-generated commands first need an indirect-command pipeline for it, the
+translation is restored from the Mesa disk cache, or translated again from
+the compiler input, and released after that pipeline is built.
 
 Binding the pipeline compiles it on the binding thread when its
 compile has not started, or waits for the compile in progress and raises the
