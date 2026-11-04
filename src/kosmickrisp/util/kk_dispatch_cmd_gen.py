@@ -110,6 +110,10 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
     if (pBindDescriptorBufferEmbeddedSamplersInfo->stageFlags &&
         kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
         return;
+    % elif e.name in ('CmdExecuteGeneratedCommandsEXT', 'CmdPreprocessGeneratedCommandsEXT'):
+    if (pGeneratedCommandsInfo->maxSequenceCount && pGeneratedCommandsInfo->indirectExecutionSet &&
+        kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
+        return;
     % elif e.name == 'CmdExecuteCommands':
     for (uint32_t i = 0; i < commandBufferCount &&
          (!cmd->deferred_render_chain || !cmd->transient_candidate ||

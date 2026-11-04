@@ -9,17 +9,21 @@
 #include "util/simple_mtx.h"
 #include "kk_dgc_shader.h"
 #include "kk_dgc_mesh_shader.h"
+#include "kk_dgc_pipeline_shader.h"
 #include "kk_physical_device.h"
 #include "util/ralloc.h"
 #import <Metal/Metal.h>
 #include <stdio.h>
 
+struct kk_dgc_pipeline_metal;
+static void kk_dgc_pipeline_finish(struct kk_dgc_pipeline_metal *state);
 struct kk_dgc_mesh_metal;
 static void kk_dgc_mesh_finish(struct kk_dgc_mesh_metal *mesh);
 struct kk_dgc_metal {
    id<MTLLibrary> library;
    mtl_compute_pipeline_state *pipeline[4];
    struct kk_dgc_mesh_metal *mesh;
+   struct kk_dgc_pipeline_metal *switching;
    uint32_t mesh_group_limit;
    simple_mtx_t pipeline_mutex;
 };
@@ -74,13 +78,14 @@ void kk_dgc_finish(struct kk_device *dev)
    for (unsigned i = 0; i < 4; ++i)
       [(id<MTLComputePipelineState>)dev->dgc->pipeline[i] release];
    kk_dgc_mesh_finish(dev->dgc->mesh);
+   kk_dgc_pipeline_finish(dev->dgc->switching);
    [dev->dgc->library release];
    simple_mtx_destroy(&dev->dgc->pipeline_mutex);
    free(dev->dgc);
    dev->dgc = NULL;
 }
-void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute,
-                     const struct kk_dgc_params *params)
+static void *kk_dgc_new_icb_state(struct kk_device *dev, uint32_t count, bool compute,
+                     const struct kk_dgc_params *params, bool inherit)
 {
    @autoreleasepool {
       MTLIndirectCommandBufferDescriptor *desc =
@@ -88,7 +93,7 @@ void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute,
       desc.commandTypes = compute ? MTLIndirectCommandTypeConcurrentDispatch
                                   : (MTLIndirectCommandTypeDraw |
                                      MTLIndirectCommandTypeDrawIndexed);
-      desc.inheritPipelineState = YES;
+      desc.inheritPipelineState = inherit;
       desc.inheritBuffers = NO;
       const unsigned buffer_count = kk_argument_table_buffer_count(
          (struct kk_argument_table_usage){
@@ -107,6 +112,16 @@ void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute,
       [desc release];
       return icb;
    }
+}
+void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute,
+   const struct kk_dgc_params *params)
+{
+   return kk_dgc_new_icb_state(dev, count, compute, params, true);
+}
+void *kk_dgc_new_pipeline_icb(struct kk_device *dev, uint32_t count, bool compute,
+   const struct kk_dgc_params *params)
+{
+   return kk_dgc_new_icb_state(dev, count, compute, params, false);
 }
 uint64_t kk_dgc_icb_id(void *icb)
 {
@@ -182,7 +197,7 @@ void kk_dgc_execute_compute(mtl_compute_encoder *encoder, void *icb,
                             mtl_compute_pipeline_state *pipeline)
 {
    id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
-   [enc setComputePipelineState:(id<MTLComputePipelineState>)pipeline];
+   if (pipeline) [enc setComputePipelineState:(id<MTLComputePipelineState>)pipeline];
    [enc executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)icb
                  indirectBuffer:range];
 }
@@ -241,3 +256,5 @@ mtl_compute_pipeline_state *kk_dgc_get_compute_pipeline(struct kk_device *dev, s
 }
 
 #include "kk_dgc_mesh_bridge.h"
+
+#include "kk_dgc_pipeline_bridge.h"

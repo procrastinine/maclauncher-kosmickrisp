@@ -21,6 +21,13 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_indirect_commands_layout, vk.base,
                                VkIndirectCommandsLayoutEXT,
                                VK_OBJECT_TYPE_INDIRECT_COMMANDS_LAYOUT_EXT)
 
+static bool
+kk_dgc_has_execution_set(const VkGeneratedCommandsInfoEXT *info)
+{
+   VK_FROM_HANDLE(kk_indirect_commands_layout, layout, info->indirectCommandsLayout);
+   return layout->vk.dgc_info & BITFIELD_BIT(MESA_VK_DGC_IES);
+}
+
 #define ROOT_SIZE sizeof(struct kk_root_descriptor_table)
 #define DRAW_OFFSET ALIGN_POT(ROOT_SIZE, 8)
 #define ARGS_OFFSET ALIGN_POT(DRAW_OFFSET + sizeof(struct kk_per_draw_data), 8)
@@ -87,19 +94,7 @@ VKAPI_ATTR void VKAPI_CALL kk_GetGeneratedCommandsMemoryRequirementsEXT(
        .memoryTypeBits = 1,
    };
 }
-/* Indirect execution sets are a separately reported optional facility. */
-VKAPI_ATTR VkResult VKAPI_CALL kk_CreateIndirectExecutionSetEXT(
-    VkDevice device, const VkIndirectExecutionSetCreateInfoEXT *info,
-    const VkAllocationCallbacks *alloc, VkIndirectExecutionSetEXT *out)
-{
-   *out = VK_NULL_HANDLE;
-   return VK_ERROR_FEATURE_NOT_PRESENT;
-}
-VKAPI_ATTR void VKAPI_CALL kk_DestroyIndirectExecutionSetEXT(
-    VkDevice device, VkIndirectExecutionSetEXT set,
-    const VkAllocationCallbacks *alloc)
-{
-}
+#include "kk_dgc_execution_set.h"
 
 static struct kk_dgc_params
 kk_dgc_parameters(struct kk_cmd_buffer *cmd,
@@ -275,7 +270,6 @@ static void kk_dgc_preprocess_inner(
     VkCommandBuffer stateCommandBuffer)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
-   VK_FROM_HANDLE(kk_cmd_buffer, state, stateCommandBuffer);
    if (!info->maxSequenceCount)
       return;
    if (!kk_dgc_init(kk_cmd_buffer_device(cmd))) {
@@ -479,6 +473,8 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
 }
+#include "kk_dgc_pipeline_execute.h"
+
 static void kk_dgc_execute_inner(
     VkCommandBuffer commandBuffer, VkBool32 preprocessed,
     const VkGeneratedCommandsInfoEXT *info)
@@ -486,6 +482,10 @@ static void kk_dgc_execute_inner(
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    if (!info->maxSequenceCount)
       return;
+   if (kk_dgc_has_execution_set(info)) {
+      kk_dgc_execute_set(cmd, preprocessed, info);
+      return;
+   }
    bool compute = info->shaderStages & VK_SHADER_STAGE_COMPUTE_BIT;
    if (!compute)
       kk_dgc_flush_graphics(cmd);
@@ -525,15 +525,15 @@ static void kk_dgc_execute_inner(
 
 /* Command inputs and both command buffers are borrowed only through the
  * synchronous join. Native creation stays on the existing KK-owned queue. */
-struct kk_dgc_mesh_work {
+struct kk_dgc_native_command_work {
    VkCommandBuffer command, state;
    const VkGeneratedCommandsInfoEXT *info;
    VkBool32 preprocessed;
    bool preprocess;
 };
-static void kk_dgc_mesh_work_execute(void *data)
+static void kk_dgc_native_command_work_execute(void *data)
 {
-   struct kk_dgc_mesh_work *work = data;
+   struct kk_dgc_native_command_work *work = data;
    if (work->preprocess)
       kk_dgc_preprocess_inner(work->command, work->info, work->state);
    else
@@ -545,11 +545,12 @@ VKAPI_ATTR void VKAPI_CALL kk_CmdPreprocessGeneratedCommandsEXT(
 {
    if (!info->maxSequenceCount) return;
    VK_FROM_HANDLE(kk_indirect_commands_layout, layout, info->indirectCommandsLayout);
-   if (layout->vk.dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH)) {
+   if (kk_dgc_has_execution_set(info) ||
+       (layout->vk.dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH))) {
       VK_FROM_HANDLE(kk_cmd_buffer, cmd, command);
-      struct kk_dgc_mesh_work work = {command, state, info, false, true};
+      struct kk_dgc_native_command_work work = {command, state, info, false, true};
       if (!kk_dgc_run_native_command(kk_cmd_buffer_device(cmd), &work,
-                                    kk_dgc_mesh_work_execute))
+                                    kk_dgc_native_command_work_execute))
          vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
    } else kk_dgc_preprocess_inner(command, info, state);
 }
@@ -559,11 +560,12 @@ VKAPI_ATTR void VKAPI_CALL kk_CmdExecuteGeneratedCommandsEXT(
 {
    if (!info->maxSequenceCount) return;
    VK_FROM_HANDLE(kk_indirect_commands_layout, layout, info->indirectCommandsLayout);
-   if (layout->vk.dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH)) {
+   if (kk_dgc_has_execution_set(info) ||
+       (layout->vk.dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH))) {
       VK_FROM_HANDLE(kk_cmd_buffer, cmd, command);
-      struct kk_dgc_mesh_work work = {command, command, info, preprocessed, false};
+      struct kk_dgc_native_command_work work = {command, command, info, preprocessed, false};
       if (!kk_dgc_run_native_command(kk_cmd_buffer_device(cmd), &work,
-                                    kk_dgc_mesh_work_execute))
+                                    kk_dgc_native_command_work_execute))
          vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
    } else kk_dgc_execute_inner(command, preprocessed, info);
 }
@@ -573,6 +575,10 @@ void kk_dgc_release_commands(struct kk_cmd_buffer *cmd)
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    util_dynarray_foreach(&cmd->dgc_commands, void *, icb)
    {
+      if ((uintptr_t)*icb & 1u) {
+         kk_dgc_snapshot_finish(dev, (void *)((uintptr_t)*icb & ~(uintptr_t)1u));
+         continue;
+      }
       kk_device_remove_buffer_from_residency_set(dev, *icb);
       mtl_release(*icb);
    }
@@ -636,16 +642,6 @@ uint64_t kk_dgc_offset_count(struct kk_cmd_buffer *cmd, uint64_t address,
    mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
    return p.output;
-}
-
-/* The extension's entry points remain discoverable even when the optional
- * binding-stage masks are empty. No execution-set update has valid usage in
- * that profile: creation cannot produce an execution-set handle. */
-VKAPI_ATTR void VKAPI_CALL kk_UpdateIndirectExecutionSetPipelineEXT(
-    VkDevice device, VkIndirectExecutionSetEXT set, uint32_t count,
-    const VkWriteIndirectExecutionSetPipelineEXT *writes)
-{
-   UNREACHABLE("Indirect pipeline binding is not supported");
 }
 
 VKAPI_ATTR void VKAPI_CALL kk_UpdateIndirectExecutionSetShaderEXT(

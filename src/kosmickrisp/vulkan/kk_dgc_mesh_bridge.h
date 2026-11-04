@@ -76,9 +76,10 @@ kk_dgc_mesh_compile_execute(void *data)
    mtl_function_descriptor *function = mtl_new_library_function_descriptor(
       work->library, work->phase ? "kk_dgc_mesh_commands" : "kk_dgc_expand");
    if (!function) return;
-   work->pipeline = mtl_new_compute_pipeline_state(
-      work->dev->mtl_compiler_handle, function, 32);
-   mtl_release(function);
+   @try {
+      work->pipeline = mtl_new_compute_pipeline_state(
+         work->dev->mtl_compiler_handle, function, 32);
+   } @finally { mtl_release(function); }
 }
 static void
 kk_dgc_mesh_compile_failed(void *data, const char *message)

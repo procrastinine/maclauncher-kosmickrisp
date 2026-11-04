@@ -9,6 +9,9 @@
 #include <vulkan/vulkan_core.h>
 #include "kosmickrisp/libkk/kk_mesh_types.h"
 
+#define KK_DGC_PIPELINE_COUNT 4096u
+#define KK_DGC_PIPELINE_STAGES (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT)
+
 /* Shared byte layout with kk_dgc.metal. Offsets are derived from the actual
  * Kosmic root/per-draw structures, not duplicated host structure definitions.
  */
@@ -46,6 +49,18 @@ struct kk_dgc_params {
    uint32_t layer_replay;
 };
 static_assert(sizeof(struct kk_dgc_params) == 256, "DGC parameter ABI");
+struct kk_dgc_pipeline_row {
+   struct kk_dgc_params p;
+   uint64_t render, compute, depth;
+   uint32_t valid, has_depth;
+};
+struct kk_dgc_pipeline_state {
+   struct kk_dgc_params p;
+   uint64_t rows;
+   uint32_t pipeline_offset, pipeline_count, target, pad;
+};
+static_assert(sizeof(struct kk_dgc_pipeline_row) == 288, "DGC pipeline row ABI");
+static_assert(sizeof(struct kk_dgc_pipeline_state) == 280, "DGC pipeline state ABI");
 struct kk_dgc_mesh_params {
    struct kk_dgc_params p;
    struct kk_mesh_params mesh;
@@ -108,6 +123,15 @@ bool kk_dgc_mesh_encode(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder,
    uint64_t parameters, uint32_t count, bool native);
 void *kk_dgc_new_mesh_icb(struct kk_device *dev, uint32_t count,
    const struct kk_dgc_mesh_params *params);
+void *kk_dgc_new_pipeline_icb(struct kk_device *dev, uint32_t count, bool compute,
+   const struct kk_dgc_params *params);
+void kk_dgc_pipeline_ids(struct kk_dgc_pipeline_row *row,
+   mtl_render_pipeline_state *render, mtl_compute_pipeline_state *compute,
+   mtl_depth_stencil_state *depth);
+bool kk_dgc_pipeline_encode(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder,
+   uint64_t parameters, uint64_t second, uint32_t count, bool native);
+void kk_dgc_selected_graphics(struct kk_cmd_buffer *cmd,
+   mtl_render_pipeline_state **render, mtl_depth_stencil_state **depth);
 void kk_dgc_release_commands(struct kk_cmd_buffer *cmd);
 uint32_t kk_dgc_primitive(struct kk_cmd_buffer *cmd);
 bool kk_dgc_prepare_graphics_root(struct kk_cmd_buffer *allocator, struct kk_cmd_buffer *state, struct kk_root_descriptor_table *root);

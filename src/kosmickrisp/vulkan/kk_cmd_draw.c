@@ -3347,6 +3347,15 @@ kk_CmdDrawIndexedIndirect2KHR(VkCommandBuffer commandBuffer,
       kk_draw(cmd, &data);
 }
 
+/* Execution-set variants use the exact selected ordinary cache and DS path. */
+void kk_dgc_selected_graphics(struct kk_cmd_buffer *cmd,
+   mtl_render_pipeline_state **render, mtl_depth_stencil_state **depth)
+{
+   struct kk_shader *shader = cmd->state.gfx.shader;
+   *render = kk_attachment_pipeline(cmd, shader, KK_PIPELINE_MAIN);
+   *depth = kk_cmd_selected_depth_stencil(cmd, shader);
+}
+
 /* DGC uses the same pipeline, attachment and dynamic state flush as draws. */
 void kk_dgc_flush_graphics(struct kk_cmd_buffer *cmd) { kk_flush_gfx_state(cmd); }
 bool kk_dgc_prepare_graphics_root(struct kk_cmd_buffer *allocator,
