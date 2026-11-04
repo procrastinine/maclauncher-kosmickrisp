@@ -861,8 +861,21 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    case nir_op_bcsel:
       /* KK_WORKAROUND_10 All shaders will have buf0 bound */
       if (!(ctx->disabled_workarounds & BITFIELD_BIT(10)) &&
-          ctx->shader->info.stage == MESA_SHADER_COMPUTE && msl_has_buf0(ctx))
+          ctx->shader->info.stage == MESA_SHADER_COMPUTE && msl_has_buf0(ctx)) {
+         if (ctx->buf0_guard && instr->def.num_components == 1) {
+            /* select() forms the guarded condition without the branch that
+             * a short-circuit && produces. */
+            ctx->buf0_guard_used = true;
+            P(ctx, "select(false, ");
+            alu_src_to_msl(ctx, instr, 0);
+            P(ctx, ", kk_buf0) ? ");
+            alu_src_to_msl(ctx, instr, 1);
+            P(ctx, " : ");
+            alu_src_to_msl(ctx, instr, 2);
+            break;
+         }
          P(ctx, "(ulong)&buf0.contents[0] && ");
+      }
       alu_src_to_msl(ctx, instr, 0);
       P(ctx, " ? ");
       alu_src_to_msl(ctx, instr, 1);
