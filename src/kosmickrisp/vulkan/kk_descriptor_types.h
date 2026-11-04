@@ -8,6 +8,7 @@
 #define KK_DESCRIPTOR_TYPES 1
 
 #include "kk_private.h"
+#include <stddef.h>
 
 /* TODO_KOSMICKRISP Reduce size to 32 bytes by moving border to a heap. */
 struct kk_sampled_image_descriptor {
@@ -55,6 +56,16 @@ static_assert(offsetof(struct kk_sampled_image_descriptor, sampler_query_lod_bia
               "sampler bias metadata ABI");
 static_assert(sizeof(struct kk_sampled_image_descriptor) == 64,
               "kk_sampled_image_descriptor has no holes");
+static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_fp16) ==
+              offsetof(struct kk_sampled_image_descriptor, sampler_lod_max_fp16) +
+              sizeof(uint16_t), "image min LOD follows sampler LOD");
+static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_uint16) ==
+              offsetof(struct kk_sampled_image_descriptor, image_min_lod_fp16) +
+              sizeof(uint16_t), "image min LOD fields are adjacent");
+static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_uint16) +
+              sizeof(uint16_t) <=
+              offsetof(struct kk_sampled_image_descriptor, border),
+              "image min LOD does not overlap trailing descriptor fields");
 
 #define KK_TEXEL_BUFFER_RGB32 (1u << 31)
 

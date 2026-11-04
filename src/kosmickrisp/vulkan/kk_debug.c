@@ -27,7 +27,7 @@ const struct debug_named_value experimental_flags[] = {
 };
 
 DEBUG_GET_ONCE_FLAGS_OPTION(mesa_kk_experimental, "MESA_KK_EXPERIMENTAL",
-                            experimental_flags, KK_EXPERIMENTAL_CUSTOM_BORDER);
+                            experimental_flags, KK_EXPERIMENTAL_CUSTOM_BORDER | KK_EXPERIMENTAL_IMAGE_VIEW_MIN_LOD);
 
 void
 kk_process_debug_variable(void)
