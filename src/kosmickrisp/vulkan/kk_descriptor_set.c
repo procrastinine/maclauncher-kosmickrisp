@@ -310,15 +310,22 @@ write_dynamic_buffer_desc(struct kk_descriptor_set *set,
    *desc = kk_buffer_descriptor(buffer, addr_range);
 }
 
+/* Both realized native views and allocation-free address records retain this
+ * one complete prefix/tail layout and use the ordinary descriptor byte writer. */
+struct kk_texel_buffer_descriptor {
+   struct kk_storage_image_descriptor image;
+   struct kk_sparse_view_descriptor sparse;
+};
+static_assert(sizeof(struct kk_texel_buffer_descriptor) ==
+              sizeof(struct kk_storage_image_descriptor) +
+              sizeof(struct kk_sparse_view_descriptor), "complete texel stride");
+
 static void
 write_buffer_view_desc(struct kk_descriptor_set *set,
                        const VkBufferView bufferView, uint32_t binding,
                        uint32_t elem)
 {
-   struct {
-      struct kk_storage_image_descriptor image;
-      struct kk_sparse_view_descriptor sparse;
-   } desc = {};
+   struct kk_texel_buffer_descriptor desc = {};
    if (bufferView != VK_NULL_HANDLE) {
       VK_FROM_HANDLE(kk_buffer_view, view, bufferView);
 

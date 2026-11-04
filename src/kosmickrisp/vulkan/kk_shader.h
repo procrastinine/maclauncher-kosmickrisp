@@ -414,6 +414,9 @@ kk_nir_lower_descriptors(nir_shader *nir, kk_feature_key features,
                          const struct vk_pipeline_robustness_state *rs,
                          uint32_t set_layout_count,
                          struct vk_descriptor_set_layout *const *set_layouts);
+bool kk_nir_lower_descriptors_for_binding_model(nir_shader *nir, kk_feature_key features,
+   const struct vk_pipeline_robustness_state *rs, uint32_t set_layout_count,
+   struct vk_descriptor_set_layout *const *set_layouts, bool raw_texel);
 
 /* KK_WORKAROUND_18 */
 bool kk_nir_add_device_barrier_workaround(nir_shader *nir);

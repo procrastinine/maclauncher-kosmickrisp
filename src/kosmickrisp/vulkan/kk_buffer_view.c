@@ -126,6 +126,8 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
       alignment += KK_MIN_TEXEL_BUFFER_ALIGNMENT;
    VkDeviceSize prefix = view->vk.offset % alignment;
    view->texel_offset = prefix / texel_size;
+   assert(view->texel_offset < KK_MIN_TEXEL_BUFFER_ALIGNMENT);
+   assert(!(view->texel_offset & KK_TEXEL_BUFFER_RAW_ADDRESS));
 
    struct kk_image_layout layout = {
       .width_px = view->vk.elements * (rgb32 ? 3u : 1u) + view->texel_offset,

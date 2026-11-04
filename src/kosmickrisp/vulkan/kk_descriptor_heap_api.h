@@ -2,6 +2,7 @@
 /* Included after the ordinary descriptor writers in kk_descriptor_set.c. */
 #include "kk_cmd_buffer.h"
 #include "kk_image.h"
+#include "kk_format.h"
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "vk_sampler.h"
 #include "util/hash_table.h"
@@ -50,16 +51,6 @@ struct kk_heap_image_view {
    struct kk_image_view view;
 };
 
-struct kk_heap_buffer_view_key {
-   uint64_t offset, size;
-   VkFormat format;
-};
-
-struct kk_heap_buffer_view {
-   struct kk_heap_buffer_view_key key;
-   VkBufferView view;
-};
-
 static uint32_t
 kk_heap_sampler_hash(const void *key)
 {
@@ -84,25 +75,8 @@ kk_heap_image_view_equal(const void *a, const void *b)
    return memcmp(a, b, sizeof(((struct kk_heap_image_view *)0)->key)) == 0;
 }
 
-static uint32_t
-kk_heap_buffer_view_hash(const void *data)
-{
-   const struct kk_heap_buffer_view_key *key = data;
-   /* Do not hash structure padding. */
-   uint32_t hash = _mesa_hash_data(&key->offset, sizeof(key->offset));
-   hash = _mesa_hash_data_with_seed(&key->size, sizeof(key->size), hash);
-   return _mesa_hash_data_with_seed(&key->format, sizeof(key->format), hash);
-}
-
-static bool
-kk_heap_buffer_view_equal(const void *a, const void *b)
-{
-   const struct kk_heap_buffer_view_key *x = a, *y = b;
-   return x->offset == y->offset && x->size == y->size && x->format == y->format;
-}
-
-/* Only an actual heap descriptor/embedded-sampler request creates a cache.
- * The unused device, image and buffer keep their existing single NULL slot. */
+/* Only an actual heap image/embedded-sampler request creates a cache.
+ * Unused device and image caches retain their existing NULL slots. */
 static VkResult
 kk_heap_cache_init(struct kk_device *dev, struct kk_heap_cache **cache,
                    uint32_t (*hash)(const void *),
@@ -219,16 +193,6 @@ kk_descriptor_heap_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer
    if (*link)
       *link = buffer->heap_next;
    simple_mtx_unlock(&dev->descriptor_heap_lock);
-   if (buffer->heap_views) {
-      hash_table_foreach(&buffer->heap_views->table, entry) {
-         struct kk_heap_buffer_view *view = entry->data;
-         kk_DestroyBufferView(kk_device_to_handle(dev), view->view, NULL);
-         vk_free(&dev->vk.alloc, view);
-      }
-      _mesa_hash_table_fini(&buffer->heap_views->table, NULL);
-      vk_free(&dev->vk.alloc, buffer->heap_views);
-   }
-   buffer->heap_views = NULL;
    buffer->heap_registered = false;
 }
 
@@ -585,69 +549,106 @@ kk_descriptor_buffer_from_address_locked(struct kk_device *dev,
 }
 
 VkResult
+kk_descriptor_write_raw_texel_buffer_locked(struct kk_device *dev,
+   const struct kk_buffer *selected, uint64_t address, uint64_t size,
+   VkFormat format, VkDescriptorType type, void *destination,
+   uint32_t descriptor_size)
+{
+   if ((type != VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER &&
+        type != VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER) ||
+       !destination || descriptor_size < sizeof(struct kk_texel_buffer_descriptor))
+      return VK_ERROR_UNKNOWN;
+   struct kk_texel_buffer_descriptor descriptor = {};
+   /* Nulls have no selected virtual source and do not read ignored format or
+    * range state. They keep the common all-zero representation. */
+   if (address) {
+      if (!selected || !selected->vk.device_address ||
+          address < selected->vk.device_address)
+         return VK_ERROR_UNKNOWN;
+      const uint64_t offset = address - selected->vk.device_address;
+      if (offset > selected->vk.size || size > selected->vk.size - offset)
+         return VK_ERROR_UNKNOWN;
+      const VkFormatFeatureFlags2 needed = type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER
+         ? VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT
+         : VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT;
+      if (!(kk_get_buffer_format_features(kk_device_physical(dev), format) & needed))
+         return VK_ERROR_FORMAT_NOT_SUPPORTED;
+      const enum pipe_format pipe = vk_format_to_pipe_format(format);
+      if (!kk_raw_texel_format_supported(pipe))
+         return VK_ERROR_FORMAT_NOT_SUPPORTED;
+      const uint32_t texel_size = util_format_get_blocksize(pipe);
+      const uint64_t count = size / texel_size;
+      if (count > UINT32_MAX)
+         return VK_ERROR_UNKNOWN;
+      descriptor.image.image_gpu_resource_id = address;
+      descriptor.image.texel_offset = KK_TEXEL_BUFFER_RAW_ADDRESS | pipe;
+      descriptor.image.texel_count = count;
+      descriptor.sparse = kk_sparse_buffer_range_descriptor(selected, offset,
+                                                            texel_size, false);
+   }
+   /* Validation is complete. No remaining operation can allocate or fail. */
+   memset(destination, 0, descriptor_size);
+   memcpy(destination, &descriptor, sizeof(descriptor));
+   return VK_SUCCESS;
+}
+
+bool
+kk_descriptor_raw_texel_sources_equal_locked(const struct kk_buffer *a,
+   const struct kk_buffer *b, uint64_t address, uint64_t size, VkFormat format)
+{
+   if (!a || !b || !a->vk.device_address || !b->vk.device_address ||
+       address < a->vk.device_address || address < b->vk.device_address)
+      return false;
+   const uint64_t a_offset = address - a->vk.device_address;
+   const uint64_t b_offset = address - b->vk.device_address;
+   if (a_offset > a->vk.size || size > a->vk.size - a_offset ||
+       b_offset > b->vk.size || size > b->vk.size - b_offset ||
+       a->sparse_record != b->sparse_record)
+      return false;
+   (void)format; /* Format validation/encoding belongs to the selected writer. */
+   if (a == b)
+      return true;
+   if (a->sparse_residency || b->sparse_residency ||
+       a->sparse_record || b->sparse_record)
+      return false;
+   /* The bridge checks retained native-buffer intervals or actual placement
+    * heap identity/intervals. Numerical VA coverage alone is not proof. */
+   if (!a->metal.handle || !b->metal.handle ||
+       a->metal.offset > UINT64_MAX - a_offset ||
+       b->metal.offset > UINT64_MAX - b_offset)
+      return false;
+   const uint64_t native_a = a->metal.offset + a_offset;
+   const uint64_t native_b = b->metal.offset + b_offset;
+   return mtl_buffer_ranges_alias(a->metal.handle, native_a,
+                                  b->metal.handle, native_b, size);
+}
+
+VkResult
 kk_descriptor_write_texel_buffer_locked(struct kk_device *dev,
    uint64_t address, uint64_t size, VkFormat format, VkDescriptorType type,
    void *destination, uint32_t descriptor_size)
 {
-   assert(type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER ||
-          type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER);
-   struct kk_buffer *buffer =
-      kk_descriptor_buffer_from_address_locked(dev, address, size);
-   assert(buffer && "texel descriptor address is backed by a live buffer");
-   if (!buffer)
-      return vk_error(dev, VK_ERROR_UNKNOWN);
-   const uint64_t offset = address - buffer->vk.device_address;
-   VkResult result = kk_heap_cache_init(dev, &buffer->heap_views,
-                                        kk_heap_buffer_view_hash, kk_heap_buffer_view_equal);
-   if (result != VK_SUCCESS)
-      return result;
-   const struct kk_heap_buffer_view_key key = {
-      .offset = offset, .size = size, .format = format,
-   };
-   struct kk_heap_buffer_view *entry = kk_heap_cache_lookup(buffer->heap_views,
-                                                           &key, kk_heap_buffer_view_equal);
-   if (!entry) {
-      entry = vk_zalloc(&dev->vk.alloc, sizeof(*entry), 8,
-                        VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-      if (!entry)
-         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
-      const VkBufferViewCreateInfo create = {
-         .sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO,
-         .buffer = kk_buffer_to_handle(buffer),
-         .format = format,
-         .offset = offset,
-         .range = size,
-      };
-      VkResult result = kk_CreateBufferView(kk_device_to_handle(dev), &create,
-                                             NULL, &entry->view);
-      if (result != VK_SUCCESS) {
-         vk_free(&dev->vk.alloc, entry);
-         return result;
+   const struct kk_buffer *selected = NULL;
+   if (address) {
+      for (struct kk_buffer *buffer = dev->heap_buffers; buffer;
+           buffer = buffer->heap_next) {
+         const uint64_t base = buffer->vk.device_address;
+         if (!base || address < base || address - base > buffer->vk.size ||
+             size > buffer->vk.size - (address - base))
+            continue;
+         if (selected && !kk_descriptor_raw_texel_sources_equal_locked(selected,
+               buffer, address, size, format))
+            return VK_ERROR_UNKNOWN;
+         if (!selected)
+            selected = buffer;
       }
-      entry->key = key;
-      if (!kk_heap_cache_insert(buffer->heap_views, &entry->key, entry)) {
-         kk_DestroyBufferView(kk_device_to_handle(dev), entry->view, NULL);
-         vk_free(&dev->vk.alloc, entry);
-         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
-      }
+      if (!selected)
+         return VK_ERROR_UNKNOWN;
    }
-   /* Use the ordinary writer and its declared stride, including any metadata
-    * appended by another capability. The local target describes one entry. */
-   _Alignas(struct kk_descriptor_set_layout) uint8_t layout_storage[
-      sizeof(struct kk_descriptor_set_layout) +
-      sizeof(struct kk_descriptor_set_binding_layout)] = {};
-   struct kk_descriptor_set_layout *layout = (void *)layout_storage;
-   layout->binding_count = 1;
-   layout->binding[0].type = type;
-   layout->binding[0].stride = descriptor_size;
-   layout->binding[0].array_size = 1;
-   struct kk_descriptor_set target = {
-      .layout = layout,
-      .size = descriptor_size,
-      .mapped_ptr = destination,
-   };
-   write_buffer_view_desc(&target, entry->view, 0, 0);
-   return VK_SUCCESS;
+   /* All address-only typed producers use the same allocation-free mode.
+    * Explicit VkBufferView writers remain native and never enter this route. */
+   return kk_descriptor_write_raw_texel_buffer_locked(dev, selected, address,
+      size, format, type, destination, descriptor_size);
 }
 
 VKAPI_ATTR VkDeviceSize VKAPI_CALL

@@ -892,8 +892,11 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
               const struct vk_pipeline_robustness_state *rs,
               uint32_t set_layout_count,
               struct vk_descriptor_set_layout *const *set_layouts,
-              kk_feature_key features, bool descriptor_heap)
+              kk_feature_key features, VkShaderCreateFlagsEXT binding_flags)
 {
+   const bool descriptor_heap = binding_flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+   const bool raw_texel = binding_flags & (VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT |
+                                         VK_SHADER_CREATE_DESCRIPTOR_BUFFER_BIT_MESA);
    struct kk_physical_device *pdev = kk_device_physical(dev);
    if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
       NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
@@ -918,8 +921,8 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
     * generate a nir_intrinsic_load_blend_const_color_rgba which gets lowered by
     * the lower descriptor pass
     */
-   NIR_PASS(_, nir, kk_nir_lower_descriptors, features, rs, set_layout_count,
-            set_layouts);
+   NIR_PASS(_, nir, kk_nir_lower_descriptors_for_binding_model, features, rs,
+            set_layout_count, set_layouts, raw_texel);
 
    if (features & BITFIELD_BIT(KK_FEAT_SLICED_3D))
       NIR_PASS(_, nir, kk_nir_lower_sliced_3d);
@@ -1116,7 +1119,8 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
    }
 
    if (nir->info.stage != MESA_SHADER_FRAGMENT)
-      kk_finish_nir(dev, nir, rs, set_layout_count, set_layouts, features, descriptor_heap);
+      kk_finish_nir(dev, nir, rs, set_layout_count, set_layouts, features,
+         compile_info ? compile_info->flags : 0);
 }
 
 static void
@@ -2846,7 +2850,7 @@ kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
    kk_lower_fs(dev, fs, state, depth_bounds);
    kk_finish_nir(dev, fs, info ? info->robustness : &rs_none,
       info ? info->set_layout_count : 0, info ? info->set_layouts : NULL, features,
-      info && (info->flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT));
+      info ? info->flags : 0);
    /* The shared embedded schema carries original-stage root loads; its
     * canonical sampler lifetime remains with the owning fine shader. */
    static_assert(KK_EMBEDDED_SAMPLER_BINDING_SCHEMA == 1u,

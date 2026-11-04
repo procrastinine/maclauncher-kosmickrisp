@@ -29,6 +29,7 @@
 struct lower_descriptors_ctx {
    const struct kk_descriptor_set_layout *set_layouts[KK_MAX_SETS];
 
+   bool raw_texel;
    bool standard_3d;
    bool image_array_alias;
    bool array_storage_alias;
@@ -400,48 +401,56 @@ kk_texel_buffer_coord(nir_builder *b, nir_def *coord, nir_def *metadata,
 }
 
 
-/* R64 texel buffers contain byte addresses, not Metal resource IDs. Keep
- * bounds and aliases in the same address-based path as buffer atomics. */
+#include "kk_raw_texel_nir.h"
+
+/* Native R64 records already carry a BDA. Share raw byte access, including
+ * sparse residency and bounds, without treating that address as a texture ID. */
 static bool
 kk_lower_buffer64(nir_builder *b, nir_intrinsic_instr *intr,
                    nir_deref_instr *deref, const struct lower_descriptors_ctx *ctx)
 {
-   if (nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_BUF) return false;
-   const bool store = intr->intrinsic == nir_intrinsic_image_deref_store;
-   const bool load = intr->intrinsic == nir_intrinsic_image_deref_load;
-   const bool atomic = intr->intrinsic == nir_intrinsic_image_deref_atomic;
-   const bool swap = intr->intrinsic == nir_intrinsic_image_deref_atomic_swap;
-   if (!(store || load || atomic || swap) ||
-       (store ? intr->src[3].ssa->bit_size : intr->def.bit_size) != 64) return false;
-   nir_def *base = load_resource_deref_desc(b, 1, 64, deref, 0, ctx);
-   nir_def *metadata = load_resource_deref_desc(b, 2, 32, deref,
-      offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
-   nir_def *x = nir_channel(b, intr->src[1].ssa, 0);
-   nir_def *valid = nir_iand(b, nir_ine_imm(b, base, 0),
-      nir_ult(b, x, nir_channel(b, metadata, 1)));
-   nir_def *address = nir_iadd(b, base, nir_imul_imm(b, nir_u2u64(b, x), 8));
-   enum gl_access_qualifier access = nir_intrinsic_access(intr);
-   nir_def *result = NULL;
-   nir_push_if(b, valid);
-   if (store) {
-      nir_store_global(b, nir_channel(b, intr->src[3].ssa, 0), address,
-         .align_mul = 8, .write_mask = 1, .access = access);
-   } else if (load) {
-      nir_def *value = nir_load_global(b, 1, 64, address, .align_mul = 8, .access = access);
-      nir_def *components[4] = {value, nir_imm_int64(b, 0), nir_imm_int64(b, 0), nir_imm_int64(b, 1)};
-      result = nir_vec(b, components, intr->def.num_components);
-   } else if (swap) {
-      result = nir_global_atomic_swap(b, 64, address, intr->src[3].ssa,
-         intr->src[4].ssa, .atomic_op = nir_intrinsic_atomic_op(intr), .access = access);
-   } else {
-      result = nir_global_atomic(b, 64, address, intr->src[3].ssa,
-         .atomic_op = nir_intrinsic_atomic_op(intr), .access = access);
+   if (nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_BUF)
+      return false;
+   struct kk_raw_texel_access op = {0};
+   switch (intr->intrinsic) {
+   case nir_intrinsic_image_deref_load:
+   case nir_intrinsic_image_deref_sparse_load: op.operation = KK_RAW_TEXEL_READ; break;
+   case nir_intrinsic_image_deref_store: op.operation = KK_RAW_TEXEL_WRITE; break;
+   case nir_intrinsic_image_deref_atomic: op.operation = KK_RAW_TEXEL_ATOMIC; break;
+   case nir_intrinsic_image_deref_atomic_swap: op.operation = KK_RAW_TEXEL_SWAP; break;
+   default: return false;
    }
-   nir_push_else(b, NULL);
-   nir_def *zero = store ? NULL : nir_imm_zero(b, intr->def.num_components, 64);
-   nir_pop_if(b, NULL);
-   if (store) nir_instr_remove(&intr->instr);
-   else nir_def_replace(&intr->def, nir_if_phi(b, result, zero));
+   const bool store = op.operation == KK_RAW_TEXEL_WRITE;
+   op.bits = store ? intr->src[3].ssa->bit_size : intr->def.bit_size;
+   if (op.bits != 64)
+      return false;
+   op.base = load_resource_deref_desc(b, 1, 64, deref, 0, ctx);
+   op.coord = nir_channel(b, intr->src[1].ssa, 0);
+   op.tail = load_resource_deref_desc(b, 4, 32, deref,
+      sizeof(struct kk_storage_image_descriptor), ctx);
+   nir_variable *var = nir_deref_instr_get_variable(deref);
+   op.access = nir_intrinsic_access(intr) | (var ? var->data.access : 0);
+   op.type = store ? nir_intrinsic_src_type(intr) :
+      nir_intrinsic_has_atomic_op(intr)
+         ? nir_atomic_op_type(nir_intrinsic_atomic_op(intr)) | 64
+         : nir_intrinsic_dest_type(intr);
+   op.components = store ? 0 : intr->def.num_components;
+   op.sparse_result = intr->intrinsic == nir_intrinsic_image_deref_sparse_load;
+   if (store || op.operation == KK_RAW_TEXEL_ATOMIC || op.operation == KK_RAW_TEXEL_SWAP)
+      op.data = intr->src[3].ssa;
+   if (op.operation == KK_RAW_TEXEL_SWAP)
+      op.compare = intr->src[4].ssa;
+   if (nir_intrinsic_has_atomic_op(intr))
+      op.atomic_op = nir_intrinsic_atomic_op(intr);
+   nir_def *count = load_resource_deref_desc(b, 1, 32, deref,
+      offsetof(struct kk_storage_image_descriptor, texel_count), ctx);
+   const enum pipe_format format = nir_alu_type_get_base_type(op.type) == nir_type_int
+      ? PIPE_FORMAT_R64_SINT : PIPE_FORMAT_R64_UINT;
+   nir_def *value = kk_raw_access(b, nir_imm_int(b, 0), count, format, &op);
+   if (store)
+      nir_instr_remove(&intr->instr);
+   else
+      nir_def_replace(&intr->def, value);
    return true;
 }
 
@@ -1135,6 +1144,33 @@ lower_load_ssbo_descriptor(nir_builder *b, nir_intrinsic_instr *intrin,
 
 #include "kk_sparse_buffer_nir.h"
 
+/* Chosen once for participating layouts/Heap shaders. The ordinary visitor
+ * and its native handlers perform no raw-mode checks or format dispatch. */
+static bool
+try_lower_raw_descriptors_instr(nir_builder *b, nir_instr *instr, void *data)
+{
+   const struct lower_descriptors_ctx *ctx = data;
+   b->cursor = nir_before_instr(instr);
+   if (instr->type == nir_instr_type_tex) {
+      if (kk_lower_raw_tex(b, nir_instr_as_tex(instr), ctx))
+         return true;
+   } else if (instr->type == nir_instr_type_intrinsic) {
+      nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+      switch (intr->intrinsic) {
+      case nir_intrinsic_image_deref_load:
+      case nir_intrinsic_image_deref_sparse_load:
+      case nir_intrinsic_image_deref_store:
+      case nir_intrinsic_image_deref_atomic:
+      case nir_intrinsic_image_deref_atomic_swap:
+         if (kk_lower_raw_image(b, intr, ctx))
+            return true;
+         break;
+      default: break;
+      }
+   }
+   return try_lower_descriptors_instr(b, instr, data);
+}
+
 static bool
 lower_ssbo_descriptor(nir_builder *b, nir_intrinsic_instr *intr, void *_data)
 {
@@ -1209,12 +1245,14 @@ kk_nir_prepare_layered_bc(nir_shader *nir,
 }
 
 bool
-kk_nir_lower_descriptors(nir_shader *nir, kk_feature_key features,
+kk_nir_lower_descriptors_for_binding_model(nir_shader *nir, kk_feature_key features,
                          const struct vk_pipeline_robustness_state *rs,
                          uint32_t set_layout_count,
-                         struct vk_descriptor_set_layout *const *set_layouts)
+                         struct vk_descriptor_set_layout *const *set_layouts,
+                         bool raw_texel)
 {
    struct lower_descriptors_ctx ctx = kk_descriptor_context(rs, set_layout_count, set_layouts);
+   ctx.raw_texel = raw_texel;
    ctx.standard_3d = features & BITFIELD_BIT(KK_FEAT_STANDARD_3D);
    ctx.image_array_alias = features & BITFIELD_BIT(KK_FEAT_IMAGE_ARRAY_ALIAS);
    ctx.sparse_image_query = features & BITFIELD_BIT(KK_FEAT_SPARSE_IMAGE_QUERY);
@@ -1228,12 +1266,23 @@ kk_nir_lower_descriptors(nir_shader *nir, kk_feature_key features,
     * Apple. This is inherited from NVK.
     */
    bool pass_lower_descriptors = nir_shader_instructions_pass(
-      nir, try_lower_descriptors_instr, nir_metadata_none, &ctx);
+      nir, ctx.raw_texel ? try_lower_raw_descriptors_instr : try_lower_descriptors_instr,
+      nir_metadata_none, &ctx);
 
    bool pass_lower_ssbo = nir_shader_intrinsics_pass(
       nir, lower_ssbo_descriptor, nir_metadata_control_flow, &ctx);
 
    return pass_lower_descriptors || pass_lower_ssbo;
+}
+
+bool
+kk_nir_lower_descriptors(nir_shader *nir, kk_feature_key features,
+                         const struct vk_pipeline_robustness_state *rs,
+                         uint32_t set_layout_count,
+                         struct vk_descriptor_set_layout *const *set_layouts)
+{
+   return kk_nir_lower_descriptors_for_binding_model(nir, features, rs,
+      set_layout_count, set_layouts, false);
 }
 
 #include "kk_descriptor_heap_nir.h"

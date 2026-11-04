@@ -123,6 +123,48 @@ those actual attachment indices while using physical render-target index0.
 Retained Mesh output is consumed through the shared Mesh begin/end callback
 interface, before the next slice can overwrite the output cache.
 
+## Typed buffer records
+
+Typed buffer descriptors retain a 16-byte prefix followed by the existing
+16-byte Sparse metadata. Explicit `VkBufferView` descriptors store their native
+texture identifier at byte 0, the native texel prefix at byte 8 and the logical
+element count at byte 12. Native RGB32 uses bit 31 of the prefix word and scalar
+native coordinates. Native R64 integer views store a byte address and use the
+64-bit buffer access path.
+
+Address-only typed writers use `KK_TEXEL_BUFFER_RAW_ADDRESS` (bit 30) in the same
+byte-8 word. The remaining low bits contain the existing `pipe_format`; byte 0
+contains the requested full-width byte address, and byte 12 contains the logical
+element count. Native prefix values are below 16, and the native RGB32 bit stays
+separate. Image-array descriptors use a different view class and do not decode
+this buffer mode.
+
+Raw records use logical texel coordinates and Mesa format packing/unpacking for
+loads, stores and fetches. Integer R32/R64 atomics retain their declared atomic
+operation and access qualifiers. Bounds and Sparse residency guard byte access;
+a byte address is never used as a native texture identifier. Native and raw
+records can be consumed by the same participating pipeline. Buffer size queries
+read the common logical element count.
+
+The Sparse tail retains its residency-map address, byte prefix and coordinate
+stride at offsets 16, 24 and 28. Raw RGB32 uses stride 12 and logical coordinates;
+native RGB32 uses stride 4, the existing scalar-coordinate flag and a 12-byte
+access span. R64 uses stride 8. The underlying resource and residency map follow
+the selected buffer's legal-reader lifetime; copying descriptor bytes does not
+retain the resource.
+
+Address writers validate the already-selected live source before publishing
+bytes and perform no native view creation, cache insertion or allocation.
+Ordinary alias selection requires the same actual native buffer interval, or
+proven equal intervals of the same placement heap. Equal numerical device
+addresses alone do not establish native storage identity. Distinct Sparse
+virtual buffers remain distinct sources.
+
+Raw decoding is selected during the existing descriptor pass for actual
+Heap/descriptor-buffer shader binding flags. Those flags already participate in
+the common shader key. Ordinary descriptor-set shaders use the native visitor
+and emit no raw-format dispatch.
+
 ## Embedded sampler bindings
 
 Embedded heap samplers use immutable device-owned address arrays. The existing

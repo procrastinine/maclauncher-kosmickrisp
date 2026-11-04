@@ -9,6 +9,7 @@
 
 #include "kk_private.h"
 #include <stddef.h>
+#include "util/format/u_format.h"
 
 /* TODO_KOSMICKRISP Reduce size to 32 bytes by moving border to a heap. */
 struct kk_sampled_image_descriptor {
@@ -82,6 +83,15 @@ static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_uint16)
               "image min LOD does not overlap trailing descriptor fields");
 
 #define KK_TEXEL_BUFFER_RGB32 (1u << 31)
+/* Buffer records only: word0 is a byte address, word8 holds this tag and an
+ * existing pipe_format, and word12 is the logical element count. Native image
+ * array IDs use a different view class and never consume this interpretation. */
+#define KK_TEXEL_BUFFER_RAW_ADDRESS (1u << 30)
+#define KK_TEXEL_BUFFER_FORMAT_MASK (KK_TEXEL_BUFFER_RAW_ADDRESS - 1u)
+static_assert(PIPE_FORMAT_COUNT <= KK_TEXEL_BUFFER_FORMAT_MASK,
+              "raw texel format fits the common buffer payload");
+static_assert((KK_TEXEL_BUFFER_RAW_ADDRESS & KK_TEXEL_BUFFER_RGB32) == 0,
+              "raw buffer mode and native RGB32 remain independent");
 
 struct kk_storage_image_descriptor {
    uint64_t image_gpu_resource_id;
