@@ -262,7 +262,7 @@ kk_vrs_cells_remove_interlock(nir_builder *b, nir_intrinsic_instr *intr, void *d
 static bool
 kk_vrs_cells_shader(nir_shader *shader,
    struct kk_interlock_framebuffer_nir *framebuffer, unsigned samples,
-   unsigned *local_output_bytes)
+   bool custom_resolve, unsigned *local_output_bytes)
 {
    if (!shader || !framebuffer || !framebuffer->transaction.render ||
        framebuffer->transaction.render->sample_shading ||
@@ -288,6 +288,7 @@ kk_vrs_cells_shader(nir_shader *shader,
          .record = kk_vrs_cells_record, .sample_position = kk_vrs_cells_sample_position},
          .centroid = cells.centroid},
       .sample_shift = kk_vrs_cells_shift, .samples = samples,
+      .custom_resolve = custom_resolve,
    };
    if (!kk_vrs_wrap_framebuffer_transaction(shader, framebuffer, &source, local_output_bytes))
       return false;

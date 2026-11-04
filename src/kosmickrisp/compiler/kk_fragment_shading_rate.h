@@ -17,6 +17,10 @@ nir_def *kk_nir_vrs_combined_extent(struct nir_builder *, nir_def *context,
    nir_def *absolute_pixel, unsigned samples);
 bool kk_nir_lower_coarse_fragment(nir_shader *nir);
 bool kk_nir_lower_native_coarse_fragment(nir_shader *nir);
+/* Retained clone only: preserve the application frequency before fine
+ * epilogue lowering can add sample inputs. Missing metadata stays unknown. */
+void kk_nir_vrs_mark_frequency(nir_shader *, bool sample_frequency);
+bool kk_nir_vrs_frequency(nir_shader *, bool *sample_frequency, bool remove);
 bool kk_nir_vrs_split_application(nir_shader *nir);
 void kk_nir_vrs_flatten(nir_shader *nir);
 bool kk_nir_lower_linked_native_coarse_fragment(nir_shader *nir);

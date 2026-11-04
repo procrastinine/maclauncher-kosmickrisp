@@ -8,6 +8,47 @@
 #include "msl_compute_derivatives.h"
 #include "msl_virtual_subgroups.h"
 
+static const char vrs_frequency_name[] = "kk_vrs_application_sample_frequency";
+
+void
+kk_nir_vrs_mark_frequency(nir_shader *nir, bool sample_frequency)
+{
+   nir_variable *metadata = NULL;
+   nir_foreach_variable_with_modes(var, nir, nir_var_shader_temp)
+      if (var->name && !strcmp(var->name, vrs_frequency_name)) {
+         metadata = var;
+         break;
+      }
+   if (!metadata)
+      metadata = nir_variable_create(nir, nir_var_shader_temp,
+         glsl_uint_type(), vrs_frequency_name);
+   if (!metadata->constant_initializer)
+      metadata->constant_initializer = rzalloc(nir, nir_constant);
+   metadata->constant_initializer->values[0].u32 = sample_frequency;
+}
+
+bool
+kk_nir_vrs_frequency(nir_shader *nir, bool *sample_frequency, bool remove)
+{
+   if (!nir || !sample_frequency)
+      return false;
+   nir_variable *metadata = NULL;
+   nir_foreach_variable_with_modes(var, nir, nir_var_shader_temp) {
+      if (!var->name || strcmp(var->name, vrs_frequency_name))
+         continue;
+      if (metadata || var->type != glsl_uint_type() ||
+          !var->constant_initializer || var->constant_initializer->values[0].u32 > 1)
+         return false;
+      metadata = var;
+   }
+   if (!metadata)
+      return false;
+   *sample_frequency = metadata->constant_initializer->values[0].u32;
+   if (remove)
+      exec_node_remove(&metadata->node);
+   return true;
+}
+
 struct coarse_values {
    nir_def *mask, *helper, *position, *rate, *primitive, *result;
 };

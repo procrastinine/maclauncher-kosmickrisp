@@ -4,6 +4,7 @@
 
 #include "kosmickrisp/compiler/kk_fragment_shading_rate.h"
 #include "kk_fragment_shading_rate_inputs_nir.h"
+#include "kk_fragment_shading_rate_attachments_nir.h"
 #include "kk_interlock_framebuffer_coarse_nir.h"
 
 /* Construction-time view of the caller's existing ordered primitive job.
@@ -20,6 +21,7 @@ struct kk_vrs_transaction_nir {
    nir_def *(*sample_shift)(nir_builder *, struct kk_interlock_program_nir *,
       nir_def *slot, void *);
    unsigned samples;
+   bool custom_resolve;
 };
 
 struct kk_vrs_transaction_build {
@@ -46,6 +48,7 @@ kk_vrs_transaction_prepare(nir_shader *shader,
    /* Rebase application draw loads before the captured reader can insert
     * its own driver-context loads. Those must keep the internal address. */
    if (!kk_nir_vrs_lower_transaction_body(shader, application, &logical) ||
+       !kk_vrs_lower_application_attachments(application, program, source->custom_resolve) ||
        !kk_vrs_lower_captured_inputs(shader, application, &inputs) ||
        !kk_nir_vrs_rebase_fine_draw(s->fine, logical.original_per_draw))
       return false;

@@ -1625,8 +1625,13 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             /* The retained named source predates ordinary DCE. Drop only its
              * dead descriptor nodes before the one captured-reader finish. */
             NIR_PASS(_, captured, nir_opt_dce);
+            bool sample_frequency;
+            bool known_frequency = kk_nir_vrs_frequency(opts->vrs_source,
+               &sample_frequency, false);
             kk_vrs_finish_captured_fragment(captured, prev_stage, state, opts,
                robustness, pixel_envelope);
+            if (known_frequency)
+               kk_nir_vrs_mark_frequency(captured, sample_frequency);
          }
          kk_compile_msl(dev, point_fs, state, &shader->polygon[3]);
          if (captured) {
@@ -2899,9 +2904,12 @@ kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
                        const struct vk_shader_compile_info *info,
                        kk_feature_key features, nir_shader **retained, bool depth_bounds)
 {
-   bool callable = retained && dev->vrs && kk_vrs_pipeline_can_coarsen(state,
-      dev->vk.enabled_features.primitiveFragmentShadingRate,
-      dev->vk.enabled_features.attachmentFragmentShadingRate) &&
+   bool callable = retained && dev->vrs &&
+      !fs->info.fs.uses_sample_shading &&
+      !(state && state->ms && state->ms->sample_shading_enable) &&
+      kk_vrs_pipeline_can_coarsen(state,
+         dev->vk.enabled_features.primitiveFragmentShadingRate,
+         dev->vk.enabled_features.attachmentFragmentShadingRate) &&
       kk_nir_vrs_split_application(fs);
    kk_lower_fs(dev, fs, state, depth_bounds);
    kk_finish_nir(dev, fs, info ? info->robustness : &rs_none,
@@ -2911,8 +2919,11 @@ kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
     * canonical sampler lifetime remains with the owning fine shader. */
    static_assert(KK_EMBEDDED_SAMPLER_BINDING_SCHEMA == 1u,
                  "retained embedded source uses portable runtime root bindings");
-   if (retained && dev->vrs && callable)
+   if (retained && dev->vrs && callable) {
       *retained = nir_shader_clone(NULL, fs);
+      /* callable excludes actual application sample-frequency programs. */
+      kk_nir_vrs_mark_frequency(*retained, false);
+   }
    if (callable)
       kk_nir_vrs_flatten(fs);
    if (dev->vrs)

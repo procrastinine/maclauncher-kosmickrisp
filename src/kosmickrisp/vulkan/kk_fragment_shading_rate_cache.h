@@ -16,6 +16,7 @@ struct kk_vrs_artifact;
 enum kk_vrs_fragment_kind {
    KK_VRS_COARSE_BODY,
    KK_VRS_FINE_REPLAY,
+   KK_VRS_TRANSACTION,
    KK_VRS_FRAGMENT_KIND_COUNT,
 };
 struct msl_compile_data;
@@ -28,12 +29,19 @@ struct blob_reader;
 /* Canonical byte encodings, not dumps of C structs. The NIR is the actual
  * linked callable application and its once-lowered fine epilogue. ABI/options include
  * lowering level, robustness, compiler/math requirements and source ABI. */
+enum kk_vrs_application_flags {
+   KK_VRS_FREQUENCY_KNOWN = 1u,
+   KK_VRS_SAMPLE_FREQUENCY = 2u,
+   KK_VRS_DYNAMIC_SAMPLES = 4u,
+   KK_VRS_CUSTOM_RESOLVE = 8u,
+};
 struct kk_vrs_source_data {
    const void *nir, *interface, *epilogue, *options, *abi;
    uint32_t nir_size, interface_size, epilogue_size, options_size, abi_size;
    uint32_t result_stride;
    uint32_t uses_per_draw;
    uint32_t early_fragment_tests;
+   uint32_t application_flags;
 };
 VkResult kk_vrs_device_init(struct kk_device *dev);
 void kk_vrs_device_finish(struct kk_device *dev);
@@ -67,6 +75,20 @@ VkResult kk_vrs_artifact_get(struct kk_device *dev, struct kk_vrs_source *source
  * Called lazily by an effective coarse draw, never ordinary pipeline creation. */
 VkResult kk_vrs_fragment_get(struct kk_device *dev, struct kk_vrs_source *source,
    enum kk_vrs_fragment_kind kind, struct kk_vrs_artifact **out);
+/* Actual physical formats and attachment-location remap for this coarse
+ * transaction. Resource addresses, DS values and input indices are immutable
+ * envelope data, not compile keys. Entries beyond color_count are ignored. */
+struct kk_vrs_transaction_options {
+   uint32_t color_count;
+   VkFormat color_formats[8];
+   uint8_t color_map[8];
+   VkFormat depth_format, stencil_format;
+   uint32_t samples;
+};
+/* Explicit coarse request only, through the same per-device/common cache and
+ * native function factory. No state variants are compiled at PSO creation. */
+VkResult kk_vrs_transaction_get(struct kk_device *, struct kk_vrs_source *,
+   const struct kk_vrs_transaction_options *, struct kk_vrs_artifact **);
 /* Producer and fragment are the actual bound pair. The command/attachment
  * owner holds their normal lifetime and owns the resulting native PSOs. */
 VkResult kk_vrs_native_pipelines_create(struct kk_device *dev,
@@ -96,6 +118,7 @@ VkResult kk_vrs_captured_pipelines_create_statistics(struct kk_device *,
    mtl_render_pipeline_descriptor *, const struct kk_shader *fragment,
    bool statistics, struct mtl_vrs_pipelines **out);
 bool kk_vrs_artifact_uses_pipeline_statistics(const struct kk_vrs_artifact *);
+uint32_t kk_vrs_artifact_input_stride(const struct kk_vrs_artifact *);
 void kk_vrs_artifact_unref(struct kk_device *dev, struct kk_vrs_artifact *artifact);
 
 mtl_function_descriptor *kk_vrs_artifact_function(const struct kk_vrs_artifact *artifact);
