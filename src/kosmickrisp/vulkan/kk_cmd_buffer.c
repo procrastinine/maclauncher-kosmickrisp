@@ -579,9 +579,12 @@ cs_start_render(struct kk_cmd_buffer *cmd)
 
    {
       KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_SETUP_BINDS, binds);
-      /* Pipeline binding may occur after BeginRendering. Force first apply. */
-      state->amplification_view_mask = ~state->render.view_mask;
-      kk_cmd_buffer_apply_view_mask(cmd);
+      /* BeginRendering may precede Mesh binding. Its Vulkan view count can
+       * exceed native amplification (32 Mesh views versus 8 on Apple7/8).
+       * Start with one view; the pipeline flush applies the selected map. */
+      uint32_t layer = 0;
+      mtl_set_vertex_amplification_count(cmd->metal.render, &layer, 1);
+      state->amplification_view_mask = 0;
       /* Fresh encoders have no table state, even when Metal reuses a pointer.
        * Bind once here; graphics state invalidation remains per encoder. */
       mtl_render_set_argument_table(cmd->metal.render, cmd->argument_table,
