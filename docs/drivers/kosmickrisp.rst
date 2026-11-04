@@ -412,6 +412,19 @@ Built-in compute kernels compile when an operation first needs them. Each
 kernel shares one completed pipeline within the Vulkan device. Native compile
 failures propagate to command recording; a failed kernel is not dispatched.
 
+Compute pipeline creation
+=========================
+
+A single compute pipeline created without a native archive hit returns once
+its MSL is generated, including any sparse residency guards. The Metal
+library and pipeline compile on the bounded compiler queue. Binding or
+destroying the pipeline waits for that compile and raises its queue
+priority; a native compile failure loses the device at first use. Creation stays
+synchronous for multi-pipeline calls, creation feedback, compile-required and
+early-return failures, statistics and internal-representation capture,
+indirect-bindable pipelines, shaders that use 64-bit atomic locks and sparse
+variants selected at bind.
+
 Library reuse
 =============
 

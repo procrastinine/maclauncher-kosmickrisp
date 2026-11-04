@@ -3574,8 +3574,11 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       uint32_t local_size_threads = s->info.cs.local_size.x *
                                     s->info.cs.local_size.y *
                                     s->info.cs.local_size.z;
+      /* Sparse residency guards are already part of the generated MSL; only
+       * the native library and pipeline build moves to the compiler queue.
+       * Guarded variants selected at bind compile outside pipeline creation. */
       bool deferred = kk_defer_compute && !s->info.indirect_bindable &&
-         !s->msl_data[MESA_SHADER_COMPUTE].uses_atomic64_locks && !sparse_modes &&
+         !s->msl_data[MESA_SHADER_COMPUTE].uses_atomic64_locks &&
          kk_async_compute_start(dev, s, kk_compile_async_compute);
       if (!deferred)
          result = kk_compile_compute_pipeline(dev, s, &s->msl_data[MESA_SHADER_COMPUTE],
