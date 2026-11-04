@@ -9,6 +9,7 @@
 #include "kk_descriptor_types.h"
 #include "kk_descriptor_set_layout.h"
 #include "kk_zero_init.h"
+#include "kk_dgc.h"
 #include "kk_emulation.h"
 #include "kosmickrisp/as/kosmickrisp-as-types.h"
 
@@ -731,7 +732,9 @@ kk_get_device_properties(
       .maxPushDataSize = KK_MAX_PUSH_SIZE,
       .maxDescriptorHeapEmbeddedSamplers = 2048,
       .samplerYcbcrConversionCount = 1,
-      .maxIndirectPipelineCount = 0,
+      /* The execution-set pipeline limit. Vulkan requires at least 4096 even
+       * while no stage is reported for pipeline binding. */
+      .maxIndirectPipelineCount = KK_DGC_PIPELINE_COUNT,
       .maxIndirectShaderObjectCount = 0,
       .maxIndirectSequenceCount = 1u << 20,
       .maxIndirectCommandsTokenCount = 128,
