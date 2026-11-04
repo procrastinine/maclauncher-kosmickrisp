@@ -674,10 +674,46 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
    /* A lane that has its own bit knows the executing lanes of its quad;
     * otherwise the helper flags decide, as without the handshake. */
    nir_def *pres = nir_load_var(b, present);
-   nir_def *known = nir_ine_imm(b, nir_iand(b, pres, own), 0);
    nir_def *covered = nir_load_var(b, ctx->covered_var);
+   /* Lanes that do not run the sample read garbage, so their view of the
+    * fragment can differ from the executing lanes' view. Lane positions,
+    * and therefore the derivative system, must agree across the quad: a
+    * lane takes a view only when it is marked, contains its reporter, lies
+    * within the helper coverage and every lane it names reports the same
+    * view. The executing lanes' identical views always pass. A lane whose
+    * own view fails adopts the largest passing view of a neighbor (the
+    * lowest position on ties), otherwise the helper coverage. */
+   nir_def *rep = nir_bcsel(b, nir_ine_imm(b, nir_iand(b, pres, own), 0),
+                            nir_ior_imm(b, nir_iand_imm(b, pres, 0xf), 0x10), nir_imm_int(b, 0));
+   nir_def *r[4] = {rep, nir_quad_swap_horizontal(b, rep), nir_quad_swap_vertical(b, rep),
+                    nir_quad_swap_diagonal(b, rep)};
+   nir_def *ok[4], *score[4];
+   for (unsigned j = 0; j < 4; ++j) {
+      /* r[j] comes from quad position p ^ j; ctx->bits[j] is its bit. */
+      nir_def *valid = nir_iand(b, nir_ine_imm(b, nir_iand_imm(b, r[j], 0x10), 0),
+         nir_iand(b, nir_ine_imm(b, nir_iand(b, r[j], ctx->bits[j]), 0),
+                     nir_ieq_imm(b, nir_iand(b, nir_iand_imm(b, r[j], 0xf), nir_inot(b, covered)), 0)));
+      nir_def *agree = nir_imm_true(b);
+      for (unsigned k = 0; k < 4; ++k) {
+         /* Position p ^ k reports r[k]. */
+         nir_def *named = nir_ine_imm(b, nir_iand(b, r[j], ctx->bits[k]), 0);
+         agree = nir_iand(b, agree, nir_ior(b, nir_inot(b, named), nir_ieq(b, r[k], r[j])));
+      }
+      ok[j] = nir_iand(b, valid, agree);
+      nir_def *pos = nir_ixor(b, ctx->p, nir_imm_int(b, j));
+      score[j] = nir_bcsel(b, ok[j],
+         nir_iadd_imm(b, nir_isub(b, nir_imul_imm(b, nir_bit_count(b, nir_iand_imm(b, r[j], 0xf)), 4), pos), 4),
+         nir_imm_int(b, 0));
+   }
+   nir_def *best = covered, *best_score = nir_imm_int(b, 0);
+   for (unsigned j = 1; j < 4; ++j) {
+      nir_def *better = nir_ult(b, best_score, score[j]);
+      best = nir_bcsel(b, better, nir_iand_imm(b, r[j], 0xf), best);
+      best_score = nir_umax(b, best_score, score[j]);
+   }
+   nir_def *known = ok[0];
    nir_store_var(b, ctx->covered_var,
-                 nir_bcsel(b, known, nir_iand_imm(b, pres, 0xf), covered), 1);
+                 nir_bcsel(b, known, nir_iand_imm(b, pres, 0xf), best), 1);
 
    /* After the setup: the sample invocation that holds the claiming lane
     * runs the side effects through its real lane. A lane without its own
