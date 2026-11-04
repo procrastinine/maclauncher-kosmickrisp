@@ -317,7 +317,7 @@ bool kk_nir_lower_sampler_minmax(nir_shader *nir,
       struct vk_descriptor_set_layout *const *set_layouts);
 
 VkResult kk_shader_embedded_samplers_init(struct kk_device *dev,
-   struct kk_shader *shader, uint32_t count, const struct vk_sampler_state *states);
+   struct kk_shader *shader, uint32_t count, const void *state_bytes);
 void kk_shader_embedded_samplers_finish(struct kk_device *dev,
    struct kk_shader *shader);
 

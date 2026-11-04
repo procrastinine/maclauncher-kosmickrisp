@@ -6,15 +6,16 @@
 VkResult
 kk_shader_embedded_samplers_init(struct kk_device *dev, struct kk_shader *shader,
                                 uint32_t count,
-                                const struct vk_sampler_state *states)
+                                const void *state_bytes)
 {
    if (!count)
       return VK_SUCCESS;
-   if (!states || count > kk_device_physical(dev)->vk.properties.maxDescriptorHeapEmbeddedSamplers)
+   if (!state_bytes || count > kk_device_physical(dev)->vk.properties.maxDescriptorHeapEmbeddedSamplers)
       return vk_error(dev, VK_ERROR_UNKNOWN);
    if (shader->embedded_sampler_count) {
       if (shader->embedded_sampler_count != count ||
-          memcmp(shader->embedded_sampler_states, states, count * sizeof(*states)))
+          memcmp(shader->embedded_sampler_states, state_bytes,
+                 count * sizeof(struct vk_sampler_state)))
          return vk_error(dev, VK_ERROR_UNKNOWN);
       return VK_SUCCESS;
    }
@@ -22,7 +23,7 @@ kk_shader_embedded_samplers_init(struct kk_device *dev, struct kk_shader *shader
       count * sizeof(*copy), 8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
    if (!copy)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
-   memcpy(copy, states, count * sizeof(*copy));
+   memcpy(copy, state_bytes, count * sizeof(*copy));
    uint64_t table = 0;
    VkResult result = kk_heap_embedded_sampler_table(dev, count, copy, &table);
    if (result != VK_SUCCESS) {

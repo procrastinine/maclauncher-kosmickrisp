@@ -6,12 +6,11 @@
 #include "util/blob.h"
 #include "util/u_debug.h"
 #include "kk_physical_device.h"
-#include "vk_alloc.h"
 #include "vk_sampler.h"
 
 /* Native code and its canonical inputs share the build UUID and this format. */
 #define KK_SHADER_CACHE_BINDINGS_MAGIC 0x4b4b5343u
-#define KK_SHADER_CACHE_BINDINGS_VERSION 1u
+#define KK_SHADER_CACHE_BINDINGS_VERSION 2u
 #define KK_SHADER_CACHE_USES_EMBEDDED 0x1u
 static_assert(KK_EMBEDDED_SAMPLER_BINDING_SCHEMA == 1u,
               "cached embedded bindings use runtime root schema1");
@@ -22,10 +21,13 @@ struct kk_shader_cache_bindings {
    const void *states;
 };
 
+DEBUG_GET_ONCE_BOOL_OPTION(kk_shader_cache_bindings_stats,
+                           "MESA_SHADER_CACHE_SHOW_STATS", false)
+
 static inline void
 kk_shader_cache_binding_stats(const struct kk_shader *shader, bool portable)
 {
-   if (!debug_get_bool_option("MESA_SHADER_CACHE_SHOW_STATS", false))
+   if (!debug_get_option_kk_shader_cache_bindings_stats())
       return;
    const char *code = shader->msl_data[shader->info.stage].code;
    blake3_hash digest;
@@ -58,6 +60,10 @@ kk_shader_cache_write_bindings(const struct kk_shader *shader, struct blob *blob
    blob_write_uint32(blob, count);
    blob_write_uint32(blob, shader->cache_uses_embedded_samplers ?
                            KK_SHADER_CACHE_USES_EMBEDDED : 0);
+   /* Ordinary shaders have no embedded binding payload to hash or store. */
+   if (!count)
+      return !blob->out_of_memory;
+
    size_t bytes = (size_t)count * sizeof(struct vk_sampler_state);
    blake3_hash digest;
    _mesa_blake3_compute(shader->embedded_sampler_states, bytes, digest);
@@ -85,6 +91,11 @@ kk_shader_cache_read_bindings(struct kk_device *dev, struct blob_reader *blob,
        ((flags & KK_SHADER_CACHE_USES_EMBEDDED) && !count))
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
 
+   if (!count) {
+      *bindings = (struct kk_shader_cache_bindings) {0};
+      return VK_SUCCESS;
+   }
+
    size_t bytes;
    if (__builtin_mul_overflow((size_t)count, sizeof(struct vk_sampler_state), &bytes))
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
@@ -111,17 +122,9 @@ kk_shader_cache_restore_bindings(struct kk_device *dev, struct kk_shader *shader
    shader->cache_uses_embedded_samplers = bindings->uses_embedded;
    if (!bindings->count)
       return VK_SUCCESS;
-   /* Blob bytes can be unaligned; the public-internal initializer receives
-    * an aligned canonical state array and retains its own CPU copy. */
-   size_t bytes = (size_t)bindings->count * sizeof(struct vk_sampler_state);
-   struct vk_sampler_state *states = vk_alloc(&dev->vk.alloc, bytes, 8,
-                                             VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-   if (!states)
-      return VK_ERROR_OUT_OF_HOST_MEMORY;
-   memcpy(states, bindings->states, bytes);
-   VkResult result = kk_shader_embedded_samplers_init(dev, shader,
-                                                     bindings->count, states);
-   vk_free(&dev->vk.alloc, states);
-   return result;
+   /* The initializer copies unaligned blob bytes into its one aligned,
+    * shader-owned state allocation before inspecting any state fields. */
+   return kk_shader_embedded_samplers_init(dev, shader, bindings->count,
+                                          bindings->states);
 }
 #endif
