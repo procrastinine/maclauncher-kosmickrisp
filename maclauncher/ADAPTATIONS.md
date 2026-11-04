@@ -528,7 +528,7 @@ Implementation: [kk_physical_device.c](../src/kosmickrisp/vulkan/kk_physical_dev
 
 Vulkan contract: Extended push constants and descriptors with layout-sized uploads.
 
-Supports 4096-byte constants across graphics and compute and 256 push descriptors. Root uploads cover fixed state plus the bound layout range; descriptor storage and uploads use the actual layout size. Partial and template updates retain untouched values.
+Supports 4096-byte constants across graphics and compute and 256 push descriptors. Root uploads cover fixed state plus the bound layout range; descriptor storage and uploads use the actual layout size. Partial and template updates retain untouched values. Dynamic-buffer bindings use immutable command-buffer snapshots of the bound slots. Later root uploads reuse that table address until the bindings or dynamic offsets change. Root and changed table data share one allocation.
 
 Limits and reported properties: `VkPhysicalDeviceLimits.maxPushConstantsSize = KK_MAX_PUSH_SIZE`; `VkPhysicalDeviceVulkan14Properties.maxPushDescriptors = KK_MAX_PUSH_DESCRIPTORS`; `VkPhysicalDevicePushDescriptorPropertiesKHR.maxPushDescriptors = KK_MAX_PUSH_DESCRIPTORS`.
 

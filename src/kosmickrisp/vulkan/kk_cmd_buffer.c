@@ -854,6 +854,8 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
       pipeline_layout->dynamic_descriptor_offset[info->firstSet];
 
    bool root_changed = false;
+   bool dynamic_changed = false;
+   uint32_t dynamic_count = desc->dynamic_buffer_count;
    uint32_t next_dyn_offset = 0;
    for (uint32_t i = 0; i < info->descriptorSetCount; ++i) {
       unsigned s = i + info->firstSet;
@@ -881,20 +883,26 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
          const struct kk_descriptor_set_layout *set_layout =
             vk_to_kk_descriptor_set_layout(pipeline_layout->set_layouts[s]);
 
-         if (set != NULL && set_layout->vk.dynamic_descriptor_count > 0) {
+         if (set_layout->vk.dynamic_descriptor_count > 0) {
             for (uint32_t j = 0; j < set_layout->vk.dynamic_descriptor_count;
                  j++) {
-               struct kk_buffer_address addr = set->dynamic_buffers[j];
-               addr.base_addr += info->pDynamicOffsets[next_dyn_offset + j];
+               struct kk_buffer_address addr = {0};
+               if (set != NULL) {
+                  addr = set->dynamic_buffers[j];
+                  addr.base_addr += info->pDynamicOffsets[next_dyn_offset + j];
+               }
                struct kk_buffer_address *previous =
-                  &desc->root.dynamic_buffers[dyn_buffer_start + j];
+                  &desc->dynamic_buffers[dyn_buffer_start + j];
                if (previous->base_addr != addr.base_addr ||
                    previous->size != addr.size || previous->zero != addr.zero) {
                   *previous = addr;
-                  root_changed = true;
+                  dynamic_changed = true;
                }
             }
-            next_dyn_offset += set->layout->vk.dynamic_descriptor_count;
+            dynamic_count = MAX2(dynamic_count, dyn_buffer_start +
+                                 set_layout->vk.dynamic_descriptor_count);
+            if (set != NULL)
+               next_dyn_offset += set->layout->vk.dynamic_descriptor_count;
          }
 
          dyn_buffer_start += set_layout->vk.dynamic_descriptor_count;
@@ -908,7 +916,10 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
    /* Dynamic offsets are compared in their layout-derived slots, so
     * incompatible layouts still update every affected root address. Preserve
     * dirty state from pushes, pipeline changes and earlier binds. */
-   desc->root_dirty |= root_changed;
+   dynamic_changed |= dynamic_count > desc->dynamic_buffer_count;
+   desc->dynamic_buffer_count = dynamic_count;
+   desc->dynamic_buffers_dirty |= dynamic_changed;
+   desc->root_dirty |= root_changed || dynamic_changed;
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -1128,21 +1139,41 @@ kk_pool_upload(struct kk_cmd_buffer *cmd, const void *data, uint32_t size,
 
 static struct kk_ptr
 kk_upload_descriptor_root_ptr(struct kk_cmd_buffer *cmd,
-   const struct kk_root_descriptor_table *root, uint32_t size)
+   const struct kk_root_descriptor_table *root, uint32_t size,
+   struct kk_descriptor_state *dynamic_state)
 {
-   struct kk_ptr ptr = kk_pool_upload(cmd, root, size, 8u);
-   if (unlikely(!ptr.gpu)) return (struct kk_ptr){0};
+   uint32_t dynamic_size = dynamic_state
+      ? dynamic_state->dynamic_buffer_count * sizeof(struct kk_buffer_address) : 0;
+   uint32_t dynamic_offset = ALIGN_POT(size, 16u);
+   /* A changed table shares this allocation with the root. Later root uploads
+    * retain its immutable address without recopying unused descriptor slots. */
+   struct kk_ptr ptr = kk_pool_alloc(
+      cmd, dynamic_size ? dynamic_offset + dynamic_size : size, 16u);
+   if (unlikely(!ptr.gpu))
+      return (struct kk_ptr){0};
+   memcpy(ptr.cpu, root, size);
+   struct kk_root_descriptor_table *snapshot = ptr.cpu;
+   if (dynamic_size) {
+      memcpy((uint8_t *)ptr.cpu + dynamic_offset,
+             dynamic_state->dynamic_buffers, dynamic_size);
+      snapshot->dynamic_buffers = ptr.gpu + dynamic_offset;
+      dynamic_state->root.dynamic_buffers = snapshot->dynamic_buffers;
+   }
+   if (dynamic_state)
+      dynamic_state->dynamic_buffers_dirty = false;
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
-   ((struct kk_root_descriptor_table *)ptr.cpu)->addr =
-      dev->atomic64_locks ? dev->atomic64_locks->gpu : ptr.gpu;
+   snapshot->addr = dev->atomic64_locks ? dev->atomic64_locks->gpu : ptr.gpu;
    return ptr;
 }
 
 uint64_t
 kk_upload_descriptor_root_data(struct kk_cmd_buffer *cmd,
-   const struct kk_root_descriptor_table *root, uint32_t size)
+   const struct kk_root_descriptor_table *root, uint32_t size,
+   struct kk_descriptor_state *dynamic_state)
 {
-   return kk_upload_descriptor_root_ptr(cmd, root, size).gpu;
+   /* DGC supplies its descriptor-state copy even if clean, so its snapshot
+    * never retains dynamic table storage owned by stateCommandBuffer. */
+   return kk_upload_descriptor_root_ptr(cmd, root, size, dynamic_state).gpu;
 }
 
 uint64_t
@@ -1157,7 +1188,8 @@ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
       return root->addr;
    }
    uint32_t size = offsetof(struct kk_root_descriptor_table, push) + desc->push_size;
-   struct kk_ptr ptr = kk_upload_descriptor_root_ptr(cmd, root, size);
+   struct kk_ptr ptr = kk_upload_descriptor_root_ptr(
+      cmd, root, size, desc->dynamic_buffers_dirty ? desc : NULL);
    if (!ptr.gpu) return 0u;
    kk_descriptor_root_apply_heap(desc, ptr.cpu);
    root->addr = ptr.gpu;

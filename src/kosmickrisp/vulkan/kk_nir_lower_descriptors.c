@@ -144,12 +144,12 @@ load_descriptor(nir_builder *b, unsigned num_components, unsigned bit_size,
                        nir_iadd_imm(b, dynamic_buffer_start,
                                     binding_layout->dynamic_buffer_index));
 
-      nir_def *root_desc_offset = nir_iadd_imm(
-         b, nir_imul_imm(b, index, sizeof(struct kk_buffer_address)),
-         kk_root_descriptor_offset(dynamic_buffers));
-
-      nir_def *desc = load_root(b, num_components, bit_size,
-         nir_iadd_imm(b, root_desc_offset, offset_B), offset_B ? 4 : 16);
+      nir_def *table = load_root(b, 1, 64,
+         nir_imm_int(b, kk_root_descriptor_offset(dynamic_buffers)), 8);
+      nir_def *addr = nir_iadd(b, table, nir_u2u64(b,
+         nir_imul_imm(b, index, sizeof(struct kk_buffer_address))));
+      nir_def *desc = load_speculatable(b, num_components, bit_size,
+         nir_iadd_imm(b, addr, offset_B), offset_B ? 4 : 16);
       if (offset_B) return desc;
       assert(num_components == 4 && bit_size == 32);
 
@@ -987,17 +987,15 @@ lower_ssbo_resource_index(nir_builder *b, nir_intrinsic_instr *intrin,
    }
 
    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
-      nir_def *root_desc_addr = nir_load_buffer_ptr_kk(b, 1, 64, .binding = KK_ARGUMENT_ROOT);
+      nir_def *root_desc_addr = load_root(b, 1, 64,
+         nir_imm_int(b, kk_root_descriptor_offset(dynamic_buffers)), 8);
 
       nir_def *dynamic_buffer_start =
          nir_iadd_imm(b, load_dynamic_buffer_start(b, set, ctx),
                       binding_layout->dynamic_buffer_index);
 
       nir_def *dynamic_binding_offset =
-         nir_iadd_imm(b,
-                      nir_imul_imm(b, dynamic_buffer_start,
-                                   sizeof(struct kk_buffer_address)),
-                      kk_root_descriptor_offset(dynamic_buffers));
+         nir_imul_imm(b, dynamic_buffer_start, sizeof(struct kk_buffer_address));
 
       binding_addr =
          nir_iadd(b, root_desc_addr, nir_u2u64(b, dynamic_binding_offset));
@@ -1321,7 +1319,7 @@ kk_nir_add_device_barrier_workaround(nir_shader *nir)
             /* The inserted load before the new barrier must not be constant */
             nir_def *root = nir_load_buffer_ptr_kk(&b, 1, 64, .binding = KK_ARGUMENT_ROOT);
             nir_def *addr = nir_iadd_imm(
-               &b, root, kk_root_descriptor_offset(dynamic_buffers[0].zero));
+               &b, root, kk_root_descriptor_offset(device_barrier_zero));
             nir_def *zero =
                nir_build_load_global(&b, 1, 32, addr, .align_mul = 4);
 

@@ -211,7 +211,8 @@ static struct kk_dgc_params kk_dgc_state(struct kk_cmd_buffer *cmd,
    /* Replay uses this recording's immutable sparse snapshot, even when the
     * DGC state command buffer predates first sparse resource creation. */
    root.sparse_state = cmd->state.cs.descriptors.root.sparse_state;
-   p.base_root = kk_upload_descriptor_root_data(cmd, &root, sizeof(root));
+   p.base_root = kk_upload_descriptor_root_data(cmd, &root, sizeof(root),
+                                                &descriptors);
    struct kk_per_draw_data draw = state->state.gfx.per_draw_data;
    draw.draw_id = 0;
    p.base_draw = kk_pool_upload(cmd, &draw, sizeof(draw), 8).gpu;

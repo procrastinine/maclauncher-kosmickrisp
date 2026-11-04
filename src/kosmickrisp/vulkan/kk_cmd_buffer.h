@@ -69,13 +69,15 @@ struct kk_root_descriptor_table {
       };
    };
 
-   /* Dynamic buffer bindings */
-   struct kk_buffer_address dynamic_buffers[KK_MAX_DYNAMIC_BUFFERS];
+   /* Immutable dynamic buffer bindings, refreshed only when bindings change. */
+   uint64_t dynamic_buffers;
 
    /* Start index in dynamic_buffers where each set starts */
    uint8_t set_dynamic_buffer_start[KK_MAX_SETS];
 
    uint64_t sparse_state;
+   /* Non-constant zero load used by the device-scope barrier workaround. */
+   uint64_t device_barrier_zero;
 
    /* Client push constants: upload only the bound pipeline range. */
    uint8_t push[KK_MAX_PUSH_SIZE];
@@ -90,6 +92,9 @@ struct kk_descriptor_state {
    bool root_dirty;
    uint32_t push_size;
    struct kk_root_descriptor_table root;
+   struct kk_buffer_address dynamic_buffers[KK_MAX_DYNAMIC_BUFFERS];
+   uint32_t dynamic_buffer_count;
+   bool dynamic_buffers_dirty;
    uint64_t heap_resource, heap_sampler;
    bool descriptor_heap;
    uint64_t heap_embedded_samplers[MESA_ALL_SHADER_STAGES];
@@ -551,7 +556,8 @@ struct kk_ptr kk_pool_upload(struct kk_cmd_buffer *cmd, const void *data,
                              uint32_t size, uint32_t alignment);
 
 uint64_t kk_upload_descriptor_root_data(struct kk_cmd_buffer *cmd,
-   const struct kk_root_descriptor_table *root, uint32_t size);
+   const struct kk_root_descriptor_table *root, uint32_t size,
+   struct kk_descriptor_state *dynamic_state);
 
 uint64_t kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
                                    VkPipelineBindPoint bind_point);
