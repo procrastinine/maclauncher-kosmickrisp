@@ -33,7 +33,8 @@ struct kk_sampled_image_descriptor {
    uint16_t sampler_reduction_mode;
    uint16_t sampler_filter_bits;
    uint16_t sampler_address_modes;
-   uint64_t pad_to_power_2[2];
+   uint64_t aux_resource_id;
+   uint64_t aux_word;
 };
 
 static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_fp16) == 18,
@@ -54,6 +55,10 @@ static_assert(offsetof(struct kk_sampled_image_descriptor, sampler_mipmap_mode) 
               "mipmap metadata ABI");
 static_assert(offsetof(struct kk_sampled_image_descriptor, sampler_query_lod_bias_fp16) == 40,
               "sampler bias metadata ABI");
+static_assert(offsetof(struct kk_sampled_image_descriptor, aux_resource_id) == 48,
+              "sampled image auxiliary resource ID offset");
+static_assert(offsetof(struct kk_sampled_image_descriptor, aux_word) == 56,
+              "sampled image auxiliary word offset");
 static_assert(sizeof(struct kk_sampled_image_descriptor) == 64,
               "kk_sampled_image_descriptor has no holes");
 static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_fp16) ==
