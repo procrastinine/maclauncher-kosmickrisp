@@ -32,6 +32,22 @@ enum {
    KK_TEMPORAL_DEPTH_INFINITE = 0x80,    /* infinite far plane; far_plane is 0 */
 };
 
+/* Optional, in a frame's pNext chain: its guide masks (VkTemporalFrameMasksInfoMVK of VKD3D-Proton's
+ * vk_temporal_frame.h). Reactive is one channel from 0 to 1, where 1 relies on the current frame instead of
+ * history; transparency is FidelityFX's transparency-and-composition mask. Each is read at its offset over the
+ * render extent. */
+#define KK_STRUCTURE_TYPE_TEMPORAL_FRAME_MASKS_INFO 1000999103u
+
+enum { KK_TEMPORAL_MASK_REACTIVE, KK_TEMPORAL_MASK_TRANSPARENCY, KK_TEMPORAL_MASKS };
+
+struct kk_temporal_frame_masks_info {
+   VkStructureType sType;
+   const void *pNext;
+   VkImage images[KK_TEMPORAL_MASKS];
+   VkFormat formats[KK_TEMPORAL_MASKS]; /* VK_FORMAT_UNDEFINED: the image's own */
+   uint32_t x[KK_TEMPORAL_MASKS], y[KK_TEMPORAL_MASKS];
+};
+
 struct kk_temporal_frame_info {
    VkStructureType sType;
    const void *pNext;

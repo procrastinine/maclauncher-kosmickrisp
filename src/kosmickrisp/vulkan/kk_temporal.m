@@ -62,6 +62,7 @@ struct kk_temporal_record {
    uint32_t scene_flags;
    bool roughness_alias;
    id<MTLTexture> textures[KK_TEMPORAL_IMAGES];
+   id<MTLTexture> masks[KK_TEMPORAL_MASKS];
 };
 
 /* The pipeline, when its library is loaded in this process; resolved once. */
@@ -124,6 +125,30 @@ kk_temporal_find(const VkDependencyInfo *dep)
    return NULL;
 }
 
+/* The retained Metal texture of a frame image, read as its format: integer-typed images are read as the float
+ * format of their bits. nil when that view is not possible. */
+static id<MTLTexture>
+kk_temporal_texture(VkImage handle, VkFormat requested)
+{
+   VK_FROM_HANDLE(kk_image, image, handle);
+   id<MTLTexture> texture = (id<MTLTexture>)image->planes[0].mtl_handle;
+   const MTLPixelFormat format = requested != VK_FORMAT_UNDEFINED
+      ? (MTLPixelFormat)vk_format_to_mtl_pixel_format(requested) : texture.pixelFormat;
+   if (texture && format != texture.pixelFormat)
+      return (texture.usage & MTLTextureUsagePixelFormatView) ? [texture newTextureViewWithPixelFormat:format] : nil;
+   return [texture retain];
+}
+
+static const struct kk_temporal_frame_masks_info *
+kk_temporal_find_masks(const struct kk_temporal_frame_info *info)
+{
+   for (const VkBaseInStructure *s = info->pNext; s; s = s->pNext) {
+      if ((uint32_t)s->sType == KK_STRUCTURE_TYPE_TEMPORAL_FRAME_MASKS_INFO)
+         return (const struct kk_temporal_frame_masks_info *)s;
+   }
+   return NULL;
+}
+
 void
 kk_temporal_copy_enqueued(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
 {
@@ -147,6 +172,19 @@ kk_temporal_copy_enqueued(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep
    }
    *copy = *info;
    copy->pNext = NULL;
+   const struct kk_temporal_frame_masks_info *masks = kk_temporal_find_masks(info);
+   if (masks) {
+      struct kk_temporal_frame_masks_info *masks_copy =
+         linear_alloc_child(cmd->vk.cmd_queue.ctx, sizeof(*masks_copy));
+      if (!masks_copy) {
+         copied->pNext = NULL;
+         vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+         return;
+      }
+      *masks_copy = *masks;
+      masks_copy->pNext = NULL;
+      copy->pNext = masks_copy;
+   }
    if (info->release_feature_id_count)
       memcpy(ids, info->release_feature_ids, info->release_feature_id_count * sizeof(*ids));
    copy->release_feature_ids = ids;
@@ -231,6 +269,8 @@ kk_temporal_record_free(struct kk_temporal_record *r)
 {
    for (unsigned i = 0; i < KK_TEMPORAL_IMAGES; i++)
       [r->textures[i] release];
+   for (unsigned i = 0; i < KK_TEMPORAL_MASKS; i++)
+      [r->masks[i] release];
    if (r->owner)
       kk_temporal_owner_unref(r->owner);
    free(r);
@@ -294,21 +334,15 @@ kk_temporal_record(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
       return;
    }
 
+   const struct kk_temporal_frame_masks_info *masks = kk_temporal_find_masks(info);
    @autoreleasepool {
       for (unsigned i = 0; i < KK_TEMPORAL_IMAGES; i++) {
-         if (info->images[i] == VK_NULL_HANDLE)
-            continue;
-         VK_FROM_HANDLE(kk_image, image, info->images[i]);
-         id<MTLTexture> texture = (id<MTLTexture>)image->planes[0].mtl_handle;
-         const MTLPixelFormat format = info->formats[i] != VK_FORMAT_UNDEFINED
-            ? (MTLPixelFormat)vk_format_to_mtl_pixel_format(info->formats[i]) : texture.pixelFormat;
-         /* Integer-typed images are read as the float format of their bits. */
-         if (texture && format != texture.pixelFormat)
-            texture = (texture.usage & MTLTextureUsagePixelFormatView)
-               ? [texture newTextureViewWithPixelFormat:format] : nil;
-         else
-            texture = [texture retain];
-         r->textures[i] = texture;
+         if (info->images[i] != VK_NULL_HANDLE)
+            r->textures[i] = kk_temporal_texture(info->images[i], info->formats[i]);
+      }
+      for (unsigned i = 0; masks && i < KK_TEMPORAL_MASKS; i++) {
+         if (masks->images[i] != VK_NULL_HANDLE)
+            r->masks[i] = kk_temporal_texture(masks->images[i], masks->formats[i]);
       }
    }
    id<MTLTexture> color = r->textures[KK_TEMPORAL_COLOR], depth = r->textures[KK_TEMPORAL_DEPTH];
@@ -369,6 +403,23 @@ kk_temporal_record(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
       f->farPlane = info->far_plane;
       f->verticalFov = info->vertical_fov;
    }
+   /* The pipeline reads the reactive and transparency masks at the color's region, so a mask at another offset,
+    * or one that does not cover the render extent, is left out. */
+   for (unsigned i = 0; masks && i < KK_TEMPORAL_MASKS; i++) {
+      id<MTLTexture> mask = r->masks[i];
+      if (!masks->images[i] || (mask && masks->x[i] == f->colorX && masks->y[i] == f->colorY &&
+                                mask.width >= f->colorX + f->renderWidth && mask.height >= f->colorY + f->renderHeight))
+         continue;
+      static int reported;
+      if (!p_atomic_xchg(&reported, 1))
+         mesa_logw("Temporal frame %llu: %s mask left out: %s", (unsigned long long)info->frame_id,
+                   i == KK_TEMPORAL_MASK_REACTIVE ? "reactive" : "transparency",
+                   mask ? "it is not at the color's region" : "its image has no compatible Metal texture");
+      [mask release];
+      r->masks[i] = nil;
+   }
+   f->reactive = r->masks[KK_TEMPORAL_MASK_REACTIVE];
+   f->transparency = r->masks[KK_TEMPORAL_MASK_TRANSPARENCY];
 
    /* The frame runs between this part and the next. */
    if (!kk_mesh_split_command_buffer(cmd)) {
