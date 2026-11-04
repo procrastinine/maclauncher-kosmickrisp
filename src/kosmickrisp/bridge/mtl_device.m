@@ -242,6 +242,14 @@ mtl_new_timestamp_counter_heap(mtl_device *dev, uint32_t count)
    }
 }
 
+uint32_t
+mtl_timestamp_counter_heap_count(mtl_counter_heap *heap)
+{
+   @autoreleasepool {
+      return (uint32_t)[(id<MTL4CounterHeap>)heap count];
+   }
+}
+
 /* Resource queries */
 /* TODO_KOSMICKRISP Return a struct */
 void

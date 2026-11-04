@@ -301,6 +301,7 @@ struct kk_ts_resolve {
 };
 
 struct kk_ts_stage_entry {
+   const struct kk_query_pool *pool;
    mtl_counter_heap *heap;
    enum mtl_render_stages stage;
    uint32_t index;

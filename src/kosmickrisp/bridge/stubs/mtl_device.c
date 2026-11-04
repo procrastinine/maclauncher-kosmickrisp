@@ -114,6 +114,12 @@ mtl_new_timestamp_counter_heap(mtl_device *dev, uint32_t count)
    return NULL;
 }
 
+uint32_t
+mtl_timestamp_counter_heap_count(mtl_counter_heap *heap)
+{
+   return 0u;
+}
+
 /* Resource queries */
 void
 mtl_heap_buffer_size_and_align_with_length(mtl_device *device, uint64_t *size_B,

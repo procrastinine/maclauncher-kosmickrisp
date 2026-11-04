@@ -17,6 +17,9 @@ struct kk_ts_state {
     * sampled into this heap and later resolved into `bo` (see kk_query_pool.c).
     * NULL for non-timestamp pools. */
    mtl_counter_heap *heap;
+   mtl_counter_heap **extra_heaps;
+   uint32_t heap_capacity;
+   uint32_t extra_count;
 };
 
 struct kk_oq_state {

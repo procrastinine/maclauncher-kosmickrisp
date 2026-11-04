@@ -47,6 +47,7 @@ uint64_t mtl_device_timestamp_frequency(mtl_device *dev);
  * mtl_release. */
 mtl_counter_heap *mtl_new_timestamp_counter_heap(mtl_device *dev,
                                                  uint32_t count);
+uint32_t mtl_timestamp_counter_heap_count(mtl_counter_heap *heap);
 
 /* Resource queries */
 void mtl_heap_buffer_size_and_align_with_length(mtl_device *device,

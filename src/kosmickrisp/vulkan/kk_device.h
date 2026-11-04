@@ -105,6 +105,9 @@ struct kk_device {
    struct kk_sampler_heap samplers;
    struct kk_query_table occlusion_queries;
 
+   /* Accepted native timestamp heap capacity, published after negotiation. */
+   uint32_t timestamp_heap_capacity;
+
    /* Track all heaps the user allocated so we can set them all as resident when
     * recording as required by Metal. */
    struct kk_residency_set residency_set;
