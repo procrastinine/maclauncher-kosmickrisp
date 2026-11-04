@@ -12,6 +12,7 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "kk_multiview_clear.h"
 #include "kk_physical_device.h"
 #include "kk_image.h"
 #include "kk_image_view.h"
@@ -331,31 +332,40 @@ kk_CmdClearAttachments(VkCommandBuffer commandBuffer, uint32_t attachmentCount,
    kk_meta_init_render(cmd, &render_info);
 
    uint32_t view_mask = cmd->state.gfx.render.view_mask;
-   uint32_t layer_ids[KK_MAX_MULTIVIEW_VIEW_COUNT] = {};
-   mtl_set_vertex_amplification_count(cs_get_render(cmd), layer_ids, 1u);
+   uint32_t views = util_bitcount(view_mask);
+   if (views && rectCount > UINT32_MAX / views) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return;
+   }
+   uint32_t count = views ? rectCount * views : rectCount;
+   STACK_ARRAY(VkClearRect, layered_rects, views ? count : 0);
+   if (views && !layered_rects) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return;
+   }
+   const VkClearRect *rects = pRects;
+   if (views) {
+      count = kk_multiview_clear_rects(view_mask, rectCount, pRects, layered_rects);
+      rects = layered_rects;
+      render_info.view_mask = 0;
+   }
+   uint32_t layer = 0;
+   mtl_set_vertex_amplification_count(cs_get_render(cmd), &layer, 1);
+   cmd->state.gfx.amplification_view_mask = 0;
 
-   /* Preserve conditional rendering state for clearing attachments */
    struct kk_conditional_rendering_state cond_render = cmd->state.cond_render;
-
    struct kk_meta_save save;
    kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS,
                  "meta:vkCmdClearAttachments");
    cmd->state.cond_render = cond_render;
-   /* vk_meta expands one explicit-layer rectangle for each original view.
-    * Preserve its single-amplification draw while leaving render_info intact. */
    cmd->state.gfx.render.view_mask = 0;
    vk_meta_clear_attachments(&cmd->vk, &dev->meta, &render_info,
-                             attachmentCount, pAttachments, rectCount, pRects);
+                             attachmentCount, pAttachments, count, rects);
    cmd->state.gfx.render.view_mask = view_mask;
    kk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
-
-   uint32_t count = 0u;
-   u_foreach_bit(id, view_mask)
-      layer_ids[count++] = id;
-   if (view_mask == 0u) {
-      layer_ids[count++] = 0;
-   }
-   mtl_set_vertex_amplification_count(cs_get_render(cmd), layer_ids, count);
+   /* A Mesh pipeline, or no bound pipeline yet, stays at one native view. */
+   kk_cmd_buffer_apply_view_mask(cmd);
+   STACK_ARRAY_FINISH(layered_rects);
 }
 
 void
