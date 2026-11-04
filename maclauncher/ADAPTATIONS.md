@@ -1684,9 +1684,9 @@ Implementation: [kk_cmd_buffer.c](../src/kosmickrisp/vulkan/kk_cmd_buffer.c), [k
 
 ### Fragment shading rates through quad groups
 
-Vulkan contract: `VK_KHR_fragment_shading_rate`, `pipelineFragmentShadingRate`, `primitiveFragmentShadingRate`, `attachmentFragmentShadingRate`.
+Vulkan contract: `VK_KHR_fragment_shading_rate`, `pipelineFragmentShadingRate`, `primitiveFragmentShadingRate`, `attachmentFragmentShadingRate`, `primitiveFragmentShadingRateMeshShader`.
 
-Fragment shaders of pipelines that can select a rate above 1x1 are lowered so that each Metal quad or half quad forms one fragment of at most 2x2 pixels. The lowest covered lane of a fragment runs the shader body with inputs extrapolated to the fragment center; its outputs and discard are broadcast through quad operations, and the remaining lanes evaluate neighboring fragments for derivatives and implicit texture levels. The pipeline rate, the primitive rate and the 8x8-texel rate attachment are combined in the shader. Multisampled shaders that write memory, which Metal runs once per covered sample, select one lane across the samples of each fragment and primitive and broadcast through SIMD shuffles. Conditions that select 1x1 are listed in the feature reference.
+Fragment shaders of pipelines that can select a rate above 1x1 are lowered so that each Metal quad or half quad forms one fragment of at most 2x2 pixels. The lowest covered lane of a fragment runs the shader body with inputs extrapolated to the fragment center; its outputs and discard are broadcast through quad operations, and the remaining lanes evaluate neighboring fragments for derivatives and implicit texture levels. The pipeline rate, the primitive rate and the 8x8-texel rate attachment are combined in the shader. Multisampled shaders that write memory, which Metal runs once per covered sample, run the body once per fragment and primitive: the first sample invocation claims a slot in a device table, keyed by draw serial, raster primitive and fragment origin, and publishes its outputs and discard there for the other sample invocations. Conditions that select 1x1 are listed in the feature reference.
 
 Scope: the `fragment_shading_rate` emulation entry; performance mode does not report the extension.
 

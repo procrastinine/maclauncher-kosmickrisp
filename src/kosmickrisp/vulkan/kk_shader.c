@@ -3333,8 +3333,6 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       state->mv && state->mv->view_mask;
    poly_layer_replay = poly_layer_replay &&
       kk_poly_layer_alias_possible(state, enabled_features);
-   /* VRS retains linked source below. Device enablement does not select
-    * Layer replay or eagerly compile a captured application sibling. */
    /* Device enablement alone must not create a captured pipeline. The final
     * producer owns primitive rejection; earlier-stage distances are inputs
     * for that producer. Native mesh output performs its own cull test. */
