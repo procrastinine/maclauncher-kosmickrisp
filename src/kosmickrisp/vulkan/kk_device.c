@@ -337,6 +337,17 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_sampler_heap;
 
+   if (dev->vk.enabled_features.shaderBufferInt64Atomics ||
+       dev->vk.enabled_features.shaderSharedInt64Atomics) {
+      result = kk_alloc_bo(dev, &dev->vk.base, 65536 * sizeof(uint32_t), 64,
+                           &dev->atomic64_locks);
+      if (result != VK_SUCCESS) {
+         kk_device_finish_lib(dev);
+         goto fail_sampler_heap;
+      }
+      memset(dev->atomic64_locks->cpu, 0, 65536 * sizeof(uint32_t));
+   }
+
    if (pdev->settings.gpu_capture_enabled) {
       const char *capture_directory =
          debug_get_option("MESA_KK_GPU_CAPTURE_DIRECTORY", NULL);
@@ -398,6 +409,9 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_device_finish_lib(dev);
    kk_query_table_finish(dev, &dev->occlusion_queries);
    kk_destroy_sampler_heap(dev, &dev->samplers);
+
+   if (dev->atomic64_locks)
+      kk_destroy_bo(dev, dev->atomic64_locks);
 
    /* Geometry heap */
    if (dev->heap)

@@ -1088,6 +1088,8 @@ global_access_qualifier(struct nir_to_msl_ctx *ctx,
    return access & ACCESS_COHERENT ? "coherent device" : "device";
 }
 
+#include "kk_atomic_int64.h"
+
 static void
 intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
 {
@@ -1100,6 +1102,7 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
        instr->intrinsic == nir_intrinsic_load_barycentric_at_offset)
       return;
 
+   if (kk_emit_atomic64(ctx, instr)) return;
    const nir_intrinsic_info *info = &nir_intrinsic_infos[instr->intrinsic];
    if (instrinsic_needs_dest_type(instr)) {
       P_IND(ctx, "t%d = ", instr->def.index);
@@ -2531,6 +2534,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       P(&ctx, "#include <metal_compute>\n");
    P(&ctx, "#include <metal_stdlib>\n");
    P(&ctx, "using namespace metal;\n");
+   if (kk_uses_atomic64(shader)) P(&ctx, "%s", kk_atomic64_msl);
    if (kk_fp32_preserve(shader)) P(&ctx, "%s", kk_fp32_preserve_msl);
 
    msl_emit_constant_data(&ctx, shader);
