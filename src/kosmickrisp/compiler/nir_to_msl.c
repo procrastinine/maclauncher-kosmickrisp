@@ -3024,6 +3024,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (atomic64) {
       P(&ctx, "constant ulong kk_atomic64_lock_table [[function_constant(%u)]];\n",
         KK_FUNCTION_CONSTANT_ATOMIC64_LOCK_TABLE);
+      P(&ctx, "#define KK_NATIVE_ULONG_MINMAX %u\n", options->native_atomic64_minmax);
       P(&ctx, "%s", kk_atomic64_msl);
    }
 

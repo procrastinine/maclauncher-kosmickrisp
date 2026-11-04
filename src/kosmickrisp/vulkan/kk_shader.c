@@ -1422,6 +1422,7 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    translate_options.native_sampler_lod_bias = pdev->info.gpu_apple_family >= 10;
    translate_options.native_query_texture_lod = pdev->info.supports_query_texture_lod;
    translate_options.per_vertex_inputs = opts ? opts->native_per_vertex : NULL;
+   translate_options.native_atomic64_minmax = pdev->info.gpu_apple_family >= 8;
    struct kk_mesh_msl_options mesh_options;
    if (nir->info.stage == MESA_SHADER_TASK || nir->info.stage == MESA_SHADER_MESH) {
       mesh_options.queries = opts && opts->mesh_queries;

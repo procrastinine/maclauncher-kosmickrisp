@@ -411,13 +411,16 @@ Feature table
      - —
    * - ``VK_KHR_shader_atomic_int64`` (``shaderBufferInt64Atomics``,
        ``shaderSharedInt64Atomics``)
-     - Emulated: each operation takes a hashed lock and updates two 32-bit
-       words.
-     - Apple9 for all 64-bit atomics, Apple8 on macOS for unsigned minimum
-       and maximum; emulated on all families.
-     - —
-     - Always
-     - —
+     - Full-width transactions use a hashed lock. Apple8 and later use native
+       assistance for unsigned buffer minimum and maximum with unused results;
+       other buffer and workgroup operations use two 32-bit words.
+     - Apple9 hardware atomic capability; the public MSL path retains the
+       emulated transaction on all families. Apple8 macOS provides unsigned
+       buffer minimum and maximum assistance.
+     - ``atomic64``
+     - On
+     - vkd3d-proton cannot advance from SM 6.5 to SM 6.6 and loses its shared
+       int64 atomic capability. Ordinary ``shaderInt64`` remains independent.
    * - ``VK_EXT_shader_image_atomic_int64``, 64-bit integer storage images and
        texel buffers
      - Emulated: each operation takes a hashed lock, and a native unsigned

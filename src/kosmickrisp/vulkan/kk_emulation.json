@@ -725,5 +725,23 @@
     "performance_reason": "Writable multisample textures are optional in vkd3d-proton and do not raise its base shader model or feature level; disabling them retains native MSAA sampling without sample-plane selection.",
     "off_consequence": "D3D12 WriteableMSAATexturesSupported becomes false; vkd3d-proton base shader-model, feature-level and device-creation requirements are unchanged. Ordinary MSAA and multisampled local reads remain available.",
     "native_from": null
+  },
+  {
+    "name": "atomic64",
+    "description": "Full-width buffer and workgroup 64-bit integer atomic operations.",
+    "cost_class": "hashed locks / split-word transactions",
+    "cost_note": "Actual atomic64 operations acquire a shared 32-bit hashed lock with CAS retry and two sequential fences. Returned-value operations read two 32-bit words; modifying operations write two words. Unsigned unused-result device min/max uses native assistance from Apple8 within the same mixed-operation lock protocol. Threadgroup operations retain split-word transactions. Operations whose addresses share a hashed lock serialize.",
+    "extensions": [
+      "VK_KHR_shader_atomic_int64"
+    ],
+    "features": [
+      "shaderBufferInt64Atomics",
+      "shaderSharedInt64Atomics"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "vkd3d-proton requires buffer int64 atomics for SM 6.6 and higher; workgroup int64 atomics provide its optional shared-memory atomic capability. Only actual atomic64 instructions select this implementation.",
+    "off_consequence": "Buffer and workgroup int64 atomics are unavailable; vkd3d-proton cannot advance from SM 6.5 to SM 6.6 and loses AtomicInt64OnGroupSharedSupported. Ordinary shaderInt64 remains independent.",
+    "native_from": null
   }
 ]

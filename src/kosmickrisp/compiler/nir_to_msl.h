@@ -57,6 +57,9 @@ struct nir_to_msl_options {
       uint8_t rts_component_count[MAX_DRAW_BUFFERS];
       const struct kk_mesh_msl_options *mesh;
    };
+
+   /* Public ulong min/max is available on Apple8 macOS and later. */
+   bool native_atomic64_minmax;
 };
 
 /* Assumes nir_shader_gather_info has been called beforehand. */
