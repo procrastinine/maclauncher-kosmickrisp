@@ -42,6 +42,11 @@ struct fsr_ctx {
    nir_def *lead;         /* real lane of this sample invocation, bool */
    nir_def *won;          /* this invocation runs the fragment's side effects */
    nir_def *slot, *tag;   /* fragment slot address (u64, 0 if none) and tag */
+   /* Presence handshake inputs (sample_group only). */
+   nir_def *px, *py, *p, *alive, *group, *wide, *tall;
+   nir_def *bits[4];      /* 1 << (p ^ k) */
+   nir_variable *covered_var;
+   nir_instr *covered_store;
    nir_def *rate;         /* final rate, Vulkan encoding */
    nir_def *fx, *fy;      /* fragment width and height, float */
    /* Neighbor displacements for the derivative solve. */
@@ -189,6 +194,26 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
    nir_def *covered = nir_ior(b, nir_imul(b, alive, bit0),
       nir_ior(b, nir_imul(b, alive_h, bit1),
          nir_ior(b, nir_imul(b, alive_v, bit2), nir_imul(b, alive_d, bit3))));
+   if (ctx->sample_group) {
+      /* fsr_claim replaces the helper-flag coverage with the lanes whose
+       * memory operations run in this sample invocation. */
+      ctx->px = px;
+      ctx->py = py;
+      ctx->p = p;
+      ctx->alive = alive;
+      ctx->group = group;
+      ctx->wide = wide;
+      ctx->tall = tall;
+      ctx->bits[0] = bit0;
+      ctx->bits[1] = bit1;
+      ctx->bits[2] = bit2;
+      ctx->bits[3] = bit3;
+      ctx->covered_var = nir_local_variable_create(b->impl, glsl_uint_type(), "kk_fsr_covered");
+      nir_store_var(b, ctx->covered_var, covered, 1);
+      assert(b->cursor.option == nir_cursor_after_instr);
+      ctx->covered_store = b->cursor.instr;
+      covered = nir_load_var(b, ctx->covered_var);
+   }
    nir_def *candidates = nir_iand(b, covered, group);
    nir_def *real_pos = nir_find_lsb(b, nir_bcsel(b, nir_ine_imm(b, candidates, 0),
                                                  candidates, group));
@@ -469,7 +494,10 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
  * limit keeps its own results. */
 #define FSR_SLOT_READY 4
 #define FSR_SLOT_DISCARD 8
-#define FSR_SLOT_DATA 12
+#define FSR_SLOT_PRESENCE 12
+#define FSR_SLOT_SAMPLES 8
+#define FSR_SLOT_DATA (FSR_SLOT_PRESENCE + 4 * FSR_SLOT_SAMPLES)
+#define FSR_PRESENCE_TRIES 64
 #define FSR_SLOT_PROBES 64
 #define FSR_SLOT_AGE 2
 #define FSR_SLOT_TRIES (1u << 12)
@@ -513,10 +541,16 @@ fsr_slot_fence(nir_builder *b)
 static void
 fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
 {
+   /* Before the real lane is chosen: every executing lane of the fragment
+    * finds the slot, then announces itself in the slot's presence word for
+    * its sample. */
+   b->cursor = nir_after_instr(ctx->covered_store);
    nir_def *serial = fsr_load_root(b, 1, 32, offsetof(struct kk_root_descriptor_table, fsr.serial));
    nir_def *slots = fsr_load_root(b, 1, 64, offsetof(struct kk_root_descriptor_table, fsr.slots));
    nir_def *prim = nir_load_raster_primitive_id_kk(b);
-   nir_def *origin = nir_ior(b, ctx->ox, nir_ishl_imm(b, ctx->oy, 16));
+   nir_def *ox = nir_bcsel(b, ctx->wide, nir_iand_imm(b, ctx->px, ~1u), ctx->px);
+   nir_def *oy = nir_bcsel(b, ctx->tall, nir_iand_imm(b, ctx->py, ~1u), ctx->py);
+   nir_def *origin = nir_ior(b, ox, nir_ishl_imm(b, oy, 16));
    nir_def *h = nir_ixor(b, nir_imul_imm(b, serial, 0x9e3779b1u),
       nir_ixor(b, nir_imul_imm(b, nir_iadd_imm(b, prim, 1), 0x85ebca77u),
                   nir_imul_imm(b, origin, 0xc2b2ae3du)));
@@ -531,16 +565,23 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
                                 32 - bits);
    nir_def *half = nir_ishl_imm(b, nir_iand_imm(b, serial, 1), bits);
    nir_def *active = nir_ine_imm(b, slots, 0);
+   nir_def *sid = nir_iand_imm(b, nir_load_sample_id(b), FSR_SLOT_SAMPLES - 1);
+   BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_SAMPLE_ID);
+   nir_def *key = nir_ishl_imm(b, ctx->tag, 5);
+   nir_def *own = ctx->bits[0];
 
    nir_variable *won = nir_local_variable_create(b->impl, glsl_bool_type(), "kk_fsr_won");
    nir_variable *slot = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "kk_fsr_slot");
    nir_variable *probe = nir_local_variable_create(b->impl, glsl_uint_type(), "kk_fsr_probe");
    nir_variable *tries = nir_local_variable_create(b->impl, glsl_uint_type(), "kk_fsr_tries");
+   nir_variable *present = nir_local_variable_create(b->impl, glsl_uint_type(), "kk_fsr_present");
+   nir_variable *word = nir_local_variable_create(b->impl, glsl_uint_type(), "kk_fsr_word");
    nir_store_var(b, won, nir_imm_true(b), 1);
    nir_store_var(b, slot, nir_imm_int64(b, 0), 1);
    nir_store_var(b, probe, nir_imm_int(b, 0), 1);
    nir_store_var(b, tries, nir_imm_int(b, 0), 1);
-   nir_push_if(b, nir_iand(b, ctx->real, active));
+   nir_store_var(b, present, nir_imm_int(b, 0), 1);
+   nir_push_if(b, nir_iand(b, nir_ine_imm(b, ctx->alive, 0), active));
    {
       nir_push_loop(b);
       {
@@ -551,7 +592,7 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
          nir_def *old = fsr_slot_read(b, addr);
          nir_def *n = nir_iadd_imm(b, nir_load_var(b, tries), 1);
          nir_store_var(b, tries, n, 1);
-         /* Another sample invocation of this fragment holds the slot. */
+         /* Another lane or sample invocation of this fragment holds the slot. */
          nir_push_if(b, nir_ieq(b, old, ctx->tag));
          {
             nir_store_var(b, won, nir_imm_false(b), 1);
@@ -571,8 +612,16 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
                nir_store_var(b, slot, addr, 1);
                nir_jump(b, nir_jump_break);
             }
+            /* Another lane of this fragment claimed it first. */
+            nir_push_if(b, nir_ieq(b, seen, ctx->tag));
+            {
+               nir_store_var(b, won, nir_imm_false(b), 1);
+               nir_store_var(b, slot, addr, 1);
+               nir_jump(b, nir_jump_break);
+            }
             nir_pop_if(b, NULL);
-            /* Lost the race: examine the same slot again. */
+            nir_pop_if(b, NULL);
+            /* Lost the race to another fragment: examine the same slot again. */
          }
          nir_push_else(b, NULL);
          {
@@ -583,12 +632,70 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
                                  nir_uge_imm(b, n, FSR_SLOT_TRIES)));
       }
       nir_pop_loop(b, NULL);
+
+      /* Presence: the word holds the tag shifted by 5, the claim bit (bit 4,
+       * set by the lane that claimed the slot) and one bit per quad
+       * position. A word of another tag is stale and is replaced. Only
+       * lanes that run this sample execute these atomics, and each one reads
+       * the word after every lane of its quad has added its bits; nothing
+       * waits for another simdgroup. Quad shuffles of values computed by
+       * the claim are not exact under per-sample execution, so the claim
+       * travels through the word too. */
+      nir_def *s = nir_load_var(b, slot);
+      nir_push_if(b, nir_ine_imm(b, s, 0));
+      {
+         nir_def *paddr = nir_iadd(b, nir_iadd_imm(b, s, FSR_SLOT_PRESENCE),
+                                   nir_u2u64(b, nir_ishl_imm(b, sid, 2)));
+         nir_store_var(b, word, nir_imm_int(b, 0), 1);
+         nir_store_var(b, tries, nir_imm_int(b, 0), 1);
+         nir_push_loop(b);
+         {
+            nir_def *w = nir_load_var(b, word);
+            nir_def *mine = nir_ieq(b, nir_iand_imm(b, w, ~0x1fu), key);
+            nir_def *claimed = nir_bcsel(b, nir_load_var(b, won), nir_imm_int(b, 0x10),
+                                         nir_imm_int(b, 0));
+            nir_def *next = nir_ior(b, nir_bcsel(b, mine, w, key), nir_ior(b, own, claimed));
+            nir_def *seen = nir_global_atomic_swap(b, 32, paddr, w, next,
+                                                   .atomic_op = nir_atomic_op_cmpxchg);
+            nir_store_var(b, word, seen, 1);
+            nir_def *t = nir_iadd_imm(b, nir_load_var(b, tries), 1);
+            nir_store_var(b, tries, t, 1);
+            nir_break_if(b, nir_ior(b, nir_ieq(b, seen, w),
+                                    nir_uge_imm(b, t, FSR_PRESENCE_TRIES)));
+         }
+         nir_pop_loop(b, NULL);
+         nir_def *r = fsr_slot_read(b, paddr);
+         nir_store_var(b, present, nir_bcsel(b, nir_ieq(b, nir_iand_imm(b, r, ~0x1fu), key),
+                                             nir_iand_imm(b, r, 0x1f), nir_imm_int(b, 0)), 1);
+      }
+      nir_pop_if(b, NULL);
    }
    nir_pop_if(b, NULL);
-   ctx->won = nir_load_var(b, won);
+   /* A lane that has its own bit knows the executing lanes of its quad;
+    * otherwise the helper flags decide, as without the handshake. */
+   nir_def *pres = nir_load_var(b, present);
+   nir_def *known = nir_ine_imm(b, nir_iand(b, pres, own), 0);
+   nir_def *covered = nir_load_var(b, ctx->covered_var);
+   nir_store_var(b, ctx->covered_var,
+                 nir_bcsel(b, known, nir_iand_imm(b, pres, 0xf), covered), 1);
+
+   /* After the setup: the sample invocation that holds the claiming lane
+    * runs the side effects through its real lane. A lane without its own
+    * presence bit (no slot) falls back to the quad's claim results. */
+   b->cursor = nir_after_instr(ctx->top_end);
+   nir_def *wonbit = nir_b2i32(b, nir_load_var(b, won));
+   nir_def *wonmask = nir_ior(b, nir_imul(b, wonbit, ctx->bits[0]),
+      nir_ior(b, nir_imul(b, nir_quad_swap_horizontal(b, wonbit), ctx->bits[1]),
+         nir_ior(b, nir_imul(b, nir_quad_swap_vertical(b, wonbit), ctx->bits[2]),
+                    nir_imul(b, nir_quad_swap_diagonal(b, wonbit), ctx->bits[3]))));
+   nir_def *candidates = nir_iand(b, nir_load_var(b, ctx->covered_var), ctx->group);
+   nir_def *group_won = nir_bcsel(b, known, nir_ine_imm(b, nir_iand_imm(b, pres, 0x10), 0),
+                                  nir_ine_imm(b, nir_iand(b, wonmask, candidates), 0));
+   ctx->won = group_won;
    ctx->slot = nir_load_var(b, slot);
    ctx->lead = ctx->real;
-   ctx->real = nir_iand(b, ctx->real, ctx->won);
+   ctx->real = nir_iand(b, ctx->real, group_won);
+   ctx->top_end = nir_def_instr(ctx->real);
 }
 
 /* At the end of the shader: the winner publishes, the other real lanes take
