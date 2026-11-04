@@ -561,5 +561,19 @@
     "performance": true,
     "performance_reason": "Preserve D3D single-layer dimension reinterpretation: the pinned vkd3d-proton legacy natural-view path has no maintenance11 guarantee or established equivalent native Metal argument-type fallback.",
     "off_consequence": "D3D single-layer 2D/2D-array descriptor reinterpretation loses its maintenance11 guarantee even though reported SM/FL and device creation are unchanged; DXVK uploads fall back to the graphics queue."
+  },
+  {
+    "name": "layered_block_views",
+    "description": "Multiple layers in uncompressed block-compatible views of compressed images.",
+    "cost_class": "native per-layer views / layer and raster adaptation",
+    "cost_note": "Native per-layer views share backing; selected shader accesses select a layer descriptor. Cube filtering may add taps and layered attachments may use retained raster readers. Representative array-load lowering adds five descriptor or record loads and 37 pre-optimization ALU operations. Runtime timing is unmeasured.",
+    "extensions": [],
+    "features": [],
+    "properties": [
+      "blockTexelViewCompatibleMultipleLayers"
+    ],
+    "performance": false,
+    "performance_reason": "DXVK has a per-layer compressed-upload fallback and does not use this optional maintenance6 property to choose D3D SM/FL or require device creation.",
+    "off_consequence": "Reported D3D SM/FL and translator device creation are unchanged; public multi-layer raw block views are unavailable and DXVK uses per-layer uploads. Other maintenance6 guarantees and internal copy paths remain available."
   }
 ]
