@@ -575,5 +575,38 @@
     "performance": false,
     "performance_reason": "DXVK has a per-layer compressed-upload fallback and does not use this optional maintenance6 property to choose D3D SM/FL or require device creation.",
     "off_consequence": "Reported D3D SM/FL and translator device creation are unchanged; public multi-layer raw block views are unavailable and DXVK uses per-layer uploads. Other maintenance6 guarantees and internal copy paths remain available."
+  },
+  {
+    "name": "transform_feedback",
+    "description": "Transform-feedback buffer output, geometry streams and stream queries.",
+    "cost_class": "compute / buffer output",
+    "cost_note": "Active feedback captures producer output, checks buffer room and writes enabled components and counters. A family-8 point-GS vec4 output adds 16 emitted MSL assignment/store sites to the raster sibling and a 115-site report program. These are static source sites, not native instruction counts; replay/report dispatch depends on actual use.",
+    "extensions": [
+      "VK_EXT_transform_feedback",
+      "VK_EXT_primitives_generated_query"
+    ],
+    "features": [
+      "transformFeedback",
+      "geometryStreams",
+      "primitivesGeneratedQuery",
+      "primitivesGeneratedQueryWithRasterizerDiscard",
+      "primitivesGeneratedQueryWithNonZeroStreams"
+    ],
+    "properties": [
+      "maxTransformFeedbackStreams",
+      "maxTransformFeedbackBuffers",
+      "maxTransformFeedbackBufferSize",
+      "maxTransformFeedbackStreamDataSize",
+      "maxTransformFeedbackBufferDataSize",
+      "maxTransformFeedbackBufferDataStride",
+      "transformFeedbackQueries",
+      "transformFeedbackStreamsLinesTriangles",
+      "transformFeedbackRasterizationStreamSelect",
+      "transformFeedbackDraw",
+      "transformFeedbackPreservesTriangleFanProvokingVertex"
+    ],
+    "performance": true,
+    "performance_reason": "vkd3d-proton requires transform-feedback queries for device creation, and D3D11 stream output requires the implemented output path.",
+    "off_consequence": "vkd3d-proton rejects devices without transformFeedbackQueries; D3D11 stream output and dependent generated-primitive queries are unavailable."
   }
 ]
