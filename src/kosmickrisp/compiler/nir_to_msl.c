@@ -1222,7 +1222,6 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       return;
 
    if (kk_emit_image64(ctx, instr)) return;
-   if (kk_emit_mesh_intrinsic(ctx, instr)) return;
    if (kk_emit_atomic64(ctx, instr)) return;
    bool guarded = msl_interlock_side_effect(ctx, instr);
    if (guarded) {
@@ -1238,6 +1237,16 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       }
    }
    switch (instr->intrinsic) {
+   case nir_intrinsic_load_task_payload:
+   case nir_intrinsic_store_task_payload:
+   case nir_intrinsic_launch_mesh_workgroups:
+   case nir_intrinsic_set_vertex_and_primitive_count:
+   case nir_intrinsic_store_per_vertex_output:
+   case nir_intrinsic_store_per_primitive_output:
+   case nir_intrinsic_load_per_vertex_output:
+   case nir_intrinsic_load_per_primitive_output:
+      kk_mesh_intrinsic_to_msl(ctx, instr);
+      break;
    case nir_intrinsic_decl_reg: {
       const char *reg_type = msl_uint_type(nir_intrinsic_bit_size(instr),
                                            nir_intrinsic_num_components(instr));
@@ -1442,6 +1451,12 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       break;
    }
    case nir_intrinsic_store_output: {
+      if (nir_intrinsic_io_semantics(instr).location == VARYING_SLOT_PRIMITIVE_COUNT) {
+         P_IND(ctx, "if (gl_LocalInvocationIndex == 0) kk_counts[1] = ");
+         src_to_msl(ctx, &instr->src[0]);
+         P(ctx, ";\n");
+         break;
+      }
       uint32_t idx = nir_src_as_uint(instr->src[1]);
       nir_io_semantics io = nir_intrinsic_io_semantics(instr);
       uint32_t location = io.location + idx;
@@ -2610,12 +2625,28 @@ msl_preprocess_nir_workarounds(struct nir_shader *nir,
 }
 
 static void
+kk_mesh_init_msl_info(struct nir_to_msl_ctx *ctx,
+                      const struct nir_to_msl_options *options)
+{
+   static const struct kk_mesh_msl_options defaults;
+   const struct kk_mesh_msl_options *mesh = options->mesh ? options->mesh : &defaults;
+   ctx->mesh = (struct kk_mesh_msl_info) {
+      .queries = mesh->queries,
+      .view_mask = mesh->view_mask,
+      .view_index_offset = mesh->view_index_offset,
+      .flat_heap = mesh->flat_heap,
+      .projected_basis = mesh->projected_basis,
+      .flat_heap_offset = mesh->flat_heap_offset,
+   };
+   ctx->uses_per_draw_data = ctx->mesh.flat_heap || ctx->mesh.view_mask ||
+      msl_gather_uses_per_draw_data(ctx->shader);
+}
+
+static void
 msl_gather_info(struct nir_to_msl_ctx *ctx, struct nir_to_msl_options *options)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(ctx->shader);
    ctx->types = msl_infer_types(ctx);
-   ctx->uses_per_draw_data = ctx->mesh_flat_heap || ctx->mesh_view_mask ||
-      msl_gather_uses_per_draw_data(ctx->shader);
 
    /* TODO_KOSMICKRISP
     * Reindex blocks and ssa. This allows us to optimize things we don't at the
@@ -2623,9 +2654,17 @@ msl_gather_info(struct nir_to_msl_ctx *ctx, struct nir_to_msl_options *options)
    nir_index_blocks(impl);
    nir_index_ssa_defs(impl);
 
-   if (ctx->shader->info.stage == MESA_SHADER_VERTEX ||
-       ctx->shader->info.stage == MESA_SHADER_FRAGMENT ||
-       ctx->shader->info.stage == MESA_SHADER_MESH) {
+   switch (ctx->shader->info.stage) {
+   case MESA_SHADER_TASK:
+      kk_mesh_init_msl_info(ctx, options);
+      break;
+   case MESA_SHADER_MESH:
+      kk_mesh_init_msl_info(ctx, options);
+      goto gather_io;
+   case MESA_SHADER_VERTEX:
+   case MESA_SHADER_FRAGMENT:
+      ctx->uses_per_draw_data = msl_gather_uses_per_draw_data(ctx->shader);
+   gather_io:
       msl_gather_io_info(ctx, ctx->inputs_info, ctx->outputs_info);
 
       if (ctx->shader->info.stage == MESA_SHADER_FRAGMENT) {
@@ -2661,6 +2700,10 @@ msl_gather_info(struct nir_to_msl_ctx *ctx, struct nir_to_msl_options *options)
                options->rts_component_count[i];
          }
       }
+      break;
+   default:
+      ctx->uses_per_draw_data = msl_gather_uses_per_draw_data(ctx->shader);
+      break;
    }
 }
 
@@ -2746,19 +2789,13 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    rename_main_entrypoint(shader);
    kk_float_controls_lower(shader);
 
-   struct nir_to_msl_ctx ctx = {
-      .shader = shader,
-      .interlock = msl_interlock_shader(shader),
-      .text = _mesa_string_buffer_create(options->mem_ctx, 1024),
-      .disabled_workarounds = options->disabled_workarounds,
-      .native_sampler_lod_bias = options->native_sampler_lod_bias,
-      .mesh_queries = options->mesh_queries,
-      .mesh_view_mask = options->mesh_view_mask,
-      .mesh_view_index_offset = options->mesh_view_index_offset,
-      .mesh_flat_heap = options->mesh_flat_heap,
-      .mesh_projected_basis = options->mesh_projected_basis,
-      .mesh_flat_heap_offset = options->mesh_flat_heap_offset,
-   };
+   struct nir_to_msl_ctx ctx;
+   memset(&ctx, 0, offsetof(struct nir_to_msl_ctx, mesh));
+   ctx.shader = shader;
+   ctx.interlock = msl_interlock_shader(shader);
+   ctx.text = _mesa_string_buffer_create(options->mem_ctx, 1024);
+   ctx.disabled_workarounds = options->disabled_workarounds;
+   ctx.native_sampler_lod_bias = options->native_sampler_lod_bias;
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    msl_interlock_prepare(shader);
    bool fp32_preserve_helpers = kk_fp32_preserve_lower(&ctx);
@@ -2827,12 +2864,12 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    ctx.indentlevel--;
    P(&ctx, "}\n");
    }
-   if (shader->info.stage == MESA_SHADER_MESH && options->mesh_retained_strides) {
-      options->mesh_retained_strides[0] = ctx.mesh_retained_vertex_stride;
-      options->mesh_retained_strides[1] = ctx.mesh_retained_primitive_stride;
+   if (shader->info.stage == MESA_SHADER_MESH && options->mesh && options->mesh->retained_strides) {
+      options->mesh->retained_strides[0] = ctx.mesh.retained_vertex_stride;
+      options->mesh->retained_strides[1] = ctx.mesh.retained_primitive_stride;
    }
-   if (shader->info.stage == MESA_SHADER_MESH && options->mesh_retained_fields)
-      memcpy(options->mesh_retained_fields, ctx.mesh_retained_fields, sizeof(ctx.mesh_retained_fields));
+   if (shader->info.stage == MESA_SHADER_MESH && options->mesh && options->mesh->retained_fields)
+      memcpy(options->mesh->retained_fields, ctx.mesh.retained_fields, sizeof(ctx.mesh.retained_fields));
    options->requires_msl41 = ctx.requires_msl41;
    options->uses_matrix_coordinates = ctx.uses_matrix_coordinates;
    char *ret = ctx.text->buf;

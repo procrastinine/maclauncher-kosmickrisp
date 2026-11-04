@@ -86,16 +86,38 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    util_dynarray_clear(&cmd->submit_drawables);
 }
 
-/* Ending recording preserves the allocator backing executable commands. */
-static void
-end_recording(struct kk_cmd_buffer *cmd)
+/* Also used by a submit-owned suffix: its Vulkan state is already pending.
+ * Finalize the real native span after the last encoder, for both callers. */
+void
+kk_cmd_buffer_end_native_recording(struct kk_cmd_buffer *cmd)
 {
-   if (cmd->vk.state != MESA_VK_COMMAND_BUFFER_STATE_RECORDING ||
-       cmd->metal.cmd_buf == NULL)
+   if (!cmd->metal.cmd_buf)
       return;
 
    cs_end_unordered(cmd);
    mtl_end_command_buffer(cmd->metal.cmd_buf);
+   cmd->native_submit.buffers = &cmd->metal.cmd_buf;
+   cmd->native_submit.count = 1;
+   if (util_dynarray_num_elements(&cmd->mesh_command_buffers,
+                                  mtl_command_buffer *) > 0) {
+      /* Retain an initialized final slot in the allocation, while leaving the
+       * vector's logical size as preceding parts only. Interlock continuations
+       * and retirement still own metal.cmd_buf separately. No later recording
+       * can grow/recycle this allocation before Vulkan reset. */
+      util_dynarray_append(&cmd->mesh_command_buffers, cmd->metal.cmd_buf);
+      cmd->native_submit.buffers = util_dynarray_begin(&cmd->mesh_command_buffers);
+      cmd->native_submit.count = util_dynarray_num_elements(
+         &cmd->mesh_command_buffers, mtl_command_buffer *);
+      (void)util_dynarray_pop(&cmd->mesh_command_buffers, mtl_command_buffer *);
+   }
+}
+
+/* Ending recording preserves the allocator backing executable commands. */
+static void
+end_recording(struct kk_cmd_buffer *cmd)
+{
+   if (cmd->vk.state == MESA_VK_COMMAND_BUFFER_STATE_RECORDING)
+      kk_cmd_buffer_end_native_recording(cmd);
 }
 
 static void

@@ -56,11 +56,11 @@ static unsigned
 kk_mesh_native_layout(struct nir_to_msl_ctx *ctx, uint64_t mask, bool vertex)
 {
    unsigned size = 0, alignment = 1;
-   if (ctx->mesh_flat_heap) {
+   if (ctx->mesh.flat_heap) {
       mask &= ~(BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1) &
                 ~BITFIELD64_MASK(VARYING_SLOT_VAR0));
       if (!vertex) kk_mesh_layout_field(&size, &alignment, 8, 8);
-      if (vertex && ctx->mesh_projected_basis)
+      if (vertex && ctx->mesh.projected_basis)
          kk_mesh_layout_field(&size, &alignment, 16, 16);
    }
    if (vertex && !(mask & VARYING_BIT_POS))
@@ -85,11 +85,11 @@ kk_mesh_native_layout(struct nir_to_msl_ctx *ctx, uint64_t mask, bool vertex)
          location == VARYING_SLOT_PRIMITIVE_SHADING_RATE ? 1u :
          location == VARYING_SLOT_LAYER ? 2u : 4u;
       if (field < 4u) {
-         ctx->mesh_retained_fields[field][0] = vertex ? 1u : 2u;
-         ctx->mesh_retained_fields[field][1] = field_offset;
-         ctx->mesh_retained_fields[field][2] = location == VARYING_SLOT_LAYER
+         ctx->mesh.retained_fields[field][0] = vertex ? 1u : 2u;
+         ctx->mesh.retained_fields[field][1] = field_offset;
+         ctx->mesh.retained_fields[field][2] = location == VARYING_SLOT_LAYER
             ? nir_type_uint32 : info.type;
-         ctx->mesh_retained_fields[field][3] = n;
+         ctx->mesh.retained_fields[field][3] = n;
       }
    }
    if (vertex && ctx->shader->info.clip_distance_array_size)
@@ -98,11 +98,11 @@ kk_mesh_native_layout(struct nir_to_msl_ctx *ctx, uint64_t mask, bool vertex)
    if (!vertex && ctx->shader->info.cull_distance_array_size &&
        !(mask & BITFIELD64_BIT(VARYING_SLOT_CULL_PRIMITIVE)))
       kk_mesh_layout_field(&size, &alignment, 1u, 1u);
-   if (!vertex && ctx->mesh_view_mask && !(mask & VARYING_BIT_LAYER)) {
-      ctx->mesh_retained_fields[2][0] = 2u;
-      ctx->mesh_retained_fields[2][1] = ALIGN_POT(size, 4u);
-      ctx->mesh_retained_fields[2][2] = nir_type_uint32;
-      ctx->mesh_retained_fields[2][3] = 1u;
+   if (!vertex && ctx->mesh.view_mask && !(mask & VARYING_BIT_LAYER)) {
+      ctx->mesh.retained_fields[2][0] = 2u;
+      ctx->mesh.retained_fields[2][1] = ALIGN_POT(size, 4u);
+      ctx->mesh.retained_fields[2][2] = nir_type_uint32;
+      ctx->mesh.retained_fields[2][3] = 1u;
       kk_mesh_layout_field(&size, &alignment, 4u, 4u);
    }
    if (!vertex && !ctx->shader->info.cull_distance_array_size &&
@@ -117,7 +117,7 @@ kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
 {
    P(ctx, "struct %s {\n", name);
    ctx->indentlevel++;
-   if (!storage && ctx->mesh_flat_heap) {
+   if (!storage && ctx->mesh.flat_heap) {
       mask &= ~(BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1) &
                 ~BITFIELD64_MASK(VARYING_SLOT_VAR0));
       if (!vertex) {
@@ -127,7 +127,7 @@ kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
          varying_slot_semantic(ctx, VARYING_SLOT_VAR0, 0);
          P(ctx, ";\n");
       }
-      if (ctx->mesh_projected_basis && vertex) {
+      if (ctx->mesh.projected_basis && vertex) {
          P_IND(ctx, "float3 ");
          varying_slot_name(ctx, KK_CANONICAL_PROJECTED_POINT, 0);
          P(ctx, " ");
@@ -168,7 +168,7 @@ kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
    if (!storage && !vertex && ctx->shader->info.cull_distance_array_size &&
        !(mask & BITFIELD64_BIT(VARYING_SLOT_CULL_PRIMITIVE)))
       P_IND(ctx, "bool kk_culled [[primitive_culled]];\n");
-   if (!storage && !vertex && ctx->mesh_view_mask && !(mask & VARYING_BIT_LAYER))
+   if (!storage && !vertex && ctx->mesh.view_mask && !(mask & VARYING_BIT_LAYER))
       P_IND(ctx, "uint kk_mesh_view_layer [[render_target_array_index]];\n");
    if (!storage && !vertex &&
        !(mask & BITFIELD64_BIT(VARYING_SLOT_CULL_PRIMITIVE)) &&
@@ -188,23 +188,23 @@ kk_mesh_io_blocks(struct nir_to_msl_ctx *ctx)
    uint64_t written = (s->info.outputs_written | s->info.outputs_read) &
       ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
       ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT);
-   ctx->mesh_retained_vertex_stride = kk_mesh_native_layout(ctx,
+   ctx->mesh.retained_vertex_stride = kk_mesh_native_layout(ctx,
       written & ~s->info.per_primitive_outputs, true);
-   ctx->mesh_retained_primitive_stride = kk_mesh_native_layout(ctx,
+   ctx->mesh.retained_primitive_stride = kk_mesh_native_layout(ctx,
       written & s->info.per_primitive_outputs, false);
    kk_mesh_io_block(ctx, "MeshVertex", written & ~s->info.per_primitive_outputs, true, false);
    kk_mesh_io_block(ctx, "MeshPrimitive", written & s->info.per_primitive_outputs, false, false);
    kk_mesh_io_block(ctx, "MeshVertexStorage", written & ~s->info.per_primitive_outputs, true, true);
    kk_mesh_io_block(ctx, "MeshPrimitiveStorage", written & s->info.per_primitive_outputs, false, true);
-   if (!ctx->mesh_retained_fields[2][0]) {
-      ctx->mesh_retained_fields[2][0] = 4u;
-      ctx->mesh_retained_fields[2][2] = nir_type_uint32;
-      ctx->mesh_retained_fields[2][3] = 1u;
+   if (!ctx->mesh.retained_fields[2][0]) {
+      ctx->mesh.retained_fields[2][0] = 4u;
+      ctx->mesh.retained_fields[2][2] = nir_type_uint32;
+      ctx->mesh.retained_fields[2][3] = 1u;
    }
-   ctx->mesh_retained_fields[3][0] = ctx->mesh_view_mask ? 3u : 4u;
-   ctx->mesh_retained_fields[3][1] = ctx->mesh_view_mask ? ctx->mesh_view_index_offset : 0u;
-   ctx->mesh_retained_fields[3][2] = nir_type_uint32;
-   ctx->mesh_retained_fields[3][3] = 1u;
+   ctx->mesh.retained_fields[3][0] = ctx->mesh.view_mask ? 3u : 4u;
+   ctx->mesh.retained_fields[3][1] = ctx->mesh.view_mask ? ctx->mesh.view_index_offset : 0u;
+   ctx->mesh.retained_fields[3][2] = nir_type_uint32;
+   ctx->mesh.retained_fields[3][3] = 1u;
    const char *topology = s->info.mesh.primitive_type == MESA_PRIM_POINTS ? "point" :
                           s->info.mesh.primitive_type == MESA_PRIM_LINES ? "line" : "triangle";
    P(ctx, "using MeshOutput = mesh<MeshVertex, MeshPrimitive, %u, %u, topology::%s>;\n",

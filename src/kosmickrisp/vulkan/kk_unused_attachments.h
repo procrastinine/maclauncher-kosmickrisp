@@ -150,11 +150,11 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
       }
    }
    mtl_render_pipeline_state *original = kind == KK_PIPELINE_MESH_VIRTUAL
-      ? shader->mesh_virtual->gfx.render : kind == KK_PIPELINE_MESH_CAPTURE
-      ? shader->mesh_retained[0]->gfx.render : kind == KK_PIPELINE_MESH_READER
-      ? shader->mesh_retained[1]->gfx.render : kind == KK_PIPELINE_MESH_SLICED
-      ? shader->mesh_sliced[0]->gfx.render : kind == KK_PIPELINE_MESH_VIRTUAL_SLICED
-      ? shader->mesh_sliced[1]->gfx.render : kind == KK_PIPELINE_CONSERVATIVE
+      ? shader->mesh->runtime->virtual->gfx.render : kind == KK_PIPELINE_MESH_CAPTURE
+      ? shader->mesh->runtime->retained[0]->gfx.render : kind == KK_PIPELINE_MESH_READER
+      ? shader->mesh->runtime->retained[1]->gfx.render : kind == KK_PIPELINE_MESH_SLICED
+      ? shader->mesh->runtime->sliced[0]->gfx.render : kind == KK_PIPELINE_MESH_VIRTUAL_SLICED
+      ? shader->mesh->runtime->sliced[1]->gfx.render : kind == KK_PIPELINE_CONSERVATIVE
       ? shader->pipeline.gfx.conservative_render : kind == KK_PIPELINE_POLYGON
       ? shader->pipeline.gfx.polygon_render : shader->pipeline.gfx.render;
    if (!original) {

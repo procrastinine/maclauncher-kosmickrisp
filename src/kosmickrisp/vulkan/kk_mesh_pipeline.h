@@ -3,6 +3,23 @@
 #define KK_MESH_PIPELINE_H
 #include "kk_mesh_sliced.h"
 
+static struct kk_mesh_shader_runtime *
+kk_mesh_runtime(struct kk_shader *shader)
+{
+   struct kk_mesh_shader_runtime *runtime = p_atomic_read(&shader->mesh->runtime);
+   if (!runtime) {
+      struct kk_mesh_shader_runtime *created = calloc(1, sizeof(*created));
+      if (!created)
+         return NULL;
+      runtime = p_atomic_cmpxchg(&shader->mesh->runtime, NULL, created);
+      if (runtime)
+         free(created);
+      else
+         runtime = created;
+   }
+   return runtime;
+}
+
 static VkResult
 kk_mesh_function(struct kk_device *dev, const struct msl_compile_data *data,
                   bool virtual, const char *suffix, mtl_library **library,
@@ -31,31 +48,38 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
    const struct kk_mesh_fragment_program *fragment_program,
    bool force_virtual, struct kk_pipeline_handles *pipe)
 {
-   const struct kk_shader_info *info = &shader->info;
+   if (!shader->mesh)
+      return VK_ERROR_INVALID_SHADER_NV;
+   const struct kk_mesh_shader_info *info = &shader->mesh->info;
    if (!fragment_program || !mesh_data ||
-       (!!task_data != info->mesh.has_task) ||
+       (!!task_data != info->has_task) ||
        (!!fragment_program->monolithic == !!fragment_program->attach))
       return VK_ERROR_INVALID_SHADER_NV;
-   if (fragment_program->attach && !shader->mesh_fragment) {
-      shader->mesh_fragment = malloc(sizeof(*shader->mesh_fragment));
-      if (!shader->mesh_fragment)
+   if (fragment_program->attach && !kk_mesh_fragment(shader)) {
+      struct kk_mesh_shader_runtime *runtime = kk_mesh_runtime(shader);
+      if (!runtime)
          return VK_ERROR_OUT_OF_HOST_MEMORY;
-      *shader->mesh_fragment = *fragment_program;
+      /* The original executable is not published until its first build ends.
+       * All later variants share these immutable fragment dependencies. */
+      runtime->fragment = *fragment_program;
    }
-   bool virtual = info->mesh.has_task &&
-      (force_virtual || info->mesh.task_grid_bound > KK_MESH_NATIVE_GROUPS);
-   void *temporary = ralloc_context(NULL);
+   bool virtual = info->has_task &&
+      (force_virtual || info->task_grid_bound > KK_MESH_NATIVE_GROUPS);
+   void *temporary = NULL;
+   if (info->retained_capture || info->retained_reader ||
+       (virtual && info->sliced))
+      temporary = ralloc_context(NULL);
    struct msl_compile_data retained_mesh;
-   if (info->mesh.retained_capture || info->mesh.retained_reader) {
+   if (info->retained_capture || info->retained_reader) {
       retained_mesh = *mesh_data;
       retained_mesh.code = ralloc_asprintf(temporary,
          "#define KK_MESH_RETAINED 1\n#define %s 1\n%s",
-         info->mesh.retained_reader ? "KK_MESH_RETAINED_READER" : "KK_MESH_RETAINED_CAPTURE",
+         info->retained_reader ? "KK_MESH_RETAINED_READER" : "KK_MESH_RETAINED_CAPTURE",
          mesh_data->code);
       mesh_data = &retained_mesh;
    }
    struct msl_compile_data sliced_mesh;
-   if (virtual && info->mesh.sliced) {
+   if (virtual && info->sliced) {
       sliced_mesh = *mesh_data;
       sliced_mesh.code = kk_mesh_virtual_sliced_source(temporary, mesh_data->code);
       if (!sliced_mesh.code) {
@@ -68,16 +92,16 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
    mtl_function_descriptor *mesh = NULL, *task = NULL, *fragment = NULL;
    mtl_render_pipeline_descriptor *descriptor = NULL;
    VkResult result = kk_mesh_function(dev, mesh_data,
-      virtual, info->mesh.retained_reader ? "retained" : virtual ? "virtual" : NULL, &mesh_lib, &mesh);
+      virtual, info->retained_reader ? "retained" : virtual ? "virtual" : NULL, &mesh_lib, &mesh);
    if (result != VK_SUCCESS)
       goto out;
-   if (info->mesh.has_task) {
+   if (info->has_task) {
       result = kk_mesh_function(dev, task_data,
          virtual, virtual ? "compute" : NULL, &task_lib, &task);
       if (result != VK_SUCCESS)
          goto out;
       if (virtual) {
-         struct mtl_size local = info->mesh.task_local_size;
+         struct mtl_size local = info->task_local_size;
          pipe->gfx.pre_render[0] = mtl_new_compute_pipeline_state(
             dev->mtl_compiler_handle, task, local.x * local.y * local.z);
          if (!pipe->gfx.pre_render[0]) {
@@ -93,13 +117,13 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
       if (result != VK_SUCCESS)
          goto out;
    }
-   struct mtl_size ml = info->mesh.retained_reader
-      ? (struct mtl_size){1, 1, 1} : info->mesh.local_size;
-   struct mtl_size tl = info->mesh.task_local_size;
+   struct mtl_size ml = info->retained_reader
+      ? (struct mtl_size){1, 1, 1} : info->local_size;
+   struct mtl_size tl = info->task_local_size;
    descriptor = mtl_new_mesh_pipeline_descriptor(mesh, virtual ? NULL : task,
       ml.x * ml.y * ml.z, tl.x * tl.y * tl.z,
-      MAX2(info->mesh.payload_size, info->mesh.task_payload_size),
-      info->mesh.task_grid_bound);
+      MAX2(info->payload_size, info->task_payload_size),
+      info->task_grid_bound);
    if (!descriptor) {
       result = VK_ERROR_OUT_OF_HOST_MEMORY;
       goto out;
@@ -116,8 +140,8 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
    if (!pipe->gfx.render) {
       result = VK_ERROR_INVALID_SHADER_NV;
    } else {
-      unsigned kind = info->mesh.retained_reader ? KK_PIPELINE_MESH_READER :
-         info->mesh.retained_capture ? KK_PIPELINE_MESH_CAPTURE : info->mesh.sliced ? (virtual ? KK_PIPELINE_MESH_VIRTUAL_SLICED : KK_PIPELINE_MESH_SLICED) :
+      unsigned kind = info->retained_reader ? KK_PIPELINE_MESH_READER :
+         info->retained_capture ? KK_PIPELINE_MESH_CAPTURE : info->sliced ? (virtual ? KK_PIPELINE_MESH_VIRTUAL_SLICED : KK_PIPELINE_MESH_SLICED) :
          force_virtual ? KK_PIPELINE_MESH_VIRTUAL : KK_PIPELINE_MAIN;
       if (fragment_program->finish)
          result = fragment_program->finish(dev, fragment_program, descriptor, pipe, kind);
@@ -145,9 +169,9 @@ kk_compile_mesh_pipeline(struct kk_device *dev, struct kk_shader *shader,
       .monolithic = &shader->msl_data[MESA_SHADER_FRAGMENT],
    };
    return kk_mesh_build_pipeline(dev, shader,
-      shader->info.mesh.has_task ? &shader->msl_data[MESA_SHADER_TASK] : NULL,
+      shader->mesh->info.has_task ? &shader->msl_data[MESA_SHADER_TASK] : NULL,
       &shader->msl_data[MESA_SHADER_MESH],
-      shader->mesh_fragment ? shader->mesh_fragment : &monolithic,
+      kk_mesh_fragment(shader) ? kk_mesh_fragment(shader) : &monolithic,
       force_virtual, pipe);
 }
 
@@ -155,8 +179,9 @@ void
 kk_mesh_release_pipeline(struct kk_device *dev, struct kk_shader *shader,
                            struct kk_pipeline_handles *pipe, unsigned kind)
 {
-   if (shader->mesh_fragment && shader->mesh_fragment->release_auxiliary)
-      shader->mesh_fragment->release_auxiliary(dev, shader->mesh_fragment, pipe, kind);
+   const struct kk_mesh_fragment_program *fragment = kk_mesh_fragment(shader);
+   if (fragment && fragment->release_auxiliary)
+      fragment->release_auxiliary(dev, fragment, pipe, kind);
    mtl_release(pipe->gfx.render);
    mtl_release(pipe->gfx.ds_handle);
    for (unsigned i = 0; i < pipe->gfx.pre_render_count; ++i)
@@ -169,14 +194,17 @@ kk_mesh_get_sliced_pipeline(struct kk_device *dev, struct kk_shader *shader,
                               bool virtual, struct kk_pipeline_handles **out)
 {
    unsigned kind = virtual ? KK_PIPELINE_MESH_VIRTUAL_SLICED : KK_PIPELINE_MESH_SLICED;
-   struct kk_pipeline_handles *cached = p_atomic_read(&shader->mesh_sliced[virtual]);
+   struct kk_mesh_shader_runtime *runtime = kk_mesh_runtime(shader);
+   if (!runtime)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   struct kk_pipeline_handles *cached = p_atomic_read(&runtime->sliced[virtual]);
    if (!cached) {
       struct kk_pipeline_handles *created = calloc(1, sizeof(*created));
       if (!created)
          return VK_ERROR_OUT_OF_HOST_MEMORY;
       void *mem = ralloc_context(NULL);
       struct msl_compile_data task_sliced, mesh_sliced;
-      const struct msl_compile_data *task = shader->info.mesh.has_task
+      const struct msl_compile_data *task = shader->mesh->info.has_task
          ? &shader->msl_data[MESA_SHADER_TASK] : NULL;
       const struct msl_compile_data *mesh = &shader->msl_data[MESA_SHADER_MESH];
       VkResult result = VK_SUCCESS;
@@ -191,13 +219,15 @@ kk_mesh_get_sliced_pipeline(struct kk_device *dev, struct kk_shader *shader,
          if (task) task = &task_sliced;
          else mesh = &mesh_sliced;
       }
+      struct kk_mesh_shader_state mesh_state = *shader->mesh;
       struct kk_shader executable = *shader;
-      executable.info.mesh.sliced = true;
+      executable.mesh = &mesh_state;
+      mesh_state.info.sliced = true;
       const struct kk_mesh_fragment_program monolithic = {
          .monolithic = &shader->msl_data[MESA_SHADER_FRAGMENT],
       };
       result = kk_mesh_build_pipeline(dev, &executable, task, mesh,
-         shader->mesh_fragment ? shader->mesh_fragment : &monolithic,
+         kk_mesh_fragment(shader) ? kk_mesh_fragment(shader) : &monolithic,
          virtual, created);
 finish:
       ralloc_free(mem);
@@ -205,7 +235,7 @@ finish:
          kk_mesh_release_pipeline(dev, shader, created, kind);
          return result;
       }
-      cached = p_atomic_cmpxchg(&shader->mesh_sliced[virtual], NULL, created);
+      cached = p_atomic_cmpxchg(&runtime->sliced[virtual], NULL, created);
       if (cached)
          kk_mesh_release_pipeline(dev, shader, created, kind);
       else
@@ -221,18 +251,23 @@ VkResult
 kk_mesh_get_retained_pipeline(struct kk_device *dev, struct kk_shader *shader,
                              bool reader, struct kk_pipeline_handles **out)
 {
-   struct kk_pipeline_handles *cached = p_atomic_read(&shader->mesh_retained[reader]);
+   struct kk_mesh_shader_runtime *runtime = kk_mesh_runtime(shader);
+   if (!runtime)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   struct kk_pipeline_handles *cached = p_atomic_read(&runtime->retained[reader]);
    if (!cached) {
       unsigned kind = reader ? KK_PIPELINE_MESH_READER : KK_PIPELINE_MESH_CAPTURE;
       struct kk_pipeline_handles *created = calloc(1, sizeof(*created));
       if (!created) return VK_ERROR_OUT_OF_HOST_MEMORY;
       void *mem = ralloc_context(NULL);
+      struct kk_mesh_shader_state mesh_state = *shader->mesh;
       struct kk_shader executable = *shader;
-      executable.info.mesh.retained_capture = !reader;
-      executable.info.mesh.retained_reader = reader;
-      executable.info.mesh.sliced = !reader;
-      bool virtual = !reader && shader->info.mesh.has_task;
-      executable.info.mesh.has_task = virtual;
+      executable.mesh = &mesh_state;
+      mesh_state.info.retained_capture = !reader;
+      mesh_state.info.retained_reader = reader;
+      mesh_state.info.sliced = !reader;
+      bool virtual = !reader && shader->mesh->info.has_task;
+      mesh_state.info.has_task = virtual;
       const struct msl_compile_data *mesh = &shader->msl_data[MESA_SHADER_MESH];
       struct msl_compile_data sliced;
       VkResult result = VK_SUCCESS;
@@ -248,7 +283,7 @@ kk_mesh_get_retained_pipeline(struct kk_device *dev, struct kk_shader *shader,
       };
       result = kk_mesh_build_pipeline(dev, &executable,
          virtual ? &shader->msl_data[MESA_SHADER_TASK] : NULL, mesh,
-         shader->mesh_fragment ? shader->mesh_fragment : &monolithic,
+         kk_mesh_fragment(shader) ? kk_mesh_fragment(shader) : &monolithic,
          virtual, created);
 finish:
       ralloc_free(mem);
@@ -256,7 +291,7 @@ finish:
          kk_mesh_release_pipeline(dev, shader, created, kind);
          return result;
       }
-      cached = p_atomic_cmpxchg(&shader->mesh_retained[reader], NULL, created);
+      cached = p_atomic_cmpxchg(&runtime->retained[reader], NULL, created);
       if (cached) kk_mesh_release_pipeline(dev, shader, created, kind);
       else cached = created;
    }
@@ -278,12 +313,15 @@ VkResult
 kk_mesh_get_pipeline(struct kk_device *dev, struct kk_shader *shader,
                       bool force_virtual, struct kk_pipeline_handles **out)
 {
-   if (!force_virtual || !shader->info.mesh.has_task ||
-       shader->info.mesh.task_grid_bound > KK_MESH_NATIVE_GROUPS) {
+   if (!force_virtual || !shader->mesh->info.has_task ||
+       shader->mesh->info.task_grid_bound > KK_MESH_NATIVE_GROUPS) {
       *out = &shader->pipeline;
       return VK_SUCCESS;
    }
-   struct kk_pipeline_handles *cached = p_atomic_read(&shader->mesh_virtual);
+   struct kk_mesh_shader_runtime *runtime = kk_mesh_runtime(shader);
+   if (!runtime)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   struct kk_pipeline_handles *cached = p_atomic_read(&runtime->virtual);
    if (!cached) {
       struct kk_pipeline_handles *created = calloc(1, sizeof(*created));
       if (!created)
@@ -293,7 +331,7 @@ kk_mesh_get_pipeline(struct kk_device *dev, struct kk_shader *shader,
          kk_mesh_release_pipeline(dev, shader, created, KK_PIPELINE_MESH_VIRTUAL);
          return result;
       }
-      cached = p_atomic_cmpxchg(&shader->mesh_virtual, NULL, created);
+      cached = p_atomic_cmpxchg(&runtime->virtual, NULL, created);
       if (cached) {
          kk_mesh_release_pipeline(dev, shader, created, KK_PIPELINE_MESH_VIRTUAL);
       } else {

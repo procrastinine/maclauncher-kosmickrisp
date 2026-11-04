@@ -349,13 +349,16 @@ static bool
 msl_nir_gather_io_info(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
 {
    struct gather_ctx *ctx = (struct gather_ctx *)data;
-   if (b->shader->info.stage == MESA_SHADER_MESH &&
-       kk_mesh_gather_io(intrin, ctx->output))
-      return false;
    switch (intrin->intrinsic) {
    case nir_intrinsic_load_buffer_ptr_kk:
       ctx->compiler->uses_poly_layer_selector |=
          nir_intrinsic_binding(intrin) == KK_ARGUMENT_POLY_LAYER_REPLAY;
+      break;
+   case nir_intrinsic_store_per_vertex_output:
+   case nir_intrinsic_store_per_primitive_output:
+   case nir_intrinsic_load_per_vertex_output:
+   case nir_intrinsic_load_per_primitive_output:
+      kk_mesh_gather_io(intrin, ctx->output);
       break;
    case nir_intrinsic_load_interpolated_input: {
       unsigned component = nir_intrinsic_component(intrin);
@@ -540,20 +543,15 @@ msl_output_name(struct nir_to_msl_ctx *ctx, unsigned location,
         alu_type_to_string(info.type), vector_suffixes[info.num_components]);
       return;
    }
-   if (ctx->shader->info.stage != MESA_SHADER_MESH) {
-      if (load_from_input) {
-         P(ctx, "in.");
-      } else {
-         P(ctx, "out.");
-      }
-   }
    switch (ctx->shader->info.stage) {
    case MESA_SHADER_VERTEX:
+      P(ctx, load_from_input ? "in." : "out.");
+      FALLTHROUGH;
    case MESA_SHADER_MESH:
       varying_slot_name(ctx, location, component);
       break;
    case MESA_SHADER_FRAGMENT:
-      P(ctx, "%s", FS_OUTPUT_NAME[location]);
+      P(ctx, "%s%s", load_from_input ? "in." : "out.", FS_OUTPUT_NAME[location]);
       break;
    default:
       UNREACHABLE("Invalid shader stage");

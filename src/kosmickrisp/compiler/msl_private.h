@@ -18,6 +18,15 @@ struct io_slot_info {
    bool uses_interpolant;
 };
 
+struct kk_mesh_msl_info {
+   bool queries;
+   uint32_t retained_vertex_stride, retained_primitive_stride;
+   uint32_t retained_fields[4][4];
+   uint32_t view_mask, view_index_offset;
+   bool flat_heap, projected_basis;
+   unsigned flat_heap_offset;
+};
+
 struct nir_to_msl_ctx {
    FILE *output;
    struct hash_table *types;
@@ -30,22 +39,17 @@ struct nir_to_msl_ctx {
    bool has_sampler_helpers;
    bool sparse_residency;
    bool interlock;
-   bool mesh_queries;
    bool requires_msl41;
    bool uses_matrix_coordinates;
-   uint32_t mesh_retained_vertex_stride, mesh_retained_primitive_stride;
-   uint32_t mesh_retained_fields[4][4];
-   uint32_t mesh_view_mask, mesh_view_index_offset;
-   bool mesh_flat_heap;
-   bool mesh_projected_basis;
    bool uses_poly_layer_selector;
-   unsigned mesh_flat_heap_offset;
    unsigned short indentlevel;
    /* Use the alignment gap before the I/O records. */
    bool uses_atomic64;
    bool uses_image_atomic64;
    struct io_slot_info inputs_info[NUM_TOTAL_VARYING_SLOTS];
    struct io_slot_info outputs_info[NUM_TOTAL_VARYING_SLOTS];
+   /* Initialized only for Task/Mesh. Keep this stage-local data last. */
+   struct kk_mesh_msl_info mesh;
 };
 
 #define P_IND(ctx, ...)                                                        \

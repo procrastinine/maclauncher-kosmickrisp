@@ -416,6 +416,12 @@ struct kk_cmd_buffer {
    struct kk_barrier_scope pending_barrier;
    enum mtl_stages closed_encoder_stages;
    bool encoder_occlusion;
+   /* Recorded once, immutable until reset. Ordinary commands use the inline
+    * native handle; split Mesh commands use the existing parts allocation. */
+   struct {
+      mtl_command_buffer **buffers;
+      uint32_t count;
+   } native_submit;
    struct util_dynarray mesh_command_buffers;
    struct util_dynarray mesh_allocators;
    uint32_t mesh_batches_in_part, mesh_draws_in_part;
@@ -509,6 +515,7 @@ mtl_render_encoder *cs_get_render(struct kk_cmd_buffer *cmd);
 mtl_compute_encoder *cs_get_compute(struct kk_cmd_buffer *cmd);
 mtl_compute_encoder *cs_get_compute_for_dispatch(struct kk_cmd_buffer *cmd);
 /* Internal implementation boundaries retain their ordering contract. */
+void kk_cmd_buffer_end_native_recording(struct kk_cmd_buffer *cmd);
 void cs_end(struct kk_cmd_buffer *cmd);
 void cs_end_unordered(struct kk_cmd_buffer *cmd);
 void kk_cmd_pipeline_barriers(struct kk_cmd_buffer *cmd, uint32_t count,

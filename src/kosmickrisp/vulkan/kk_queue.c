@@ -139,18 +139,8 @@ kk_queue_commit_native(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
       mtl_commit_options_add_feedback_handler(options, callback, user_data);
    }
 
-   if (util_dynarray_num_elements(&cmd->mesh_command_buffers,
-                                  mtl_command_buffer *) > 0) {
-      util_dynarray_append(&cmd->mesh_command_buffers, cmd->metal.cmd_buf);
-      mtl_command_queue_commit(queue->mtl_handle,
-         util_dynarray_begin(&cmd->mesh_command_buffers),
-         util_dynarray_num_elements(&cmd->mesh_command_buffers, mtl_command_buffer *),
-         options);
-      (void)util_dynarray_pop(&cmd->mesh_command_buffers, mtl_command_buffer *);
-   } else {
-      mtl_command_queue_commit(queue->mtl_handle, &cmd->metal.cmd_buf, 1u,
-                               options);
-   }
+   mtl_command_queue_commit(queue->mtl_handle, cmd->native_submit.buffers,
+                            cmd->native_submit.count, options);
    mtl_release(options);
    for (uint32_t i = 0; i < count; i++) {
       void *drawable = i < retained_count ? drawables[i] : cmd->drawable;

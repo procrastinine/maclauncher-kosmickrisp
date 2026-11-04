@@ -1125,18 +1125,22 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
    kk_shader_embedded_samplers_finish(dev, shader);
+   const bool mesh_stage = kk_shader_stage_has_mesh_info(shader->vk.stage);
    kk_sparse_shader_finish(shader);
-   for (unsigned i = 0; i < 2; ++i)
-      if (shader->mesh_retained[i])
-         kk_mesh_release_pipeline(dev, shader, shader->mesh_retained[i],
-            i ? KK_PIPELINE_MESH_READER : KK_PIPELINE_MESH_CAPTURE);
-   if (shader->mesh_virtual)
-      kk_mesh_release_pipeline(dev, shader, shader->mesh_virtual, KK_PIPELINE_MESH_VIRTUAL);
-   for (unsigned i = 0; i < 2; ++i)
-      if (shader->mesh_sliced[i])
-         kk_mesh_release_pipeline(dev, shader, shader->mesh_sliced[i],
-            i ? KK_PIPELINE_MESH_VIRTUAL_SLICED : KK_PIPELINE_MESH_SLICED);
-   free(shader->mesh_fragment);
+   if (mesh_stage && shader->mesh && shader->mesh->runtime) {
+      struct kk_mesh_shader_runtime *runtime = shader->mesh->runtime;
+      for (unsigned i = 0; i < 2; ++i)
+         if (runtime->retained[i])
+            kk_mesh_release_pipeline(dev, shader, runtime->retained[i],
+               i ? KK_PIPELINE_MESH_READER : KK_PIPELINE_MESH_CAPTURE);
+      if (runtime->virtual)
+         kk_mesh_release_pipeline(dev, shader, runtime->virtual, KK_PIPELINE_MESH_VIRTUAL);
+      for (unsigned i = 0; i < 2; ++i)
+         if (runtime->sliced[i])
+            kk_mesh_release_pipeline(dev, shader, runtime->sliced[i],
+               i ? KK_PIPELINE_MESH_VIRTUAL_SLICED : KK_PIPELINE_MESH_SLICED);
+      free(runtime);
+   }
    free(shader->lazy_polygon);
    kk_attachment_pipelines_finish(shader);
    kk_interlock_pipeline_finish(shader->interlock_pipeline);
@@ -1362,18 +1366,22 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    translate_options.mem_ctx = NULL;
    translate_options.disabled_workarounds = pdev->settings.disabled_workarounds;
    translate_options.native_sampler_lod_bias = pdev->info.gpu_apple_family >= 10;
-   translate_options.mesh_queries = opts && opts->mesh_queries;
-   translate_options.mesh_retained_strides = opts ? opts->mesh_retained_strides : NULL;
-   translate_options.mesh_retained_fields = opts ? opts->mesh_retained_fields : NULL;
-   translate_options.mesh_view_mask = nir->info.stage == MESA_SHADER_MESH && state && state->mv ? state->mv->view_mask : 0;
-   translate_options.mesh_view_index_offset = offsetof(struct kk_per_draw_data, multiview_index);
-   translate_options.mesh_flat_heap = nir->info.stage == MESA_SHADER_MESH &&
-      opts && opts->per_vertex_map && opts->per_vertex_map->active &&
-      opts->per_vertex_map->canonical_heap;
-   translate_options.mesh_projected_basis = translate_options.mesh_flat_heap &&
-      opts->per_vertex_map->projected_basis;
-   translate_options.mesh_flat_heap_offset = translate_options.mesh_flat_heap
-      ? offsetof(struct kk_per_draw_data, per_vertex_heap) : 0;
+   struct kk_mesh_msl_options mesh_options;
+   if (nir->info.stage == MESA_SHADER_TASK || nir->info.stage == MESA_SHADER_MESH) {
+      mesh_options.queries = opts && opts->mesh_queries;
+      mesh_options.retained_strides = opts ? opts->mesh_retained_strides : NULL;
+      mesh_options.retained_fields = opts ? opts->mesh_retained_fields : NULL;
+      mesh_options.view_mask = nir->info.stage == MESA_SHADER_MESH && state && state->mv ? state->mv->view_mask : 0;
+      mesh_options.view_index_offset = offsetof(struct kk_per_draw_data, multiview_index);
+      mesh_options.flat_heap = nir->info.stage == MESA_SHADER_MESH &&
+         opts && opts->per_vertex_map && opts->per_vertex_map->active &&
+         opts->per_vertex_map->canonical_heap;
+      mesh_options.projected_basis = mesh_options.flat_heap &&
+         opts->per_vertex_map->projected_basis;
+      mesh_options.flat_heap_offset = mesh_options.flat_heap
+         ? offsetof(struct kk_per_draw_data, per_vertex_heap) : 0;
+      translate_options.mesh = &mesh_options;
+   }
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       for (uint32_t i = 0u; i < MAX_DRAW_BUFFERS; ++i) {
          /* If the attachment is unused, default to 4 to avoid issues with alpha
@@ -1494,12 +1502,14 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    mesa_shader_stage stage = nir->info.stage;
    bool vrs_captured_required = false;
    shader = vk_shader_zalloc(&dev->vk, &kk_shader_ops, stage, pAllocator,
-                             sizeof(*shader));
+                             kk_shader_size(stage));
    if (shader == NULL) {
       ralloc_free(opts->vrs_source);
       ralloc_free(nir);
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
+
+   kk_shader_init_mesh_state(shader, stage);
 
    shader->info.conservative = kk_conservative_possible(state);
    shader->cache_uses_embedded_samplers = nir->info.uses_embedded_samplers;
@@ -1522,29 +1532,29 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       }
    }
    if (stage == MESA_SHADER_TASK || stage == MESA_SHADER_MESH) {
-      shader->info.mesh.local_size = (struct mtl_size){
+      shader->mesh->info.local_size = (struct mtl_size){
          nir->info.workgroup_size[0], nir->info.workgroup_size[1], nir->info.workgroup_size[2]};
-      shader->info.mesh.payload_size = nir->info.task_payload_size;
-      shader->info.mesh.queries = opts->mesh_queries;
+      shader->mesh->info.payload_size = nir->info.task_payload_size;
+      shader->mesh->info.queries = opts->mesh_queries;
       if (stage == MESA_SHADER_TASK) {
-         shader->info.mesh.task_grid_bound = kk_task_grid_bound(nir);
+         shader->mesh->info.task_grid_bound = kk_task_grid_bound(nir);
       } else {
-         shader->info.mesh.primitive = nir->info.mesh.primitive_type;
-         shader->info.mesh.flat_heap = per_vertex_map && per_vertex_map->active &&
+         shader->mesh->info.primitive = nir->info.mesh.primitive_type;
+         shader->mesh->info.flat_heap = per_vertex_map && per_vertex_map->active &&
             per_vertex_map->canonical_heap;
-         shader->info.mesh.projected_basis = shader->info.mesh.flat_heap &&
+         shader->mesh->info.projected_basis = shader->mesh->info.flat_heap &&
             per_vertex_map->projected_basis;
-         shader->info.mesh.max_primitives = nir->info.mesh.max_primitives_out;
-         shader->info.uses_per_draw_data |= shader->info.mesh.flat_heap;
-         shader->info.mesh.max_vertices = nir->info.mesh.max_vertices_out;
-         shader->info.mesh.view_mask = state && state->mv ? state->mv->view_mask : 0;
-         shader->info.uses_per_draw_data |= shader->info.mesh.view_mask != 0;
+         shader->mesh->info.max_primitives = nir->info.mesh.max_primitives_out;
+         shader->info.uses_per_draw_data |= shader->mesh->info.flat_heap;
+         shader->mesh->info.max_vertices = nir->info.mesh.max_vertices_out;
+         shader->mesh->info.view_mask = state && state->mv ? state->mv->view_mask : 0;
+         shader->info.uses_per_draw_data |= shader->mesh->info.view_mask != 0;
          shader->info.num_cull_distances = 0;
          if (prev_stage && prev_stage->info.stage == MESA_SHADER_TASK) {
-            shader->info.mesh.has_task = true;
-            shader->info.mesh.task_local_size = prev_stage->info.mesh.local_size;
-            shader->info.mesh.task_payload_size = prev_stage->info.mesh.payload_size;
-            shader->info.mesh.task_grid_bound = prev_stage->info.mesh.task_grid_bound;
+            shader->mesh->info.has_task = true;
+            shader->mesh->info.task_local_size = prev_stage->mesh->info.local_size;
+            shader->mesh->info.task_payload_size = prev_stage->mesh->info.payload_size;
+            shader->mesh->info.task_grid_bound = prev_stage->mesh->info.task_grid_bound;
          }
       }
    }
@@ -1787,10 +1797,11 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       NIR_PASS(_, nir, kk_nir_lower_descriptors, false, robustness, 0, NULL);
    }
 
-   struct kk_compile_options mesh_options = *opts;
+   struct kk_compile_options mesh_options;
    if (stage == MESA_SHADER_MESH) {
-      mesh_options.mesh_retained_strides = shader->info.mesh.retained_strides;
-      mesh_options.mesh_retained_fields = (uint32_t *)shader->info.mesh.retained_fields;
+      mesh_options = *opts;
+      mesh_options.mesh_retained_strides = shader->mesh->info.retained_strides;
+      mesh_options.mesh_retained_fields = (uint32_t *)shader->mesh->info.retained_fields;
       opts = &mesh_options;
    }
    if (pixel_envelope && stage == MESA_SHADER_FRAGMENT) {
@@ -2273,10 +2284,18 @@ gather_graphics_pipeline_create_info(
       }
    }
 
-   uint8_t topology = vs->info.stage == MESA_SHADER_MESH
-      ? (vs->info.mesh.primitive == MESA_PRIM_POINTS ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
-         : vs->info.mesh.primitive == MESA_PRIM_LINES ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
-         : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST) : state->ia->primitive_topology;
+   uint8_t topology;
+   if (vs->info.stage == MESA_SHADER_MESH) {
+      /* One executable owns every linked stage, including cache restores. */
+      for (uint32_t i = 0; i < shader_count; ++i)
+         info->uses_per_draw_data |= shaders[i]->info.uses_per_draw_data;
+      topology = vs->mesh->info.primitive == MESA_PRIM_POINTS
+         ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+         : vs->mesh->info.primitive == MESA_PRIM_LINES
+            ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+   } else {
+      topology = state->ia->primitive_topology;
+   }
    if (info->vs.additional_stages_bits & BITFIELD_BIT(MESA_SHADER_TESS_CTRL)) {
       /* TODO_KOSMICKRISP Hackity hack */
       struct kk_shader *tesc = shaders[1];
@@ -3185,6 +3204,8 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
    if (!kk_shader_cache_write_bindings(shader, blob))
       return false;
    blob_write_bytes(blob, &shader->info, sizeof(shader->info));
+   if (kk_shader_stage_has_mesh_info(shader->info.stage))
+      blob_write_bytes(blob, &shader->mesh->info, sizeof(shader->mesh->info));
    kk_msl_serialize(&shader->msl_data[shader->info.stage], blob);
    if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH)) {
       u_foreach_bit(stage, shader->info.vs.additional_stages_bits) {
@@ -3256,13 +3277,20 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
       return result;
    struct kk_shader_info info;
    blob_copy_bytes(blob, &info, sizeof(info));
+   struct kk_mesh_shader_info mesh_info;
+   if (!blob->overrun && kk_shader_stage_has_mesh_info(info.stage))
+      blob_copy_bytes(blob, &mesh_info, sizeof(mesh_info));
    if (blob->overrun)
       return vk_error(dev, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
 
    struct kk_shader *shader = vk_shader_zalloc(
-      &dev->vk, &kk_shader_ops, info.stage, pAllocator, sizeof(*shader));
+      &dev->vk, &kk_shader_ops, info.stage, pAllocator, kk_shader_size(info.stage));
    if (shader == NULL)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   kk_shader_init_mesh_state(shader, info.stage);
+   if (shader->mesh)
+      shader->mesh->info = mesh_info;
 
    result = kk_shader_cache_restore_bindings(dev, shader, &bindings);
    if (result != VK_SUCCESS)

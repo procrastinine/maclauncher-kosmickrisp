@@ -104,7 +104,7 @@ kk_mesh_retained_transaction_begin(struct kk_cmd_buffer *cmd,
    /* Native output records live in this command's bounded pool arena. Any
     * canonical packet pointers also need the existing private Poly heap so
     * another submission cannot recycle their contents while we are deferred. */
-   if (cmd->state.gfx.shader->info.mesh.flat_heap) {
+   if (cmd->state.gfx.shader->mesh->info.flat_heap) {
       VkResult result = kk_interlock_heap_select(cmd, true);
       if (result != VK_SUCCESS) {
          cmd->interlock_heap_active = state->saved_heap_active;
@@ -181,25 +181,27 @@ kk_mesh_layer_replay_end(struct kk_cmd_buffer *cmd)
    cmd->state.gfx.layer_replay = (struct kk_poly_layer_replay_state){0};
 }
 
-/* The packet arena is the existing shared Poly heap. Bound each physical
+/* Both flat and projected packets use the existing shared Poly heap. Bound each physical
  * draw by declared outputs, then reclaim only after its fragments complete.
  * This never allocates output storage proportional to the logical grid. */
 static uint32_t
 kk_mesh_canonical_span(struct kk_cmd_buffer *cmd)
 {
-   const struct kk_mesh_shader_info *info = &cmd->state.gfx.shader->info.mesh;
+   const struct kk_mesh_shader_info *info = &cmd->state.gfx.shader->mesh->info;
    uint32_t retained_span = kk_mesh_retained_active(cmd)
       ? MAX2(KK_MESH_RETAINED_BYTES, kk_mesh_retained_stride(info)) / kk_mesh_retained_stride(info)
       : KK_MESH_MAX_PHYSICAL_GROUPS;
-   if (!info->projected_basis)
+   if (!info->flat_heap)
       return MIN2(retained_span, KK_MESH_MAX_PHYSICAL_GROUPS);
    kk_heap(cmd);
    const struct poly_heap *heap = cmd->interlock_heap_active
       ? kk_interlock_heap_bo(cmd->interlock_heap)->cpu
       : kk_cmd_buffer_device(cmd)->heap->cpu;
    uint64_t available = heap->size;
+   unsigned packet_size = info->projected_basis ?
+      kk_canonical_projected_buffer_size() : kk_canonical_buffer_size();
    uint64_t bytes = (uint64_t)MAX2(info->max_primitives, 1u) *
-      (kk_canonical_projected_buffer_size() + 16u);
+      (packet_size + 16u);
    uint32_t span = MAX2(1u, MIN2((uint64_t)KK_MESH_MAX_PHYSICAL_GROUPS, available / bytes));
    span = MIN2(span, retained_span);
    /* Every full virtual slice must be an exact native rectangle. Otherwise
@@ -209,7 +211,7 @@ kk_mesh_canonical_span(struct kk_cmd_buffer *cmd)
       span -= span % KK_MESH_MAX_DIMENSION;
    if (KK_DEBUG(MSL))
       fprintf(stderr, "mesh canonical: heap=%llu packet=%u max_primitives=%u span=%u\n",
-         (unsigned long long)available, kk_canonical_projected_buffer_size(),
+         (unsigned long long)available, packet_size,
          info->max_primitives, span);
    return span;
 }
@@ -217,7 +219,7 @@ kk_mesh_canonical_span(struct kk_cmd_buffer *cmd)
 static uint32_t
 kk_mesh_canonical_task_limit(const struct kk_mesh_shader_info *info, bool retained)
 {
-   return (info->projected_basis || retained) ? MIN2(KK_MESH_BATCH_SIZE,
+   return (info->flat_heap || retained) ? MIN2(KK_MESH_BATCH_SIZE,
       MAX2(1u, KK_MESH_MAX_GROUPS / MAX2(info->task_grid_bound, 1u))) :
       KK_MESH_BATCH_SIZE;
 }
@@ -225,7 +227,7 @@ kk_mesh_canonical_task_limit(const struct kk_mesh_shader_info *info, bool retain
 static void
 kk_mesh_reset_canonical_heap(struct kk_cmd_buffer *cmd)
 {
-   if (!cmd->state.gfx.shader->info.mesh.projected_basis)
+   if (!cmd->state.gfx.shader->mesh->info.flat_heap)
       return;
    libkk_mesh_reset_heap(cmd, kk_grid_1d(1), true,
       cmd->state.gfx.per_draw_data.per_vertex_heap,
@@ -261,19 +263,22 @@ static struct kk_mesh_params
 kk_mesh_parameters(struct kk_cmd_buffer *cmd, uint64_t grid, uint64_t count,
                      uint32_t id, uint32_t maximum)
 {
-   return (struct kk_mesh_params) {
+   struct kk_mesh_params params = {
       .indirect_grid = grid,
       .indirect_count = count,
       .draw_id = id,
       .max_draw_count = maximum,
       .predicate = cmd->state.cond_render.enabled ? cmd->state.cond_render.address : 0,
       .predicate_inverted = cmd->state.cond_render.inverted,
-      .task_statistic = kk_pipeline_stat_addr(cmd,
-         VK_QUERY_PIPELINE_STATISTIC_TASK_SHADER_INVOCATIONS_BIT_EXT),
-      .mesh_statistic = kk_pipeline_stat_addr(cmd,
-         VK_QUERY_PIPELINE_STATISTIC_MESH_SHADER_INVOCATIONS_BIT_EXT),
-      .primitive_statistic = cmd->state.gfx.mesh_primitives_query,
    };
+   if (cmd->state.gfx.shader->mesh->info.queries) {
+      params.task_statistic = kk_pipeline_stat_addr(cmd,
+         VK_QUERY_PIPELINE_STATISTIC_TASK_SHADER_INVOCATIONS_BIT_EXT);
+      params.mesh_statistic = kk_pipeline_stat_addr(cmd,
+         VK_QUERY_PIPELINE_STATISTIC_MESH_SHADER_INVOCATIONS_BIT_EXT);
+      params.primitive_statistic = cmd->state.gfx.mesh_primitives_query;
+   }
+   return params;
 }
 
 static bool
@@ -292,24 +297,23 @@ kk_mesh_bind_draw(struct kk_cmd_buffer *cmd, mtl_argument_table *table,
                     uint32_t draw_id)
 {
    struct kk_shader *s = cmd->state.gfx.shader;
-   if (s->info.mesh.flat_heap) {
+   if (s->mesh->info.flat_heap) {
       cmd->state.gfx.per_draw_data.per_vertex_heap = kk_heap(cmd);
-      cmd->state.gfx.per_draw_data.per_vertex_topology = s->info.mesh.primitive;
+      cmd->state.gfx.per_draw_data.per_vertex_topology = s->mesh->info.primitive;
       cmd->state.gfx.per_draw_data.provoking_last =
          cmd->vk.dynamic_graphics_state.rs.provoking_vertex ==
          VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
    }
    cmd->state.gfx.mesh_per_draw_address = 0;
    bool uses = s->info.uses_per_draw_data || cmd->state.gfx.mesh_retained_consumer.consume;
-   struct kk_shader *task = cmd->state.shaders[MESA_SHADER_TASK];
-   struct kk_shader *fragment = cmd->state.shaders[MESA_SHADER_FRAGMENT];
-   uses |= task && task->info.uses_per_draw_data;
-   uses |= fragment && fragment->info.uses_per_draw_data;
    if (!uses)
       return true;
    cmd->state.gfx.per_draw_data.draw_id = draw_id;
    struct kk_ptr data = kk_pool_upload(cmd, &cmd->state.gfx.per_draw_data,
-      sizeof(cmd->state.gfx.per_draw_data), 8);
+      /* Logical ViewIndex is the last Mesh input. GS report addresses are not
+       * consumed by Task/Mesh or their retained raster readers. */
+      offsetof(struct kk_per_draw_data, multiview_index) +
+         sizeof(cmd->state.gfx.per_draw_data.multiview_index), 8);
    if (!data.gpu)
       return false;
    cmd->state.gfx.mesh_per_draw_address = data.gpu;
@@ -333,16 +337,17 @@ kk_mesh_render(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *pipe,
    mtl_render_set_pipeline_state(enc, render);
    if (table != cmd->argument_table)
       mtl_set_address(table, cmd->state.gfx.descriptors.root.addr, KK_ARGUMENT_ROOT);
-   if (s->mesh_fragment && s->mesh_fragment->bind_arguments)
-      s->mesh_fragment->bind_arguments(s->mesh_fragment, s, pipe, kind, render, table);
+   const struct kk_mesh_fragment_program *fragment = kk_mesh_fragment(s);
+   if (fragment && fragment->bind_arguments)
+      fragment->bind_arguments(fragment, s, pipe, kind, render, table);
    mtl_render_set_argument_table(enc, table,
       MTL_RENDER_STAGE_OBJECT | MTL_RENDER_STAGE_MESH | MTL_RENDER_STAGE_FRAGMENT);
-   struct mtl_size object = virtual || !s->info.mesh.has_task
-      ? (struct mtl_size){1, 1, 1} : s->info.mesh.task_local_size;
+   struct mtl_size object = virtual || !s->mesh->info.has_task
+      ? (struct mtl_size){1, 1, 1} : s->mesh->info.task_local_size;
    if (indirect)
-      mtl_draw_mesh_threadgroups_indirect(enc, indirect, object, s->info.mesh.local_size);
+      mtl_draw_mesh_threadgroups_indirect(enc, indirect, object, s->mesh->info.local_size);
    else
-      mtl_draw_mesh_threadgroups(enc, direct, object, s->info.mesh.local_size);
+      mtl_draw_mesh_threadgroups(enc, direct, object, s->mesh->info.local_size);
    /* Classic pipeline encoding always finds its original table bound. */
    mtl_render_set_argument_table(enc, cmd->argument_table,
       MTL_RENDER_STAGE_VERTEX | MTL_RENDER_STAGE_FRAGMENT);
@@ -396,7 +401,7 @@ kk_draw_mesh_unsliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    }
    bool virtual = pipe->gfx.pre_render_count != 0;
    kk_flush_gfx_state(cmd);
-   bool params_needed = virtual || shader->info.mesh.queries;
+   bool params_needed = virtual || shader->mesh->info.queries;
    /* Mesh fragments may read the existing nullable logical-Layer selector,
     * even when their producer needs no query parameters. */
    mtl_argument_table *table = kk_mesh_table(cmd);
@@ -415,8 +420,8 @@ kk_draw_mesh_unsliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          return;
       uint64_t grid = indirect ? indirect + (uint64_t)draw * stride : 0;
       struct kk_mesh_params p = kk_mesh_parameters(cmd, grid, count, draw, draw_count);
-      uint32_t task_limit = kk_mesh_canonical_task_limit(&shader->info.mesh, kk_mesh_retained_active(cmd));
-      if (virtual && shader->info.mesh.projected_basis) {
+      uint32_t task_limit = kk_mesh_canonical_task_limit(&shader->mesh->info, kk_mesh_retained_active(cmd));
+      if (virtual && shader->mesh->info.flat_heap) {
          p.pad = kk_mesh_canonical_span(cmd);
          p.max_draw_count = task_limit;
       }
@@ -455,7 +460,7 @@ kk_draw_mesh_unsliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          mtl_compute_set_argument_table(enc, table);
          mtl_compute_set_pipeline_state(enc, pipe->gfx.pre_render[0]);
          mtl_dispatch_threadgroups_with_indirect_buffer(enc,
-            p.batch + offsetof(struct kk_mesh_batch, task_dispatch), shader->info.mesh.task_local_size);
+            p.batch + offsetof(struct kk_mesh_batch, task_dispatch), shader->mesh->info.task_local_size);
          mtl_compute_set_argument_table(enc, cmd->argument_table);
          libkk_mesh_prefix(cmd, kk_grid_1d(1), true, args.gpu);
          kk_mesh_render(cmd, pipe, table,
@@ -481,10 +486,11 @@ kk_mesh_render_slices_native(struct kk_cmd_buffer *cmd, struct kk_pipeline_handl
    mtl_render_encoder *enc = cs_get_render(cmd);
    mtl_render_set_pipeline_state(enc, render);
    mtl_set_address(table, cmd->state.gfx.descriptors.root.addr, KK_ARGUMENT_ROOT);
-   if (s->mesh_fragment && s->mesh_fragment->bind_arguments)
-      s->mesh_fragment->bind_arguments(s->mesh_fragment, s, pipe, kind, render, table);
-   struct mtl_size object = virtual || !s->info.mesh.has_task
-      ? (struct mtl_size){1, 1, 1} : s->info.mesh.task_local_size;
+   const struct kk_mesh_fragment_program *fragment = kk_mesh_fragment(s);
+   if (fragment && fragment->bind_arguments)
+      fragment->bind_arguments(fragment, s, pipe, kind, render, table);
+   struct mtl_size object = virtual || !s->mesh->info.has_task
+      ? (struct mtl_size){1, 1, 1} : s->mesh->info.task_local_size;
    /* Metal snapshots the current table at each draw. Keep the same table
     * bound across slices so a slot update does not rebind every stage. */
    mtl_render_set_argument_table(enc, table,
@@ -493,7 +499,7 @@ kk_mesh_render_slices_native(struct kk_cmd_buffer *cmd, struct kk_pipeline_handl
       mtl_set_address(table, parameters + (uint64_t)i * sizeof(struct kk_mesh_params),
                       KK_ARGUMENT_MESH_PARAMETERS);
       mtl_draw_mesh_threadgroups_indirect(enc, grids + 3u * sizeof(uint32_t) * i,
-                                          object, s->info.mesh.local_size);
+                                          object, s->mesh->info.local_size);
    }
    mtl_render_set_argument_table(enc, cmd->argument_table,
       MTL_RENDER_STAGE_VERTEX | MTL_RENDER_STAGE_FRAGMENT);
@@ -525,13 +531,14 @@ kk_mesh_render_retained(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *c
    mtl_set_address(table, parameters, KK_ARGUMENT_MESH_PARAMETERS);
    mtl_set_address(table, gfx->descriptors.root.addr, KK_ARGUMENT_ROOT);
    mtl_set_address(table, 0, KK_ARGUMENT_POLY_LAYER_REPLAY);
-   if (s->mesh_fragment && s->mesh_fragment->bind_arguments)
-      s->mesh_fragment->bind_arguments(s->mesh_fragment, s, capture,
+   const struct kk_mesh_fragment_program *fragment = kk_mesh_fragment(s);
+   if (fragment && fragment->bind_arguments)
+      fragment->bind_arguments(fragment, s, capture,
          KK_PIPELINE_MESH_CAPTURE, render, table);
    mtl_render_set_argument_table(enc, table,
       MTL_RENDER_STAGE_MESH | MTL_RENDER_STAGE_FRAGMENT);
    mtl_draw_mesh_threadgroups_indirect(enc, grid,
-      (struct mtl_size){1,1,1}, s->info.mesh.local_size);
+      (struct mtl_size){1,1,1}, s->mesh->info.local_size);
    /* Submission preflight kk_whole_pass_transient_safe rejects Mesh pipeline
     * binds and Mesh commands for the WHOLE pass, before BeginRendering or
     * earlier ordinary draws. kk_transient_prepare_rendering therefore uses
@@ -565,13 +572,14 @@ kk_mesh_render_retained(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *c
       mtl_set_address(table, args, KK_ARGUMENT_MESH_PARAMETERS);
       mtl_set_address(table, select, KK_ARGUMENT_POLY_LAYER_REPLAY);
       mtl_set_address(table, gfx->descriptors.root.addr, KK_ARGUMENT_ROOT);
-      if (s->mesh_fragment && s->mesh_fragment->bind_arguments)
-         s->mesh_fragment->bind_arguments(s->mesh_fragment, s, reader,
+      const struct kk_mesh_fragment_program *fragment = kk_mesh_fragment(s);
+      if (fragment && fragment->bind_arguments)
+         fragment->bind_arguments(fragment, s, reader,
             KK_PIPELINE_MESH_READER, render, table);
       enc = cs_get_render(cmd);
       const struct kk_mesh_retained_consumer consumer = gfx->mesh_retained_consumer;
       if (consumer.consume) {
-         const struct kk_mesh_shader_info *info = &s->info.mesh;
+         const struct kk_mesh_shader_info *info = &s->mesh->info;
          uint32_t vpp = mesa_vertices_per_prim(info->primitive);
          uint32_t primitive_offset = ALIGN_POT(32u + MAX2(info->max_vertices, 1u) *
                                               info->retained_strides[0], 32u);
@@ -641,7 +649,7 @@ kk_mesh_render_slices(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *pip
       }
       return;
    }
-   if (!cmd->state.gfx.shader->info.mesh.projected_basis) {
+   if (!cmd->state.gfx.shader->mesh->info.flat_heap) {
       kk_mesh_render_slices_native(cmd, pipe, table, grids, parameters, slice_count, virtual);
       return;
    }
@@ -704,18 +712,20 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    mtl_argument_table *table = kk_mesh_table(cmd);
    if (!table || !kk_mesh_sliced_scratch(cmd, virtual))
       return;
-   uint64_t cache_bytes = MAX2(KK_MESH_RETAINED_BYTES, kk_mesh_retained_stride(&shader->info.mesh));
-   if (retained && cmd->state.gfx.mesh_retained_output_bytes < cache_bytes) {
-      /* The target is one bounded working slice. A record larger than the
-       * target gets one full record; no output/dispatch is clipped. Old pool
-       * allocations retain their normal command-retirement lifetime. */
-      struct kk_ptr cache = kk_pool_alloc(cmd, cache_bytes, 32);
-      if (!cache.gpu) return;
-      cmd->state.gfx.mesh_retained_outputs = cache.gpu;
-      cmd->state.gfx.mesh_retained_output_bytes = cache_bytes;
+   if (retained) {
+      uint64_t cache_bytes = MAX2(KK_MESH_RETAINED_BYTES, kk_mesh_retained_stride(&shader->mesh->info));
+      if (cmd->state.gfx.mesh_retained_output_bytes < cache_bytes) {
+         /* The target is one bounded working slice. A record larger than the
+          * target gets one full record; no output/dispatch is clipped. Old pool
+          * allocations retain their normal command-retirement lifetime. */
+         struct kk_ptr cache = kk_pool_alloc(cmd, cache_bytes, 32);
+         if (!cache.gpu) return;
+         cmd->state.gfx.mesh_retained_outputs = cache.gpu;
+         cmd->state.gfx.mesh_retained_output_bytes = cache_bytes;
+      }
    }
-   bool canonical = shader->info.mesh.projected_basis;
-   uint32_t task_limit = kk_mesh_canonical_task_limit(&shader->info.mesh, kk_mesh_retained_active(cmd));
+   bool canonical = shader->mesh->info.flat_heap;
+   uint32_t task_limit = kk_mesh_canonical_task_limit(&shader->mesh->info, kk_mesh_retained_active(cmd));
    uint64_t slice_grids = virtual ? cmd->state.gfx.mesh_slices :
                                    cmd->state.gfx.mesh_native_slices;
    if (canonical || retained) {
@@ -733,7 +743,9 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    }
    /* These immutable slice parameters are shared by every task batch of a
     * logical draw. Only the task pre-pass receives a changing task_base. */
-   struct kk_mesh_params *parameters = calloc(slice_count, sizeof(*parameters));
+   struct kk_mesh_params single_parameters;
+   struct kk_mesh_params *parameters = slice_count == 1 ? &single_parameters :
+      malloc((size_t)slice_count * sizeof(*parameters));
    if (!parameters) {
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
       return;
@@ -791,7 +803,7 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          mtl_compute_set_argument_table(enc, table);
          mtl_compute_set_pipeline_state(enc, pipe->gfx.pre_render[0]);
          mtl_dispatch_threadgroups_with_indirect_buffer(enc,
-            p.batch + offsetof(struct kk_mesh_batch, task_dispatch), shader->info.mesh.task_local_size);
+            p.batch + offsetof(struct kk_mesh_batch, task_dispatch), shader->mesh->info.task_local_size);
          mtl_compute_set_argument_table(enc, cmd->argument_table);
          libkk_mesh_prefix_slices(cmd, kk_grid_1d(1), true, args.gpu,
             slice_grids, slice_count);
@@ -800,7 +812,8 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
       }
    }
 finish:
-   free(parameters);
+   if (parameters != &single_parameters)
+      free(parameters);
 }
 
 static void
@@ -808,11 +821,11 @@ kk_draw_mesh_one_view(struct kk_cmd_buffer *cmd, struct mtl_size direct,
                 uint64_t indirect, uint64_t count, uint32_t draw_count,
                 uint32_t stride, bool force_virtual)
 {
-   const struct kk_mesh_shader_info *info = &cmd->state.gfx.shader->info.mesh;
+   const struct kk_mesh_shader_info *info = &cmd->state.gfx.shader->mesh->info;
    bool retained = kk_mesh_retained_active(cmd);
    if (retained && info->has_task) force_virtual = true;
    uint32_t physical_span = kk_mesh_canonical_span(cmd);
-   if (info->projected_basis && info->has_task &&
+   if (info->flat_heap && info->has_task &&
        info->task_grid_bound > physical_span)
       force_virtual = true;
    bool virtual = info->has_task &&

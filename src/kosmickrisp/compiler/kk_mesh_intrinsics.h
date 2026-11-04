@@ -31,10 +31,8 @@ kk_mesh_io_slot(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr,
                             BITFIELD_MASK(intr->num_components);
    bool indices = location == VARYING_SLOT_PRIMITIVE_INDICES;
    unsigned vpp = mesa_vertices_per_prim(ctx->shader->info.mesh.primitive_type);
-   if (!store) {
-      P_IND(ctx, "t%u = %s(", intr->def.index,
-            msl_type_for_def(ctx->types, &intr->def));
-   }
+   if (!store)
+      P(ctx, "%s(", msl_type_for_def(ctx->types, &intr->def));
    for (unsigned c = 0; c < intr->num_components; ++c) {
       if (!(mask & BITFIELD_BIT(c)))
          continue;
@@ -56,22 +54,20 @@ kk_mesh_io_slot(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr,
       }
    }
    if (!store)
-      P(ctx, ");\n");
+      P(ctx, ")");
 }
 
-static bool
-kk_emit_mesh_intrinsic(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
+static void
+kk_mesh_intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
 {
-   mesa_shader_stage stage = ctx->shader->info.stage;
-   if (stage != MESA_SHADER_TASK && stage != MESA_SHADER_MESH)
-      return false;
+   assert(ctx->shader->info.stage == MESA_SHADER_TASK ||
+          ctx->shader->info.stage == MESA_SHADER_MESH);
    bool store, primitive;
    switch (intr->intrinsic) {
    case nir_intrinsic_load_task_payload: {
       unsigned bits = intr->def.bit_size;
       const char *type = msl_uint_type(bits, 1);
-      P_IND(ctx, "t%u = %s(", intr->def.index,
-            msl_type_for_def(ctx->types, &intr->def));
+      P(ctx, "%s(", msl_type_for_def(ctx->types, &intr->def));
       for (unsigned c = 0; c < intr->num_components; ++c) {
          if (c)
             P(ctx, ", ");
@@ -80,7 +76,7 @@ kk_emit_mesh_intrinsic(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
          P(ctx, ") + %u)", nir_intrinsic_base(intr) + c * bits / 8);
       }
       P(ctx, ");\n");
-      return true;
+      return;
    }
    case nir_intrinsic_store_task_payload: {
       unsigned bits = intr->src[0].ssa->bit_size;
@@ -94,7 +90,7 @@ kk_emit_mesh_intrinsic(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
          kk_mesh_scalar_src(ctx, &intr->src[0], c);
          P(ctx, ");\n");
       }
-      return true;
+      return;
    }
    case nir_intrinsic_launch_mesh_workgroups:
       /* EmitMeshTasksEXT synchronizes the entire task workgroup and makes
@@ -103,17 +99,17 @@ kk_emit_mesh_intrinsic(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
       P_IND(ctx, "if (gl_LocalInvocationIndex == 0) kk_emit_mesh(kk_emitter, ");
       src_to_msl(ctx, &intr->src[0]);
       P(ctx, ");\n");
-      return true;
+      return;
    case nir_intrinsic_set_vertex_and_primitive_count:
       P_IND(ctx, "if (gl_LocalInvocationIndex == 0) { kk_counts[0] = ");
       src_to_msl(ctx, &intr->src[0]);
       P(ctx, "; kk_counts[1] = ");
       src_to_msl(ctx, &intr->src[1]);
       P(ctx, ";");
-      if (ctx->mesh_queries)
+      if (ctx->mesh.queries)
          P(ctx, " kk_mesh_stat(params.primitive_statistic, kk_counts[1]);");
       P(ctx, " }\n");
-      return true;
+      return;
    case nir_intrinsic_store_per_vertex_output:
       store = true; primitive = false; break;
    case nir_intrinsic_store_per_primitive_output:
@@ -122,15 +118,8 @@ kk_emit_mesh_intrinsic(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
       store = false; primitive = false; break;
    case nir_intrinsic_load_per_primitive_output:
       store = false; primitive = true; break;
-   case nir_intrinsic_store_output:
-      if (nir_intrinsic_io_semantics(intr).location != VARYING_SLOT_PRIMITIVE_COUNT)
-         return false;
-      P_IND(ctx, "if (gl_LocalInvocationIndex == 0) kk_counts[1] = ");
-      src_to_msl(ctx, &intr->src[0]);
-      P(ctx, ";\n");
-      return true;
    default:
-      return false;
+      UNREACHABLE("Invalid Mesh intrinsic");
    }
    nir_io_semantics io = nir_intrinsic_io_semantics(intr);
    nir_src *index = &intr->src[store ? 1 : 0];
@@ -138,6 +127,19 @@ kk_emit_mesh_intrinsic(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
    if (nir_src_is_const(*offset)) {
       kk_mesh_io_slot(ctx, intr, index, io.location + nir_src_as_uint(*offset),
                        primitive, store);
+      if (!store)
+         P(ctx, ";\n");
+   } else if (!store) {
+      /* Loads are expressions in the ordinary intrinsic dispatcher. Select
+       * the same declared slot without introducing an extra SSA assignment. */
+      for (unsigned i = 0; i < io.num_slots; ++i) {
+         src_to_msl(ctx, offset);
+         P(ctx, " == %uu ? ", i);
+         kk_mesh_io_slot(ctx, intr, index, io.location + i, primitive, false);
+         P(ctx, " : ");
+      }
+      /* An out-of-range output read is undefined. */
+      P(ctx, "%s(0);\n", msl_type_for_def(ctx->types, &intr->def));
    } else {
       P_IND(ctx, "switch (");
       src_to_msl(ctx, offset);
@@ -146,7 +148,7 @@ kk_emit_mesh_intrinsic(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
       for (unsigned i = 0; i < io.num_slots; ++i) {
          P_IND(ctx, "case %u: {\n", i);
          ctx->indentlevel++;
-         kk_mesh_io_slot(ctx, intr, index, io.location + i, primitive, store);
+         kk_mesh_io_slot(ctx, intr, index, io.location + i, primitive, true);
          P_IND(ctx, "break;\n");
          ctx->indentlevel--;
          P_IND(ctx, "}\n");
@@ -154,7 +156,6 @@ kk_emit_mesh_intrinsic(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
       ctx->indentlevel--;
       P_IND(ctx, "}\n");
    }
-   return true;
 }
 
 #endif

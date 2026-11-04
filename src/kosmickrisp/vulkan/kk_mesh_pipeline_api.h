@@ -151,6 +151,14 @@ VkResult kk_mesh_retained_transaction_resume(struct kk_cmd_buffer *,
  * copied for lazy variants, so its core/epilog objects must remain valid until
  * executable destruction. The common stage owner retains those objects.
  *
+ * executable->info.uses_per_draw_data includes all linked Task/Mesh/FS inputs,
+ * computed once when the executable is gathered.
+ *
+ * executable->mesh borrows Task/Mesh state for this call; only its numeric
+ * info member is serialized. Its runtime pointer owns lazy native handles.
+ * Compiler-created shaders keep it in their original allocation; temporary
+ * variants use a local value copy so their flags cannot alter the producer.
+ *
  * pipeline is zero-initialized by the caller. Every handle written into it,
  * including partial results on failure, belongs to the caller. attach retains
  * its native dependencies on the descriptor. finish owns fragment tables and

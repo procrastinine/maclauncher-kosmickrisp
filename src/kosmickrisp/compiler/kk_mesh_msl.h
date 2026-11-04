@@ -34,9 +34,9 @@ kk_mesh_emit_buffer_args(struct nir_to_msl_ctx *ctx)
    P(ctx, "buf0, sampler_table");
    if (ctx->uses_per_draw_data)
       P(ctx, ", per_draw");
-   if (!ctx->mesh_queries) P(ctx, "\n#ifdef KK_MESH_RETAINED\n");
+   if (!ctx->mesh.queries) P(ctx, "\n#ifdef KK_MESH_RETAINED\n");
    P(ctx, ", params");
-   if (!ctx->mesh_queries) P(ctx, "\n#endif\n");
+   if (!ctx->mesh.queries) P(ctx, "\n#endif\n");
 }
 
 static void
@@ -111,7 +111,7 @@ kk_mesh_emit_copy_members(struct nir_to_msl_ctx *ctx, bool primitive)
       ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
       ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT);
    mask &= primitive ? s->info.per_primitive_outputs : ~s->info.per_primitive_outputs;
-   if (ctx->mesh_flat_heap)
+   if (ctx->mesh.flat_heap)
       mask &= ~((BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1)) &
                 ~BITFIELD64_MASK(VARYING_SLOT_VAR0));
    u_foreach_bit64(location, mask) {
@@ -146,7 +146,7 @@ kk_mesh_emit_copy_outputs(struct nir_to_msl_ctx *ctx)
    kk_mesh_emit_copy_members(ctx, false);
    if (!(s->info.outputs_written & VARYING_BIT_POS))
       P_IND(ctx, "kk_vertex.position = float4(0,0,0,1);\n");
-   if (ctx->mesh_projected_basis) {
+   if (ctx->mesh.projected_basis) {
       P_IND(ctx, "kk_vertex.");
       msl_output_name(ctx, KK_CANONICAL_PROJECTED_POINT, 0, false);
       P(ctx, " = ");
@@ -174,16 +174,16 @@ kk_mesh_emit_copy_outputs(struct nir_to_msl_ctx *ctx)
    P_IND(ctx, "for (uint i = kk_index; i < kk_counts[1]; i += %u) {\n", threads);
    ctx->indentlevel++;
    P_IND(ctx, "MeshPrimitive primitive = {};\n");
-   if (ctx->mesh_flat_heap)
+   if (ctx->mesh.flat_heap)
       kk_mesh_canonical_primitive(ctx);
    kk_mesh_emit_copy_members(ctx, true);
-   if (ctx->mesh_view_mask) {
+   if (ctx->mesh.view_mask) {
       P_IND(ctx, "primitive.");
       if (s->info.outputs_written & VARYING_BIT_LAYER)
          msl_output_name(ctx, VARYING_SLOT_LAYER, 0, false);
       else P(ctx, "kk_mesh_view_layer");
       P(ctx, " = *((constant uint *)((constant uchar *)&per_draw.contents[0] + %u));\n",
-            ctx->mesh_view_index_offset);
+            ctx->mesh.view_index_offset);
    }
    if (s->info.cull_distance_array_size) {
       bool explicit_cull = s->info.per_primitive_outputs & BITFIELD64_BIT(VARYING_SLOT_CULL_PRIMITIVE);
@@ -216,7 +216,7 @@ kk_mesh_emit_copy_outputs(struct nir_to_msl_ctx *ctx)
    P(ctx, "#ifdef KK_MESH_RETAINED_CAPTURE\n");
    P_IND(ctx, "*((device MeshPrimitive *)(kk_cache + KK_RETAINED_PRIMITIVES + ulong(i) * KK_RETAINED_PRIMITIVE_STRIDE)) = primitive;\n");
    P_IND(ctx, "((device uint *)(kk_cache + KK_RETAINED_LAYERS))[i] = ");
-   if (ctx->mesh_view_mask || (s->info.outputs_written & VARYING_BIT_LAYER)) {
+   if (ctx->mesh.view_mask || (s->info.outputs_written & VARYING_BIT_LAYER)) {
       P(ctx, "primitive.");
       if (s->info.outputs_written & VARYING_BIT_LAYER)
          msl_output_name(ctx, VARYING_SLOT_LAYER, 0, false);
@@ -259,7 +259,7 @@ kk_mesh_emit_functions(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
    if (task)
       P(ctx, "Emitter kk_emitter, ");
    P(ctx, "kk_mesh_sysvals sys, ");
-   kk_mesh_emit_buffers(ctx, false, ctx->mesh_queries);
+   kk_mesh_emit_buffers(ctx, false, ctx->mesh.queries);
    P(ctx, ", threadgroup char *shared_data");
    if (!task) {
       const char *space = threads == 1 ? "thread" : "threadgroup";
@@ -269,7 +269,7 @@ kk_mesh_emit_functions(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
    ctx->indentlevel++;
    kk_mesh_emit_aliases(ctx);
    kk_mesh_emit_locals(ctx);
-   if (ctx->mesh_queries)
+   if (ctx->mesh.queries)
       P_IND(ctx, "if (gl_LocalInvocationIndex == 0) kk_mesh_stat(params.%s_statistic, 1);\n", task ? "task" : "mesh");
    predeclare_ssa_values(ctx, impl);
    foreach_list_typed(nir_cf_node, node, node, &impl->body)
@@ -288,7 +288,7 @@ kk_mesh_emit_functions(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
          P(ctx, "const object_data uchar *payload [[payload]], ");
    }
    kk_mesh_emit_hardware_args(ctx);
-   kk_mesh_emit_buffers(ctx, true, ctx->mesh_queries);
+   kk_mesh_emit_buffers(ctx, true, ctx->mesh.queries);
    P(ctx, ") {\n");
    ctx->indentlevel++;
    kk_mesh_emit_sysvals(ctx);

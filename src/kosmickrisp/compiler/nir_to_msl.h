@@ -16,27 +16,32 @@ struct vk_input_attachment_location_state;
 struct vk_color_attachment_location_state;
 struct vk_render_pass_state;
 
+struct kk_mesh_msl_options {
+   bool queries;
+   uint32_t *retained_strides, *retained_fields;
+   uint32_t view_mask, view_index_offset;
+   bool flat_heap, projected_basis;
+   unsigned flat_heap_offset;
+};
+
 struct nir_to_msl_options {
    void *mem_ctx;
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;
-   bool mesh_queries;
    /* Output: the emitted source uses a Metal 4.1 operation. */
    bool requires_msl41;
    /* Output: an emitted FP8 matrix load/store consumes the coordinate ramp. */
    bool uses_matrix_coordinates;
-   uint32_t *mesh_retained_strides;
-   uint32_t *mesh_retained_fields;
-   uint32_t mesh_view_mask, mesh_view_index_offset;
-   bool mesh_flat_heap;
-   bool mesh_projected_basis;
-   unsigned mesh_flat_heap_offset;
 
    /* Required to correctly declare fragment outputs. Shader may contain
     * shrinked writes which can lead to writting less components than the ones
     * the render target has. This leads to an incorrect calculation of the
     * component count for the render target formats. */
-   uint8_t rts_component_count[MAX_DRAW_BUFFERS];
+   /* Fragment uses counts; Task/Mesh borrows settings for this translation. */
+   union {
+      uint8_t rts_component_count[MAX_DRAW_BUFFERS];
+      const struct kk_mesh_msl_options *mesh;
+   };
 };
 
 /* Assumes nir_shader_gather_info has been called beforehand. */

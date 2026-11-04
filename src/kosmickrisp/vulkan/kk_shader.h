@@ -127,7 +127,6 @@ struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
    uint8_t sparse_modes; /* Native code compiled for these residency classes. */
-   struct kk_mesh_shader_info mesh;
    uint8_t framebuffer_read_mask;
    uint32_t push_size;
    bool descriptor_heap;
@@ -264,6 +263,20 @@ kk_msl_language_version(const struct msl_compile_data *data,
 #define KK_EMBEDDED_SAMPLER_BINDING_SCHEMA 1u
 struct vk_sampler_state;
 
+/* Runtime-only Mesh auxiliaries. Never serialized. Native monolithic Mesh
+ * needs none of this storage until an auxiliary pipeline is requested. */
+struct kk_mesh_shader_runtime {
+   struct kk_pipeline_handles *virtual;
+   struct kk_pipeline_handles *sliced[2];
+   struct kk_pipeline_handles *retained[2];
+   struct kk_mesh_fragment_program fragment;
+};
+
+struct kk_mesh_shader_state {
+   struct kk_mesh_shader_info info;
+   struct kk_mesh_shader_runtime *runtime;
+};
+
 struct kk_shader {
    struct vk_shader vk;
    struct kk_interlock_shader *interlock;
@@ -275,19 +288,16 @@ struct kk_shader {
    uint64_t embedded_sampler_table;
    struct kk_sparse_shader_state *sparse;
    struct kk_shader *sparse_base; /* Weak: base owns every immutable variant. */
-   /* Fragment and compute shaders use disjoint runtime state. */
+   /* Immutable vk.stage selects fragment, compute or Task/Mesh state. */
    union {
       struct kk_vrs_source *vrs_source;
       mtl_compute_pipeline_state *dgc_compute;
+      struct kk_mesh_shader_state *mesh;
    };
 
    struct kk_attachment_pipelines *attachment_pipelines;
    struct kk_lazy_polygon *lazy_polygon;
    struct kk_pipeline_handles pipeline;
-   struct kk_pipeline_handles *mesh_virtual;
-   struct kk_pipeline_handles *mesh_sliced[2];
-   struct kk_pipeline_handles *mesh_retained[2];
-   struct kk_mesh_fragment_program *mesh_fragment;
    struct kk_shader_info info;
    struct msl_compile_data msl_data[MESA_ALL_SHADER_STAGES];
    /* Compute pass of a GS. Its rasterization VS is in
@@ -298,6 +308,37 @@ struct kk_shader {
    struct msl_compile_data polygon_native_fs;
    struct msl_compile_data gs_aux[2];
 };
+
+static_assert(_Alignof(struct kk_shader) >= _Alignof(struct kk_mesh_shader_state),
+              "inline Mesh metadata remains aligned");
+
+static inline bool
+kk_shader_stage_has_mesh_info(mesa_shader_stage stage)
+{
+   return stage == MESA_SHADER_TASK || stage == MESA_SHADER_MESH;
+}
+
+static inline size_t
+kk_shader_size(mesa_shader_stage stage)
+{
+   return sizeof(struct kk_shader) +
+      (kk_shader_stage_has_mesh_info(stage) ? sizeof(struct kk_mesh_shader_state) : 0);
+}
+
+static inline void
+kk_shader_init_mesh_state(struct kk_shader *shader, mesa_shader_stage stage)
+{
+   shader->mesh = kk_shader_stage_has_mesh_info(stage)
+      ? (void *)(shader + 1) : NULL;
+}
+
+static inline const struct kk_mesh_fragment_program *
+kk_mesh_fragment(const struct kk_shader *shader)
+{
+   const struct kk_mesh_shader_runtime *runtime = shader->mesh
+      ? p_atomic_read(&shader->mesh->runtime) : NULL;
+   return runtime && runtime->fragment.attach ? &runtime->fragment : NULL;
+}
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,
                                VK_OBJECT_TYPE_SHADER_EXT);

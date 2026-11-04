@@ -10,10 +10,10 @@
 static void
 kk_mesh_canonical_primitive(struct nir_to_msl_ctx *ctx)
 {
-   const unsigned size = ctx->mesh_projected_basis ?
+   const unsigned size = ctx->mesh.projected_basis ?
       kk_canonical_projected_buffer_size() : kk_canonical_buffer_size();
    P_IND(ctx, "ulong kk_heap = *((constant ulong *)((constant uchar *)&per_draw.contents[0] + %u));\n",
-         ctx->mesh_flat_heap_offset);
+         ctx->mesh.flat_heap_offset);
    P_IND(ctx, "uint kk_bottom = atomic_fetch_add_explicit((device atomic_uint *)(kk_heap + %zu), %uu, memory_order_relaxed);\n",
          offsetof(struct poly_heap, bottom), size + 16u);
    P_IND(ctx, "uint kk_offset = (kk_bottom + 15u) & ~15u;\n");
@@ -28,7 +28,7 @@ kk_mesh_canonical_primitive(struct nir_to_msl_ctx *ctx)
       ~BITFIELD64_MASK(VARYING_SLOT_VAR0);
    unsigned vpp = mesa_vertices_per_prim(ctx->shader->info.mesh.primitive_type);
    for (unsigned corner = 0; corner < 3; ++corner) {
-      if (ctx->mesh_projected_basis) {
+      if (ctx->mesh.projected_basis) {
          for (unsigned c = 0; c < 3; ++c) {
             P_IND(ctx, "*((device uint *)(kk_packet + %uu)) = as_type<uint>(",
                   kk_canonical_position_offset(corner) + c * 4u);

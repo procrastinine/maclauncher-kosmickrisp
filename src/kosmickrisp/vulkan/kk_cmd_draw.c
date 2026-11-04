@@ -944,7 +944,7 @@ kk_rast_prim(struct kk_cmd_buffer *cmd)
 {
    struct kk_shader *shader = cmd->state.gfx.shader;
    if (shader && shader->info.stage == MESA_SHADER_MESH)
-      return shader->info.mesh.primitive;
+      return shader->mesh->info.primitive;
    struct kk_shader *gs = kk_geometry_shader(cmd);
    if (gs)
       return gs->info.geometry.mode;
@@ -3001,7 +3001,9 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
                                     : sizeof(data->draws[0]);
       size += (size_t)(data->draw_count - 1u) * stride;
    }
-   struct kk_draw_command *per_view = ralloc_size(NULL, size);
+   struct kk_draw_command header;
+   struct kk_draw_command *per_view = size == sizeof(header)
+      ? &header : ralloc_size(NULL, size);
    if (!per_view) {
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
       return;
@@ -3017,7 +3019,8 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       kk_draw_one_view(cmd, per_view);
    }
    gfx->render.view_mask = view_mask;
-   ralloc_free(per_view);
+   if (per_view != &header)
+      ralloc_free(per_view);
 }
 
 VKAPI_ATTR void VKAPI_CALL

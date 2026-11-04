@@ -10,8 +10,8 @@ kk_mesh_emit_retained_reader(struct nir_to_msl_ctx *ctx)
    unsigned v = MAX2(s->info.mesh.max_vertices_out, 1u);
    unsigned p = MAX2(s->info.mesh.max_primitives_out, 1u);
    unsigned vpp = mesa_vertices_per_prim(s->info.mesh.primitive_type);
-   unsigned vs = ctx->mesh_retained_vertex_stride;
-   unsigned ps = ctx->mesh_retained_primitive_stride;
+   unsigned vs = ctx->mesh.retained_vertex_stride;
+   unsigned ps = ctx->mesh.retained_primitive_stride;
    /* Every native field alignment divides32. Section starts stay aligned even
     * when the preceding array has an odd number of small primitive records. */
    unsigned vertices = 32u;
@@ -57,7 +57,7 @@ kk_mesh_emit_retained_reader(struct nir_to_msl_ctx *ctx)
       msl_output_name(ctx, VARYING_SLOT_CULL_PRIMITIVE, 0, false);
    else P(ctx, s->info.cull_distance_array_size ? "kk_culled" : "kk_retained_culled");
    P(ctx, " |= ((device const uint *)(cache + KK_RETAINED_LAYERS))[i] != params.predicate_inverted;\n");
-   if (ctx->mesh_view_mask || (s->info.outputs_written & VARYING_BIT_LAYER)) {
+   if (ctx->mesh.view_mask || (s->info.outputs_written & VARYING_BIT_LAYER)) {
       P(ctx, "primitive.");
       if (s->info.outputs_written & VARYING_BIT_LAYER) msl_output_name(ctx, VARYING_SLOT_LAYER, 0, false);
       else P(ctx, "kk_mesh_view_layer");
