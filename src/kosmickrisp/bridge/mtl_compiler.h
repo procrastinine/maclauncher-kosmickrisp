@@ -46,6 +46,9 @@ struct mtl_compiler_cache_stats {
    /* Every MTLLibrary request through the in-process source cache, and the
     * vertex-stage subset of graphics library pairs. */
    uint64_t library_requests, library_hits;
+   /* Pipelines compiled on the non-capturing compiler during a snapshot, and
+    * those later captured on the capturing compiler. */
+   uint64_t bypass_compiles, recaptures;
    uint64_t vertex_library_requests, vertex_library_hits;
    /* Disk-cache piece reads (load_piece) and native archive opens
     * (newArchiveWithURL), with the time spent in each call. */
@@ -64,16 +67,35 @@ void *mtl_compiler_cache_begin(mtl_compiler *compiler);
 void mtl_compiler_cache_end(void *token);
 void mtl_compiler_cache_record_pipeline(mtl_compiler *compiler);
 void mtl_compiler_cache_record_descriptor(mtl_compiler *compiler, void *descriptor);
+/* Descriptor calls never wait for a snapshot: *native receives the compiler
+ * the native call uses, and the descriptor is captured after the snapshot. */
+void *mtl_compiler_cache_begin_pipeline(mtl_compiler *compiler, mtl_compiler **native);
+void mtl_compiler_cache_record_pipeline_descriptor(mtl_compiler *compiler, void *token,
+   void *descriptor);
+void mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit);
 #ifdef __OBJC__
-#define MTL_COMPILER_PIPELINE_CALL(compiler, expression) \
-   MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, NULL, expression)
-#define MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, descriptor, expression) ({ \
+#define MTL_COMPILER_PIPELINE_CALL(compiler, expression) ({ \
    mtl_compiler *_kk_native_compiler = (mtl_compiler *)(compiler); \
    void *_kk_capture = mtl_compiler_cache_begin(_kk_native_compiler); \
    __typeof__(expression) _kk_pipeline = nil; \
    @try { \
       _kk_pipeline = (expression); \
-      if (_kk_pipeline) mtl_compiler_cache_record_descriptor(_kk_native_compiler, (void *)(descriptor)); \
+      if (_kk_pipeline) mtl_compiler_cache_record_descriptor(_kk_native_compiler, NULL); \
+   } @finally { mtl_compiler_cache_end(_kk_capture); } \
+   _kk_pipeline; \
+})
+/* The expression creates the pipeline with the compiler named by native. */
+#define MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, descriptor, native, expression) ({ \
+   mtl_compiler *_kk_native_compiler = (mtl_compiler *)(compiler); \
+   mtl_compiler *_kk_selected = _kk_native_compiler; \
+   void *_kk_capture = mtl_compiler_cache_begin_pipeline(_kk_native_compiler, &_kk_selected); \
+   id<MTL4Compiler> native = (id<MTL4Compiler>)_kk_selected; \
+   __typeof__(expression) _kk_pipeline = nil; \
+   @try { \
+      _kk_pipeline = (expression); \
+      if (_kk_pipeline) \
+         mtl_compiler_cache_record_pipeline_descriptor(_kk_native_compiler, _kk_capture, \
+                                                       (void *)(descriptor)); \
    } @finally { mtl_compiler_cache_end(_kk_capture); } \
    _kk_pipeline; \
 })

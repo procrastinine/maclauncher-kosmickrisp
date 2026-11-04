@@ -177,6 +177,14 @@ void *mtl_compiler_cache_begin(mtl_compiler *compiler) { return NULL; }
 void mtl_compiler_cache_end(void *token) {}
 void mtl_compiler_cache_record_pipeline(mtl_compiler *compiler) {}
 void mtl_compiler_cache_record_descriptor(mtl_compiler *compiler, void *descriptor) {}
+void *mtl_compiler_cache_begin_pipeline(mtl_compiler *compiler, mtl_compiler **native)
+{
+   *native = compiler;
+   return NULL;
+}
+void mtl_compiler_cache_record_pipeline_descriptor(mtl_compiler *compiler, void *token,
+   void *descriptor) {}
+void mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit) {}
 
 void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),

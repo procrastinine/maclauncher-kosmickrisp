@@ -174,6 +174,11 @@ instances are unique within the process, so no matter how many Vulkan devices
 we create, the same GPU uses the same `MTLDevice`. Each `MTL4Compiler` instance
 is still capable of performing concurrent compilation.
 
+On macOS 27 and later, the pipeline archive also keeps a second compiler without
+a pipeline data set serializer. Pipeline creation uses it while a serializer
+snapshot holds the archive exclusively, and the same descriptors are created
+again on the capturing compiler after the snapshot.
+
 | Log:
 | 2026-05-28: Workaround implemented
 | 2026-08-10: Resolved in macOS 27 beta 5

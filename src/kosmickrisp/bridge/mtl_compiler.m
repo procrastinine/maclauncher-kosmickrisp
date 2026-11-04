@@ -81,10 +81,17 @@ mtl_new_cached_compiler(mtl_device *device,
    return mtl_create_compiler(device, ops, data);
 }
 
+/* Bypassed pipelines captured per compile on the calling thread. A capture is
+ * served by Metal's compiled-binary cache, so a batch costs well under 1 ms. */
+#define KK_RECAPTURE_BATCH 4
+
 void
 mtl_compiler_finish_cache(mtl_compiler *compiler)
 {
-   @autoreleasepool { [kk_compiler_archive(compiler) finish]; }
+   @autoreleasepool {
+      mtl_compiler_cache_recapture(compiler, UINT_MAX);
+      [kk_compiler_archive(compiler) finish];
+   }
 }
 
 @interface KKCompileQueue : NSOperationQueue {
@@ -597,7 +604,6 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
 {
    @autoreleasepool {
       KK_FOREGROUND_SCOPE(compiler);
-      id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
 
       bool valid = true;
       MTL4FunctionDescriptor *prepared =
@@ -611,8 +617,9 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
       NSError *error = nil;
       id<MTLComputePipelineState> pipeline = kk_archive_compute(compiler, desc);
       if (!pipeline) {
-         pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc,
-            [comp newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
+         pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc, native,
+            [native newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
+         mtl_compiler_cache_recapture(compiler, KK_RECAPTURE_BATCH);
       }
 
       if (kk_current_operation.cancelled) {
@@ -715,7 +722,6 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
 {
    @autoreleasepool {
       KK_FOREGROUND_SCOPE(compiler);
-      id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
       MTL4PipelineDescriptor *desc =
          kk_prepare_render_function_constants((MTL4PipelineDescriptor *)descriptor);
       if (!desc) return NULL;
@@ -723,8 +729,9 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
       NSError *error = nil;
       id<MTLRenderPipelineState> pipeline = kk_archive_render(compiler, desc);
       if (!pipeline) {
-         pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc,
-            [comp newRenderPipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
+         pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc, native,
+            [native newRenderPipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
+         mtl_compiler_cache_recapture(compiler, KK_RECAPTURE_BATCH);
       }
 
       if (pipeline == nil) {

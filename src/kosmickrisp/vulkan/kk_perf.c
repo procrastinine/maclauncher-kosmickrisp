@@ -193,6 +193,7 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
          ",\"checkpoints\":%"PRIu64",\"store_requested_bytes\":%"PRIu64
          ",\"snapshot_ms\":%.6f,\"capture_wait_ms\":%.6f"
          ",\"library_requests\":%"PRIu64",\"library_hits\":%"PRIu64
+         ",\"bypass_compiles\":%"PRIu64",\"recaptures\":%"PRIu64
          ",\"vertex_library_requests\":%"PRIu64",\"vertex_library_hits\":%"PRIu64"}",
          p->metal_compiler, archive.archive_loaded ? "true" : "false", archive.requests,
          archive.lookups, archive.piece_loads, archive.piece_load_ns / 1e6, archive.archive_opens,
@@ -200,6 +201,7 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
          archive.checkpoints,
          archive.stored_bytes, archive.snapshot_ns / 1e6, archive.capture_wait_ns / 1e6,
          archive.library_requests, archive.library_hits,
+         archive.bypass_compiles, archive.recaptures,
          archive.vertex_library_requests, archive.vertex_library_hits);
    fprintf(p->log, ",\"submit_pending\":%"PRId64",\"submit_peak\":%"PRIu64
            ",\"submit_scope\":\"common_submit_list_including_worker_head\","

@@ -215,6 +215,11 @@ kk_archive_temporary_path(void)
    NSMutableArray *resident_pieces;
    NSMutableArray *cached_libraries;
    size_t cached_source_bytes;
+   /* Non-capturing compiler for pipeline creation during a snapshot, and the
+    * [descriptor, hint] pairs it compiled, awaiting capture. */
+   id<MTL4Compiler> bypass_compiler;
+   NSMutableArray *recapture;
+   unsigned recapture_count;
    uint64_t generation, checkpointed, last_compile;
    bool available, scheduled, finished, gate_ready;
    struct mtl_compiler_cache_stats stats;
@@ -225,6 +230,7 @@ kk_archive_temporary_path(void)
 - (KKLoadedArchive *)archiveForPiece:(KKArchivePiece *)piece;
 - (void)recordHit;
 - (void)recordCompile:(NSData *)hint;
+- (void)captureLocked:(NSData *)hint;
 - (BOOL)publishPiece:(NSData *)identity captured:(NSDictionary *)captured;
 - (void)scheduleLocked;
 - (void)checkpoint:(BOOL)final;
@@ -401,12 +407,17 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
 {
    @synchronized(self) {
       stats.native_compiles++;
-      if (!serializer || !available || finished) return;
-      generation++;
-      if (hint) pending_hints[hint] = @YES;
-      last_compile = kk_archive_now();
-      [self scheduleLocked];
+      [self captureLocked:hint];
    }
+}
+
+- (void)captureLocked:(NSData *)hint
+{
+   if (!serializer || !available || finished) return;
+   generation++;
+   if (hint) pending_hints[hint] = @YES;
+   last_compile = kk_archive_now();
+   [self scheduleLocked];
 }
 
 - (void)scheduleLocked
@@ -539,6 +550,8 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
 
 - (void)dealloc
 {
+   [recapture release];
+   [bypass_compiler release];
    [cached_libraries release];
    [pieces release];
    [hints release];
@@ -666,6 +679,127 @@ kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vert
    return result;
 }
 
+/* Bypass token: the pipeline compiled on the non-capturing compiler. */
+static char kk_capture_bypass;
+#define KK_CAPTURE_BYPASS ((void *)&kk_capture_bypass)
+
+/* A second concurrent MTL4Compiler is safe from macOS 27 on (workaround 11).
+ * Earlier systems keep the single compiler and wait for the snapshot. */
+static id<MTL4Compiler>
+kk_archive_bypass_compiler(KKPipelineArchive *cache)
+{
+   if (@available(macOS 27.0, *)) {
+   } else {
+      return nil;
+   }
+   @synchronized(cache) {
+      if (!cache->bypass_compiler && !cache->finished) {
+         NSError *error = nil;
+         MTL4CompilerDescriptor *desc = [[MTL4CompilerDescriptor new] autorelease];
+         cache->bypass_compiler = [cache->device newCompilerWithDescriptor:desc error:&error];
+      }
+      return cache->finished ? nil : cache->bypass_compiler;
+   }
+}
+
+/* Pipeline creation never waits for a serializer snapshot. While a snapshot
+ * holds the gate exclusively, the call compiles on a non-capturing compiler
+ * and its descriptor is captured after the snapshot. Metal's compiled-binary
+ * cache serves that later capture without compiling again. */
+void *
+mtl_compiler_cache_begin_pipeline(mtl_compiler *compiler, mtl_compiler **native)
+{
+   *native = compiler;
+   KKPipelineArchive *cache = kk_compiler_archive(compiler);
+   if (!cache) return NULL;
+   [cache load];
+   if (!cache->available || !cache->serializer) return NULL;
+   if (!pthread_rwlock_tryrdlock(&cache->capture_gate)) return cache;
+   id<MTL4Compiler> bypass = kk_archive_bypass_compiler(cache);
+   if (bypass) {
+      *native = (mtl_compiler *)bypass;
+      return KK_CAPTURE_BYPASS;
+   }
+   uint64_t begin = kk_archive_now();
+   pthread_rwlock_rdlock(&cache->capture_gate);
+   uint64_t duration = kk_archive_now() - begin;
+   @synchronized(cache) { cache->stats.capture_wait_ns += duration; }
+   return cache;
+}
+
+void
+mtl_compiler_cache_record_pipeline_descriptor(mtl_compiler *compiler, void *token,
+                                              void *descriptor)
+{
+   if (token != KK_CAPTURE_BYPASS) {
+      if (token) mtl_compiler_cache_record_descriptor(compiler, descriptor);
+      return;
+   }
+   KKPipelineArchive *cache = kk_compiler_archive(compiler);
+   if (!cache) return;
+   NSData *hint = descriptor ? kk_pipeline_hint((id)descriptor) : nil;
+   id copy = descriptor ? [(id)descriptor copy] : nil;
+   @synchronized(cache) {
+      cache->stats.native_compiles++;
+      cache->stats.bypass_compiles++;
+      if (copy && !cache->finished) {
+         if (!cache->recapture) cache->recapture = [NSMutableArray new];
+         [cache->recapture addObject:@[copy, hint ?: (id)[NSNull null]]];
+         __atomic_store_n(&cache->recapture_count, (unsigned)cache->recapture.count, __ATOMIC_RELEASE);
+      }
+   }
+   [copy release];
+}
+
+/* Captures up to limit bypassed descriptors on the capturing compiler, each
+ * under shared gate access. Stops when a snapshot holds the gate again. */
+void
+mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit)
+{
+   KKPipelineArchive *cache = kk_compiler_archive(compiler);
+   if (!cache || !__atomic_load_n(&cache->recapture_count, __ATOMIC_ACQUIRE)) return;
+   for (unsigned i = 0; i < limit; ++i) @autoreleasepool {
+      NSArray *entry = nil;
+      @synchronized(cache) {
+         if (cache->finished || !cache->recapture.count) break;
+         entry = [[cache->recapture objectAtIndex:0] retain];
+         [cache->recapture removeObjectAtIndex:0];
+         __atomic_store_n(&cache->recapture_count, (unsigned)cache->recapture.count, __ATOMIC_RELEASE);
+      }
+      if (pthread_rwlock_tryrdlock(&cache->capture_gate)) {
+         @synchronized(cache) {
+            if (!cache->finished) {
+               [cache->recapture insertObject:entry atIndex:0];
+               __atomic_store_n(&cache->recapture_count, (unsigned)cache->recapture.count, __ATOMIC_RELEASE);
+            }
+         }
+         [entry release];
+         break;
+      }
+      id state = nil;
+      @try {
+         NSError *error = nil;
+         id descriptor = entry[0];
+         if ([descriptor isKindOfClass:[MTL4ComputePipelineDescriptor class]])
+            state = [(id<MTL4Compiler>)compiler newComputePipelineStateWithDescriptor:descriptor
+                        compilerTaskOptions:nil error:&error];
+         else
+            state = [(id<MTL4Compiler>)compiler newRenderPipelineStateWithDescriptor:descriptor
+                        compilerTaskOptions:nil error:&error];
+         if (state) @synchronized(cache) {
+            cache->stats.recaptures++;
+            [cache captureLocked:entry[1] == [NSNull null] ? nil : entry[1]];
+         }
+      } @catch (NSException *exception) {
+         state = nil;
+      } @finally {
+         pthread_rwlock_unlock(&cache->capture_gate);
+      }
+      [state release];
+      [entry release];
+   }
+}
+
 void *
 mtl_compiler_cache_begin(mtl_compiler *compiler)
 {
@@ -685,7 +819,8 @@ mtl_compiler_cache_begin(mtl_compiler *compiler)
 void
 mtl_compiler_cache_end(void *token)
 {
-   if (token) pthread_rwlock_unlock(&((KKPipelineArchive *)token)->capture_gate);
+   if (token && token != KK_CAPTURE_BYPASS)
+      pthread_rwlock_unlock(&((KKPipelineArchive *)token)->capture_gate);
 }
 
 void
