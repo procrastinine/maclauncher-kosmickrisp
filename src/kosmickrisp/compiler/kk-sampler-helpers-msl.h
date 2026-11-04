@@ -390,12 +390,17 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
    unsigned dims = tex->sampler_dim == GLSL_SAMPLER_DIM_3D ? 3 :
                    tex->sampler_dim == GLSL_SAMPLER_DIM_1D ? 1 : 2;
    bool reduction = tex->backend_flags & KK_SAMPLE_MINMAX;
+   bool reduction_only = tex->backend_flags & (KK_SAMPLE_MIN | KK_SAMPLE_MAX);
    bool weighted_only = (tex->backend_flags & KK_SAMPLE_PREPARE_2D) && !reduction;
    bool gather = tex->op == nir_texop_tg4;
    bool emulation_only = tex->backend_flags & KK_SAMPLE_EMULATION_ONLY;
    /* Keep one call boundary around descriptor-selected emulation. Native
     * samples use the ordinary emitter; conservative helpers retain theirs. */
-   const char *internal_attribute = emulation_only ? "always_inline" : "noinline";
+   /* Immutable MIN/MAX has no weighted arm. Inline its tap tree so texture
+    * and sampler state can be shared across the footprint; retain the cold
+    * outer call boundary and leave mutable/weighted helper emission alone. */
+   const char *internal_attribute = emulation_only || reduction_only ?
+      "always_inline" : "noinline";
    if (tex->op == nir_texop_lod) {
       P(ctx, "static __attribute__((always_inline)) float2 kk_sample_%u(", id);
       kk_sample_texture_param(ctx, tex);
@@ -440,7 +445,13 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       if (!weighted_only) {
       P(ctx, "static %s kk_reduce_%u(%s a, %s b, uint mode) {\n", type, id, type, type);
       if (flush) P(ctx, "    #pragma METAL fp math_mode(safe)\n");
-      P(ctx, "    %s value = mode == 1u ? %s(a, b) : %s(a, b);\n", type, fp ? "fmin" : "min", fp ? "fmax" : "max");
+      if (reduction_only) {
+         P(ctx, "    %s value = %s(a, b);\n", type,
+           tex->backend_flags & KK_SAMPLE_MIN ? (fp ? "fmin" : "min") :
+                                               (fp ? "fmax" : "max"));
+      } else {
+         P(ctx, "    %s value = mode == 1u ? %s(a, b) : %s(a, b);\n", type, fp ? "fmin" : "min", fp ? "fmax" : "max");
+      }
       if (flush && !tex->is_shadow)
          P(ctx, "    value = as_type<%s>(select(as_type<uint4>(value), as_type<uint4>(value) & 0x80000000u, (as_type<uint4>(value) & 0x7f800000u) == 0u));\n", type);
       P(ctx, "    return value;\n}\n");
@@ -484,6 +495,8 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, "    float3 base = floor(p), fraction = p - base; base += texel_offset;\n");
       if (weighted_only) {
          P(ctx, "    %s weighted = %s(0);\n", accum, accum);
+      } else if (reduction_only) {
+         P(ctx, "    %s result = %s(0); bool first = true;\n", type, type);
       } else {
          P(ctx, "    %s result = %s(0); %s weighted = %s(0); bool first = true;\n", type, type, accum, accum);
       }
@@ -505,6 +518,8 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, ");\n        if (!linear_filter) return tap;\n");
       if (weighted_only) {
          P(ctx, "        weighted += %s(tap) * weight;\n    }\n    return %s(weighted);\n}\n", accum, type);
+      } else if (reduction_only) {
+         P(ctx, "        result = first ? tap : kk_reduce_%u(result, tap, mode);\n        first = false;\n    }\n    return result;\n}\n", id);
       } else {
          P(ctx, "        if (mode == 0u) weighted += %s(tap) * weight;\n", accum);
          P(ctx, "        else result = first ? tap : kk_reduce_%u(result, tap, mode);\n        first = false;\n    }\n    return mode == 0u ? %s(weighted) : result;\n}\n", id, type);
@@ -549,6 +564,8 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       kk_sample_sparse_arg(ctx, tex, false);
       if (weighted_only) {
          P(ctx, ");\n        value = %s(mix(%s(value), %s(upper), lod - float(low)));\n    }\n    return value;\n}\n", type, accum, accum);
+      } else if (reduction_only) {
+         P(ctx, ");\n        value = kk_reduce_%u(value, upper, mode);\n    }\n    return value;\n}\n", id);
       } else {
          P(ctx, ");\n        value = mode == 0u ? %s(mix(%s(value), %s(upper), lod - float(low))) : kk_reduce_%u(value, upper, mode);\n    }\n    return value;\n}\n", type, accum, accum, id);
       }
@@ -609,6 +626,8 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
          P(ctx, "    float3 direction = lx >= ly ? gx : gy;\n");
          if (weighted_only) {
             P(ctx, "    %s weighted = %s(0);\n", accum, accum);
+         } else if (reduction_only) {
+            P(ctx, "    %s result = %s(0);\n", type, type);
          } else {
             P(ctx, "    %s result = %s(0); %s weighted = %s(0);\n", type, type, accum, accum);
          }
@@ -619,6 +638,8 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
          P(ctx, ", lod, mode"); kk_sample_sparse_arg(ctx, tex, false);
          if (weighted_only) {
             P(ctx, ");\n        weighted += %s(value);\n    }\n    return %s(weighted / float(count));\n", accum, type);
+         } else if (reduction_only) {
+            P(ctx, ");\n        result = tap == 0u ? value : kk_reduce_%u(result, value, mode);\n    }\n    return result;\n", id);
          } else {
             P(ctx, ");\n        if (mode == 0u) weighted += %s(value);\n", accum);
             P(ctx, "        else result = tap == 0u ? value : kk_reduce_%u(result, value, mode);\n    }\n    return mode == 0u ? %s(weighted / float(count)) : result;\n", id, type);
