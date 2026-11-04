@@ -38,6 +38,7 @@ struct kk_root_descriptor_table {
          uint32_t buffer_strides[KK_MAX_VBUFS];
          uint64_t attrib_base[KK_MAX_ATTRIBS];
          uint32_t attrib_clamps[KK_MAX_ATTRIBS];
+         uint64_t vertex_input;
 
          uint64_t fragment_statistic;
          float blend_constant[4];

@@ -1467,6 +1467,8 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
    return kk_pool_upload(cmd, &params, sizeof(params), 8).gpu;
 }
 
+#include "kk_vertex_input.h"
+
 static void
 kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
 {
@@ -1626,23 +1628,10 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
    }
 
    if (IS_DIRTY(VI) || IS_DIRTY(VI_BINDINGS_VALID) ||
-       IS_DIRTY(VI_BINDING_STRIDES) || gfx->dirty & KK_DIRTY_VB) {
-      struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
-      unsigned slot = 0;
-      u_foreach_bit(i, vs->info.vs.attribs_read) {
-         if (dyn->vi->attributes_valid & BITFIELD_BIT(i)) {
-            struct vk_vertex_attribute_state attr = dyn->vi->attributes[i];
-            struct kk_addr_range vb = gfx->vb.addr_range[attr.binding];
-
-            desc->root.draw.attrib_clamps[slot] = kk_calculate_vbo_clamp(
-               vb.addr, 0, vk_format_to_pipe_format(attr.format), vb.range,
-               dyn->vi_binding_strides[attr.binding], attr.offset,
-               &desc->root.draw.attrib_base[slot]);
-            desc->root.draw.buffer_strides[attr.binding] =
-               dyn->vi_binding_strides[attr.binding];
-         }
-         slot++;
-      }
+       IS_DIRTY(VI_BINDING_STRIDES) || gfx->dirty & KK_DIRTY_VB ||
+       IS_SHADER_DIRTY(VERTEX)) {
+      if (!kk_flush_vertex_input(cmd))
+         return;
       desc->root_dirty = true;
    }
 

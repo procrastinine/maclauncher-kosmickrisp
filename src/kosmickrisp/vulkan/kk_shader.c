@@ -107,8 +107,16 @@ has_static_depth_stencil_state(const struct vk_graphics_pipeline_state *state)
       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_STENCIL_WRITE_MASK));
 }
 
+static bool
+kk_vi_is_static(const struct vk_graphics_pipeline_state *state)
+{
+   return state && state->vi &&
+          !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_VI);
+}
+
 struct kk_vs_key {
    bool is_points;
+   bool dynamic_vi;
    struct vk_vertex_input_state vi;
 };
 
@@ -117,9 +125,11 @@ kk_populate_vs_key(struct kk_vs_key *key,
                    const struct vk_graphics_pipeline_state *state)
 {
    memset(key, 0, sizeof(*key));
-   key->is_points =
-      (state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST);
-   key->vi = *state->vi;
+   key->is_points = state->ia && state->ia->primitive_topology ==
+                                    VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+   key->dynamic_vi = !kk_vi_is_static(state);
+   if (!key->dynamic_vi)
+      key->vi = *state->vi;
 }
 
 struct kk_fs_key {
@@ -376,9 +386,12 @@ kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
    /* Fold constant offset srcs for IO. */
    NIR_PASS(_, nir, nir_opt_constant_folding);
 
+   bool robustness2 =
+      rs->vertex_inputs ==
+      VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2;
    struct kk_attribute attributes[KK_MAX_ATTRIBS] = {};
    uint64_t attribs_read = nir->info.inputs_read >> VERT_ATTRIB_GENERIC0;
-   u_foreach_bit(i, state->vi->attributes_valid) {
+   u_foreach_bit(i, kk_vi_is_static(state) ? (state->vi->attributes_valid & attribs_read) : 0) {
       const struct vk_vertex_attribute_state *attr = &state->vi->attributes[i];
       assert(state->vi->bindings_valid & BITFIELD_BIT(attr->binding));
       const struct vk_vertex_binding_state *binding =
@@ -395,10 +408,8 @@ kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
       attributes[slot].instanced =
          binding->input_rate == VK_VERTEX_INPUT_RATE_INSTANCE;
    }
-   bool robustness2 =
-      rs->vertex_inputs ==
-      VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2;
-   NIR_PASS(_, nir, kk_nir_lower_vbo, attributes, robustness2);
+   NIR_PASS(_, nir, kk_nir_lower_vbo,
+            kk_vi_is_static(state) ? attributes : NULL, robustness2);
 }
 
 /* Lowering for the stage which ends up as the vertex stage on hardware */
@@ -957,6 +968,7 @@ gather_shader_info(struct kk_shader *shader, nir_shader *nir,
    if (nir->info.stage == MESA_SHADER_VERTEX) {
       nir_shader_intrinsics_pass(nir, gather_vs_inputs, nir_metadata_all,
                                  &shader->info.vs.attribs_read);
+      shader->info.vs.dynamic_vi = !kk_vi_is_static(state);
       shader->info.outputs_written = nir->info.outputs_written;
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       /* Some meta shaders like vk-meta-resolve will have depth_layout as NONE
