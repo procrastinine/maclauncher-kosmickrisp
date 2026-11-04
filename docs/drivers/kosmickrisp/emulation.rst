@@ -2,28 +2,36 @@
 
 .. list-table::
    :header-rows: 1
-   :widths: 12 28 36 8 16
+   :widths: 10 20 24 8 12 14 12
 
    * - Name
      - Emulated behavior
      - Cost
-     - Default
+     - Performance default
+     - Performance reason
+     - When off
      - Enable
    * - ``denorm_preserve``
      - Gradual underflow for requested floating-point preservation modes.
        Controls: ``shaderDenormPreserveFloat16``, ``shaderDenormPreserveFloat32``, ``shaderDenormPreserveFloat64``.
      - mixed native / software. FP16 uses native half arithmetic; FP32 replaces most arithmetic and comparisons with software; FP64 uses software binary64. About 7x GPU time was reported for a workload requesting FP32 preservation. Per-operation cost is unmeasured.
-     - Off
+     - On
+     - vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.
+     - Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.
      - ``performance,+denorm_preserve``
    * - ``denorm_flush``
      - Flush subnormal results to zero in requested floating-point modes.
        Controls: ``shaderDenormFlushToZeroFloat16``, ``shaderDenormFlushToZeroFloat32``, ``shaderDenormFlushToZeroFloat64``.
      - native arithmetic / ALU fixups. FP32 adds exponent-mask fixups to selected operations; no full software FP32 replacement. Per-operation cost is unmeasured. FTZ16 and FTZ64 are unsupported.
-     - Off
+     - On
+     - vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.
+     - Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.
      - ``performance,+denorm_flush``
    * - ``ray_tracing``
      - Acceleration structures, ray queries and continuation-based ray-tracing pipelines.
        Controls: ``VK_KHR_acceleration_structure``, ``VK_KHR_ray_tracing_pipeline``, ``VK_KHR_ray_query``, ``VK_KHR_ray_tracing_maintenance1``, ``VK_KHR_pipeline_library``, ``accelerationStructure``, ``descriptorBindingAccelerationStructureUpdateAfterBind``, ``rayTracingPipeline``, ``rayTracingPipelineTraceRaysIndirect``, ``rayTraversalPrimitiveCulling``, ``rayQuery``, ``rayTracingMaintenance1``, ``rayTracingPipelineTraceRaysIndirect2``, ``maxGeometryCount``, ``maxInstanceCount``, ``maxPrimitiveCount``, ``maxPerStageDescriptorAccelerationStructures``, ``maxPerStageDescriptorUpdateAfterBindAccelerationStructures``, ``maxDescriptorSetAccelerationStructures``, ``maxDescriptorSetUpdateAfterBindAccelerationStructures``, ``minAccelerationStructureScratchOffsetAlignment``, ``shaderGroupHandleSize``, ``shaderGroupHandleAlignment``, ``shaderGroupBaseAlignment``, ``maxShaderGroupStride``, ``maxRayRecursionDepth``, ``maxRayHitAttributeSize``, ``maxRayDispatchInvocationCount``, ``shaderGroupHandleCaptureReplaySize``, ``subgroupSupportedStages``, ``VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR``.
      - compute / software traversal. AS construction and traversal use compute and continuation dispatch. Work is selected by RT commands and shaders. Runtime cost is unmeasured.
      - Off
+     - Ray-tracing interfaces require explicit selection.
+     - Vulkan acceleration-structure, ray-query and ray-tracing pipeline interfaces and D3D12 DXR are unavailable; the RTXPT DXR path cannot run.
      - ``performance,+ray_tracing``

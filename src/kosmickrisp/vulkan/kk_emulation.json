@@ -10,7 +10,10 @@
       "shaderDenormPreserveFloat16",
       "shaderDenormPreserveFloat32",
       "shaderDenormPreserveFloat64"
-    ]
+    ],
+    "performance": true,
+    "performance_reason": "vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.",
+    "off_consequence": "Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable."
   },
   {
     "name": "denorm_flush",
@@ -23,7 +26,10 @@
       "shaderDenormFlushToZeroFloat16",
       "shaderDenormFlushToZeroFloat32",
       "shaderDenormFlushToZeroFloat64"
-    ]
+    ],
+    "performance": true,
+    "performance_reason": "vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.",
+    "off_consequence": "Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable."
   },
   {
     "name": "ray_tracing",
@@ -68,6 +74,9 @@
     "property_bits": {
       "subgroupSupportedStages": "VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_INTERSECTION_BIT_KHR | VK_SHADER_STAGE_CALLABLE_BIT_KHR"
     },
-    "format_feature": "VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR"
+    "format_feature": "VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR",
+    "performance": false,
+    "performance_reason": "Ray-tracing interfaces require explicit selection.",
+    "off_consequence": "Vulkan acceleration-structure, ray-query and ray-tracing pipeline interfaces and D3D12 DXR are unavailable; the RTXPT DXR path cannot run."
   }
 ]

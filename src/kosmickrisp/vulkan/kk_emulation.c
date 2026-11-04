@@ -23,7 +23,8 @@ kk_emulation_apply(const char *value,
                     struct vk_features *features,
                     struct vk_properties *properties)
 {
-   bool enabled[KK_EMULATION_COUNT] = {false};
+   bool enabled[KK_EMULATION_COUNT];
+   memcpy(enabled, kk_emulation_performance, sizeof(enabled));
    bool hidden[VK_DEVICE_EXTENSION_COUNT] = {false};
    const char *cursor = value ? value : "";
    unsigned token_index = 0;
@@ -38,7 +39,8 @@ kk_emulation_apply(const char *value,
           (kk_emulation_token(begin, length, "performance") ||
            kk_emulation_token(begin, length, "conformance"))) {
          bool all = kk_emulation_token(begin, length, "conformance");
-         for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i) enabled[i] = all;
+         for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i)
+            enabled[i] = all || kk_emulation_performance[i];
          known = true;
       } else if (length > 1 && (*begin == '+' || *begin == '-')) {
          for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i) {

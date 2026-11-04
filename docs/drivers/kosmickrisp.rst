@@ -89,12 +89,18 @@ Slow but correct features
 *************************
 
 ``KK_EMULATION`` controls software-backed capability advertisement. It is read
-once at physical-device creation. The default is ``performance``, which hides
-all registry entries. ``conformance`` retains all implemented capabilities.
+once at physical-device creation. The default mode, ``performance``, uses each
+entry's performance default. Capabilities required for a D3D shader model,
+feature level or translator device creation remain enabled; an emulation is
+disabled by default only when those requirements remain satisfied.
+``conformance`` retains all implemented capabilities.
+
 An entry is enabled with ``+name`` and disabled with ``-name``; the last override
-for an entry wins. For example, ``performance,+denorm_preserve`` enables only
-preservation, and ``conformance,-ray_tracing`` excludes ray tracing. Enabling an
-entry does not add unsupported hardware modes; FTZ16 and FTZ64 remain false.
+for an entry wins. For example, ``performance,-denorm_preserve`` disables
+preservation, and ``conformance,-ray_tracing`` excludes ray tracing. Explicit
+disabling can reduce a consumer's shader model, feature level or available
+interfaces as listed below. Enabling an entry does not add unsupported modes;
+FTZ16 and FTZ64 remain false.
 
 ``-VK_extension_name`` removes an extension and its associated feature and
 property fields, including promoted query aliases. For example,
