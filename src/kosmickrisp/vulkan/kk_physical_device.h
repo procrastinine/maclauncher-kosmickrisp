@@ -71,6 +71,9 @@ struct kk_physical_device {
    mtl_device *mtl_dev_handle;
    struct kk_device_info info;
    struct kk_env_settings settings;
+   /* KK_EMULATION precise_timestamps: compute timestamps wait for earlier
+    * dispatches instead of sharing the encoder's relaxed sample. */
+   bool precise_timestamps;
 
    struct wsi_device wsi_device;
 

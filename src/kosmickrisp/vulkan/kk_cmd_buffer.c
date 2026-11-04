@@ -93,6 +93,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    util_dynarray_clear(&cmd->post_render_writes);
    util_dynarray_clear(&cmd->ts_resolves);
    util_dynarray_clear(&cmd->ts_stage_map);
+   cmd->ts_compute_sampled = false;
    util_dynarray_foreach(&cmd->submit_drawables, void *, drawable)
       mtl_release(*drawable);
    util_dynarray_clear(&cmd->submit_drawables);
@@ -774,6 +775,7 @@ cs_end_internal(struct kk_cmd_buffer *cmd, bool ordered)
          stages |= MTL_STAGE_DISPATCH;
       end_encoder(cmd, cmd->metal.compute, stages, ordered_compute);
       cmd->metal.compute = NULL;
+      cmd->ts_compute_sampled = false;
    }
 }
 

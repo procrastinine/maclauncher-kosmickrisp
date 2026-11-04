@@ -325,3 +325,10 @@
      - On
      - On
      - On Apple7-11: Float32 conversion and two native FMAs for each requested mixed dot product. No packed mixed-precision instruction is assumed. Float16 accumulation, BFloat16 and Float8 variants are not reported.
+   * - ``precise_timestamps``
+     - Off
+     - Off
+     - Off
+     - Off
+     - Off
+     - Off on Apple7-11: one relaxed sample per compute encoder. Enabled, each timestamp outside a render pass waits for the encoder's earlier dispatches.

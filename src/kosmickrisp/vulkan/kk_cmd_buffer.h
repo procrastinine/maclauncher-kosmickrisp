@@ -511,6 +511,11 @@ struct kk_cmd_buffer {
    /* Timestamps already sampled by the current render encoder. (struct
     * kk_ts_stage_entry). */
    struct util_dynarray ts_stage_map;
+   /* The current compute encoder's relaxed timestamp sample, which every
+    * timestamp written in that encoder reports while precise_timestamps is
+    * off. */
+   struct kk_ts_stage_entry ts_compute_sample;
+   bool ts_compute_sampled;
    /* Deferred writes due to being mid render encoder */
    struct util_dynarray post_render_writes;
 

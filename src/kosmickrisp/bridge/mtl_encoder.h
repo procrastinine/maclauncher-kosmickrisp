@@ -178,7 +178,8 @@ void mtl_draw_indexed_primitives_indirect(mtl_render_encoder *encoder,
                                           uint64_t addr);
 
 void mtl_compute_write_timestamp(mtl_compute_encoder *encoder,
-                                 mtl_counter_heap *heap, uint32_t index);
+                                 mtl_counter_heap *heap, uint32_t index,
+                                 bool precise);
 
 void mtl_render_write_timestamp(mtl_render_encoder *encoder,
                                 enum mtl_render_stages stage,

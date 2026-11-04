@@ -583,15 +583,21 @@ mtl_draw_indexed_primitives_indirect(mtl_render_encoder *encoder,
    });
 }
 
+/* A relaxed compute timestamp costs no GPU wait, but an encoder records only
+ * its first four relaxed writes, all one value. A precise one follows the
+ * encoder's earlier work and waits for it. */
 void
 mtl_compute_write_timestamp(mtl_compute_encoder *encoder,
-                            mtl_counter_heap *heap, uint32_t index)
+                            mtl_counter_heap *heap, uint32_t index,
+                            bool precise)
 {
    KK_MTL_REPLAY_POOL({
       id<MTL4ComputeCommandEncoder> enc =
          (id<MTL4ComputeCommandEncoder>)encoder;
       id<MTL4CounterHeap> h = (id<MTL4CounterHeap>)heap;
-      [enc writeTimestampWithGranularity:MTL4TimestampGranularityRelaxed
+      [enc writeTimestampWithGranularity:precise
+                                            ? MTL4TimestampGranularityPrecise
+                                            : MTL4TimestampGranularityRelaxed
                                 intoHeap:h
                                  atIndex:index];
    });

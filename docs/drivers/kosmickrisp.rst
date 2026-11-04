@@ -161,8 +161,12 @@ format features that the entry controls. Disabling an entry can lower the shader
 model, feature level or interfaces available to a translator, as listed in the
 table below. Enabling an entry keeps the support the device otherwise reports
 and adds nothing beyond it; ``+denorm_flush`` leaves FP16 and FP64
-flush-to-zero unsupported. The variable changes only the reported
-capabilities; command recording and shader compilation do not read it.
+flush-to-zero unsupported. Apart from the behavior entry
+``precise_timestamps``, the variable changes only the reported capabilities;
+command recording and shader compilation do not read it.
+``precise_timestamps`` changes no reported capability and selects how
+timestamps written outside a render pass are recorded (see
+`Timestamp queries`_).
 
 The table lists each entry's emulated behavior, cost, performance default,
 the reason for that default, the effect of disabling it, and the token that
@@ -702,7 +706,18 @@ of 32 and returns them when it is destroyed, so the live pools of a process
 share up to 131,072 entries, less any other timestamp heaps in the process,
 whatever their number and size. Pool creation fails with
 ``VK_ERROR_OUT_OF_DEVICE_MEMORY`` when no unit is free and Metal refuses
-another heap.
+another heap, and writes one warning to standard error naming the query count,
+the query type and what ran out.
+
+Outside a render pass, ``vkCmdWriteTimestamp2`` writes in the current compute
+encoder. Metal records only the first four relaxed timestamps of a compute
+encoder, all with one value. By default, every timestamp written in one compute
+encoder reports that encoder's first relaxed sample, which adds no GPU wait:
+timestamps stay available, nonzero and non-decreasing, and durations measured
+within one encoder are 0. The ``precise_timestamps`` entry, on in
+``conformance`` mode and off by default in ``performance`` mode, makes each
+such timestamp precise: it waits for the encoder's earlier work, about 7
+microseconds of GPU time per timestamp, and records its own time.
 
 Inside a render pass, Metal samples each render stage once per render encoder.
 The first timestamp written at a stage takes that sample, and later timestamps

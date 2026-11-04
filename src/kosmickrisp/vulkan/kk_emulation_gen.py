@@ -69,9 +69,10 @@ def documentation(entries):
         controls += list(row.get('property_bits', {}))
         if row.get('format_feature'):
             controls.append(row['format_feature'])
+        controlled = ', '.join('``' + s + '``' for s in controls) or row['behavior']
         lines += ['   * - ``' + row['name'] + '``',
                   '     - ' + row['description'],
-                  '       Controls: ' + ', '.join('``' + s + '``' for s in controls) + '.',
+                  '       Controls: ' + controlled + '.',
                   '     - ' + row['cost_class'] + '. ' + row['cost_note'],
                   '     - ' + native_description(row),
                   '     - ' + ('On' if row['performance'] else 'Off'),
@@ -300,6 +301,12 @@ def main():
             parser.error(row['name'] + ': native_from must be an Apple family integer from 1 through 11 or null')
         if not isinstance(row.get('performance'), bool):
             parser.error(row['name'] + ': performance must be a boolean')
+        # A behavior entry changes driver behavior instead of reported capabilities.
+        if not (row['extensions'] or row['features'] or row['properties'] or
+                row.get('property_bits') or row.get('format_feature')):
+            behavior = row.get('behavior')
+            if not isinstance(behavior, str) or not behavior.strip() or '\n' in behavior:
+                parser.error(row['name'] + ': an entry without capabilities needs one behavior line')
         for field in ['performance_reason', 'off_consequence']:
             value = row.get(field)
             if not isinstance(value, str) or not value.strip() or '\n' in value or '\r' in value:

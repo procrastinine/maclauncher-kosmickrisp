@@ -473,8 +473,6 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
                                     heap_index);
       }
    } else {
-      heap = kk_timestamp_query_heap(pool, query, &heap_index);
-
       /* compute encoder active or nothing active. If the latter, the write will
        * create a new compute encoder.  The timestamp write needs compute work
        * in the encoder to trigger it.  Rewrite the low half of the sentinel the
@@ -484,7 +482,25 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
                       kk_query_report_addr(dev, pool, query),
                       (uint32_t)LIBKK_QUERY_UNAVAILABLE);
 
-      mtl_compute_write_timestamp(cmd->metal.compute, heap, heap_index);
+      /* A compute encoder records only its first four relaxed timestamps, all
+       * one value; later entries keep earlier contents. Without
+       * precise_timestamps, every timestamp in the encoder reports its first
+       * sample, so none is 0 or stale. A precise timestamp waits for the
+       * encoder's earlier work and records its own time. */
+      const bool precise = kk_device_physical(dev)->precise_timestamps;
+      if (precise || !cmd->ts_compute_sampled) {
+         heap = kk_timestamp_query_heap(pool, query, &heap_index);
+         mtl_compute_write_timestamp(cmd->metal.compute, heap, heap_index,
+                                     precise);
+         if (!precise) {
+            cmd->ts_compute_sample = (struct kk_ts_stage_entry){
+               .heap = heap, .index = heap_index};
+            cmd->ts_compute_sampled = true;
+         }
+      } else {
+         heap = cmd->ts_compute_sample.heap;
+         heap_index = cmd->ts_compute_sample.index;
+      }
    }
 
    /* Resolve the Metal timestamp value to all multiview query indices so that

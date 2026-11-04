@@ -783,6 +783,16 @@ Feature table
      - —
      - Always
      - —
+   * - Timestamps written outside a render pass (``vkCmdWriteTimestamp2``)
+     - Native Metal timestamps. Off: every timestamp in one compute encoder
+       reports the encoder's first relaxed sample, with no GPU wait. On: each
+       timestamp is precise and waits for the encoder's earlier dispatches,
+       about 7 microseconds of GPU time per timestamp the application writes.
+     - None listed; native on all families.
+     - ``precise_timestamps``
+     - Off
+     - Direct3D timestamp queries issued within one compute encoder report
+       one value, so GPU durations measured inside it are 0.
    * - ``VK_EXT_graphics_pipeline_library``, ``VK_KHR_pipeline_library``
      - Native stage bodies and final Metal render pipeline assembly for
        ordinary one-sample vertex/color fragment paths. Coupled state and

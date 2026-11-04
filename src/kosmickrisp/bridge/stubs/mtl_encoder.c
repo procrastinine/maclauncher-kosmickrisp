@@ -281,7 +281,8 @@ mtl_render_write_timestamp(mtl_render_encoder *encoder,
 
 void
 mtl_compute_write_timestamp(mtl_compute_encoder *encoder,
-                            mtl_counter_heap *heap, uint32_t index)
+                            mtl_counter_heap *heap, uint32_t index,
+                            bool precise)
 {
 }
 

@@ -21,7 +21,8 @@ void
 kk_emulation_apply(const char *value, unsigned apple_family,
                     struct vk_device_extension_table *extensions,
                     struct vk_features *features,
-                    struct vk_properties *properties)
+                    struct vk_properties *properties,
+                    struct kk_emulation_behavior *behavior)
 {
    const struct vk_device_extension_table before = *extensions;
    bool enabled[KK_EMULATION_COUNT];
@@ -104,6 +105,8 @@ kk_emulation_apply(const char *value, unsigned apple_family,
    for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i) {
       if (!active[i])
          kk_emulation_disable(i, active, extensions, features, properties);
+      if (strcmp(kk_emulation_names[i], "precise_timestamps") == 0)
+         behavior->precise_timestamps = active[i];
    }
    for (unsigned i = 0; i < VK_DEVICE_EXTENSION_COUNT; ++i) {
       if (hidden[i]) {

@@ -1256,5 +1256,21 @@
       11
     ],
     "family_cost_note": "On Apple7-11: Float32 conversion and two native FMAs for each requested mixed dot product. No packed mixed-precision instruction is assumed. Float16 accumulation, BFloat16 and Float8 variants are not reported."
+  },
+  {
+    "name": "precise_timestamps",
+    "description": "Timestamps written outside a render pass record when the compute encoder's earlier work has finished.",
+    "behavior": "the timestamp granularity of vkCmdWriteTimestamp2 outside render passes; no reported capability changes",
+    "cost_class": "GPU wait per timestamp",
+    "cost_note": "Each timestamp written outside a render pass is a precise Metal timestamp, which waits for the compute encoder's earlier dispatches: about 7 microseconds of GPU time per timestamp the application writes, measured on Apple8 with 64 medium dispatches in one encoder. Off, every timestamp written in one compute encoder reports that encoder's single relaxed sample, which adds no GPU wait.",
+    "extensions": [],
+    "features": [],
+    "properties": [],
+    "performance": false,
+    "performance_reason": "Applications write timestamps for profiling and frame timing; relaxed samples add no GPU wait and stay ordered across encoders.",
+    "off_consequence": "Timestamps written within one compute encoder report one value, so durations measured inside that encoder are 0; every timestamp stays available, nonzero and non-decreasing.",
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off on Apple7-11: one relaxed sample per compute encoder. Enabled, each timestamp outside a render pass waits for the encoder's earlier dispatches."
   }
 ]

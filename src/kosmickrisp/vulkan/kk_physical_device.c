@@ -1558,8 +1558,10 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
    properties.drmHasRender = false;
 
    /* One environment read; all public queries use these filtered tables. */
+   struct kk_emulation_behavior behavior = {0};
    kk_emulation_apply(getenv("KK_EMULATION"), pdev->info.gpu_apple_family, &supported_extensions,
-                       &supported_features, &properties);
+                       &supported_features, &properties, &behavior);
+   pdev->precise_timestamps = behavior.precise_timestamps;
 
    result = vk_physical_device_init(&pdev->vk, &instance->vk,
                                     &supported_extensions, &supported_features,

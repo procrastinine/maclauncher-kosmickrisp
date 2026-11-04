@@ -417,3 +417,12 @@
      - vkd3d-proton selects its mixed dot-product translation for DXIL shaders when Float16-to-Float32 accumulation is available. The route uses native arithmetic without new draw state or shader work outside those instructions.
      - vkd3d-proton translates mixed Float16 dot products through its ordinary arithmetic fallback.
      - ``performance,+mixed_float_dot_product``
+   * - ``precise_timestamps``
+     - Timestamps written outside a render pass record when the compute encoder's earlier work has finished.
+       Controls: the timestamp granularity of vkCmdWriteTimestamp2 outside render passes; no reported capability changes.
+     - GPU wait per timestamp. Each timestamp written outside a render pass is a precise Metal timestamp, which waits for the compute encoder's earlier dispatches: about 7 microseconds of GPU time per timestamp the application writes, measured on Apple8 with 64 medium dispatches in one encoder. Off, every timestamp written in one compute encoder reports that encoder's single relaxed sample, which adds no GPU wait.
+     - No Apple family
+     - Off
+     - Applications write timestamps for profiling and frame timing; relaxed samples add no GPU wait and stay ordered across encoders.
+     - Timestamps written within one compute encoder report one value, so durations measured inside that encoder are 0; every timestamp stays available, nonzero and non-decreasing.
+     - ``performance,+precise_timestamps``
