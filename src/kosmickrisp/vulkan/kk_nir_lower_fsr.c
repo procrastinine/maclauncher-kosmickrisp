@@ -484,7 +484,10 @@ fsr_is_output(nir_intrinsic_instr *intr)
 bool
 kk_nir_fsr_supported(nir_shader *nir, bool force_fine)
 {
-   if (nir->info.fs.uses_sample_shading || nir->info.fs.uses_fbfetch_output ||
+   /* Input attachments already use texture reads at FragCoord here. Their
+    * uses_fbfetch_output metadata does not require native framebuffer fetch;
+    * actual output reads are rejected by the intrinsic scan below. */
+   if (nir->info.fs.uses_sample_shading ||
        (!force_fine &&
         (nir->info.outputs_written & (BITFIELD64_BIT(FRAG_RESULT_DEPTH) |
                                       BITFIELD64_BIT(FRAG_RESULT_STENCIL) |
