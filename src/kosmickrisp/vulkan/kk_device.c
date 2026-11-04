@@ -841,7 +841,8 @@ fail_query_table:
 fail_meta:
    kk_device_finish_meta(dev);
 fail_mem_cache:
-   vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
+   if (dev->vk.mem_cache)
+      vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
    simple_mtx_destroy(&dev->pipeline_cache_init_mutex);
    while (dev->queue_count > 0)
       kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
@@ -932,7 +933,8 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    mtl_release(dev->residency_set.handle);
    simple_mtx_destroy(&dev->residency_set.mutex);
 
-   vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
+   if (dev->vk.mem_cache)
+      vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
    simple_mtx_destroy(&dev->pipeline_cache_init_mutex);
    kk_release_compiler(dev);
    kk_interlock_submission_finish(dev);
