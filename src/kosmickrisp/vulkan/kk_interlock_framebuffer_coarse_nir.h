@@ -70,10 +70,14 @@ kk_interlock_coarse_bind_sample(nir_builder *b,
    struct kk_interlock_framebuffer_nir *s = program->data;
    struct kk_interlock_transaction_nir *t = &s->transaction;
    nir_def *params = t->render->parameters(b, t->render->data);
-   nir_store_var(b, t->pixel, sample->pixel, 3);
+   /* Shared cells subtract the envelope origin; native attachment loads use
+    * that same global origin. Convert only the window-relative index here. */
+   nir_def *pixel = nir_iadd(b, sample->pixel, nir_vec2(b,
+      kk_interlock_env(b, params, tile_x), kk_interlock_env(b, params, tile_y)));
+   nir_store_var(b, t->pixel, pixel, 3);
    nir_store_var(b, t->primitive, sample->storage_primitive, 1);
    nir_store_var(b, t->anchor, kk_interlock_quad_anchor(b, params,
-      sample->pixel, sample->storage_primitive), 1);
+      pixel, sample->storage_primitive), 1);
    nir_store_var(b, t->coverage, sample->coverage, 1);
    nir_store_var(b, program->sample, sample->sample, 1);
    nir_store_var(b, program->coord, sample->coord, 15);
