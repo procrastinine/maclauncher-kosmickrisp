@@ -81,10 +81,13 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
     % if e.name == 'CmdBeginRendering':
     cmd->deferred_render_chain |= pRenderingInfo->flags &
         (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT);
+    kk_cmd_record_rendering_attachments(cmd, pRenderingInfo);
     % elif e.name == 'CmdExecuteCommands':
-    for (uint32_t i = 0; !cmd->deferred_render_chain && i < commandBufferCount; i++) {
+    for (uint32_t i = 0; i < commandBufferCount &&
+         (!cmd->deferred_render_chain || !cmd->transient_candidate); i++) {
         VK_FROM_HANDLE(kk_cmd_buffer, secondary, pCommandBuffers[i]);
         cmd->deferred_render_chain |= secondary->deferred_render_chain;
+        cmd->transient_candidate |= secondary->transient_candidate;
     }
     % endif
     % if e.return_type == 'void':

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_perf.h"
 #include "kk_device.h"
+#include "kk_cmd_buffer.h"
 #include "util/os_time.h"
 #include "util/mesa-blake3.h"
 #include <errno.h>
@@ -10,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 struct kk_perf_stat { uint64_t count, total, max; };
 struct kk_perf_gpu_stat {
@@ -35,10 +37,13 @@ static const char *const names[KK_PERF_METRIC_COUNT] = {
    "queue_wait", "drawable_wait", "deferred", "pipeline_create",
    "shader_compile", "nir", "msl", "metal_library", "metal_pipeline",
    "cache_hit", "cache_miss", "cache_binary_hit", "metal_library_pair",
-   "command_bo_allocate", "command_bo_reuse", "execution_residency_commit"
+   "command_bo_allocate", "command_bo_reuse", "execution_residency_commit",
+   "command_begin", "command_end", "command_reset", "command_pool_reset"
 };
 
 uint64_t kk_perf_now(void) { return os_time_get_nano(); }
+
+static void flush_locked(struct kk_perf *, uint64_t, bool);
 
 static uint64_t
 positive_option(const char *name, uint64_t fallback)
@@ -73,6 +78,8 @@ kk_perf_create(void)
    p->frame_interval = positive_option("KK_PERF_TRACKING_INTERVAL_FRAMES", 60);
    p->time_interval = positive_option("KK_PERF_TRACKING_INTERVAL_MS", 1000) * 1000000;
    p->created = p->interval_start = kk_perf_now();
+   /* Acknowledge enabled tracking before any native device-init compile. */
+   flush_locked(p, kk_perf_now(), false);
    return p;
 }
 
@@ -81,10 +88,14 @@ kk_perf_create(void)
 static void
 flush_locked(struct kk_perf *p, uint64_t now, bool final)
 {
-   fprintf(p->log, "{\"kk_perf\":1,\"device\":\"%p\",\"interval\":%"PRIu64
+   struct timespec wall;
+   clock_gettime(CLOCK_REALTIME, &wall);
+   const char *kind = final ? "final" : p->sequence ? "interval" : "init";
+   fprintf(p->log, "{\"kk_perf\":1,\"kind\":\"%s\",\"wall_unix_ms\":%.3f,\"device\":\"%p\",\"interval\":%"PRIu64
            ",\"elapsed_ms\":%.6f,\"window_ms\":%.6f,\"frames\":%"PRIu64
            ",\"frame_end\":%"PRIu64",\"final\":%s,\"cpu_spans\":\"nested_wall_ms\","
            "\"gpu_scope\":\"Metal4_commit_feedback_by_CPU_present_boundary\",\"metrics\":{",
+           kind, (double)wall.tv_sec * 1000.0 + wall.tv_nsec/1e6,
            (void *)p, ++p->sequence, (now-p->created)/1e6,
            (now-p->interval_start)/1e6, p->interval_frames, p->frames,
            final ? "true" : "false");
@@ -188,6 +199,10 @@ kk_perf_add(struct kk_perf *p, enum kk_perf_metric metric, uint64_t ns)
       scope->ns[metric] += ns;
    }
    if (ns > s->max) s->max = ns;
+   /* Completed CPU work must remain visible before the first present too. */
+   uint64_t now = kk_perf_now();
+   if (now - p->interval_start >= p->time_interval)
+      flush_locked(p, now, false);
    pthread_mutex_unlock(&p->mutex);
 }
 
@@ -314,9 +329,55 @@ kk_perf_CreateComputePipelines(VkDevice device, VkPipelineCache cache,
                                                      infos, alloc, pipelines));
 }
 
+/* Lifecycle wall times include their nested replay/encoding stages. They
+ * close spans around native allocation/reset without adding to those stages. */
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+                            const VkCommandBufferBeginInfo *info)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   return KK_PERF_CALL(dev, KK_PERF_COMMAND_BEGIN,
+      dev->vk.dispatch_table.BeginCommandBuffer(commandBuffer, info));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_EndCommandBuffer(VkCommandBuffer commandBuffer)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   return KK_PERF_CALL(dev, KK_PERF_COMMAND_END,
+      dev->vk.dispatch_table.EndCommandBuffer(commandBuffer));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_ResetCommandBuffer(VkCommandBuffer commandBuffer,
+                            VkCommandBufferResetFlags flags)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   return KK_PERF_CALL(dev, KK_PERF_COMMAND_RESET,
+      dev->vk.dispatch_table.ResetCommandBuffer(commandBuffer, flags));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_ResetCommandPool(VkDevice device, VkCommandPool pool,
+                          VkCommandPoolResetFlags flags)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   return KK_PERF_CALL(dev, KK_PERF_COMMAND_POOL_RESET,
+      dev->vk.dispatch_table.ResetCommandPool(device, pool, flags));
+}
+
 void
 kk_perf_init_dispatch(struct kk_device *dev)
 {
+   if (!dev->perf)
+      return;
+   dev->exposed_dispatch_table.BeginCommandBuffer = kk_perf_BeginCommandBuffer;
+   dev->exposed_dispatch_table.EndCommandBuffer = kk_perf_EndCommandBuffer;
+   dev->exposed_dispatch_table.ResetCommandBuffer = kk_perf_ResetCommandBuffer;
+   dev->exposed_dispatch_table.ResetCommandPool = kk_perf_ResetCommandPool;
    dev->exposed_dispatch_table.CreateGraphicsPipelines = kk_perf_CreateGraphicsPipelines;
    dev->exposed_dispatch_table.CreateComputePipelines = kk_perf_CreateComputePipelines;
    kk_perf_init_wait_dispatch(dev);

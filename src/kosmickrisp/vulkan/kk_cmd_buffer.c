@@ -260,6 +260,9 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
    cmd->pending_barrier = (struct kk_barrier_scope){0};
    cmd->closed_encoder_stages = 0;
    cmd->encoder_occlusion = false;
+   cmd->transient_candidate = false;
+   cmd->transient_preflight_done = false;
+   cmd->transient_safe = false;
 }
 
 static void
@@ -287,6 +290,46 @@ const struct vk_command_buffer_ops kk_cmd_buffer_ops = {
    .destroy = kk_destroy_cmd_buffer,
 };
 
+static bool
+kk_cmd_view_memoryless(VkImageView handle)
+{
+   if (handle == VK_NULL_HANDLE)
+      return false;
+   VK_FROM_HANDLE(kk_image_view, view, handle);
+   const struct kk_image *image =
+      container_of(view->vk.image, struct kk_image, vk);
+   return image->planes[0].memoryless;
+}
+
+static bool
+kk_cmd_attachment_memoryless(const VkRenderingAttachmentInfo *attachment)
+{
+   return attachment &&
+      (kk_cmd_view_memoryless(attachment->imageView) ||
+       (attachment->resolveMode != VK_RESOLVE_MODE_NONE &&
+        kk_cmd_view_memoryless(attachment->resolveImageView)));
+}
+
+/* Record only actual tile-storage candidates. An allocation elsewhere on the
+ * device must not force a command-list scan for ordinary attachments. */
+void
+kk_cmd_record_rendering_attachments(struct kk_cmd_buffer *cmd,
+                                    const VkRenderingInfo *info)
+{
+   if (cmd->transient_candidate ||
+       !p_atomic_read(&kk_cmd_buffer_device(cmd)->live_lazy_allocations))
+      return;
+   for (uint32_t i = 0; i < info->colorAttachmentCount; i++) {
+      if (kk_cmd_attachment_memoryless(&info->pColorAttachments[i])) {
+         cmd->transient_candidate = true;
+         return;
+      }
+   }
+   cmd->transient_candidate =
+      kk_cmd_attachment_memoryless(info->pDepthAttachment) ||
+      kk_cmd_attachment_memoryless(info->pStencilAttachment);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
                       const VkCommandBufferBeginInfo *pBeginInfo)
@@ -297,6 +340,10 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    /* Implicit reset must discard old native storage before acquiring the
     * next recording, as explicit reset and destruction already do. */
    vk_command_buffer_begin(&cmd->vk, pBeginInfo);
+
+   cmd->transient_safe = false;
+   cmd->transient_candidate = false;
+   cmd->transient_preflight_done = false;
 
    /* If this is the first time starting the command buffer allocate Metal
     * resources */
@@ -384,9 +431,12 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
       cmd->enqueue_commands = true;
    if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY &&
        cmd->vk.record_result == VK_SUCCESS) {
-      struct vk_command_buffer *source = &cmd->vk;
-      cmd->transient_safe = kk_whole_pass_transient_safe(kk_cmd_buffer_device(cmd),
-                                                         &source, 1);
+      if (!cmd->transient_preflight_done) {
+         struct vk_command_buffer *source = &cmd->vk;
+         cmd->transient_safe = cmd->transient_candidate &&
+            kk_whole_pass_transient_safe(kk_cmd_buffer_device(cmd), &source, 1);
+         cmd->transient_preflight_done = true;
+      }
       if (!cmd->enqueue_commands && !cmd->deferred_render_chain)
          KK_PERF_VOID(kk_cmd_buffer_device(cmd), KK_PERF_REPLAY,
             mtl_execute_command_queue(&cmd->vk.cmd_queue, commandBuffer,

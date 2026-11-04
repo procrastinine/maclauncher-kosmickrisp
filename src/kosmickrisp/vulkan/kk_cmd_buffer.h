@@ -398,6 +398,8 @@ struct kk_cmd_buffer {
    struct kk_whole_pass_state whole_pass;
    /* Recorded at rendering/secondary enqueue, consumed without an End scan. */
    bool deferred_render_chain;
+   bool transient_candidate;
+   bool transient_preflight_done;
    bool transient_safe;
 
    struct {
@@ -654,6 +656,8 @@ kk_dependency_info_is_empty(const VkDependencyInfo *dependency)
 void kk_cmd_buffer_set_label(struct kk_cmd_buffer *cb, const char *label);
 
 
+void kk_cmd_record_rendering_attachments(struct kk_cmd_buffer *,
+                                          const VkRenderingInfo *);
 bool kk_whole_pass_transient_safe(struct kk_device *, struct vk_command_buffer **, uint32_t);
 void kk_whole_pass_command_boundary(struct kk_cmd_buffer *cmd);
 VKAPI_ATTR void VKAPI_CALL
