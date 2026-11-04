@@ -628,5 +628,32 @@
     "performance": true,
     "performance_reason": "The shared report path supplies transformFeedbackQueries, which vkd3d-proton requires for device creation.",
     "off_consequence": "Generated-primitive queries and shared XFB stream-query reports are unavailable; clearing transformFeedbackQueries prevents vkd3d-proton device creation."
+  },
+  {
+    "name": "conservative_rasterization",
+    "description": "Triangle conservative overestimation, degenerate coverage and fully-covered fragment input.",
+    "cost_class": "compute / raster expansion / fragment prolog",
+    "cost_note": "Enabled mode captures original vertices, expands coverage and reconstructs original interpolation in the fragment prolog. Family-8 support kernels contain 1935 clip, 1466 prepare, 45 output-setup and 175 output assignment/store sites; these are static MSL sites, not per-fragment native instruction counts. FullyCovered adds edge tests when read; static disabled mode emits ordinary VS/FS code.",
+    "extensions": [
+      "VK_EXT_conservative_rasterization"
+    ],
+    "features": [
+      "extendedDynamicState3ConservativeRasterizationMode",
+      "extendedDynamicState3ExtraPrimitiveOverestimationSize"
+    ],
+    "properties": [
+      "primitiveOverestimationSize",
+      "maxExtraPrimitiveOverestimationSize",
+      "extraPrimitiveOverestimationSizeGranularity",
+      "primitiveUnderestimation",
+      "conservativePointAndLineRasterization",
+      "degenerateTrianglesRasterized",
+      "degenerateLinesRasterized",
+      "fullyCoveredFragmentShaderInputVariable",
+      "conservativeRasterizationPostDepthCoverage"
+    ],
+    "performance": true,
+    "performance_reason": "Conservative rasterization tier 1 is required for D3D12 feature level 12_1; the implementation also supplies higher-tier coverage behavior.",
+    "off_consequence": "D3D12 conservative rasterization is unavailable, preventing feature levels 12_1 and 12_2; DXVK reports no D3D11 conservative-rasterization tier."
   }
 ]
