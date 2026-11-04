@@ -51,6 +51,12 @@ struct nir_to_msl_ctx {
    unsigned short indentlevel;
    /* First construct that has no MSL form; the translation then fails. */
    const char *error;
+   /* While a function body is printed: SSA values whose instruction assigns
+    * every component unconditionally. Their declarations need no zero. */
+   BITSET_WORD *assigned_defs;
+   /* Floating-point math mode of the open ALU statement scope, if any.
+    * Consecutive ALU statements with the same mode share one scope. */
+   const char *open_math_mode;
    bool uses_pipeline_statistics;
    bool uses_atomic64 : 1;
    bool uses_image_atomic64 : 1;
@@ -68,6 +74,13 @@ struct nir_to_msl_ctx {
    } while (0);
 
 #define P(ctx, ...) _mesa_string_buffer_printf((ctx)->text, __VA_ARGS__);
+
+static inline void
+msl_def_assigned(struct nir_to_msl_ctx *ctx, const nir_def *def)
+{
+   if (ctx->assigned_defs)
+      BITSET_SET(ctx->assigned_defs, def->index);
+}
 
 static inline void
 msl_fail(struct nir_to_msl_ctx *ctx, const char *message)
@@ -94,6 +107,9 @@ const char *msl_uint_type(uint8_t bit_size, uint8_t num_components);
 const char *msl_type_for_src(struct hash_table *types, nir_src *src);
 
 const char *msl_bitcast_for_src(struct hash_table *types, nir_src *src);
+
+const char *msl_printed_type_for_src(struct hash_table *types, nir_src *src,
+                                     unsigned num_components);
 
 void msl_src_as_const(struct nir_to_msl_ctx *ctx, nir_src *src);
 

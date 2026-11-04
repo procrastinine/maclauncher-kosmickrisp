@@ -281,9 +281,13 @@ src_to_msl(struct nir_to_msl_ctx *ctx, nir_src *src)
       P(ctx, "as_type<%s>(", bitcast);
    if (is_register(src->ssa)) {
       nir_intrinsic_instr *instr = nir_def_as_intrinsic(src->ssa);
-      if (src->ssa->bit_size != 1u) {
-         P(ctx, "as_type<%s>(r%d)", msl_type_for_def(ctx->types, src->ssa),
-           instr->src[0].ssa->index);
+      const char *type = msl_type_for_def(ctx->types, src->ssa);
+      if (src->ssa->bit_size != 1u &&
+          type != msl_uint_type(src->ssa->bit_size, src->ssa->num_components)) {
+         P(ctx, "as_type<%s>(r%d)", type, instr->src[0].ssa->index);
+      } else if (src->ssa->bit_size != 1u) {
+         /* Registers are declared with the unsigned type of their width. */
+         P(ctx, "r%d", instr->src[0].ssa->index);
       } else {
          P(ctx, "%s(r%d)", msl_type_for_def(ctx->types, src->ssa),
            instr->src[0].ssa->index);
@@ -1327,6 +1331,8 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       if (msl_def_has_sparse_residency(ctx, &instr->def)) {
          P_IND(ctx, "auto sparse%d = ", instr->def.index);
       } else {
+         if (!guarded)
+            msl_def_assigned(ctx, &instr->def);
          P_IND(ctx, "t%d = ", instr->def.index);
       }
    }
@@ -1344,23 +1350,36 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_param:
       if (ctx->current_function && !ctx->current_function->is_entrypoint) {
          unsigned index = nir_intrinsic_param_idx(instr);
-         if (ctx->current_function->params[index].is_return) {
+         const nir_parameter *param = &ctx->current_function->params[index];
+         const char *type = msl_type_for_def(ctx->types, &instr->def);
+         if (param->is_return) {
             P(ctx, "(ulong)p%u;\n", index);
+         } else if (type == msl_uint_type(param->bit_size, param->num_components)) {
+            /* The parameter already has the value's type. */
+            P(ctx, "p%u;\n", index);
          } else {
-            P(ctx, "as_type<%s>(p%u);\n",
-               msl_type_for_def(ctx->types, &instr->def), index);
+            P(ctx, "as_type<%s>(p%u);\n", type, index);
          }
       } else {
          kk_rt_parameter_to_msl(ctx, instr);
       }
       break;
-   case nir_intrinsic_load_deref:
+   case nir_intrinsic_load_deref: {
+      nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
+      const char *type = msl_type_for_def(ctx->types, &instr->def);
+      if (type == msl_local_storage_type(deref->type)) {
+         /* The storage already has the value's type. */
+         P(ctx, "*");
+         msl_helper_deref(ctx, deref);
+         P(ctx, ";\n");
+         break;
+      }
       /* Booleans cannot be reinterpreted with as_type. */
-      P(ctx, instr->def.bit_size == 1 ? "%s(*" : "as_type<%s>(*",
-        msl_type_for_def(ctx->types, &instr->def));
-      msl_helper_deref(ctx, nir_src_as_deref(instr->src[0]));
+      P(ctx, instr->def.bit_size == 1 ? "%s(*" : "as_type<%s>(*", type);
+      msl_helper_deref(ctx, deref);
       P(ctx, ");\n");
       break;
+   }
    case nir_intrinsic_store_deref: {
       nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
       const char *storage = msl_local_storage_type(deref->type);
@@ -1369,6 +1388,14 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
          storage = "uint";
       }
       P_IND(ctx, "*"); msl_helper_deref(ctx, deref);
+      if (msl_printed_type_for_src(ctx->types, &instr->src[1],
+                                   instr->src[1].ssa->num_components) == storage) {
+         /* The value is already printed with the storage type. */
+         P(ctx, " = ");
+         src_to_msl(ctx, &instr->src[1]);
+         P(ctx, ";\n");
+         break;
+      }
       P(ctx, instr->src[1].ssa->bit_size == 1 ? " = %s(" : " = as_type<%s>(", storage);
       src_to_msl(ctx, &instr->src[1]);
       P(ctx, ");\n");
@@ -2191,6 +2218,7 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
    if (sparse) {
       P_IND(ctx, "auto sparse%d = ", tex->def.index);
    } else {
+      msl_def_assigned(ctx, &tex->def);
       P_IND(ctx, "t%d = ", tex->def.index);
    }
 
@@ -2482,22 +2510,51 @@ alu_fp_math_mode_pragma(struct nir_to_msl_ctx *ctx, const nir_alu_instr *alu)
    return NULL;
 }
 
+/* ALU statements print inside a scope that sets their floating-point math
+ * mode; consecutive statements with the same mode share the scope. Any other
+ * printed statement and the end of a block close it. */
+static void
+msl_set_math_mode(struct nir_to_msl_ctx *ctx, const char *mode)
+{
+   const char *open = ctx->open_math_mode;
+   if (open == mode || (open && mode && !strcmp(open, mode)))
+      return;
+   if (open)
+      P_IND(ctx, "}\n");
+   if (mode) {
+      P_IND(ctx, "{\n");
+      P_IND(ctx, "#pragma METAL fp math_mode(%s)\n", mode);
+   }
+   ctx->open_math_mode = mode;
+}
+
+static bool
+instr_prints_nothing(const nir_instr *instr)
+{
+   switch (instr->type) {
+   case nir_instr_type_deref:
+   case nir_instr_type_load_const:
+   case nir_instr_type_undef:
+      return true;
+   case nir_instr_type_intrinsic:
+      return nir_instr_as_intrinsic(instr)->intrinsic == nir_intrinsic_load_reg;
+   default:
+      return false;
+   }
+}
+
 static void
 instr_to_msl(struct nir_to_msl_ctx *ctx, nir_instr *instr)
 {
+   if (instr->type != nir_instr_type_alu && !instr_prints_nothing(instr))
+      msl_set_math_mode(ctx, NULL);
    switch (instr->type) {
    case nir_instr_type_alu: {
       nir_alu_instr *alu = nir_instr_as_alu(instr);
-      const char *math_mode = alu_fp_math_mode_pragma(ctx, alu);
-      if (math_mode) {
-         P_IND(ctx, "{\n");
-         P_IND(ctx, "#pragma METAL fp math_mode(%s)\n", math_mode);
-      }
+      msl_set_math_mode(ctx, alu_fp_math_mode_pragma(ctx, alu));
       P_IND(ctx, "t%d = ", alu->def.index);
       alu_to_msl(ctx, alu);
       P(ctx, ";\n");
-      if (math_mode)
-         P_IND(ctx, "}\n");
       break;
    }
    case nir_instr_type_deref:
@@ -2511,12 +2568,17 @@ instr_to_msl(struct nir_to_msl_ctx *ctx, nir_instr *instr)
       for (unsigned i = 0; i < call->num_params; ++i) {
          if (i) P(ctx, ", ");
          const nir_parameter *param = &call->callee->params[i];
-         /* Booleans cannot be reinterpreted with as_type. */
-         if (!param->is_return)
-            P(ctx, param->bit_size == 1 ? "%s(" : "as_type<%s>(",
-              msl_uint_type(param->bit_size, param->num_components));
+         const char *type = param->is_return ? NULL :
+            msl_uint_type(param->bit_size, param->num_components);
+         /* Arguments already printed with the parameter type need no
+          * conversion. Booleans cannot be reinterpreted with as_type. */
+         if (type && msl_printed_type_for_src(ctx->types, &call->params[i],
+                                              param->num_components) == type)
+            type = NULL;
+         if (type)
+            P(ctx, param->bit_size == 1 ? "%s(" : "as_type<%s>(", type);
          src_to_msl(ctx, &call->params[i]);
-         if (!param->is_return) P(ctx, ")");
+         if (type) P(ctx, ")");
       }
       P(ctx, ");\n");
       break;
@@ -2554,6 +2616,7 @@ cf_node_to_metal(struct nir_to_msl_ctx *ctx, nir_cf_node *node)
       nir_foreach_instr(instr, block) {
          instr_to_msl(ctx, instr);
       }
+      msl_set_math_mode(ctx, NULL);
       break;
    }
    case nir_cf_node_if: {
@@ -2960,11 +3023,14 @@ predeclare_ssa_values(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
                continue;
             if (msl_def_is_sampler(ctx, def)) {
                P_IND(ctx, "%s t%u;\n", type, def->index);
-            } else if (instr->type == nir_instr_type_alu) {
-               /* instr_to_msl assigns every ALU destination in full. */
+            } else if (instr->type == nir_instr_type_alu ||
+                       (ctx->assigned_defs &&
+                        BITSET_TEST(ctx->assigned_defs, def->index))) {
+               /* The instruction assigns every component unconditionally. */
                P_IND(ctx, "%s t%u;\n", type, def->index);
             } else {
-               /* Guarded intrinsic and texture reads retain their zero. */
+               /* Guarded, sparse and separately emitted results retain
+                * their zero. */
                P_IND(ctx, "%s t%u = %s(0);\n", type, def->index, type);
             }
          }
@@ -2992,6 +3058,41 @@ msl_emit_constant_data(struct nir_to_msl_ctx *ctx, nir_shader *shader)
       P(ctx, "%s0x%xu", i ? "," : "", word);
    }
    P(ctx, "};\n");
+}
+
+/* Prints the body before the value declarations so that declarations can
+ * omit the zero for values the body assigns unconditionally. The entry
+ * shader also prints its output return in the body. */
+static void
+msl_emit_impl(struct nir_to_msl_ctx *ctx, nir_function_impl *impl,
+              nir_shader *entry)
+{
+   struct _mesa_string_buffer *declarations = ctx->text;
+   struct _mesa_string_buffer *body = _mesa_string_buffer_create(declarations, 4096);
+   BITSET_WORD *assigned = body ? rzalloc_array(body, BITSET_WORD,
+                                                BITSET_WORDS(impl->ssa_alloc)) : NULL;
+   if (!assigned) {
+      /* Without a body buffer, every declaration keeps its zero. */
+      if (body)
+         _mesa_string_buffer_destroy(body);
+      predeclare_ssa_values(ctx, impl);
+      foreach_list_typed(nir_cf_node, node, node, &impl->body)
+         cf_node_to_metal(ctx, node);
+      if (entry)
+         emit_output_return(ctx, entry);
+      return;
+   }
+   ctx->text = body;
+   ctx->assigned_defs = assigned;
+   foreach_list_typed(nir_cf_node, node, node, &impl->body)
+      cf_node_to_metal(ctx, node);
+   if (entry)
+      emit_output_return(ctx, entry);
+   ctx->text = declarations;
+   predeclare_ssa_values(ctx, impl);
+   ctx->assigned_defs = NULL;
+   _mesa_string_buffer_append_len(declarations, body->buf, body->length);
+   _mesa_string_buffer_destroy(body);
 }
 
 static void
@@ -3023,9 +3124,7 @@ msl_emit_helpers(struct nir_to_msl_ctx *ctx)
       }
       P(ctx, ")\n{\n"); ctx->indentlevel++;
       msl_helper_locals(ctx, impl);
-      predeclare_ssa_values(ctx, impl);
-      foreach_list_typed(nir_cf_node, node, node, &impl->body)
-         cf_node_to_metal(ctx, node);
+      msl_emit_impl(ctx, impl, NULL);
       ctx->indentlevel--; P(ctx, "}\n");
    }
    ctx->current_function = nir_shader_get_entrypoint(ctx->shader)->function;
@@ -3156,11 +3255,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
          P_IND(&ctx, "}\n");
       }
    }
-   predeclare_ssa_values(&ctx, impl);
-   foreach_list_typed(nir_cf_node, node, node, &impl->body) {
-      cf_node_to_metal(&ctx, node);
-   }
-   emit_output_return(&ctx, shader);
+   msl_emit_impl(&ctx, impl, shader);
    ctx.indentlevel--;
    P(&ctx, "}\n");
    }

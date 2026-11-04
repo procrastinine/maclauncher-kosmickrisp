@@ -862,9 +862,46 @@ msl_bitcast_for_src(struct hash_table *types, nir_src *src)
          return NULL;
 
       // produce bitcast _into_ src_type
-      return ti_type_to_msl_type(src_type, src->ssa->bit_size,
-                                 src->ssa->num_components);
+      const char *into = ti_type_to_msl_type(src_type, src->ssa->bit_size,
+                                             src->ssa->num_components);
+      /* Distinct inferred types can share one MSL type. */
+      if (into && def_type != TYPE_TEXTURE &&
+          into == ti_type_to_msl_type(def_type, src->ssa->bit_size,
+                                      src->ssa->num_components))
+         return NULL;
+      return into;
    } else {
+      return NULL;
+   }
+}
+
+/* MSL type of the expression src_to_msl prints for a source with
+ * num_components selected components, or NULL when it prints an untyped
+ * literal or a non-arithmetic value. */
+const char *
+msl_printed_type_for_src(struct hash_table *types, nir_src *src,
+                         unsigned num_components)
+{
+   if (nir_src_is_undef(*src) || nir_src_is_if(src))
+      return NULL;
+   ti_type src_type = get_type(types, src);
+   ti_type def_type = get_type(types, src->ssa);
+   ti_type type = def_type;
+   if (nir_src_is_const(*src) ||
+       (src_type != def_type && src_type != TYPE_BOOL && def_type != TYPE_BOOL))
+      type = src_type;
+   switch (type) {
+   case TYPE_GENERIC_DATA:
+   case TYPE_GENERIC_INT:
+   case TYPE_GENERIC_INT_OR_BOOL:
+   case TYPE_UINT:
+   case TYPE_INT:
+   case TYPE_BOOL:
+      return ti_type_to_msl_type(type, src->ssa->bit_size, num_components);
+   case TYPE_FLOAT:
+      return src->ssa->bit_size == 16 || src->ssa->bit_size == 32
+         ? ti_type_to_msl_type(type, src->ssa->bit_size, num_components) : NULL;
+   default:
       return NULL;
    }
 }

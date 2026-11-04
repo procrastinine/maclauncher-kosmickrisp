@@ -904,6 +904,7 @@ static bool
 kk_sample_emit_call(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
 {
    if (tex->backend_flags & KK_SAMPLE_METADATA) {
+      msl_def_assigned(ctx, &tex->def);
       P_IND(ctx, "t%u = kk_sampler_metadata_value(as_type<ulong>(as_type<uint4>(", tex->def.index);
       src_to_msl(ctx, nir_tex_get_src(tex, nir_tex_src_backend1));
       P(ctx, ").xy), %uu, %s);\n",
@@ -930,6 +931,8 @@ kk_sample_emit_call(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
    if (sparse) {
       P_IND(ctx, "auto sparse%u = kk_sparse_sample_%u(", tex->def.index, helper->id);
    } else {
+      if (!guarded)
+         msl_def_assigned(ctx, &tex->def);
       P_IND(ctx, "t%u = kk_sample_%u(", tex->def.index, helper->id);
    }
    src_to_msl(ctx, nir_tex_get_src(tex, nir_tex_src_texture_handle));P(ctx, ", ");

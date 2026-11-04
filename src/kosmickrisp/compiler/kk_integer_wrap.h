@@ -5,11 +5,17 @@ kk_msl_wrap_source(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr, unsigned sr
 {
    unsigned bits = instr->def.bit_size;
    unsigned components = instr->def.num_components;
+   const char *type = msl_uint_type(bits, components);
+   /* Sources already printed as the unsigned type need no reinterpretation. */
+   bool cast = msl_printed_type_for_src(ctx->types, &instr->src[src].src,
+                                        components) != type;
    if (bits < 32)
       P(ctx, "%s(", msl_uint_type(32, components));
-   P(ctx, "as_type<%s>(", msl_uint_type(bits, components));
+   if (cast)
+      P(ctx, "as_type<%s>(", type);
    alu_src_to_msl(ctx, instr, src);
-   P(ctx, ")");
+   if (cast)
+      P(ctx, ")");
    if (bits < 32)
       P(ctx, ")");
 }
@@ -27,7 +33,11 @@ kk_msl_integer_wrap(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    }
    unsigned bits = instr->def.bit_size;
    assert(bits == 8 || bits == 16 || bits == 32 || bits == 64);
-   P(ctx, "as_type<%s>(", msl_type_for_def(ctx->types, &instr->def));
+   /* The unsigned expression already has the type of an unsigned result. */
+   const char *def_type = msl_type_for_def(ctx->types, &instr->def);
+   bool cast = def_type != msl_uint_type(bits, instr->def.num_components);
+   if (cast)
+      P(ctx, "as_type<%s>(", def_type);
    /* C++ promotes scalar uchar/ushort to signed int. Promote to uint first,
     * then narrow the unsigned result before reinterpreting its exact bits. */
    if (bits < 32)
@@ -46,5 +56,6 @@ kk_msl_integer_wrap(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    }
    if (bits < 32)
       P(ctx, ")");
-   P(ctx, ")");
+   if (cast)
+      P(ctx, ")");
 }
