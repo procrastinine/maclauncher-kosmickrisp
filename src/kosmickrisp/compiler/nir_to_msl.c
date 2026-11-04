@@ -2975,6 +2975,11 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    rename_main_entrypoint(shader);
    kk_float_controls_lower(shader);
 
+   /* Meta shaders can reach emission without the application optimization
+    * passes. Only surviving deref storage needs a local declaration; dead
+    * aggregate or opaque variables have no scalar MSL storage type. */
+   NIR_PASS(_, shader, nir_remove_dead_variables, nir_var_function_temp, NULL);
+
    struct nir_to_msl_ctx ctx;
    memset(&ctx, 0, offsetof(struct nir_to_msl_ctx, mesh));
    ctx.shader = shader;
