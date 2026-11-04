@@ -608,5 +608,25 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires transform-feedback queries for device creation, and D3D11 stream output requires the implemented output path.",
     "off_consequence": "vkd3d-proton rejects devices without transformFeedbackQueries; D3D11 stream output and dependent generated-primitive queries are unavailable."
+  },
+  {
+    "name": "primitives_generated_query",
+    "description": "Generated-primitive queries and the shared transform-feedback stream-query reports.",
+    "cost_class": "compute / counter reports",
+    "cost_note": "Active queries execute counter/report work without per-draw CPU readback. Family-8 emitted GS reports contain 33 assignment/store sites; VS/TES helper programs contain 82, or 190 with restart counting. Query-capable GS pipelines retain report MSL before query use; native report compilation and dispatch are lazy. Counts are static MSL sites, not native instructions.",
+    "extensions": [
+      "VK_EXT_primitives_generated_query"
+    ],
+    "features": [
+      "primitivesGeneratedQuery",
+      "primitivesGeneratedQueryWithRasterizerDiscard",
+      "primitivesGeneratedQueryWithNonZeroStreams"
+    ],
+    "properties": [
+      "transformFeedbackQueries"
+    ],
+    "performance": true,
+    "performance_reason": "The shared report path supplies transformFeedbackQueries, which vkd3d-proton requires for device creation.",
+    "off_consequence": "Generated-primitive queries and shared XFB stream-query reports are unavailable; clearing transformFeedbackQueries prevents vkd3d-proton device creation."
   }
 ]
