@@ -21,6 +21,7 @@ static const char support_msl[] =
    "typedef uint uint32_t; typedef ulong uint64_t; typedef int int32_t;\n"
    KK_VRS_MESH_TYPES_MSL
    KK_VRS_MSL_LAYOUT
+   KK_VRS_MSL_MESH_JOBS_LAYOUT
    "kernel void kk_vrs_order(){threadgroup_barrier(mem_flags::mem_device); }\n"
    "struct V { float4 position [[position]]; };\n"
    "struct O { float4 color [[color(0)]]; uint mask [[sample_mask]]; };\n"

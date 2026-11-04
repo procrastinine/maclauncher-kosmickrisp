@@ -23,6 +23,17 @@ VkResult kk_vrs_cmd_encode_mesh_job(struct kk_cmd_buffer *cmd,
    const struct mtl_vrs_pipelines *pipelines,
    mtl_argument_table *original_fragment, mtl_argument_table *coarse_fragment,
    const struct kk_vrs_context *context);
+struct kk_vrs_mesh_jobs;
+struct kk_vrs_prepared;
+/* Advance the GPU cursor once, clear its reusable leaf, and consume that
+ * original primitive through all phases before any further cursor advance.
+ * Reader parameters are immutable and shared across jobs/phases. Scheduling
+ * the complete bounded batch/continuation remains the caller's responsibility;
+ * no CPU count/completion read is performed by this entry. */
+VkResult kk_vrs_cmd_encode_next_mesh_job(struct kk_cmd_buffer *,
+   const struct kk_mesh_retained_batch *, const struct kk_vrs_mesh_jobs *,
+   const struct mtl_vrs_pipelines *, mtl_argument_table *original_fragment,
+   mtl_argument_table *coarse_fragment, const struct kk_vrs_prepared *);
 struct kk_poly_retained_raster;
 /* Prepare the immutable GPU range and open/flush graphics before entering this
  * leaf. Pipelines use the actual retained Poly FS convention and descriptor.

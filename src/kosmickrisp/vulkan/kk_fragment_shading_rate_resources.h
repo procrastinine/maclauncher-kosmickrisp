@@ -29,4 +29,19 @@ VkResult kk_vrs_cmd_prepare_mesh_job(struct kk_cmd_buffer *cmd,
    const struct kk_mesh_retained_batch *batch, uint64_t job,
    const struct mtl_vrs_pipelines *pipelines, mtl_argument_table *private_table,
    const struct kk_vrs_prepared *resources);
+/* Borrowed batch identity expires at the synchronous consume callback return.
+ * The cursor allocation is command-retired. Its mutable state, completion and
+ * errors are GPU-owned; callers must not read them back to schedule work.
+ * This advances one primitive job, not the general dispatch/continuation loop.
+ * Complete all phases reading this job before advancing it again. */
+struct kk_vrs_mesh_jobs {
+   const struct kk_mesh_retained_batch *batch;
+   uint64_t gpu, reader_parameters;
+};
+VkResult kk_vrs_cmd_begin_mesh_jobs(struct kk_cmd_buffer *,
+   const struct kk_mesh_retained_batch *, struct kk_vrs_mesh_jobs *);
+VkResult kk_vrs_cmd_prepare_next_mesh_job(struct kk_cmd_buffer *,
+   const struct kk_mesh_retained_batch *, const struct kk_vrs_mesh_jobs *,
+   const struct mtl_vrs_pipelines *, mtl_argument_table *private_table,
+   const struct kk_vrs_prepared *);
 #endif

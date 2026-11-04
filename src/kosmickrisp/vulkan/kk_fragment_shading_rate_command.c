@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_fragment_shading_rate_command.h"
+#include "kk_fragment_shading_rate_resources.h"
 #include "kk_shader.h"
 #include "kk_mesh_pipeline_api.h"
 #include "kk_poly_retained_raster_types.h"
@@ -49,6 +50,8 @@ kk_vrs_cmd_encode_phases(struct kk_cmd_buffer *cmd,
    if (!kk_cmd_depth_stencil_variant(snapshot, KK_DEPTH_STENCIL_BYPASS))
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
+   const enum mtl_visibility_result_mode visibility = cmd->state.gfx.occlusion.mode;
+   const size_t visibility_offset = cmd->state.gfx.occlusion.index * sizeof(uint64_t);
    bool early = mtl_vrs_pipelines_early_tests(pipelines);
    for (enum mtl_vrs_phase phase = MTL_VRS_COVERAGE; phase <= MTL_VRS_REPLAY; phase++) {
       if (!kk_vrs_snapshot_is_live(snapshot)) {
@@ -63,6 +66,13 @@ kk_vrs_cmd_encode_phases(struct kk_cmd_buffer *cmd,
          commit ? KK_DEPTH_STENCIL_ORIGINAL : KK_DEPTH_STENCIL_BYPASS);
       if (result != VK_SUCCESS)
          goto restore;
+      /* Count passing samples at the same phase that commits DS. Early-test
+       * queries precede application kill/A2C; late queries include the final
+       * fine output mask. Internal body/other raster draws never contribute.
+       * Leave the logical query state and query-free native path unchanged. */
+      if (visibility != MTL_VISIBILITY_RESULT_MODE_DISABLED)
+         mtl_set_visibility_result_mode(snapshot->encoder,
+            commit ? visibility : MTL_VISIBILITY_RESULT_MODE_DISABLED, visibility_offset);
       result = draw(cmd, pipelines, context, phase, data);
       if (result != VK_SUCCESS)
          goto restore;
@@ -75,6 +85,8 @@ restore:
    } else {
       VkResult restored = kk_cmd_bind_depth_stencil(snapshot, KK_DEPTH_STENCIL_ORIGINAL);
       restore_raster(snapshot->encoder, data);
+      if (visibility != MTL_VISIBILITY_RESULT_MODE_DISABLED)
+         mtl_set_visibility_result_mode(snapshot->encoder, visibility, visibility_offset);
       if (result == VK_SUCCESS)
          result = restored;
    }
@@ -156,6 +168,37 @@ kk_vrs_restore_mesh(mtl_render_encoder *encoder, void *data)
    mtl_render_set_argument_table(encoder, raster->original_fragment, MTL_RENDER_STAGE_FRAGMENT);
 }
 
+static VkResult
+kk_vrs_cmd_encode_mesh_parameters(struct kk_cmd_buffer *cmd,
+   const struct kk_mesh_retained_batch *batch, uint64_t parameters,
+   const struct mtl_vrs_pipelines *pipelines,
+   mtl_argument_table *original_fragment, mtl_argument_table *coarse_fragment,
+   const struct kk_vrs_context *context)
+{
+   struct kk_vrs_mesh_raster raster = {
+      .batch = batch, .parameters = parameters,
+      .original_fragment = original_fragment, .coarse = coarse_fragment,
+   };
+   /* Only the separate Fragment table changes; Mesh owns slot5 and its exact
+    * original reader grid/guard. Alias filtering uses its existing named slot. */
+   mtl_set_address(coarse_fragment, batch->layer_selector, KK_ARGUMENT_POLY_LAYER_REPLAY);
+   return kk_vrs_cmd_encode_phases(cmd, (struct kk_shader *)batch->producer,
+      pipelines, context, kk_vrs_mesh_phase, kk_vrs_restore_mesh, &raster);
+}
+
+static bool
+kk_vrs_mesh_job_arguments_valid(struct kk_cmd_buffer *cmd,
+   const struct kk_mesh_retained_batch *batch,
+   mtl_argument_table *original_fragment, mtl_argument_table *coarse_fragment,
+   const struct kk_vrs_context *context)
+{
+   return cmd && batch && context &&
+      batch->producer == cmd->state.gfx.shader && batch->encoder == cmd->metal.render &&
+      original_fragment && coarse_fragment && original_fragment != coarse_fragment &&
+      coarse_fragment != batch->mesh_table &&
+      context->original_per_draw == batch->per_draw_address;
+}
+
 VkResult
 kk_vrs_cmd_encode_mesh_job(struct kk_cmd_buffer *cmd,
    const struct kk_mesh_retained_batch *batch, uint64_t job,
@@ -163,23 +206,35 @@ kk_vrs_cmd_encode_mesh_job(struct kk_cmd_buffer *cmd,
    mtl_argument_table *original_fragment, mtl_argument_table *coarse_fragment,
    const struct kk_vrs_context *context)
 {
-   if (!cmd || !batch || !job || job % 4 || !context ||
-       batch->producer != cmd->state.gfx.shader || batch->encoder != cmd->metal.render ||
-       !original_fragment || !coarse_fragment || original_fragment == coarse_fragment ||
-       coarse_fragment == batch->mesh_table ||
-       context->original_per_draw != batch->per_draw_address)
+   if (!job || job % 4 || !pipelines ||
+       !kk_vrs_mesh_job_arguments_valid(cmd, batch, original_fragment, coarse_fragment, context))
       return VK_ERROR_UNKNOWN;
-   struct kk_vrs_mesh_raster raster = {
-      .batch = batch, .original_fragment = original_fragment, .coarse = coarse_fragment,
-   };
-   VkResult result = kk_mesh_retained_raster_job_parameters(cmd, batch, job, &raster.parameters);
+   uint64_t parameters;
+   VkResult result = kk_mesh_retained_raster_job_parameters(cmd, batch, job, &parameters);
    if (result != VK_SUCCESS)
       return result;
-   /* Only the separate Fragment table changes; Mesh owns slot5 and its exact
-    * original reader grid/guard. Alias filtering uses its existing named slot. */
-   mtl_set_address(coarse_fragment, batch->layer_selector, KK_ARGUMENT_POLY_LAYER_REPLAY);
-   return kk_vrs_cmd_encode_phases(cmd, (struct kk_shader *)batch->producer,
-      pipelines, context, kk_vrs_mesh_phase, kk_vrs_restore_mesh, &raster);
+   return kk_vrs_cmd_encode_mesh_parameters(cmd, batch, parameters, pipelines,
+      original_fragment, coarse_fragment, context);
+}
+
+VkResult
+kk_vrs_cmd_encode_next_mesh_job(struct kk_cmd_buffer *cmd,
+   const struct kk_mesh_retained_batch *batch, const struct kk_vrs_mesh_jobs *jobs,
+   const struct mtl_vrs_pipelines *pipelines,
+   mtl_argument_table *original_fragment, mtl_argument_table *coarse_fragment,
+   const struct kk_vrs_prepared *resources)
+{
+   if (!jobs || jobs->batch != batch || !jobs->gpu || !jobs->reader_parameters ||
+       !resources || !pipelines ||
+       !kk_vrs_mesh_job_arguments_valid(cmd, batch, original_fragment,
+          coarse_fragment, resources->context))
+      return VK_ERROR_UNKNOWN;
+   VkResult result = kk_vrs_cmd_prepare_next_mesh_job(cmd, batch, jobs,
+      pipelines, coarse_fragment, resources);
+   if (result != VK_SUCCESS)
+      return result;
+   return kk_vrs_cmd_encode_mesh_parameters(cmd, batch, jobs->reader_parameters,
+      pipelines, original_fragment, coarse_fragment, resources->context);
 }
 
 struct kk_vrs_poly_raster {

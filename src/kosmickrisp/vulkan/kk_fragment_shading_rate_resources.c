@@ -55,6 +55,7 @@ kk_vrs_cmd_prepare_native(struct kk_cmd_buffer *cmd,
    context->result_stride = stride;
    context->original_per_draw = original_per_draw;
    context->reserved = samples;
+   context->sample_mask = cmd->vk.dynamic_graphics_state.ms.sample_mask;
    mtl_set_address(coarse_table, allocation.gpu, KK_ARGUMENT_PER_DRAW);
    *out = (struct kk_vrs_prepared){context, allocation.gpu, bytes};
    return VK_SUCCESS;
@@ -78,11 +79,11 @@ kk_vrs_mesh_field_valid(const struct kk_mesh_retained_field *field,
    return !(field->offset % 4) && field->offset <= size && size - field->offset >= 4;
 }
 
-VkResult
-kk_vrs_cmd_prepare_mesh_job(struct kk_cmd_buffer *cmd,
+static VkResult
+kk_vrs_cmd_prepare_mesh_job_state(struct kk_cmd_buffer *cmd,
    const struct kk_mesh_retained_batch *batch, uint64_t job,
    const struct mtl_vrs_pipelines *pipelines, mtl_argument_table *private_table,
-   const struct kk_vrs_prepared *resources)
+   const struct kk_vrs_prepared *resources, bool advance)
 {
    if (!cmd || !batch || !job || job % 4 || !pipelines || !private_table ||
        private_table == batch->mesh_table || !resources || !resources->context ||
@@ -110,6 +111,7 @@ kk_vrs_cmd_prepare_mesh_job(struct kk_cmd_buffer *cmd,
          VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT,
       .id_source = id->source, .id_offset = id->offset,
       .rate_source = rate->source, .rate_offset = rate->offset,
+      .advance = advance,
    };
    struct kk_ptr upload = kk_pool_upload(cmd, &parameters, sizeof(parameters), 8);
    if (!upload.gpu)
@@ -120,4 +122,46 @@ kk_vrs_cmd_prepare_mesh_job(struct kk_cmd_buffer *cmd,
    mtl_render_set_argument_table(batch->encoder, cmd->argument_table, MTL_RENDER_STAGE_VERTEX);
    mtl_render_set_pipeline_state(batch->encoder, batch->raster_pipeline);
    return VK_SUCCESS;
+}
+
+VkResult
+kk_vrs_cmd_prepare_mesh_job(struct kk_cmd_buffer *cmd,
+   const struct kk_mesh_retained_batch *batch, uint64_t job,
+   const struct mtl_vrs_pipelines *pipelines, mtl_argument_table *private_table,
+   const struct kk_vrs_prepared *resources)
+{
+   return kk_vrs_cmd_prepare_mesh_job_state(cmd, batch, job,
+      pipelines, private_table, resources, false);
+}
+
+VkResult
+kk_vrs_cmd_begin_mesh_jobs(struct kk_cmd_buffer *cmd,
+   const struct kk_mesh_retained_batch *batch, struct kk_vrs_mesh_jobs *out)
+{
+   if (!out) return VK_ERROR_UNKNOWN;
+   *out = (struct kk_vrs_mesh_jobs){0};
+   if (!cmd || !batch || batch->encoder != cmd->metal.render ||
+       batch->producer != cmd->state.gfx.shader)
+      return VK_ERROR_UNKNOWN;
+   const struct kk_vrs_mesh_jobs_state initial = {.job = {UINT32_MAX, UINT32_MAX}};
+   struct kk_ptr upload = kk_pool_upload(cmd, &initial, sizeof(initial), 8);
+   if (!upload.gpu) return VK_ERROR_OUT_OF_HOST_MEMORY;
+   uint64_t reader_parameters;
+   VkResult result = kk_mesh_retained_raster_job_parameters(cmd, batch,
+      upload.gpu, &reader_parameters);
+   if (result != VK_SUCCESS)
+      return result;
+   *out = (struct kk_vrs_mesh_jobs){batch, upload.gpu, reader_parameters};
+   return VK_SUCCESS;
+}
+
+VkResult
+kk_vrs_cmd_prepare_next_mesh_job(struct kk_cmd_buffer *cmd,
+   const struct kk_mesh_retained_batch *batch, const struct kk_vrs_mesh_jobs *jobs,
+   const struct mtl_vrs_pipelines *pipelines, mtl_argument_table *private_table,
+   const struct kk_vrs_prepared *resources)
+{
+   if (!jobs || jobs->batch != batch) return VK_ERROR_UNKNOWN;
+   return kk_vrs_cmd_prepare_mesh_job_state(cmd, batch, jobs->gpu,
+      pipelines, private_table, resources, true);
 }
