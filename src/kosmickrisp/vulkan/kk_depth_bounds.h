@@ -51,6 +51,17 @@ kk_depth_bounds_selected(const struct kk_physical_device *pdev,
        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE));
 }
 
+/* A dynamic enable also compiles the ordinary pipeline. Draws bind it while
+ * the test is off and bind the transaction pipeline while it is on. */
+static inline bool
+kk_depth_bounds_dynamic_enable(const struct kk_device *dev,
+                               const struct vk_graphics_pipeline_state *state)
+{
+   return state && kk_depth_bounds_emulated(dev) &&
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE);
+}
+void kk_depth_bounds_route(struct kk_cmd_buffer *cmd);
+
 static inline bool
 kk_depth_bounds_pipeline(const struct kk_device *dev,
                           const struct vk_graphics_pipeline_state *state)

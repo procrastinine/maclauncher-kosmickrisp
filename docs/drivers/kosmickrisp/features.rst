@@ -171,7 +171,9 @@ Feature table
        later, in every mode. On earlier families, each draw of a pipeline
        that enables the test runs in the per-sample depth/stencil
        transaction, which tests the stored depth and discards samples
-       outside the bounds without changing stencil.
+       outside the bounds without changing stencil. A pipeline with a
+       dynamic enable draws through its unchanged pipeline while the test
+       is off.
      - Apple10; native on Apple10 and later, emulated on Apple7 to Apple9.
      - ``depth_bounds``
      - Off

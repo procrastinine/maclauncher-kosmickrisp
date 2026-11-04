@@ -455,12 +455,10 @@ kk_sparse_select_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
 }
 
 static VkResult
-kk_compile_shaders_untracked(struct vk_device *device, uint32_t count,
+kk_compile_shaders_sparse(struct vk_device *device, uint32_t count,
    struct vk_shader_compile_info *infos, const struct vk_graphics_pipeline_state *graphics,
    const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
-   if (count && mesa_shader_stage_is_rt(infos[0].stage))
-      return kk_compile_shaders_native(device,count,infos,graphics,features,alloc,out,features->sparseResidencyBuffer || features->sparseResidencyImage3D);
    struct kk_sparse_shader_state *state = NULL;
    uint32_t always_modes;
    uint32_t modes = kk_sparse_pipeline_modes(count, infos, features, &always_modes);
@@ -490,6 +488,66 @@ kk_compile_shaders_untracked(struct vk_device *device, uint32_t count,
       }
    }
    return result;
+}
+
+/* A dynamic depth-bounds enable compiles the ordinary pipeline from the same
+ * inputs with the test statically off, then the transaction pipeline. Each
+ * transaction shader owns the ordinary shader of its stage. */
+static VkResult
+kk_compile_shaders_bounds_routes(struct vk_device *device, uint32_t count,
+   struct vk_shader_compile_info *infos, const struct vk_graphics_pipeline_state *graphics,
+   const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out)
+{
+   assert(count <= MESA_SHADER_STAGES);
+   struct vk_shader_compile_info native_infos[MESA_SHADER_STAGES];
+   struct vk_shader *native[MESA_SHADER_STAGES] = {0};
+   bool cloned = true;
+   for (unsigned i = 0; i < count; ++i) {
+      native_infos[i] = infos[i];
+      native_infos[i].nir = nir_shader_clone(NULL, infos[i].nir);
+      cloned &= native_infos[i].nir != NULL;
+   }
+   struct vk_graphics_pipeline_state state = *graphics;
+   struct vk_depth_stencil_state ds;
+   BITSET_CLEAR(state.dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE);
+   if (graphics->ds) {
+      ds = *graphics->ds;
+      ds.depth.bounds_test.enable = false;
+      state.ds = &ds;
+   }
+   VkResult result = VK_ERROR_OUT_OF_HOST_MEMORY;
+   if (cloned)
+      result = kk_compile_shaders_sparse(device, count, native_infos, &state, features, alloc, native);
+   else
+      for (unsigned i = 0; i < count; ++i) ralloc_free(native_infos[i].nir);
+   if (result != VK_SUCCESS) {
+      for (unsigned i = 0; i < count; ++i) ralloc_free(infos[i].nir);
+      return result;
+   }
+   result = kk_compile_shaders_sparse(device, count, infos, graphics, features, alloc, out);
+   for (unsigned i = 0; i < count; ++i) {
+      struct kk_shader *ordinary = container_of(native[i], struct kk_shader, vk);
+      if (result != VK_SUCCESS) {
+         kk_shader_destroy(device, ordinary, alloc);
+         continue;
+      }
+      struct kk_shader *transaction = container_of(out[i], struct kk_shader, vk);
+      transaction->bounds_route = ordinary;
+      ordinary->bounds_route = transaction;
+   }
+   return result;
+}
+
+static VkResult
+kk_compile_shaders_untracked(struct vk_device *device, uint32_t count,
+   struct vk_shader_compile_info *infos, const struct vk_graphics_pipeline_state *graphics,
+   const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out)
+{
+   if (count && mesa_shader_stage_is_rt(infos[0].stage))
+      return kk_compile_shaders_native(device,count,infos,graphics,features,alloc,out,features->sparseResidencyBuffer || features->sparseResidencyImage3D);
+   if (kk_depth_bounds_dynamic_enable(container_of(device, struct kk_device, vk), graphics))
+      return kk_compile_shaders_bounds_routes(device, count, infos, graphics, features, alloc, out);
+   return kk_compile_shaders_sparse(device, count, infos, graphics, features, alloc, out);
 }
 
 static ATTRIBUTE_NOINLINE VkResult
@@ -527,7 +585,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t count,
 }
 
 static bool
-kk_shader_serialize(struct vk_device *dev, const struct vk_shader *vk_shader, struct blob *blob)
+kk_shader_serialize_sparse(struct vk_device *dev, const struct vk_shader *vk_shader, struct blob *blob)
 {
    if (!kk_shader_serialize_native(dev, vk_shader, blob)) return false;
    const struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
@@ -550,11 +608,22 @@ kk_shader_serialize(struct vk_device *dev, const struct vk_shader *vk_shader, st
    return ok;
 }
 
+/* A transaction shader with a dynamic enable carries its ordinary sibling. */
+static bool
+kk_shader_serialize(struct vk_device *dev, const struct vk_shader *vk_shader, struct blob *blob)
+{
+   if (!kk_shader_serialize_sparse(dev, vk_shader, blob)) return false;
+   const struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
+   const bool route = shader->info.depth_bounds_emulation && shader->bounds_route;
+   blob_write_uint8(blob, route);
+   if (!route) return !blob->out_of_memory;
+   return kk_shader_serialize_sparse(dev, &shader->bounds_route->vk, blob);
+}
+
 static VkResult
-kk_deserialize_shader_untracked(struct vk_device *dev, struct blob_reader *blob, uint32_t version,
+kk_deserialize_shader_sparse(struct vk_device *dev, struct blob_reader *blob, uint32_t version,
    const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
-   if (kk_rt_shader_binary(blob)) return kk_rt_shader_deserialize(dev,blob,alloc,out);
    VkResult result = kk_deserialize_shader_native(dev, blob, version, alloc, out);
    if (result != VK_SUCCESS) return result;
    unsigned size = blob_read_uint32(blob);
@@ -590,6 +659,35 @@ kk_deserialize_shader_untracked(struct vk_device *dev, struct blob_reader *blob,
          container_of(*out, struct kk_shader, vk)->info.sparse_modes);
    if (result != VK_SUCCESS) kk_shader_destroy(dev, container_of(*out, struct kk_shader, vk), alloc);
    return result;
+}
+
+static VkResult
+kk_deserialize_shader_untracked(struct vk_device *dev, struct blob_reader *blob, uint32_t version,
+   const VkAllocationCallbacks *alloc, struct vk_shader **out)
+{
+   if (kk_rt_shader_binary(blob)) return kk_rt_shader_deserialize(dev,blob,alloc,out);
+   VkResult result = kk_deserialize_shader_sparse(dev, blob, version, alloc, out);
+   if (result != VK_SUCCESS) return result;
+   struct kk_shader *transaction = container_of(*out, struct kk_shader, vk);
+   const bool route = blob_read_uint8(blob);
+   if (route && !transaction->info.depth_bounds_emulation)
+      blob->overrun = true;
+   struct vk_shader *ordinary = NULL;
+   if (!blob->overrun && route)
+      result = kk_deserialize_shader_sparse(dev, blob, version, alloc, &ordinary);
+   if (result == VK_SUCCESS && blob->overrun) {
+      if (ordinary) kk_shader_destroy(dev, container_of(ordinary, struct kk_shader, vk), alloc);
+      result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
+   }
+   if (result != VK_SUCCESS) {
+      kk_shader_destroy(dev, transaction, alloc);
+      return result;
+   }
+   if (ordinary) {
+      transaction->bounds_route = container_of(ordinary, struct kk_shader, vk);
+      transaction->bounds_route->bounds_route = transaction;
+   }
+   return VK_SUCCESS;
 }
 
 static ATTRIBUTE_NOINLINE VkResult

@@ -949,6 +949,7 @@ static int
 kk_depth_bounds_mesh_begin(VkCommandBuffer commandBuffer)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   kk_depth_bounds_route(cmd);
    if (!cmd->state.gfx.shader->info.depth_bounds_emulation)
       return 0;
    if (!kk_mesh_retained_transaction_begin(cmd, kk_depth_bounds_record_mesh_batch, NULL)) {
@@ -992,9 +993,75 @@ kk_depth_bounds_draw_mesh_indirect_count(VkCommandBuffer commandBuffer, VkBuffer
    if (selected) kk_mesh_retained_transaction_end(kk_cmd_buffer_from_handle(commandBuffer));
 }
 
+/* Vertex-pipeline draws select the ordinary or transaction shaders of a
+ * dynamic-enable pipeline before the draw reads any bound shader. */
+#define KK_DEPTH_BOUNDS_DRAW(name, params, args) \
+static void VKAPI_CALL \
+kk_depth_bounds_##name params \
+{ \
+   kk_depth_bounds_route(kk_cmd_buffer_from_handle(commandBuffer)); \
+   kk_##name args; \
+}
+KK_DEPTH_BOUNDS_DRAW(CmdDraw, (VkCommandBuffer commandBuffer, uint32_t vertexCount,
+   uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance),
+   (commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance))
+KK_DEPTH_BOUNDS_DRAW(CmdDrawMultiEXT, (VkCommandBuffer commandBuffer, uint32_t drawCount,
+   const VkMultiDrawInfoEXT *pVertexInfo, uint32_t instanceCount, uint32_t firstInstance,
+   uint32_t stride),
+   (commandBuffer, drawCount, pVertexInfo, instanceCount, firstInstance, stride))
+KK_DEPTH_BOUNDS_DRAW(CmdDrawIndexed, (VkCommandBuffer commandBuffer, uint32_t indexCount,
+   uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance),
+   (commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance))
+KK_DEPTH_BOUNDS_DRAW(CmdDrawMultiIndexedEXT, (VkCommandBuffer commandBuffer, uint32_t drawCount,
+   const VkMultiDrawIndexedInfoEXT *pIndexInfo, uint32_t instanceCount, uint32_t firstInstance,
+   uint32_t stride, const int32_t *pVertexOffset),
+   (commandBuffer, drawCount, pIndexInfo, instanceCount, firstInstance, stride, pVertexOffset))
+KK_DEPTH_BOUNDS_DRAW(CmdDrawIndirect2KHR, (VkCommandBuffer commandBuffer,
+   const VkDrawIndirect2InfoKHR *pInfo), (commandBuffer, pInfo))
+KK_DEPTH_BOUNDS_DRAW(CmdDrawIndexedIndirect2KHR, (VkCommandBuffer commandBuffer,
+   const VkDrawIndirect2InfoKHR *pInfo), (commandBuffer, pInfo))
+KK_DEPTH_BOUNDS_DRAW(CmdDrawIndirectCount2KHR, (VkCommandBuffer commandBuffer,
+   const VkDrawIndirectCount2InfoKHR *pInfo), (commandBuffer, pInfo))
+KK_DEPTH_BOUNDS_DRAW(CmdDrawIndexedIndirectCount2KHR, (VkCommandBuffer commandBuffer,
+   const VkDrawIndirectCount2InfoKHR *pInfo), (commandBuffer, pInfo))
+KK_DEPTH_BOUNDS_DRAW(CmdDrawIndirectByteCount2EXT, (VkCommandBuffer commandBuffer,
+   uint32_t instanceCount, uint32_t firstInstance,
+   const VkBindTransformFeedbackBuffer2InfoEXT *counter, uint32_t counterOffset,
+   uint32_t vertexStride),
+   (commandBuffer, instanceCount, firstInstance, counter, counterOffset, vertexStride))
+#undef KK_DEPTH_BOUNDS_DRAW
+
+/* Generated commands draw with the shaders bound when they are preprocessed
+ * and executed, so both select from the command buffer's enable first. */
+static void VKAPI_CALL
+kk_depth_bounds_CmdPreprocessGeneratedCommandsEXT(VkCommandBuffer commandBuffer,
+   const VkGeneratedCommandsInfoEXT *info, VkCommandBuffer state)
+{
+   kk_depth_bounds_route(kk_cmd_buffer_from_handle(state));
+   kk_CmdPreprocessGeneratedCommandsEXT(commandBuffer, info, state);
+}
+
+static void VKAPI_CALL
+kk_depth_bounds_CmdExecuteGeneratedCommandsEXT(VkCommandBuffer commandBuffer,
+   VkBool32 preprocessed, const VkGeneratedCommandsInfoEXT *info)
+{
+   kk_depth_bounds_route(kk_cmd_buffer_from_handle(commandBuffer));
+   kk_CmdExecuteGeneratedCommandsEXT(commandBuffer, preprocessed, info);
+}
+
 void
 kk_depth_bounds_init_dispatch(struct kk_device *dev)
 {
+#define KK_DEPTH_BOUNDS_ENTRY(name) dev->vk.dispatch_table.name = kk_depth_bounds_##name;
+   KK_DEPTH_BOUNDS_ENTRY(CmdDraw) KK_DEPTH_BOUNDS_ENTRY(CmdDrawMultiEXT)
+   KK_DEPTH_BOUNDS_ENTRY(CmdDrawIndexed) KK_DEPTH_BOUNDS_ENTRY(CmdDrawMultiIndexedEXT)
+   KK_DEPTH_BOUNDS_ENTRY(CmdDrawIndirect2KHR) KK_DEPTH_BOUNDS_ENTRY(CmdDrawIndexedIndirect2KHR)
+   KK_DEPTH_BOUNDS_ENTRY(CmdDrawIndirectCount2KHR)
+   KK_DEPTH_BOUNDS_ENTRY(CmdDrawIndexedIndirectCount2KHR)
+   KK_DEPTH_BOUNDS_ENTRY(CmdDrawIndirectByteCount2EXT)
+   KK_DEPTH_BOUNDS_ENTRY(CmdPreprocessGeneratedCommandsEXT)
+   KK_DEPTH_BOUNDS_ENTRY(CmdExecuteGeneratedCommandsEXT)
+#undef KK_DEPTH_BOUNDS_ENTRY
    dev->vk.dispatch_table.CmdDrawMeshTasksEXT = kk_depth_bounds_draw_mesh;
    dev->vk.dispatch_table.CmdDrawMeshTasksIndirectEXT = kk_depth_bounds_draw_mesh_indirect;
    dev->vk.dispatch_table.CmdDrawMeshTasksIndirectCountEXT = kk_depth_bounds_draw_mesh_indirect_count;

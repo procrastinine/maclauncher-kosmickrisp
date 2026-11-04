@@ -323,6 +323,9 @@ struct kk_shader {
    uint64_t embedded_sampler_table;
    struct kk_sparse_shader_state *sparse;
    struct kk_shader *sparse_base; /* Weak: base owns every immutable variant. */
+   /* Dynamic depth-bounds enable: the transaction shader owns the ordinary
+    * shader of the same stage, which points back without owning it. */
+   struct kk_shader *bounds_route;
    /* Immutable vk.stage selects vertex, fragment, compute or Task/Mesh state. */
    union {
       struct kk_shader *gs_mesh; /* Vertex-owned internal Mesh alternative. */

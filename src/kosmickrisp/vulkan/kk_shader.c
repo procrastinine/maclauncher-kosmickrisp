@@ -1440,6 +1440,8 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
       kk_async_compute_shader_finish(shader);
    if (shader->vk.stage == MESA_SHADER_VERTEX && shader->gs_mesh)
       kk_shader_destroy(vk_dev, shader->gs_mesh, pAllocator);
+   if (shader->info.depth_bounds_emulation && shader->bounds_route)
+      kk_shader_destroy(vk_dev, shader->bounds_route, pAllocator);
    kk_shader_embedded_samplers_finish(dev, shader);
    const bool mesh_stage = kk_shader_stage_has_mesh_info(shader->vk.stage);
    kk_sparse_shader_finish(shader);
@@ -2155,9 +2157,10 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       nir_shader_intrinsics_pass(nir, kk_interlock_trim_native_output,
          nir_metadata_control_flow, (void *)state);
    if (shader->info.depth_bounds_emulation && stage == MESA_SHADER_FRAGMENT) {
-      /* All draws for this pipeline use the transaction, including a dynamic
-       * bounds-disable. Its native attachment executables capture coverage;
-       * only the transaction executes the original application body. */
+      /* Every draw of this pipeline uses the transaction. A dynamic enable
+       * also compiles the ordinary pipeline, which draws bind while the test
+       * is off. Its native attachment executables capture coverage; only the
+       * transaction executes the original application body. */
       const struct msl_compile_data *capture = &shader->interlock->program[KK_INTERLOCK_CAPTURE];
       kk_msl_copy(&shader->msl_data[stage], capture);
       kk_msl_copy(&shader->polygon[3], capture);
@@ -4335,6 +4338,30 @@ kk_cmd_bind_shaders(struct vk_command_buffer *cmd_buffer, uint32_t stage_count,
          kk_cmd_bind_compute_shader(cmd, shader);
       else
          kk_cmd_bind_graphics_shader(cmd, stages[i], shader);
+   }
+}
+
+/* Called before each draw on devices with software depth bounds. A pipeline
+ * with a dynamic enable draws through its ordinary shaders while the test is
+ * off and through the transaction shaders while it is on. */
+void
+kk_depth_bounds_route(struct kk_cmd_buffer *cmd)
+{
+   struct kk_shader *last = cmd->state.gfx.shader;
+   if (last && last->sparse_base) last = last->sparse_base;
+   if (!last || !last->bounds_route ||
+       last->info.depth_bounds_emulation ==
+       cmd->vk.dynamic_graphics_state.ds.depth.bounds_test.enable)
+      return;
+   static const mesa_shader_stage stages[] = {
+      MESA_SHADER_TASK, MESA_SHADER_MESH, MESA_SHADER_VERTEX, MESA_SHADER_TESS_CTRL,
+      MESA_SHADER_TESS_EVAL, MESA_SHADER_GEOMETRY, MESA_SHADER_FRAGMENT,
+   };
+   for (unsigned i = 0; i < ARRAY_SIZE(stages); ++i) {
+      struct kk_shader *shader = cmd->state.shaders[stages[i]];
+      if (shader && shader->sparse_base) shader = shader->sparse_base;
+      if (shader && shader->bounds_route)
+         kk_cmd_bind_graphics_shader(cmd, stages[i], shader->bounds_route);
    }
 }
 

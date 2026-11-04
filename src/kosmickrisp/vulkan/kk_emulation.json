@@ -831,7 +831,7 @@
     "name": "depth_bounds",
     "description": "Depth bounds test on Apple7, Apple8 and Apple9 GPUs.",
     "cost_class": "native Apple10 / software depth-stencil transaction",
-    "cost_note": "Apple10 uses the native Metal depth bounds test. On earlier families, every draw of a pipeline that enables the test, statically or through dynamic state, runs in the per-sample depth/stencil transaction: native coverage capture, a load of the stored depth and stencil, ordered bounds, depth and stencil tests in bounded tile and primitive batches, and replay of the passing samples. Ordinary, Mesh and generated Mesh draws use the same transaction. Pipelines that do not enable the test compile and run unchanged. While the feature is enabled, color and depth/stencil attachment images also receive shader-read usage.",
+    "cost_note": "Apple10 uses the native Metal depth bounds test. On earlier families, every draw of a pipeline that enables the test statically, and every draw of a pipeline with a dynamic enable while the test is on, runs in the per-sample depth/stencil transaction: native coverage capture, a load of the stored depth and stencil, ordered bounds, depth and stencil tests in bounded tile and primitive batches, and replay of the passing samples. Ordinary, Mesh and generated Mesh draws use the same transaction. A pipeline with a dynamic enable also compiles the unchanged pipeline, which its draws, and generated commands without an execution set, bind while the test is off. Pipelines that do not enable the test compile and run unchanged. While the feature is enabled, color and depth/stencil attachment images also receive shader-read usage.",
     "extensions": [],
     "features": [
       "depthBounds"
