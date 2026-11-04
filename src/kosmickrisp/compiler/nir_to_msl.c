@@ -2545,7 +2545,9 @@ msl_optimize_nir(struct nir_shader *nir)
       NIR_PASS(progress, nir, nir_split_struct_vars, nir_var_function_temp);
       NIR_PASS(progress, nir, nir_lower_var_copies);
       NIR_PASS(progress, nir, nir_lower_vars_to_ssa);
-      NIR_PASS(progress, nir, nir_lower_phis_to_scalar, kk_matrix_phi_width, NULL);
+      if (nir->info.stage == MESA_SHADER_COMPUTE &&
+          nir->info.cs.has_cooperative_matrix)
+         NIR_PASS(progress, nir, nir_lower_phis_to_scalar, kk_matrix_phi_width, NULL);
       NIR_PASS(progress, nir, nir_opt_undef);
       NIR_PASS(progress, nir, nir_opt_dce);
       NIR_PASS(progress, nir, nir_opt_cse);
@@ -2849,6 +2851,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (shader->info.stage == MESA_SHADER_MESH && options->mesh_retained_fields)
       memcpy(options->mesh_retained_fields, ctx.mesh_retained_fields, sizeof(ctx.mesh_retained_fields));
    options->requires_msl41 = ctx.requires_msl41;
+   options->uses_matrix_coordinates = ctx.uses_matrix_coordinates;
    char *ret = ctx.text->buf;
    if (ctx.sampler_helpers) _mesa_hash_table_destroy(ctx.sampler_helpers, NULL);
    _mesa_hash_table_destroy(ctx.types, NULL);

@@ -32,6 +32,7 @@ struct nir_to_msl_ctx {
    bool interlock;
    bool mesh_queries;
    bool requires_msl41;
+   bool uses_matrix_coordinates;
    uint32_t mesh_retained_vertex_stride, mesh_retained_primitive_stride;
    uint32_t mesh_retained_fields[4][4];
    uint32_t mesh_view_mask, mesh_view_index_offset;

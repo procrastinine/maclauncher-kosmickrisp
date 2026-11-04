@@ -264,6 +264,7 @@ kk_emit_matrix_tile(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
       bool load = intr->intrinsic == nir_intrinsic_load_cmat_kk;
       unsigned bits = load ? intr->def.bit_size : intr->src[1].ssa->bit_size;
       bool fp8 = bits == 8;
+      ctx->uses_matrix_coordinates |= fp8;
       bool shared = nir_intrinsic_memory_modes(intr) == nir_var_mem_shared;
       const char *space = shared ? "threadgroup" : "device";
       const char *scalar = bits == 16 ? "half" : "float";

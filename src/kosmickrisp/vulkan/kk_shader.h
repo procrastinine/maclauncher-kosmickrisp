@@ -244,6 +244,7 @@ struct msl_compile_data {
    char *code;
    char *entrypoint_name;
    bool requires_msl41;
+   bool uses_matrix_coordinates;
 };
 
 static inline enum mtl_language_version

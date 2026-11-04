@@ -337,6 +337,7 @@ struct kk_graphics_state {
 struct kk_compute_state {
    struct kk_descriptor_state descriptors;
    mtl_compute_pipeline_state *bound_pipeline;
+   bool matrix_coordinates_initialized;
 };
 
 struct kk_conditional_rendering_state {

@@ -1380,6 +1380,7 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    data->code = KK_PERF_CALL(dev, KK_PERF_MSL,
       nir_to_msl(nir, &translate_options));
    data->requires_msl41 = translate_options.requires_msl41;
+   data->uses_matrix_coordinates = translate_options.uses_matrix_coordinates;
    if (unlikely(dev->perf))
       kk_perf_msl_source(dev->perf, nir->info.stage, data->code);
    const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
@@ -2149,6 +2150,7 @@ kk_msl_copy(struct msl_compile_data *dst, const struct msl_compile_data *src)
    dst->code = ralloc_strdup(NULL, src->code);
    dst->entrypoint_name = ralloc_strdup(NULL, src->entrypoint_name);
    dst->requires_msl41 = src->requires_msl41;
+   dst->uses_matrix_coordinates = src->uses_matrix_coordinates;
 }
 
 /* Copies all msl shader data to the vertex and gathers information for pipeline
@@ -3141,7 +3143,8 @@ kk_msl_serialize(const struct msl_compile_data *data, struct blob *blob)
    uint32_t code_length = strlen(data->code) + 1;
    blob_write_uint32(blob, entrypoint_length);
    blob_write_uint32(blob, code_length);
-   blob_write_uint8(blob, data->requires_msl41);
+   blob_write_uint8(blob, data->requires_msl41 |
+                          (data->uses_matrix_coordinates << 1));
    blob_write_bytes(blob, data->entrypoint_name, entrypoint_length);
    blob_write_bytes(blob, data->code, code_length);
 }
@@ -3191,7 +3194,9 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
 {
    const uint32_t entrypoint_length = blob_read_uint32(blob);
    const uint32_t code_length = blob_read_uint32(blob);
-   data->requires_msl41 = blob_read_uint8(blob) != 0;
+   const uint8_t flags = blob_read_uint8(blob);
+   data->requires_msl41 = flags & 1;
+   data->uses_matrix_coordinates = flags & 2;
    data->entrypoint_name = ralloc_array(NULL, char, entrypoint_length);
    if (data->entrypoint_name == NULL)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -3305,10 +3310,35 @@ fail:
    return vk_error(dev, result);
 }
 
+static void
+kk_cmd_init_matrix_coordinates(struct kk_cmd_buffer *cmd)
+{
+   /* Exact binary16 encodings of the immutable coordinate ramp 0..63. */
+   static const uint16_t matrix_coordinates[64] = {
+      0x0000, 0x3c00, 0x4000, 0x4200, 0x4400, 0x4500, 0x4600, 0x4700,
+      0x4800, 0x4880, 0x4900, 0x4980, 0x4a00, 0x4a80, 0x4b00, 0x4b80,
+      0x4c00, 0x4c40, 0x4c80, 0x4cc0, 0x4d00, 0x4d40, 0x4d80, 0x4dc0,
+      0x4e00, 0x4e40, 0x4e80, 0x4ec0, 0x4f00, 0x4f40, 0x4f80, 0x4fc0,
+      0x5000, 0x5020, 0x5040, 0x5060, 0x5080, 0x50a0, 0x50c0, 0x50e0,
+      0x5100, 0x5120, 0x5140, 0x5160, 0x5180, 0x51a0, 0x51c0, 0x51e0,
+      0x5200, 0x5220, 0x5240, 0x5260, 0x5280, 0x52a0, 0x52c0, 0x52e0,
+      0x5300, 0x5320, 0x5340, 0x5360, 0x5380, 0x53a0, 0x53c0, 0x53e0,
+   };
+   STATIC_ASSERT(sizeof(matrix_coordinates) ==
+                 sizeof(cmd->state.cs.descriptors.root.cs.matrix_coordinates));
+   memcpy(cmd->state.cs.descriptors.root.cs.matrix_coordinates,
+          matrix_coordinates, sizeof(matrix_coordinates));
+   cmd->state.cs.matrix_coordinates_initialized = true;
+   cmd->state.cs.descriptors.root_dirty = true;
+}
+
 void
 kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
 {
    shader = kk_sparse_select_shader(cmd, shader);
+   if (shader && shader->msl_data[MESA_SHADER_COMPUTE].uses_matrix_coordinates &&
+       !cmd->state.cs.matrix_coordinates_initialized)
+      kk_cmd_init_matrix_coordinates(cmd);
    struct kk_descriptor_state *desc = &cmd->state.cs.descriptors;
    /* Meta operations can restore an unbound compute stage. */
    uint32_t push_size = shader ? shader->info.push_size : 0;

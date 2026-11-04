@@ -23,6 +23,8 @@ struct nir_to_msl_options {
    bool mesh_queries;
    /* Output: the emitted source uses a Metal 4.1 operation. */
    bool requires_msl41;
+   /* Output: an emitted FP8 matrix load/store consumes the coordinate ramp. */
+   bool uses_matrix_coordinates;
    uint32_t *mesh_retained_strides;
    uint32_t *mesh_retained_fields;
    uint32_t mesh_view_mask, mesh_view_index_offset;
