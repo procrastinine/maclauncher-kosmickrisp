@@ -1046,13 +1046,14 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
 }
 
 /* Mesh outputs are already staged after its collective body. Flat interfaces
- * need the shared address packet, without the VS producer's corner replay. */
+ * need the shared address packet, without the VS producer's corner replay.
+ * Per-vertex inputs have no native Mesh route, so they always read the heap. */
 bool
-kk_nir_lower_mesh_flat_inputs(nir_shader *fs, nir_shader *mesh,
+kk_nir_lower_mesh_flat_inputs(nir_shader *fs, nir_shader *mesh, bool per_vertex,
                               struct kk_per_vertex_map *map)
 {
    assert(mesh->info.stage == MESA_SHADER_MESH);
-   if (!kk_nir_needs_interface_packing(fs, mesh))
+   if (!per_vertex && !kk_nir_needs_interface_packing(fs, mesh))
       return false;
    nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {

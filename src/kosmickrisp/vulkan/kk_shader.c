@@ -4509,7 +4509,9 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
        nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT &&
        nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_MESH)
       NIR_PASS(_, nir_shaders[total_shaders - 1u], kk_nir_lower_mesh_flat_inputs,
-               nir_shaders[total_shaders - 2u], &per_vertex_map);
+               nir_shaders[total_shaders - 2u],
+               barycentric_inputs & KK_BARYCENTRIC_INPUT_PER_VERTEX,
+               &per_vertex_map);
    if (state && total_shaders >= 2u &&
        nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT &&
        (nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_VERTEX ||

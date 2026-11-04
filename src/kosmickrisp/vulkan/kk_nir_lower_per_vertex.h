@@ -70,6 +70,7 @@ bool kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev,
 
 
 bool kk_nir_lower_mesh_flat_inputs(nir_shader *fs, nir_shader *mesh,
+                                   bool per_vertex,
                                    struct kk_per_vertex_map *map);
 
 bool kk_nir_lower_vs_per_vertex_outputs(nir_shader *vs,
