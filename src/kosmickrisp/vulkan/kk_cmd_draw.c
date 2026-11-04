@@ -229,12 +229,17 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
                          struct kk_rendering_state *render,
                          const struct vk_dynamic_graphics_state *dyn,
                          bool force_attachment_load,
-                         bool rendering_to_whole_framebuffer)
+                         bool rendering_to_whole_framebuffer,
+                         bool clear_previous)
 {
-   for (uint32_t i = 0; i < ARRAY_SIZE(render->color_att); i++) {
-      mtl_render_pass_attachment_descriptor *attachment_descriptor =
-         mtl_render_pass_descriptor_get_color_attachment(pass_descriptor, i);
-      kk_clear_common_attachment_description(attachment_descriptor);
+   /* Avoid materializing unused color slots on a new native descriptor.
+    * A changed mapping reuses its descriptor and must clear old slots. */
+   if (clear_previous) {
+      for (uint32_t i = 0; i < ARRAY_SIZE(render->color_att); i++) {
+         mtl_render_pass_attachment_descriptor *attachment_descriptor =
+            mtl_render_pass_descriptor_get_color_attachment(pass_descriptor, i);
+         kk_clear_common_attachment_description(attachment_descriptor);
+      }
    }
    for (uint32_t i = 0; i < ARRAY_SIZE(render->color_att); i++) {
       struct kk_attachment *color_att = &render->color_att[i];
@@ -408,7 +413,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
       !is_whole_framebuffer || (render->flags & VK_RENDERING_SUSPENDING_BIT);
 
    kk_set_color_attachments(pass_descriptor, render, dyn, force_attachment_load,
-                            is_whole_framebuffer);
+                            is_whole_framebuffer, false);
 
    if (render->depth_att.iview) {
       const struct kk_image_view *iview = render->depth_att.iview;
@@ -1053,7 +1058,7 @@ kk_flush_render_pass(struct kk_cmd_buffer *cmd)
 
          kk_set_color_attachments(
             cmd->state.gfx.render_pass_descriptor, render, dyn, true,
-            cmd->state.gfx.render.rendering_to_whole_framebuffer);
+            cmd->state.gfx.render.rendering_to_whole_framebuffer, true);
          needs_restart = true;
          color_attachment_map_changed = true;
       }

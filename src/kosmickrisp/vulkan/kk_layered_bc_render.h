@@ -9,7 +9,7 @@ kk_layered_bc_refresh_attachments(struct kk_cmd_buffer *cmd, bool force_load)
    struct kk_rendering_state *render = &cmd->state.gfx.render;
    mtl_render_pass_descriptor *descriptor = cmd->state.gfx.render_pass_descriptor;
    kk_set_color_attachments(descriptor, render, &cmd->vk.dynamic_graphics_state,
-                            force_load, render->rendering_to_whole_framebuffer);
+                            force_load, render->rendering_to_whole_framebuffer, true);
    const struct kk_attachment *attachments[] = {&render->depth_att,
                                                &render->stencil_att};
    for (unsigned i = 0; i < ARRAY_SIZE(attachments); ++i) {
