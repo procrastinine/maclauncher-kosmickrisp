@@ -12,7 +12,7 @@ Vulkan contract: Subgroup operations in graphics preraster stages.
 
 Native vertex lane indices come from actual SIMD active masks and ranks instead of unsupported Metal vertex input attributes. Poly stages use their existing compute SIMD execution.
 
-Limits and reported properties: `subgroupSupportedStages = 63`.
+Limits and reported properties: `subgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT | VK_SHADER_STAGE_GEOMETRY_BIT`.
 
 Consumers: vkd3d-proton, DXVK, Vulkan graphics subgroup consumers.
 
@@ -48,7 +48,7 @@ Vulkan contract: `VkPhysicalDeviceFeatures.fillModeNonSolid`, `VkPhysicalDeviceE
 
 Adds a capture branch around original GS execution and XFB, clips with original weights/provoking data, then emits native square triangles with facing/depth semantics. Extends Poly parameters from 79 to 82 words before stream counters extend to 90. Corrected polygon_grid writes 64,1,1 threadgroup dimensions (c180bf43); this correction is part of the newly owned polygon kernel, not a separate upstream edit.
 
-Limits and reported properties: `VkPhysicalDeviceMaintenance5PropertiesKHR.polygonModePointSize = "unchanged false; fixed 1.0 polygon points"`.
+Limits and reported properties: `VkPhysicalDeviceMaintenance5PropertiesKHR.polygonModePointSize = false`.
 
 Consumers: DXVK, Wine vkd3d, vkd3d-proton.
 
@@ -216,7 +216,7 @@ Vulkan contract: `VK_EXT_conservative_rasterization`, `extendedDynamicState3Cons
 
 Expands clipped triangle coverage to whole pixel spans and evaluates original-corner fragment attributes. Static disabled pipelines keep their original MSL and draw path.
 
-Limits and reported properties: `primitiveOverestimationSize = 0.00390625`; `degenerateTrianglesRasterized = false`; `fullyCoveredFragmentShaderInputVariable = false`; `conservativeRasterizationPostDepthCoverage = false`.
+Limits and reported properties: `primitiveOverestimationSize = 1.0f / 256.0f`; `degenerateTrianglesRasterized = true`; `fullyCoveredFragmentShaderInputVariable = true`; `conservativeRasterizationPostDepthCoverage = false`.
 
 Consumers: vkd3d-proton, DXVK.
 
@@ -252,7 +252,7 @@ Vulkan contract: `VK_KHR_line_rasterization`, `VK_EXT_line_rasterization`, `wide
 
 Shared Poly capture and clipping expand rectangular and smooth lines, reproduce Bresenham coverage, and carry per-strip stipple phase through the existing prefix scan and restart unroller. Smooth coverage modifies alpha before blending. Pure fragment shaders use an initial stipple discard; observable forced-early shaders retain early tests and receive only ON spans from Poly. Ordinary unit-width native draws retain their existing GPU path.
 
-Limits and reported properties: `stippledRectangularLines = false`; `stippledSmoothLines = false`; `lineWidthRange = [1, 4096]`; `lineWidthGranularity = 0.00390625`; `strictLines = false`; `nonStrictWideLinesUseParallelogram = true`.
+Limits and reported properties: `stippledRectangularLines = false`; `stippledSmoothLines = false`; `lineWidthRange = {1.0f, 4096.0f}`; `lineWidthGranularity = 1.0f / 256.0f`; `strictLines = false`; `nonStrictWideLinesUseParallelogram = true`.
 
 Consumers: ANGLE, DXVK.
 
@@ -482,7 +482,7 @@ Vulkan contract: `VK_EXT_sampler_filter_minmax`, `VkPhysicalDeviceVulkan12Featur
 
 Uses descriptor padding for minimum/maximum footprint reduction on GPUs without native sampler reduction; native reduction and feature-disabled shaders retain their existing path.
 
-Limits and reported properties: `filterMinmaxSingleComponentFormats = true`; `filterMinmaxImageComponentMapping = true`.
+Limits and reported properties: `filterMinmaxSingleComponentFormats = supported_extensions->EXT_sampler_filter_minmax`; `filterMinmaxImageComponentMapping = supported_extensions->EXT_sampler_filter_minmax`.
 
 Consumers: vkd3d-proton.
 
@@ -518,7 +518,7 @@ Vulkan contract: Extended push constants and descriptors with layout-sized uploa
 
 Supports 4096-byte constants across graphics and compute and 256 push descriptors. Root uploads cover fixed state plus the bound layout range; descriptor storage and uploads use the actual layout size. Partial and template updates retain untouched values.
 
-Limits and reported properties: `VkPhysicalDeviceLimits.maxPushConstantsSize = 4096`; `VkPhysicalDeviceVulkan14Properties.maxPushDescriptors = 256`; `VkPhysicalDevicePushDescriptorPropertiesKHR.maxPushDescriptors = 256`.
+Limits and reported properties: `VkPhysicalDeviceLimits.maxPushConstantsSize = KK_MAX_PUSH_SIZE`; `VkPhysicalDeviceVulkan14Properties.maxPushDescriptors = KK_MAX_PUSH_DESCRIPTORS`; `VkPhysicalDevicePushDescriptorPropertiesKHR.maxPushDescriptors = KK_MAX_PUSH_DESCRIPTORS`.
 
 Consumers: ANGLE GLES 3.2, DXVK, vkd3d-proton, Wine vkd3d, Native Vulkan.
 
@@ -530,7 +530,7 @@ Vulkan contract: `VK_KHR_shader_float_controls`.
 
 Reports fixed Apple FP16 preserve and FP32 flush modes, canonicalizes explicit FP32 flush results including fcanonicalize, and supports 64 uniform plus 64 storage dynamic descriptors and 8192 allocations. The existing push-data uploader retains the enlarged fixed descriptor prefix and the bound pipeline constant tail.
 
-Limits and reported properties: `VkPhysicalDeviceVulkan12Properties.denormBehaviorIndependence = "VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL"`; `VkPhysicalDeviceVulkan12Properties.roundingModeIndependence = "VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL"`; `VkPhysicalDeviceVulkan12Properties.shaderDenormPreserveFloat16 = true`; `VkPhysicalDeviceVulkan12Properties.shaderDenormFlushToZeroFloat32 = true`; `VkPhysicalDeviceLimits.maxMemoryAllocationCount = 8192`; `VkPhysicalDeviceLimits.maxDescriptorSetUniformBuffersDynamic = 64`; `VkPhysicalDeviceLimits.maxDescriptorSetStorageBuffersDynamic = 64`; `VkPhysicalDeviceVulkan12Properties.maxDescriptorSetUpdateAfterBindUniformBuffersDynamic = 64`; `VkPhysicalDeviceVulkan12Properties.maxDescriptorSetUpdateAfterBindStorageBuffersDynamic = 64`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetTotalUniformBuffersDynamic = 64`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetTotalStorageBuffersDynamic = 64`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetUpdateAfterBindTotalUniformBuffersDynamic = 64`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetUpdateAfterBindTotalStorageBuffersDynamic = 64`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetUpdateAfterBindTotalBuffersDynamic = 128`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetTotalBuffersDynamic = 128`.
+Limits and reported properties: `VkPhysicalDeviceVulkan12Properties.denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL`; `VkPhysicalDeviceVulkan12Properties.roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL`; `VkPhysicalDeviceVulkan12Properties.shaderDenormPreserveFloat16 = true`; `VkPhysicalDeviceVulkan12Properties.shaderDenormFlushToZeroFloat32 = true`; `VkPhysicalDeviceLimits.maxMemoryAllocationCount = 8192`; `VkPhysicalDeviceLimits.maxDescriptorSetUniformBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS / 2`; `VkPhysicalDeviceLimits.maxDescriptorSetStorageBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS / 2`; `VkPhysicalDeviceVulkan12Properties.maxDescriptorSetUpdateAfterBindUniformBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS / 2`; `VkPhysicalDeviceVulkan12Properties.maxDescriptorSetUpdateAfterBindStorageBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS / 2`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetTotalUniformBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS / 2`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetTotalStorageBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS / 2`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetUpdateAfterBindTotalUniformBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS / 2`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetUpdateAfterBindTotalStorageBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS / 2`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetUpdateAfterBindTotalBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS`; `VkPhysicalDeviceMaintenance7PropertiesKHR.maxDescriptorSetTotalBuffersDynamic = KK_MAX_DYNAMIC_BUFFERS`.
 
 Consumers: vkd3d-proton, DXVK, Wine vkd3d, Vulkan descriptor and allocation consumers.
 
@@ -614,7 +614,7 @@ Vulkan contract: `VK_EXT_fragment_shader_interlock`, `VkPhysicalDeviceFragmentSh
 
 An explicit native raster-order guard brackets storage accesses with the SPIR-V device and texture fences, including physical buffer addresses. Existing descriptor layout and lowering remain shared. Discard releases an active region before helper writes are suppressed.
 
-Limits and reported properties: `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT.fragmentShaderPixelInterlock = false`; `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT.fragmentShaderShadingRateInterlock = false`.
+Limits and reported properties: `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT.fragmentShaderPixelInterlock = gpu_apple_family >= 7`; `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT.fragmentShaderShadingRateInterlock = false`.
 
 Consumers: Native Vulkan.
 
@@ -926,7 +926,7 @@ Vulkan contract: `shaderStorageImageMultisample`.
 
 Uses immutable per-view sample-resource tables and existing memory bindings for multisample storage operations, with native attachment and input publication through shared per-sample image copies.
 
-Limits and reported properties: `storageImageSampleCounts = "Native supported sample counts intersected with 1, 2 and 4"`.
+Limits and reported properties: `storageImageSampleCounts = pdev->info.supported_sample_counts & (VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT)`.
 
 Consumers: DXVK, vkd3d-proton, Wine vkd3d.
 
@@ -1010,7 +1010,7 @@ Vulkan contract: `VK_EXT_fragment_shader_interlock`, `VkPhysicalDeviceFragmentSh
 
 Capture completion schedules private continuation work without a host wait in queue submission. Private gates preserve later queue work and application synchronization until completion, and device loss releases native waits before callback drain.
 
-Limits and reported properties: `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT.fragmentShaderPixelInterlock = false`.
+Limits and reported properties: `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT.fragmentShaderPixelInterlock = gpu_apple_family >= 7`.
 
 Consumers: vkd3d-proton, ANGLE.
 
@@ -1168,7 +1168,7 @@ Vulkan contract: Explicit fixed-width compute subgroups.
 
 Reports compute as accepting explicit subgroup size32, using the existing Mesa pipeline selection and native Metal SIMD width. Default pipelines and full-subgroup behavior use the same path.
 
-Limits and reported properties: `requiredSubgroupSizeStages = ["COMPUTE"]`.
+Limits and reported properties: `requiredSubgroupSizeStages = VK_SHADER_STAGE_COMPUTE_BIT`.
 
 Consumers: vkd3d-proton.
 
@@ -1204,7 +1204,7 @@ Vulkan contract: `VK_KHR_cooperative_matrix`, `VK_EXT_shader_float8`, `cooperati
 
 Composes native 8x8 fragments into 16x16 subgroup matrices, addresses matrix memory using original pointee strides, and performs FP8 conversion on the GPU.
 
-Limits and reported properties: `cooperativeMatrixSupportedStages = "VK_SHADER_STAGE_COMPUTE_BIT"`.
+Limits and reported properties: `cooperativeMatrixSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT`.
 
 Consumers: vkd3d-proton AGS WMMA_FP8.
 
@@ -1364,7 +1364,7 @@ Vulkan contract: `VK_EXT_texel_buffer_alignment`.
 
 Expands storage-image descriptors from 8 to 16 bytes, aligns native offset down, carries prefix/count and preserves logical bounds and query size. Buffer capacity reserves prefix space.
 
-Limits and reported properties: `VkPhysicalDeviceTexelBufferAlignmentProperties.storageTexelBufferOffsetSingleTexelAlignment = true`; `VkPhysicalDeviceTexelBufferAlignmentProperties.uniformTexelBufferOffsetSingleTexelAlignment = true`; `VkPhysicalDeviceLimits.maxTexelBufferElements = "16384 * 16384 - KK_MIN_TEXEL_BUFFER_ALIGNMENT"`.
+Limits and reported properties: `VkPhysicalDeviceTexelBufferAlignmentProperties.storageTexelBufferOffsetSingleTexelAlignment = true`; `VkPhysicalDeviceTexelBufferAlignmentProperties.uniformTexelBufferOffsetSingleTexelAlignment = true`; `VkPhysicalDeviceLimits.maxTexelBufferElements = 16384 * 16384 - KK_MIN_TEXEL_BUFFER_ALIGNMENT`.
 
 Consumers: ANGLE GLES 3.2, DXVK, vkd3d-proton, Wine vkd3d, winevulkan.
 
@@ -1484,7 +1484,7 @@ Vulkan contract: `VK_EXT_device_generated_commands`, `deviceGeneratedCommands`, 
 
 Expands token streams into GPU root and per-draw records, then encodes Metal indirect command buffers with sequence-specific push data and buffer bindings.
 
-Limits and reported properties: `maxDrawIndirectCount = 1073741824`; `maxIndirectSequenceCount = 1048576`; `supportedIndirectCommandsShaderStages = ["vertex", "tessellation_control", "tessellation_evaluation", "geometry", "fragment", "compute"]`.
+Limits and reported properties: `maxDrawIndirectCount = 1u << 30`; `maxIndirectSequenceCount = 1u << 20`; `supportedIndirectCommandsShaderStages = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT`.
 
 Consumers: vkd3d-proton.
 
@@ -1508,7 +1508,7 @@ Vulkan contract: Four-byte storage-buffer offsets.
 
 Exact four-byte byte offsets and descriptor ranges use inferred scalar alignment for global memory accesses.
 
-Limits and reported properties: `VkPhysicalDeviceLimits.minStorageBufferOffsetAlignment = 4`.
+Limits and reported properties: `VkPhysicalDeviceLimits.minStorageBufferOffsetAlignment = KK_MIN_SSBO_ALIGNMENT`.
 
 Consumers: DXVK, vkd3d-proton.
 
