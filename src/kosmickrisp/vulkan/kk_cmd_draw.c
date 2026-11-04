@@ -1087,6 +1087,8 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
 
+   bool bind_dynamic_ds = false;
+
    /* Depth/stencil state may be dynamic, handle it as part of the pipeline. */
    if (cmd->state.gfx.is_depth_stencil_dynamic &&
        (IS_DIRTY(DS_DEPTH_TEST_ENABLE) | IS_DIRTY(DS_DEPTH_WRITE_ENABLE) |
@@ -1102,7 +1104,7 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
          vs->info.vs.s_format != MTL_PIXEL_FORMAT_INVALID;
       gfx->depth_stencil_state = kk_compile_depth_stencil_state(
          device, &dyn->ds, has_depth, has_stencil);
-      mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
+      bind_dynamic_ds = true;
    }
 
    if ((IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) || IS_DIRTY(RS_POLYGON_MODE) ||
@@ -1112,12 +1114,17 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
       mtl_render_pipeline_state *pipeline =
          kk_attachment_pipeline(cmd, vs, gfx->conservative ? 2 :
             (gfx->polygon_points || (gfx->layer_replay.bind && vs->info.poly_layer_replay)));
-      if (!pipeline)
+      if (!pipeline) {
+         if (bind_dynamic_ds)
+            mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
          return;
+      }
       mtl_render_set_pipeline_state(enc, pipeline);
       mtl_depth_stencil_state *ds = kk_cmd_selected_depth_stencil(cmd, vs);
-      if (ds)
+      if (ds || bind_dynamic_ds)
          mtl_set_depth_stencil_state(enc, ds);
+   } else if (bind_dynamic_ds) {
+      mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
    }
 
    /* Merge tess info before GS construction since that depends on
