@@ -105,11 +105,17 @@ static nir_def *
 load_rate_image(nir_builder *b, nir_def *context, nir_def *x, nir_def *y)
 {
    nir_def *zero = nir_imm_int(b, 0);
-   nir_def *tx = nir_udiv(b, x, CTX(b, context, texel_width, 32));
-   nir_def *ty = nir_udiv(b, y, CTX(b, context, texel_height, 32));
-   nir_def *valid = nir_iand(b, nir_ine_imm(b, CTX(b, context, has_attachment, 32), 0),
-      nir_iand(b, nir_ult(b, tx, CTX(b, context, rate_image_width, 32)),
-                  nir_ult(b, ty, CTX(b, context, rate_image_height, 32))));
+   nir_def *tw = CTX(b, context, texel_width, 32);
+   nir_def *th = CTX(b, context, texel_height, 32);
+   nir_def *enabled = nir_iand(b,
+      nir_ine_imm(b, CTX(b, context, has_attachment, 32), 0),
+      nir_iand(b, nir_ine_imm(b, tw, 0), nir_ine_imm(b, th, 0)));
+   nir_push_if(b, enabled);
+   nir_def *tx = nir_udiv(b, x, tw);
+   nir_def *ty = nir_udiv(b, y, th);
+   nir_def *valid = nir_iand(b,
+      nir_ult(b, tx, CTX(b, context, rate_image_width, 32)),
+      nir_ult(b, ty, CTX(b, context, rate_image_height, 32)));
    nir_push_if(b, valid);
    nir_def *handle = nir_load_texture_handle_kk(b, 1, 64,
       nir_iadd_imm(b, context, offsetof(struct kk_vrs_context, rate_texture)),
@@ -130,7 +136,37 @@ load_rate_image(nir_builder *b, nir_def *context, nir_def *x, nir_def *y)
    nir_builder_instr_insert(b, &tex->instr);
    nir_def *rate = nir_channel(b, &tex->def, 0);
    nir_pop_if(b, NULL);
+   rate = nir_if_phi(b, rate, zero);
+   nir_pop_if(b, NULL);
    return nir_if_phi(b, rate, zero);
+}
+
+static nir_def *
+clamp_sample_extent(nir_builder *b, nir_def *extent, unsigned samples)
+{
+   /* The reviewed rate sets are seven rates at1sample, through2x4 at2,
+    * and through2x2 at4. Apply the same input/intermediate/final clamp. */
+   if (samples > 1)
+      extent = nir_umin(b, extent, nir_imm_ivec2(b, 2, samples > 2 ? 2 : 4));
+   return clamp_extent(b, extent);
+}
+
+nir_def *
+kk_nir_vrs_combined_extent(nir_builder *b, nir_def *context,
+   nir_def *absolute_pixel, unsigned samples)
+{
+   assert(samples == 1 || samples == 2 || samples == 4);
+   nir_def *pipeline = clamp_sample_extent(b, nir_vec2(b,
+      CTX(b, context, fragment_width, 32), CTX(b, context, fragment_height, 32)), samples);
+   nir_def *primitive = clamp_sample_extent(b,
+      decode_extent(b, CTX(b, context, primitive_rate, 32)), samples);
+   nir_def *attachment = clamp_sample_extent(b, decode_extent(b,
+      load_rate_image(b, context, nir_channel(b, absolute_pixel, 0),
+         nir_channel(b, absolute_pixel, 1))), samples);
+   nir_def *first = clamp_sample_extent(b, combine_extent(b,
+      pipeline, primitive, CTX(b, context, combiner0, 32)), samples);
+   return clamp_sample_extent(b, combine_extent(b,
+      first, attachment, CTX(b, context, combiner1, 32)), samples);
 }
 
 bool

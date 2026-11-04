@@ -43,8 +43,10 @@ kk_vrs_transaction_prepare(nir_shader *shader,
    inputs.center = program->coord;
    struct kk_vrs_logical_variables logical = source->logical;
    logical.initial_helper = program->initial_helper;
-   if (!kk_vrs_lower_captured_inputs(shader, application, &inputs) ||
-       !kk_nir_vrs_lower_transaction_body(shader, application, &logical) ||
+   /* Rebase application draw loads before the captured reader can insert
+    * its own driver-context loads. Those must keep the internal address. */
+   if (!kk_nir_vrs_lower_transaction_body(shader, application, &logical) ||
+       !kk_vrs_lower_captured_inputs(shader, application, &inputs) ||
        !kk_nir_vrs_rebase_fine_draw(s->fine, logical.original_per_draw))
       return false;
 
@@ -52,7 +54,7 @@ kk_vrs_transaction_prepare(nir_shader *shader,
     * while application interpolation was lowered at its logical center. */
    struct kk_interlock_captured_inputs_nir fine = {
       .capture = &transaction->render->inputs,
-      .sample_shading = true,
+      .sample_shading = transaction->render->sample_shading,
       .sample = program->sample,
       .coord = program->coord,
       .data = transaction,

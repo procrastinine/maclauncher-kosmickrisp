@@ -4,12 +4,17 @@
 #include "nir.h"
 #include "kosmickrisp/bridge/mtl_types.h"
 struct kk_shader;
+struct nir_builder;
 mtl_render_pipeline_descriptor *kk_vrs_native_pipeline_descriptor(const struct kk_shader *shader);
 #include "kosmickrisp/libkk/kk_fragment_shading_rate_types.h"
 /* Accepts explicit-I/O, descriptor-lowered fragment NIR. This bounded internal
  * form supports a single float4 color at 2x2/1sample with no DS/discard exports.
  * Unsupported input is an error to the caller, never a fine-rate substitute.
  * No Vulkan feature or command is exposed by this compiler operation. */
+/* Uses the real context's pipeline/primitive state and checked R8 texture
+ * fetch. absolute_pixel retains the rate image's framebuffer coordinates. */
+nir_def *kk_nir_vrs_combined_extent(struct nir_builder *, nir_def *context,
+   nir_def *absolute_pixel, unsigned samples);
 bool kk_nir_lower_coarse_fragment(nir_shader *nir);
 bool kk_nir_lower_native_coarse_fragment(nir_shader *nir);
 bool kk_nir_vrs_split_application(nir_shader *nir);
@@ -28,7 +33,6 @@ bool kk_nir_vrs_local_outputs(nir_shader *, nir_variable *sample_shift,
 bool kk_nir_vrs_uses_per_draw(nir_shader *nir);
 void kk_nir_vrs_lower_fine_rate(nir_shader *nir);
 bool kk_nir_lower_linked_replay_fragment(nir_shader *nir, unsigned samples);
-struct nir_builder;
 /* Borrowed shader globals filled by the shared transaction before its sole
  * call. Fine inputs/exports/DS/demotion stay in that existing wrapper. */
 struct kk_vrs_logical_variables {

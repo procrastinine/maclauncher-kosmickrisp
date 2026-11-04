@@ -28,6 +28,21 @@ struct kk_vrs_mesh_prepare { \
    U32 id_source; U32 id_offset; U32 rate_source; U32 rate_offset; U32 advance; \
 };
 KK_VRS_LAYOUT(uint64_t, uint32_t, float)
+/* Only the software coarse transaction extends its existing PER_DRAW context.
+ * envelope is the real immutable DS packet, not a copied transaction state.
+ * capture_primitive is its capture-local storage job, never shader PrimitiveID.
+ * Each ordered leaf executes region_base0,4,8,12 before reusing its capture. */
+struct kk_vrs_transaction_context {
+   struct kk_vrs_context base;
+   uint64_t envelope;
+   uint32_t capture_primitive;
+   uint32_t region_base;
+};
+_Static_assert(offsetof(struct kk_vrs_transaction_context, envelope) == 128,
+   "software transaction context suffix");
+_Static_assert(sizeof(struct kk_vrs_transaction_context) == 144,
+   "software transaction context size");
+
 /* The prefix is the Mesh owner's job type. Cursor storage belongs to one
  * original retained batch and never carries shader-visible PrimitiveID. */
 #define KK_VRS_MESH_JOBS_LAYOUT(U32, Job) \
