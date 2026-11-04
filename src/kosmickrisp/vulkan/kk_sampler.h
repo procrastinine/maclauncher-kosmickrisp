@@ -53,7 +53,8 @@ struct kk_sampler {
 static inline bool
 kk_sampler_needs_emulation(const struct kk_sampler *sampler)
 {
-   return sampler->is_virtual || sampler->has_border || sampler->reduction_mode != 0;
+   return sampler->is_virtual || sampler->has_border || sampler->reduction_mode != 0 ||
+          (sampler->filter_bits & KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE);
 }
 
 static inline void

@@ -81,6 +81,18 @@ kk_lower_non_seamless_cube(nir_builder *b, nir_tex_instr *tex, void *data)
    nir_def *dx = nir_get_tex_src(tex, nir_tex_src_ddx);
    nir_def *dy = nir_get_tex_src(tex, nir_tex_src_ddy);
    bool implicit = tex->op == nir_texop_tex || tex->op == nir_texop_txb;
+   bool dynamic_sampler = non_seamless < 0;
+   nir_tex_instr *seamless = NULL;
+   if (dynamic_sampler) {
+      /* Implicit native sampling stays outside all control flow. The outer
+       * condition is a uniform Metal function constant, so derivatives inside
+       * it remain uniform and disappear entirely in the native specialization. */
+      if (implicit) {
+         seamless = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
+         nir_builder_instr_insert(b, &seamless->instr);
+      }
+      nir_push_if(b, nir_load_sampler_emulation_enabled_kk(b));
+   }
    if (implicit) {
       // Derivatives must be taken before the sampler-dependent branch.
       dx = nir_ddx(b, nir_trim_vector(b, coord, 3));
@@ -92,17 +104,9 @@ kk_lower_non_seamless_cube(nir_builder *b, nir_tex_instr *tex, void *data)
          dy = nir_fmul(b, dy, scale);
       }
    }
-   bool dynamic_sampler = non_seamless < 0;
    nir_def *flags = dynamic_sampler ?
       load_resource_deref_desc(b, 1, 16, sampler,
          offsetof(struct kk_sampled_image_descriptor, sampler_filter_bits), ctx) : NULL;
-   // Preserve implicit cube sampling, including anisotropy, outside divergent
-   // control flow. The selected 2D operation uses explicit face gradients.
-   nir_tex_instr *seamless = NULL;
-   if (implicit && dynamic_sampler) {
-      seamless = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
-      nir_builder_instr_insert(b, &seamless->instr);
-   }
    if (dynamic_sampler)
       nir_push_if(b, nir_ine_imm(b,
          nir_iand_imm(b, flags, KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE), 0));
@@ -148,6 +152,13 @@ kk_lower_non_seamless_cube(nir_builder *b, nir_tex_instr *tex, void *data)
       }
       nir_pop_if(b, NULL);
       result = nir_if_phi(b, &sample->def, &seamless->def);
+      nir_push_else(b, NULL);
+      if (!implicit) {
+         seamless = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
+         nir_builder_instr_insert(b, &seamless->instr);
+      }
+      nir_pop_if(b, NULL);
+      result = nir_if_phi(b, result, &seamless->def);
    }
    nir_def_replace(&tex->def, result);
    return true;

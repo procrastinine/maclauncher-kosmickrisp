@@ -286,5 +286,21 @@
     "performance": true,
     "performance_reason": "DXVK requires shaderCullDistance for translator device creation; capture is selected only by actual final-producer cull output.",
     "off_consequence": "DXVK cannot create its D3D device without shaderCullDistance; Vulkan cull-distance shader support is unavailable."
+  },
+  {
+    "name": "non_seamless_cube",
+    "description": "Face-local cube sampling without filtering across cube faces.",
+    "cost_class": "shader ALU / texture sampling",
+    "cost_note": "Dynamic cube samples use the shared sampler-emulation function constant; the false specialization retains native cube sampling. Actual non-seamless use projects to a 2D-array face sample with quotient-rule gradients.",
+    "extensions": [
+      "VK_EXT_non_seamless_cube_map"
+    ],
+    "features": [
+      "nonSeamlessCubeMap"
+    ],
+    "properties": [],
+    "performance": false,
+    "performance_reason": "Disabling has no established D3D shader-model, feature-level or translator device-creation loss; content requiring legacy non-seamless cube sampling can opt in.",
+    "off_consequence": "No established D3D shader-model or feature-level reduction or translator device-creation loss; DXVK rejects content requesting non-seamless cube sampling."
   }
 ]
