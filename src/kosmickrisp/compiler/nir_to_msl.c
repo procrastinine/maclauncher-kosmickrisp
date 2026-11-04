@@ -2816,15 +2816,38 @@ kk_scalarize_filter(const nir_instr *instr, const void *data)
    return true;
 }
 
+static bool
+msl_soft_fp64_helper(const nir_function *function)
+{
+   return function->dont_inline && function->name &&
+          strncmp(function->name, "__kk_fp64_", 10) == 0;
+}
+
 void
 msl_preprocess_nir(struct nir_shader *nir)
 {
-   /* First, inline away all the functions */
+   /* First, inline away all the functions. Derived programs run this again
+    * on a clone; the software binary64 helpers an earlier run outlined stay
+    * functions, so they are hidden from the inliner and kept. */
    NIR_PASS(_, nir, nir_lower_variable_initializers, nir_var_function_temp);
    NIR_PASS(_, nir, nir_lower_returns);
+   struct util_dynarray outlined;
+   util_dynarray_init(&outlined, NULL);
+   nir_foreach_function(function, nir) {
+      if (function->impl && msl_soft_fp64_helper(function)) {
+         util_dynarray_append(&outlined, function->impl);
+         function->impl = NULL;
+      }
+   }
    NIR_PASS(_, nir, nir_inline_functions);
+   util_dynarray_foreach(&outlined, nir_function_impl *, impl)
+      (*impl)->function->impl = *impl;
+   util_dynarray_fini(&outlined);
    NIR_PASS(_, nir, nir_opt_deref);
-   nir_remove_non_entrypoints(nir);
+   nir_foreach_function_safe(function, nir) {
+      if (!function->is_entrypoint && !msl_soft_fp64_helper(function))
+         exec_node_remove(&function->node);
+   }
 
    /* nir_lower_io_to_temporaries is required before nir_lower_blend since the
     * blending pass sinks writes to the end of the block where we may have a

@@ -1024,7 +1024,12 @@ kk_nir_lower_vs_per_vertex_outputs_with_state(
       };
       nir_inline_function_impl(&b, templates[v], params, NULL);
    }
-   nir_remove_non_entrypoints(nir);
+   /* The corners still call outlined helpers, such as software binary64
+    * operations; only the corner function goes. */
+   nir_foreach_function_safe(function, nir) {
+      if (!function->is_entrypoint && !function->dont_inline)
+         exec_node_remove(&function->node);
+   }
    nir_index_ssa_defs(impl);
 
    nir->info.outputs_written = 0;
