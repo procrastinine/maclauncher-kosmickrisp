@@ -405,6 +405,15 @@ alu_funclike_precise(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,
       alu_src_to_msl(ctx, instr, 1);                                           \
    } while (0)
 
+static bool
+alu_has_const_src(const nir_alu_instr *instr, unsigned count)
+{
+   for (unsigned i = 0; i < count; i++)
+      if (nir_src_is_const(instr->src[i].src))
+         return true;
+   return false;
+}
+
 static void
 alu_fcmp_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,
                 const char *op)
@@ -551,7 +560,7 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    case nir_op_fmul:
       if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) && msl_has_buf0(ctx) &&
           (nir_alu_instr_is_inf_preserve(instr) ||
-           nir_alu_instr_is_nan_preserve(instr))) {
+           nir_alu_instr_is_nan_preserve(instr)) && alu_has_const_src(instr, 2)) {
          if (ctx->buf0_guard) {
             /* select() keeps the guard a single selection, without the
              * branch a conditional expression produces. */
@@ -745,7 +754,7 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
          bool guard = !(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&
                       msl_has_buf0(ctx) &&
                       (nir_alu_instr_is_inf_preserve(instr) ||
-                       nir_alu_instr_is_nan_preserve(instr));
+                       nir_alu_instr_is_nan_preserve(instr)) && alu_has_const_src(instr, 3);
          if (guard && ctx->buf0_guard) {
             P(ctx, "select(");
             alu_src_to_msl(ctx, instr, 2);
