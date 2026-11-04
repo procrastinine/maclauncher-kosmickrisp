@@ -59,6 +59,10 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
    memset(view, 0, sizeof(*view));
 
    vk_image_view_init(&dev->vk, &view->vk, pCreateInfo);
+   if (image->planes[0].memoryless &&
+       !(pCreateInfo->flags & VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA) &&
+       !vk_find_struct_const(pCreateInfo->pNext, IMAGE_VIEW_USAGE_CREATE_INFO))
+      view->vk.usage &= image->application_usage;
 
    if (image->wsi_opaque_alpha &&
        (pCreateInfo->flags & VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA))
@@ -145,7 +149,14 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
             view_layout.swizzle.alpha = PIPE_SWIZZLE_0;
       }
 
-      mtl_texture *mtl_handle = image->planes[image_plane].mtl_handle;
+      if (plane->memoryless && (kk_image_plane_is_committed(plane) ||
+          (view->vk.usage & (VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT)))) {
+         VkResult result = kk_image_plane_require_private(dev, plane);
+         if (result != VK_SUCCESS)
+            return result;
+      }
+      mtl_texture *mtl_handle = kk_image_plane_render_base(plane);
 
       /* Block texel view requires subresource aliasing. We do it here to avoid
        * having to create a texture for every possible subresource up-front */
@@ -284,6 +295,9 @@ kk_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
 
       if (view->planes[plane].mtl_handle_input)
          mtl_release(view->planes[plane].mtl_handle_input);
+
+      if (view->planes[plane].transient_private)
+         mtl_release(view->planes[plane].transient_private);
 
       if (view->planes[plane].mtl_handle_render)
          mtl_release(view->planes[plane].mtl_handle_render);

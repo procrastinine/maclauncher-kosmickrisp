@@ -353,6 +353,11 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    dev->vk.shader_ops = &kk_device_shader_ops;
    dev->mtl_handle = pdev->mtl_dev_handle;
    dev->vk.command_buffer_ops = &kk_cmd_buffer_ops;
+   dev->whole_pass_begin_rendering = dev->vk.dispatch_table.CmdBeginRendering;
+   dev->whole_pass_end_rendering = dev->vk.dispatch_table.CmdEndRendering2KHR;
+   dev->vk.dispatch_table.CmdBeginRendering = kk_whole_pass_begin_rendering;
+   dev->vk.dispatch_table.CmdEndRendering = kk_whole_pass_end_rendering;
+   dev->vk.dispatch_table.CmdEndRendering2KHR = kk_whole_pass_end_rendering2;
    dev->vk.command_dispatch_table = &dev->vk.dispatch_table;
    dev->vk.get_timestamp = kk_get_timestamp;
 

@@ -78,28 +78,9 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
   % if e.params[0].type == 'VkCommandBuffer':
     struct kk_device *dev = kk_cmd_buffer_device(cmd);
     % if e.return_type == 'void':
-    if (cmd->enqueue_commands) {
-      vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
-      return;
-    }
-
-    dev->vk.dispatch_table.${e.name}(${e.call_params()});
-    if (!cmd->one_time_submit) {
-      vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
-    }
+    vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
     % else:
-    if (cmd->enqueue_commands) {
-      return vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
-    }
-
-    VkResult result = dev->vk.dispatch_table.${e.name}(${e.call_params()});
-    if (result != VK_SUCCESS)
-      return result;
-
-    if (!cmd->one_time_submit) {
-      result = vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
-    }
-    return result;
+    return vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
     % endif
   % endif
 }

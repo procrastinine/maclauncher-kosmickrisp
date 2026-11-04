@@ -95,8 +95,18 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
                 mtl_feedback_handler_callback callback, void *user_data)
 {
    assert(kk_cmd_buffer_has_work(cmd));
-   if (cmd->drawable)
-      mtl_command_queue_wait_for_drawable(queue->mtl_handle, cmd->drawable);
+   const uint32_t retained_count = util_dynarray_num_elements(
+      &cmd->submit_drawables, void *);
+   void **drawables = util_dynarray_begin(&cmd->submit_drawables);
+   bool primary_retained = false;
+   for (uint32_t i = 0; i < retained_count; i++)
+      primary_retained |= drawables[i] == cmd->drawable;
+   const uint32_t count = retained_count +
+      (cmd->drawable != NULL && !primary_retained);
+   for (uint32_t i = 0; i < count; i++) {
+      void *drawable = i < retained_count ? drawables[i] : cmd->drawable;
+      mtl_command_queue_wait_for_drawable(queue->mtl_handle, drawable);
+   }
 
    mtl_commit_options *options = mtl_new_commit_options();
    mtl_commit_options_add_feedback_handler(options, callback, user_data);
@@ -104,8 +114,14 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
    mtl_command_queue_commit(queue->mtl_handle, &cmd->metal.cmd_buf, 1u,
                             options);
    mtl_release(options);
+   for (uint32_t i = 0; i < count; i++) {
+      void *drawable = i < retained_count ? drawables[i] : cmd->drawable;
+      mtl_command_queue_signal_drawable(queue->mtl_handle, drawable);
+   }
+   for (uint32_t i = 0; i < retained_count; i++)
+      mtl_release(drawables[i]);
+   util_dynarray_clear(&cmd->submit_drawables);
    if (cmd->drawable) {
-      mtl_command_queue_signal_drawable(queue->mtl_handle, cmd->drawable);
       mtl_release(cmd->drawable);
       cmd->drawable = NULL;
    }
@@ -114,11 +130,13 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
 #include "kk_sparse_queue.h"
 
 static VkResult
-rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
-                               struct kk_cmd_buffer *cmd)
+rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
+                                struct vk_command_buffer **commands,
+                                uint32_t count, uint32_t *consumed, bool *committed)
 {
    struct kk_device *dev = kk_queue_device(queue);
    struct vk_command_buffer *vk_cmd = NULL;
+   *committed = false;
    struct kk_cmd_buffer *rerecord;
    VkResult result = VK_SUCCESS;
 
@@ -147,8 +165,33 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
    if (result != VK_SUCCESS)
       goto release;
 
-   vk_cmd_queue_execute(&cmd->vk.cmd_queue, rerecord_handle,
-                        &dev->vk.dispatch_table);
+   rerecord->transient_safe = kk_whole_pass_transient_safe(dev, commands, count);
+   for (*consumed = 0; *consumed < count; (*consumed)++) {
+      struct kk_cmd_buffer *source =
+         container_of(commands[*consumed], struct kk_cmd_buffer, vk);
+      if (*consumed)
+         kk_whole_pass_command_boundary(rerecord);
+      if (source->drawable) {
+         bool retained = false;
+         util_dynarray_foreach(&rerecord->submit_drawables, void *, drawable)
+            retained |= *drawable == source->drawable;
+         if (!retained) {
+            void **drawable = util_dynarray_grow(
+               &rerecord->submit_drawables, void *, 1);
+            if (!drawable) {
+               result = vk_error(queue, VK_ERROR_OUT_OF_HOST_MEMORY);
+               goto release;
+            }
+            *drawable = mtl_retain(source->drawable);
+         }
+      }
+      vk_cmd_queue_execute(&source->vk.cmd_queue, rerecord_handle,
+                           &dev->vk.dispatch_table);
+      if (!rerecord->whole_pass.suspended) {
+         (*consumed)++;
+         break;
+      }
+   }
 
    result = kk_EndCommandBuffer(rerecord_handle);
    if (result != VK_SUCCESS)
@@ -173,6 +216,7 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
    mtl_feedback_handler_callback callback = kk_sparse_submission_begin(dev) ?
       kk_sparse_rerecord_commit_callback : rerecord_commit_callback;
    kk_queue_commit(queue, rerecord, callback, commit);
+   *committed = true;
 
    mtx_unlock(&queue->mutex);
    return VK_SUCCESS;
@@ -216,10 +260,27 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
 
       /* Metal's command buffers are one time use, re-record multiple
        * submissions. */
-      if (cmd_buffer->submitted || cmd_buffer->enqueue_commands || (!cmd_buffer->sparse_guarded && kk_sparse_residency_used(dev))) {
-         VkResult result = rerecord_and_commit_cmd_buffer(queue, cmd_buffer);
+      if (cmd_buffer->submitted || cmd_buffer->enqueue_commands ||
+          cmd_buffer->deferred_render_chain ||
+          (!cmd_buffer->sparse_guarded && kk_sparse_residency_used(dev))) {
+         uint32_t consumed = 0;
+         bool committed = false;
+         VkResult result = rerecord_and_commit_cmd_buffers(queue,
+            &submit->command_buffers[i], submit->command_buffer_count - i,
+            &consumed, &committed);
          if (result != VK_SUCCESS)
             return result;
+         for (uint32_t j = 0; committed && j < consumed; j++) {
+            struct kk_cmd_buffer *source = container_of(
+               submit->command_buffers[i + j], struct kk_cmd_buffer, vk);
+            source->submitted = true;
+            if (source->drawable) {
+               mtl_release(source->drawable);
+               source->drawable = NULL;
+            }
+         }
+         i += consumed - 1;
+         continue;
       } else if (kk_cmd_buffer_has_work(cmd_buffer)) {
          kk_sparse_commit_first(queue, cmd_buffer);
       }

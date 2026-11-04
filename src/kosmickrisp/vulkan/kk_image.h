@@ -40,6 +40,8 @@ struct kk_image_plane {
    mtl_texture *mtl_handle;
    /* Metal handle with 2D array type for 3D images */
    mtl_texture *mtl_handle_array;
+   bool memoryless;
+   mtl_texture *private_handle;
    uint64_t addr;
 };
 
@@ -57,10 +59,14 @@ struct kk_image {
 
    /* Forces alpha value to be one when creating views. Needed for WSI */
    bool wsi_opaque_alpha;
+   VkImageUsageFlags2KHR application_usage;
 
    uint8_t plane_count;
    struct kk_image_plane planes[3];
 };
+
+mtl_texture *kk_image_plane_render_base(const struct kk_image_plane *);
+bool kk_image_plane_is_committed(const struct kk_image_plane *);
 
 #define kk_foreach_slice(ndx, image, subresource_member)                       \
    for (uint32_t ndx = region->subresource_member.baseArrayLayer;              \
@@ -74,7 +80,7 @@ kk_image_to_mtl_resource(const struct kk_image *image, int plane)
 {
    if (image != NULL) {
       assert(plane < ARRAY_SIZE(image->planes));
-      return (mtl_resource *)image->planes[plane].mtl_handle;
+      return (mtl_resource *)kk_image_plane_render_base(&image->planes[plane]);
    }
    return NULL;
 }
@@ -143,6 +149,11 @@ mtl_texture *kk_image_plane_create_texture(struct kk_image_plane *plane,
                                            struct kk_image_layout *layout,
                                            uint64_t offset_B);
 
+struct kk_cmd_buffer;
+struct kk_image_view;
+VkResult kk_transient_prepare_rendering(struct kk_cmd_buffer *, const VkRenderingInfo *);
+mtl_texture *kk_transient_render_texture(const struct kk_image_view *);
+VkResult kk_image_plane_require_private(struct kk_device *, struct kk_image_plane *);
 void kk_image_set_label(struct kk_image *image, const char *label);
 
 #endif

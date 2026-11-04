@@ -106,6 +106,10 @@ struct kk_device {
     * commands due to Metal limitations */
    struct vk_device_dispatch_table exposed_dispatch_table;
 
+   bool has_lazy_memory;
+   PFN_vkCmdBeginRendering whole_pass_begin_rendering;
+   PFN_vkCmdEndRendering2KHR whole_pass_end_rendering;
+
    struct kk_sampler_heap samplers;
    struct kk_query_table occlusion_queries;
 

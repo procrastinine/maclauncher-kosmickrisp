@@ -1351,6 +1351,12 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
       .heapIndex = sysmem_heap_idx,
    };
 
+   pdev->mem_types[pdev->mem_type_count++] = (VkMemoryType){
+      .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                       VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT,
+      .heapIndex = sysmem_heap_idx,
+   };
+
    assert(pdev->mem_heap_count <= ARRAY_SIZE(pdev->mem_heaps));
    assert(pdev->mem_type_count <= ARRAY_SIZE(pdev->mem_types));
 

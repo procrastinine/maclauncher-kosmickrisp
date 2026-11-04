@@ -24,6 +24,7 @@
 
 #include "vk_alloc.h"
 #include "vk_common_entrypoints.h"
+#include "vk_cmd_queue.h"
 #include "vk_format.h"
 #include "vk_pipeline_layout.h"
 
@@ -66,6 +67,9 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    util_dynarray_clear(&cmd->post_render_writes);
    util_dynarray_clear(&cmd->ts_resolves);
    util_dynarray_clear(&cmd->ts_stage_map);
+   util_dynarray_foreach(&cmd->submit_drawables, void *, drawable)
+      mtl_release(*drawable);
+   util_dynarray_clear(&cmd->submit_drawables);
 }
 
 /* Ends Metal command buffer recording and returns allocator to pool for reuse */
@@ -109,6 +113,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
    util_dynarray_fini(&cmd->msrtss_images);
    util_dynarray_fini(&cmd->ts_resolves);
    util_dynarray_fini(&cmd->ts_stage_map);
+   util_dynarray_fini(&cmd->submit_drawables);
 
    vk_free(&pool->vk.alloc, cmd);
 }
@@ -141,6 +146,7 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    cmd->msrtss_images = UTIL_DYNARRAY_INIT;
    cmd->ts_resolves = UTIL_DYNARRAY_INIT;
    cmd->ts_stage_map = UTIL_DYNARRAY_INIT;
+   cmd->submit_drawables = UTIL_DYNARRAY_INIT;
    cmd->post_render_writes = UTIL_DYNARRAY_INIT;
 
    {
@@ -189,6 +195,8 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
 
    memset(&cmd->state, 0, sizeof(cmd->state));
    cmd->uses_heap = false;
+   memset(&cmd->whole_pass, 0, sizeof(cmd->whole_pass));
+   cmd->deferred_render_chain = false;
 }
 
 static void
@@ -274,6 +282,16 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
+   if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY &&
+       cmd->vk.record_result == VK_SUCCESS) {
+      cmd->deferred_render_chain = kk_whole_pass_needs_submit(cmd);
+      struct vk_command_buffer *source = &cmd->vk;
+      cmd->transient_safe = kk_whole_pass_transient_safe(kk_cmd_buffer_device(cmd),
+                                                         &source, 1);
+      if (!cmd->enqueue_commands && !cmd->deferred_render_chain)
+         vk_cmd_queue_execute(&cmd->vk.cmd_queue, commandBuffer,
+                              &kk_cmd_buffer_device(cmd)->vk.dispatch_table);
+   }
    end_recording(cmd);
 
    return vk_command_buffer_end(&cmd->vk);
@@ -406,6 +424,7 @@ void
 cs_end(struct kk_cmd_buffer *cmd)
 {
    assert(cmd);
+   kk_whole_pass_flush_suspended(cmd);
 
    /* Render first as it may open a compute encoder for post render writes. */
    if (cmd->metal.render) {
@@ -468,16 +487,16 @@ kk_barrier_requires_encoder_split(struct kk_cmd_buffer *cmd,
 
    VkAccessFlags2 src = 0, dst = 0;
    for (uint32_t i = 0; i < dep->memoryBarrierCount; i++) {
-      src |= dep->pMemoryBarriers[i].srcAccessMask;
-      dst |= dep->pMemoryBarriers[i].dstAccessMask;
+      src |= kk_whole_pass_attachment_access(dep->pMemoryBarriers[i].srcAccessMask, dep->pMemoryBarriers[i].srcStageMask);
+      dst |= kk_whole_pass_attachment_access(dep->pMemoryBarriers[i].dstAccessMask, dep->pMemoryBarriers[i].dstStageMask);
    }
    for (uint32_t i = 0; i < dep->bufferMemoryBarrierCount; i++) {
-      src |= dep->pBufferMemoryBarriers[i].srcAccessMask;
-      dst |= dep->pBufferMemoryBarriers[i].dstAccessMask;
+      src |= kk_whole_pass_attachment_access(dep->pBufferMemoryBarriers[i].srcAccessMask, dep->pBufferMemoryBarriers[i].srcStageMask);
+      dst |= kk_whole_pass_attachment_access(dep->pBufferMemoryBarriers[i].dstAccessMask, dep->pBufferMemoryBarriers[i].dstStageMask);
    }
    for (uint32_t i = 0; i < dep->imageMemoryBarrierCount; i++) {
-      src |= dep->pImageMemoryBarriers[i].srcAccessMask;
-      dst |= dep->pImageMemoryBarriers[i].dstAccessMask;
+      src |= kk_whole_pass_attachment_access(dep->pImageMemoryBarriers[i].srcAccessMask, dep->pImageMemoryBarriers[i].srcStageMask);
+      dst |= kk_whole_pass_attachment_access(dep->pImageMemoryBarriers[i].dstAccessMask, dep->pImageMemoryBarriers[i].dstStageMask);
    }
 
    const VkMemoryRangeBarriersInfoKHR *ranges = vk_find_struct_const(
@@ -511,18 +530,18 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
     * barrier. To take advantage of this we need to remove the chaining of
     * encoders. */
    if (cmd->metal.render) {
-      /* Multisample attachments require render pass split always. Then based on
-       * the barrier and if we are using depth/stencil or not, we may have to
-       * break the render pass. See comment in kk_barrier_requires_encoder_split
-       */
-      if (cmd->state.gfx.render.samples > 1 ||
-          kk_barrier_requires_encoder_split(cmd, pDependencyInfo)) {
+      /* Framebuffer-local dependencies remain on tile. Texture visibility
+       * still uses the shared encoder-split decision. */
+      const bool local = kk_whole_pass_local_barrier(pDependencyInfo);
+      if (kk_barrier_requires_encoder_split(cmd, pDependencyInfo) ||
+          (cmd->state.gfx.render.samples > 1 && !local)) {
          kk_apply_attachment_store_ops(cmd, true);
          cs_end(cmd);
          cs_start_render(cmd);
       } else
-         mtl_barrier_after_encoder_stages(cmd->metal.render, MTL_STAGE_VERTEX,
-                                          MTL_STAGE_FRAGMENT);
+         if (!kk_whole_pass_attachment_barrier(pDependencyInfo))
+            mtl_barrier_after_encoder_stages(cmd->metal.render,
+               local ? MTL_STAGE_FRAGMENT : MTL_STAGE_VERTEX, MTL_STAGE_FRAGMENT);
    } else if (cmd->metal.compute) {
       /* We chain encoders, so an intra-encoder barrier is enough here:
        * no need to tear down and recreate the encoder.
@@ -1203,3 +1222,5 @@ kk_CmdInsertDebugUtilsLabelEXT(VkCommandBuffer _commandBuffer,
       mtl_encoder_insert_debug_signpost(cmd->metal.compute,
                                         pLabelInfo->pLabelName);
 }
+
+#include "kk_whole_pass.h"

@@ -31,6 +31,8 @@
 #include <string.h>
 #include <sys/mman.h>
 
+static VkResult kk_device_memory_zero_init(struct kk_device *, struct kk_device_memory *);
+
 
 /* OPAQUE_FD is an owning capability for this allocation, not a host pointer.
  * All supported Darwin CPUs are little-endian. The v1 header consists only
@@ -254,6 +256,8 @@ kk_GetMemoryMetalHandlePropertiesEXT(
    for (uint32_t i = 0; i < pdev->mem_type_count; i++) {
       bool host_visible = pdev->mem_types[i].propertyFlags &
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+      if (pdev->mem_types[i].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)
+         continue;
       if ((mode == MTL_STORAGE_MODE_SHARED && host_visible) ||
           (mode == MTL_STORAGE_MODE_PRIVATE && !host_visible))
          pMemoryMetalHandleProperties->memoryTypeBits |= BITFIELD_BIT(i);
@@ -394,10 +398,17 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
       return VK_SUCCESS;
    }
 
+   simple_mtx_init(&mem->transient_mutex, mtx_plain);
+   mem->lazy = properties & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+   if (mem->lazy)
+      p_atomic_set(&dev->has_lazy_memory, true);
+
    bool import_metal = metal_info && metal_info->handleType;
    bool import_host = host_info && host_info->handleType;
 
-   if (import_metal || import_host) {
+   if (mem->lazy && !import_metal && !import_host) {
+      /* Tile storage has no persistent allocation until it is needed. */
+   } else if (import_metal || import_host) {
       mem->bo = CALLOC_STRUCT(kk_bo);
       if (!mem->bo) {
          result = vk_errorf(&dev->vk.base, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
@@ -457,22 +468,11 @@ fail_import:
       /* Imports never enter this branch. VUID-flags-10760 forbids the zero
        * allocation flag on an import; supplied contents must be preserved.
        */
-      if (mem->vk.alloc_flags & VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT) {
-         if (mem->bo->cpu) {
-            memset(mem->bo->cpu, 0, mem->bo->size_B);
-         } else {
-            enum mtl_command_queue_error error =
-               mtl_buffer_zero_sync(dev->mtl_handle, mem->bo->map);
-            if (error != MTL_COMMAND_QUEUE_ERROR_NONE) {
-               kk_destroy_bo(dev, mem->bo);
-               if (error == MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY)
-                  result = vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
-               else
-                  result = vk_device_set_lost(&dev->vk,
-                                             "Device memory zero fill failed");
-               goto fail_alloc;
-            }
-         }
+      result = kk_device_memory_zero_init(dev, mem);
+      if (result != VK_SUCCESS) {
+         kk_destroy_bo(dev, mem->bo);
+         mem->bo = NULL;
+         goto fail_alloc;
       }
    }
 
@@ -486,6 +486,7 @@ fail_import:
    return VK_SUCCESS;
 
 fail_alloc:
+   simple_mtx_destroy(&mem->transient_mutex);
    vk_device_memory_destroy(&dev->vk, pAllocator, &mem->vk);
    return result;
 }
@@ -505,7 +506,9 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
       kk_bo_unmap(dev, mem->bo, mem->map, false);
 
    kk_device_memory_set_priority(dev, mem, 0.0f);
-   kk_destroy_bo(dev, mem->bo);
+   if (mem->bo)
+      kk_destroy_bo(dev, mem->bo);
+   simple_mtx_destroy(&mem->transient_mutex);
 
    vk_device_memory_destroy(&dev->vk, pAllocator, &mem->vk);
 }
@@ -523,7 +526,7 @@ kk_MapMemory2KHR(VkDevice device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
       return VK_SUCCESS;
    }
 
-   if (!mem->bo->cpu)
+   if (!mem->bo || !mem->bo->cpu)
       return vk_error(dev, VK_ERROR_MEMORY_MAP_FAILED);
 
    const VkDeviceSize offset = pMemoryMapInfo->offset;
@@ -618,7 +621,9 @@ kk_GetDeviceMemoryCommitment(VkDevice device, VkDeviceMemory _mem,
 {
    VK_FROM_HANDLE(kk_device_memory, mem, _mem);
 
-   *pCommittedMemoryInBytes = mem->bo->size_B;
+   simple_mtx_lock(&mem->transient_mutex);
+   *pCommittedMemoryInBytes = mem->bo ? mem->vk.size : 0;
+   simple_mtx_unlock(&mem->transient_mutex);
 }
 
 #ifdef VK_USE_PLATFORM_METAL_EXT
@@ -634,7 +639,7 @@ kk_GetMemoryMetalHandleEXT(
    VK_FROM_HANDLE(kk_device_memory, mem, pGetMetalHandleInfo->memory);
 
    /* In some cases, such as host pointer imports, we don't have a MTLHeap */
-   if (!mem->bo->mtl_handle)
+   if (!mem->bo || !mem->bo->mtl_handle)
       return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
 
    /* From the Vulkan spec of vkGetMemoryMetalHandleEXT:
@@ -653,7 +658,7 @@ kk_GetDeviceMemoryOpaqueCaptureAddress(
 {
    VK_FROM_HANDLE(kk_device_memory, mem, pInfo->memory);
 
-   return mem->bo->gpu;
+   return mem->bo ? mem->bo->gpu : 0;
 }
 
 void
@@ -661,4 +666,44 @@ kk_device_memory_set_label(struct kk_device_memory *dev_mem, const char *label)
 {
    if (dev_mem->bo)
       kk_bo_set_label(dev_mem->bo, label);
+}
+
+/* Shared initialization for immediate and deferred private commitment. */
+static VkResult
+kk_device_memory_zero_init(struct kk_device *dev, struct kk_device_memory *mem)
+{
+   if (!(mem->vk.alloc_flags & VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT))
+      return VK_SUCCESS;
+   if (mem->bo->cpu) {
+      memset(mem->bo->cpu, 0, mem->bo->size_B);
+      return VK_SUCCESS;
+   }
+   enum mtl_command_queue_error error =
+      mtl_buffer_zero_sync(dev->mtl_handle, mem->bo->map);
+   if (error == MTL_COMMAND_QUEUE_ERROR_NONE)
+      return VK_SUCCESS;
+   if (error == MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY)
+      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   return vk_device_set_lost(&dev->vk, "Device memory zero fill failed");
+}
+
+/* The caller holds transient_mutex. Use the ordinary private heap path. */
+VkResult
+kk_device_memory_commit_private(struct kk_device *dev, struct kk_device_memory *mem)
+{
+   if (mem->bo)
+      return VK_SUCCESS;
+   uint64_t alignment = 4096;
+   os_get_page_size(&alignment);
+   VkResult result = kk_alloc_bo_options(dev, &dev->vk.base,
+      align64(mem->vk.size, alignment), alignment,
+      MTL_RESOURCE_TRACKING_MODE_UNTRACKED | MTL_RESOURCE_STORAGE_MODE_PRIVATE,
+      &mem->bo);
+   if (result == VK_SUCCESS)
+      result = kk_device_memory_zero_init(dev, mem);
+   if (result != VK_SUCCESS && mem->bo) {
+      kk_destroy_bo(dev, mem->bo);
+      mem->bo = NULL;
+   }
+   return result;
 }

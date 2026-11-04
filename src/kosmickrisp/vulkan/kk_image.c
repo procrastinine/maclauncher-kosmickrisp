@@ -618,6 +618,7 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
               const VkImageCreateInfo *pCreateInfo)
 {
    vk_image_init(&dev->vk, &image->vk, pCreateInfo);
+   image->application_usage = vk_image_usage_flags(pCreateInfo);
    if ((image->vk.external_handle_types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT) &&
        (!kk_fd_image_supported(image->vk.format, image->vk.image_type,
                               image->vk.tiling, image->vk.usage,
@@ -686,6 +687,8 @@ kk_image_plane_finish(struct kk_device *dev, struct kk_image_plane *plane,
 {
    if (plane->mtl_handle != NULL)
       mtl_release(plane->mtl_handle);
+   if (plane->private_handle)
+      mtl_release(plane->private_handle);
    if (plane->mtl_handle_array != NULL)
       mtl_release(plane->mtl_handle_array);
 }
@@ -794,6 +797,14 @@ kk_get_image_memory_requirements(struct kk_device *dev, struct kk_image *image,
       for (unsigned plane = 0; plane < image->plane_count; plane++) {
          kk_image_plane_add_req(dev, image, &image->planes[plane], &size_B,
                                 &align_B);
+      }
+   }
+
+   if (!(image->vk.usage & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT) ||
+       image->vk.external_handle_types) {
+      for (uint32_t i = 0; i < pdev->mem_type_count; i++) {
+         if (pdev->mem_types[i].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)
+            memory_types &= ~BITFIELD_BIT(i);
       }
    }
 
@@ -974,18 +985,35 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
                                &plane_align_B);
    *offset_B = align64(*offset_B, plane_align_B);
 
-   assert(plane->layout.linear || mem->bo->mtl_handle);
+   if (mem->lazy) {
+      simple_mtx_lock(&mem->transient_mutex);
+      mem->image_bind_count++;
+      const bool tile_image = image->plane_count == 1 &&
+         image->vk.image_type == VK_IMAGE_TYPE_2D && image->vk.mip_levels == 1 &&
+         !(vk_image_usage(&image->vk, image->vk.aspects) & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) &&
+         image->vk.create_flags == 0 && !plane->layout.linear;
+      if (tile_image && mem->image_bind_count == 1 && !mem->bo)
+         plane->mtl_handle = mtl_new_memoryless_texture(dev->mtl_handle, &plane->layout);
+      plane->memoryless = plane->mtl_handle != NULL;
+      VkResult result = plane->memoryless ? VK_SUCCESS :
+         kk_device_memory_commit_private(dev, mem);
+      simple_mtx_unlock(&mem->transient_mutex);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+   assert(plane->memoryless || plane->layout.linear || mem->bo->mtl_handle);
 
    plane->mem = mem;
    plane->mem_offset_B = *offset_B;
-   plane->mtl_handle = kk_image_plane_create_texture(plane, &plane->layout, 0u);
+   if (!plane->memoryless)
+      plane->mtl_handle = kk_image_plane_create_texture(plane, &plane->layout, 0u);
    if (plane->mtl_handle == NULL)
       return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
    if (image->vk.base.object_name)
       mtl_resource_set_label(plane->mtl_handle, image->vk.base.object_name);
 
-   plane->addr = mem->bo->gpu + *offset_B;
+   plane->addr = mem->bo ? mem->bo->gpu + *offset_B : 0;
 
    /* Create auxiliary 2D array texture for 3D images so we can use 2D views of
     * it */
@@ -1314,3 +1342,5 @@ kk_image_set_label(struct kk_image *image, const char *label)
          mtl_resource_set_label(image->planes[i].mtl_handle_array, label);
    }
 }
+
+#include "kk_transient.h"

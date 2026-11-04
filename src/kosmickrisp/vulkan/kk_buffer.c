@@ -102,6 +102,11 @@ kk_GetDeviceBufferMemoryRequirements(
          kk_sparse_memory_type_bits(pdev) : BITFIELD_MASK(pdev->mem_type_count),
    };
 
+   for (uint32_t i = 0; i < pdev->mem_type_count; i++) {
+      if (pdev->mem_types[i].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)
+         pMemoryRequirements->memoryRequirements.memoryTypeBits &= ~BITFIELD_BIT(i);
+   }
+
    vk_foreach_struct(sType, ext, pMemoryRequirements->pNext) {
       switch (sType) {
       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: {

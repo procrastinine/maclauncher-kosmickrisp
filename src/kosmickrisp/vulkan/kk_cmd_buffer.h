@@ -317,8 +317,19 @@ struct kk_msrtss_image {
    VkSampleCountFlagBits samples;
 };
 
+struct kk_whole_pass_state {
+   bool suspended;
+   VkRect2D area;
+   uint32_t layers, view_mask, color_count;
+   VkImageView colors[KK_MAX_RTS], depth, stencil;
+   VkSampleCountFlagBits implicit_samples;
+};
+
 struct kk_cmd_buffer {
    struct vk_command_buffer vk;
+   struct kk_whole_pass_state whole_pass;
+   bool deferred_render_chain;
+   bool transient_safe;
 
    struct {
       mtl_command_allocator *allocator;
@@ -336,6 +347,7 @@ struct kk_cmd_buffer {
    struct util_dynarray post_render_writes;
 
    void *drawable;
+   struct util_dynarray submit_drawables;
    mtl_argument_table *argument_table;
 
    struct {
@@ -526,5 +538,18 @@ void kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
 void kk_cmd_write(struct kk_cmd_buffer *cmd, struct libkk_imm_write write);
 
 void kk_cmd_buffer_set_label(struct kk_cmd_buffer *cb, const char *label);
+
+
+bool kk_whole_pass_transient_safe(struct kk_device *, struct vk_command_buffer **, uint32_t);
+bool kk_whole_pass_needs_submit(struct kk_cmd_buffer *cmd);
+void kk_whole_pass_command_boundary(struct kk_cmd_buffer *cmd);
+void kk_whole_pass_flush_suspended(struct kk_cmd_buffer *cmd);
+VkAccessFlags2 kk_whole_pass_attachment_access(VkAccessFlags2, VkPipelineStageFlags2);
+bool kk_whole_pass_attachment_barrier(const VkDependencyInfo *dep);
+bool kk_whole_pass_local_barrier(const VkDependencyInfo *dep);
+void kk_init_rendering_locations(struct kk_cmd_buffer *cmd, const VkRenderingInfo *info);
+VKAPI_ATTR void VKAPI_CALL kk_whole_pass_begin_rendering(VkCommandBuffer, const VkRenderingInfo *);
+VKAPI_ATTR void VKAPI_CALL kk_whole_pass_end_rendering(VkCommandBuffer);
+VKAPI_ATTR void VKAPI_CALL kk_whole_pass_end_rendering2(VkCommandBuffer, const VkRenderingEndInfoKHR *);
 
 #endif

@@ -130,7 +130,7 @@ kk_fill_common_attachment_description(
    assert(iview->plane_count ==
           1); /* TODO_KOSMICKRISP Handle multiplanar images? */
    mtl_render_pass_attachment_descriptor_set_texture(
-      descriptor, iview->planes[0].mtl_handle_render);
+      descriptor, kk_transient_render_texture(iview));
    /* If a view is being used e.g. for format change, it already points to the
     * required slice and level */
    if (!iview->planes[0].render_is_view) {
@@ -159,7 +159,7 @@ kk_fill_common_attachment_description(
 
    if (attach_resolve_texture) {
       mtl_render_pass_attachment_descriptor_set_resolve_texture(
-         descriptor, info->resolve_iview->planes[0].mtl_handle_render);
+         descriptor, kk_transient_render_texture(info->resolve_iview));
 
       if (!info->resolve_iview->planes[0].render_is_view) {
          mtl_render_pass_attachment_descriptor_set_resolve_level(
@@ -264,6 +264,12 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
 
    struct kk_rendering_state *render = &cmd->state.gfx.render;
 
+   VkResult result = kk_transient_prepare_rendering(cmd, pRenderingInfo);
+   if (result != VK_SUCCESS) {
+      vk_command_buffer_set_error(&cmd->vk, result);
+      return;
+   }
+
    memset(render, 0, sizeof(*render));
 
    render->flags = pRenderingInfo->flags;
@@ -312,11 +318,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
       };
    }
 
-   const VkRenderingAttachmentLocationInfoKHR ral_info = {
-      .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_LOCATION_INFO_KHR,
-      .colorAttachmentCount = pRenderingInfo->colorAttachmentCount,
-   };
-   vk_cmd_set_rendering_attachment_locations(&cmd->vk, &ral_info);
+   kk_init_rendering_locations(cmd, pRenderingInfo);
 
    kk_cmd_buffer_dirty_render_pass(cmd);
    mtl_render_pass_descriptor *pass_descriptor =
@@ -3210,3 +3212,13 @@ kk_CmdDrawIndirectByteCount2EXT(VkCommandBuffer commandBuffer,
 }
 
 #include "kk_msrtss.h"
+
+void
+kk_init_rendering_locations(struct kk_cmd_buffer *cmd, const VkRenderingInfo *pRenderingInfo)
+{
+   const VkRenderingAttachmentLocationInfoKHR ral_info = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_LOCATION_INFO_KHR,
+      .colorAttachmentCount = pRenderingInfo->colorAttachmentCount,
+   };
+   vk_cmd_set_rendering_attachment_locations(&cmd->vk, &ral_info);
+}

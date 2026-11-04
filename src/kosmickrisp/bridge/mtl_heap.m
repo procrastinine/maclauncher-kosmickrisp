@@ -70,6 +70,17 @@ mtl_new_texture_descriptor(const struct kk_image_layout *layout)
    }
 }
 
+mtl_texture *
+mtl_new_memoryless_texture(mtl_device *device, const struct kk_image_layout *layout)
+{
+   @autoreleasepool {
+      MTLTextureDescriptor *descriptor = [mtl_new_texture_descriptor(layout) autorelease];
+      descriptor.storageMode = MTLStorageModeMemoryless;
+      descriptor.usage = MTLTextureUsageRenderTarget;
+      return [(id<MTLDevice>)device newTextureWithDescriptor:descriptor];
+   }
+}
+
 /* Allocation from heap */
 mtl_buffer *
 mtl_new_buffer_with_length(mtl_heap *heap, uint64_t size_B, uint64_t offset_B)
