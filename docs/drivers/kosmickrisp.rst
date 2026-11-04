@@ -421,11 +421,12 @@ flag when the option is unset; no timestamp heap or samples are created then.
 
 A device times encoders through at most two timestamp heaps of 4,096 entries,
 allocated on first use. Metal allows a process 32 live timestamp heaps of at
-most 4,096 entries, which application timestamp query pools share. Each timed
-encoder holds two entries until its record is released, after its submission's
-feedback or the command buffer's next recording. An encoder that starts while
-all 4,096 entry pairs are held, or after Metal refused a heap, is reported as
-unavailable; recording never waits for an entry.
+most 4,096 entries, which application timestamp query pools share (see
+`Timestamp queries`_). Each timed encoder holds two entries until its record is
+released, after its submission's feedback or the command buffer's next
+recording. An encoder that starts while all 4,096 entry pairs are held, or
+after Metal refused a heap, is reported as unavailable; recording never waits
+for an entry.
 
 Each interval reports the twenty largest ``gpu_encoders`` groups by total
 GPU milliseconds, with source hashes, draw/dispatch/blit counts, target extent,
@@ -689,3 +690,16 @@ destroyed after their consumers are created.
 combination still invokes Metal's render pipeline backend. Libraries can
 move stage compilation ahead of drawing, while final render pipeline
 creation can still compile native code.
+
+Timestamp queries
+-----------------
+
+Timestamp query pools sample into Metal 4 timestamp counter heaps. Metal
+allows a process 32 live timestamp heaps of at most 4,096 entries. A device
+creates heaps of 4,096 entries as its pools need them and keeps them until
+the device is destroyed. Each pool takes its queries from those heaps in units
+of 32 and returns them when it is destroyed, so the live pools of a process
+share up to 131,072 entries, less any other timestamp heaps in the process,
+whatever their number and size. Pool creation fails with
+``VK_ERROR_OUT_OF_DEVICE_MEMORY`` when no unit is free and Metal refuses
+another heap.

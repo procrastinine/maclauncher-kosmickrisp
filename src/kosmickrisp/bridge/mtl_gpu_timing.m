@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "mtl_gpu_timing.h"
+#include "mtl_timestamp_arena.h"
 #include "util/mesa-blake3.h"
 #import <Metal/Metal.h>
 #import <objc/runtime.h>
@@ -11,14 +12,12 @@ bool mtl_gpu_timing_enabled;
 static char command_key, library_key, pipeline_key, feedback_key, encoder_key;
 
 /* AGX allows a process 32 live timestamp heaps, shared with the application's timestamp query
- * pools; past that the allocation fails, and faults when its error argument is NULL. Metal
- * rejects heaps over 4096 entries (32 KB). A device therefore times encoders through at most two
- * heaps of 4096 entries, allocated on first use, and each encoder takes a begin/end slot pair
- * that returns to the free list when its record is released. With every slot in use, or after
- * Metal refused a heap, an encoder is reported as unavailable; recording never waits. */
-#define KK_GPU_TIMING_HEAP_ENTRIES 4096
+ * pools; past that the allocation fails, and faults when its error argument is NULL. A device
+ * therefore times encoders through a timestamp arena of at most two heaps, allocated on first
+ * use, and each encoder takes a begin/end slot pair (one unit of two entries) that returns to the
+ * arena when its record is released. With every slot in use, or after Metal refused a heap, an
+ * encoder is reported as unavailable; recording never waits. */
 #define KK_GPU_TIMING_HEAPS 2
-#define KK_GPU_TIMING_SLOTS (KK_GPU_TIMING_HEAPS * KK_GPU_TIMING_HEAP_ENTRIES / 2)
 
 @interface KKGPUConfig : NSObject {
 @public
@@ -28,66 +27,16 @@ static char command_key, library_key, pipeline_key, feedback_key, encoder_key;
    os_unfair_lock callback_lock;
    void *data;
    mtl_gpu_encoder_callback callback;
-   os_unfair_lock slot_lock;
-   id<MTL4CounterHeap> heaps[KK_GPU_TIMING_HEAPS];
-   uint32_t heap_count, free_count;
-   bool heap_failed;
-   uint32_t free_slots[KK_GPU_TIMING_SLOTS];
+   struct mtl_timestamp_arena *slots;
 }
 @end
 @implementation KKGPUConfig
 - (void)dealloc
 {
-   for (uint32_t i = 0; i < heap_count; ++i) [heaps[i] release];
+   mtl_timestamp_arena_destroy(slots);
    [super dealloc];
 }
 @end
-
-static bool
-take_slot(KKGPUConfig *config, uint32_t *slot)
-{
-   os_unfair_lock_lock(&config->slot_lock);
-   if (!config->free_count && !config->heap_failed && config->heap_count < KK_GPU_TIMING_HEAPS) {
-      MTL4CounterHeapDescriptor *desc = [MTL4CounterHeapDescriptor new];
-      desc.type = MTL4CounterHeapTypeTimestamp;
-      desc.count = KK_GPU_TIMING_HEAP_ENTRIES;
-      NSError *error = nil;
-      id<MTL4CounterHeap> heap = [config->device newCounterHeapWithDescriptor:desc error:&error];
-      [desc release];
-      if (heap) {
-         const uint32_t base = config->heap_count * (KK_GPU_TIMING_HEAP_ENTRIES / 2);
-         config->heaps[config->heap_count++] = heap;
-         for (uint32_t i = KK_GPU_TIMING_HEAP_ENTRIES / 2; i--;)
-            config->free_slots[config->free_count++] = base + i;
-      } else {
-         config->heap_failed = true;
-      }
-   }
-   const bool taken = config->free_count != 0;
-   if (taken) *slot = config->free_slots[--config->free_count];
-   os_unfair_lock_unlock(&config->slot_lock);
-   return taken;
-}
-
-static void
-give_slot(KKGPUConfig *config, uint32_t slot)
-{
-   os_unfair_lock_lock(&config->slot_lock);
-   config->free_slots[config->free_count++] = slot;
-   os_unfair_lock_unlock(&config->slot_lock);
-}
-
-static inline id<MTL4CounterHeap>
-slot_heap(KKGPUConfig *config, uint32_t slot)
-{
-   return config->heaps[slot / (KK_GPU_TIMING_HEAP_ENTRIES / 2)];
-}
-
-static inline uint32_t
-slot_index(uint32_t slot)
-{
-   return slot % (KK_GPU_TIMING_HEAP_ENTRIES / 2) * 2;
-}
 
 @interface KKGPUCommand : NSObject {
 @public
@@ -108,6 +57,9 @@ slot_index(uint32_t slot)
    id<MTL4CommandBuffer> command;
    id native; /* The encoder of an encoder record, from bind to its end. */
    uint32_t slot;
+   /* The slot's heap (kept by the config's arena), its index there and the begin entry. */
+   id<MTL4CounterHeap> heap;
+   uint32_t heap_index, index;
    bool has_slot, encoder, render;
    NSDictionary *bound;  /* Metadata of the bound pipeline. */
    NSDictionary *merged; /* The bound metadata whose hashes are in hashes. */
@@ -122,7 +74,7 @@ slot_index(uint32_t slot)
 @implementation KKGPURecord
 - (void)dealloc
 {
-   if (has_slot) give_slot(config, slot);
+   if (has_slot) mtl_timestamp_arena_give(config->slots, 1, &slot);
    [config release]; [bound release]; [merged release]; [hashes release]; [super dealloc];
 }
 @end
@@ -137,7 +89,7 @@ mtl_gpu_timing_configure(mtl_device *device, void *data, mtl_gpu_encoder_callbac
       config->data = data;
       config->callback = callback;
       config->callback_lock = OS_UNFAIR_LOCK_INIT;
-      config->slot_lock = OS_UNFAIR_LOCK_INIT;
+      config->slots = mtl_timestamp_arena_create(device, 2, KK_GPU_TIMING_HEAPS, false);
       config->frequency = [(id<MTLDevice>)device queryTimestampFrequency];
       __atomic_store_n(&mtl_gpu_timing_enabled, true, __ATOMIC_RELEASE);
       return config;
@@ -204,12 +156,14 @@ new_record(mtl_command_buffer *command, const char *kind, bool encoder)
    record->config = [trace->config retain];
    record->command = (id)command;
    strncpy(record->result.kind, trace->meta_depth ? "meta" : kind, sizeof(record->result.kind)-1);
-   record->has_slot = take_slot(record->config, &record->slot);
+   record->has_slot = mtl_timestamp_arena_take(record->config->slots, 1, &record->slot);
+   if (record->has_slot)
+      record->heap = (id)mtl_timestamp_arena_unit(record->config->slots, record->slot,
+                                                  &record->heap_index, &record->index);
    record->encoder = encoder;
    [trace->records addObject:record];
    if (record->has_slot && !encoder)
-      [record->command writeTimestampIntoHeap:slot_heap(record->config, record->slot)
-                                      atIndex:slot_index(record->slot)];
+      [record->command writeTimestampIntoHeap:record->heap atIndex:record->index];
    return record;
 }
 
@@ -242,8 +196,8 @@ mtl_gpu_timing_encoder_begin(mtl_command_buffer *command, bool render, void *des
 static void
 write_encoder_timestamp(KKGPURecord *record, bool end)
 {
-   id<MTL4CounterHeap> heap = slot_heap(record->config, record->slot);
-   const uint32_t index = slot_index(record->slot) + end;
+   id<MTL4CounterHeap> heap = record->heap;
+   const uint32_t index = record->index + end;
    if (record->render)
       [(id<MTL4RenderCommandEncoder>)record->native
          writeTimestampWithGranularity:MTL4TimestampGranularityRelaxed
@@ -265,8 +219,7 @@ end_record(KKGPURecord *record)
       if (record->native && record->has_slot) write_encoder_timestamp(record, true);
       record->unbound = !record->native;
    } else if (record->has_slot) {
-      [record->command writeTimestampIntoHeap:slot_heap(record->config, record->slot)
-                                      atIndex:slot_index(record->slot) + 1];
+      [record->command writeTimestampIntoHeap:record->heap atIndex:record->index + 1];
    }
    record->native = nil;
    record->ended = true;
@@ -422,21 +375,20 @@ mtl_gpu_timing_resolve(void *snapshot, bool success)
       if (!r->has_slot) continue;
       if (!config) config = r->config;
       if (r->config != config) continue; /* One device per submission. */
-      const uint32_t heap = r->slot / (KK_GPU_TIMING_HEAP_ENTRIES / 2);
-      used[heap] = MAX(used[heap], slot_index(r->slot) + 2);
+      used[r->heap_index] = MAX(used[r->heap_index], r->index + 2);
    }
    for (KKGPURecord *r in (NSArray *)snapshot) {
       @synchronized(r) {
       struct mtl_gpu_encoder_result result = r->result;
       const MTL4TimestampHeapEntry *timestamps = NULL;
       if (success && !r->overlap && r->ended && r->has_slot && r->config == config && !r->unbound) {
-         const uint32_t heap = r->slot / (KK_GPU_TIMING_HEAP_ENTRIES / 2);
+         const uint32_t heap = r->heap_index;
          @try {
             if (!data[heap])
-               data[heap] = [slot_heap(config, r->slot) resolveCounterRange:NSMakeRange(0, used[heap])];
+               data[heap] = [r->heap resolveCounterRange:NSMakeRange(0, used[heap])];
          } @catch (NSException *exception) { (void)exception; }
          if (data[heap].length == used[heap] * sizeof(MTL4TimestampHeapEntry))
-            timestamps = (const MTL4TimestampHeapEntry *)data[heap].bytes + slot_index(r->slot);
+            timestamps = (const MTL4TimestampHeapEntry *)data[heap].bytes + r->index;
       }
       if (r->in_flight && !--r->in_flight) r->overlap = false;
       if (timestamps && r->config->frequency) {

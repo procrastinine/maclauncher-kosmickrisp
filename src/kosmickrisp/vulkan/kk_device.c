@@ -35,12 +35,14 @@
 #include "kk_image_view.h"
 #include "kk_instance.h"
 #include "kk_physical_device.h"
+#include "kk_query_pool.h"
 #include "kk_shader.h"
 #include "kk_interlock_device.h"
 #include "kk_interlock_submit.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/mtl_device.h"
+#include "kosmickrisp/bridge/mtl_timestamp_arena.h"
 #include "kosmickrisp/bridge/ns_process_info.h"
 #include "kosmickrisp/compiler/nir_to_msl.h"
 
@@ -774,6 +776,13 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_meta;
 
+   dev->timestamp_arena = mtl_timestamp_arena_create(
+      dev->mtl_handle, KK_TIMESTAMP_UNIT_QUERIES, KK_TIMESTAMP_ARENA_HEAPS, true);
+   if (!dev->timestamp_arena) {
+      result = vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      goto fail_query_table;
+   }
+
    result = kk_init_sampler_heap(dev, &dev->samplers);
    if (result != VK_SUCCESS)
       goto fail_query_table;
@@ -813,6 +822,7 @@ fail_sampler_heap:
    kk_interlock_device_finish(dev);
    kk_destroy_sampler_heap(dev, &dev->samplers);
 fail_query_table:
+   mtl_timestamp_arena_destroy(dev->timestamp_arena);
    kk_query_table_finish(dev, &dev->occlusion_queries);
 fail_meta:
    kk_device_finish_meta(dev);
@@ -894,6 +904,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_device_finish_lib(dev);
    kk_interlock_device_finish(dev);
    kk_query_table_finish(dev, &dev->occlusion_queries);
+   mtl_timestamp_arena_destroy(dev->timestamp_arena);
    kk_descriptor_heap_finish(dev);
    kk_destroy_sampler_heap(dev, &dev->samplers);
 

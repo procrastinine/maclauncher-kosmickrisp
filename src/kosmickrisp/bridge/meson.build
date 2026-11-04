@@ -6,6 +6,8 @@ mtl_bridge_files = files(
   'vk_to_mtl_map.h',
   'vk_to_mtl_map.c',
   'mtl_format.h',
+  'mtl_timestamp_arena.h',
+  'mtl_timestamp_arena.c',
 )
 
 if host_machine.system() == 'darwin'

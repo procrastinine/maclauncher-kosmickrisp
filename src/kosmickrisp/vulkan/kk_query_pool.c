@@ -273,15 +273,7 @@ kk_DestroyQueryPool(VkDevice device, VkQueryPool queryPool,
          kk_query_table_remove(dev, &dev->occlusion_queries, remap_index[i]);
       }
    } else if (kk_pool_is_ts(pool)) {
-      if (pool->ts.heap)
-         mtl_release(pool->ts.heap);
-      if (pool->ts.extra_heaps) {
-         for (uint32_t i = 0; i < pool->ts.extra_count; ++i) {
-            if (pool->ts.extra_heaps[i])
-               mtl_release(pool->ts.extra_heaps[i]);
-         }
-         vk_free2(&dev->vk.alloc, pAllocator, pool->ts.extra_heaps);
-      }
+      kk_timestamp_free_heaps(dev, pool, pAllocator);
    }
 
    kk_destroy_bo(dev, pool->bo);
@@ -414,7 +406,7 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
-   assert(kk_pool_is_ts(pool) && pool->ts.heap);
+   assert(kk_pool_is_ts(pool) && pool->ts.chunks);
 
    uint32_t count = kk_mv_query_count(cmd);
    enum mtl_render_stages mtl_stage =

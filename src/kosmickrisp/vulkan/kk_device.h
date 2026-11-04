@@ -142,8 +142,8 @@ struct kk_device {
    struct kk_sampler_heap samplers;
    struct kk_query_table occlusion_queries;
 
-   /* Accepted native timestamp heap capacity, published after negotiation. */
-   uint32_t timestamp_heap_capacity;
+   /* Timestamp query pools take their Metal entries from these shared heaps. */
+   struct mtl_timestamp_arena *timestamp_arena;
 
    /* Track all heaps the user allocated so we can set them all as resident when
     * recording as required by Metal. */
