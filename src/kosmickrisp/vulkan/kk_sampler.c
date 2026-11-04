@@ -295,7 +295,22 @@ kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
    /* The composed sampler finalizer receives explicit caller context. */
    assert(params_lock_context == KK_SAMPLER_PARAMS_UNLOCKED ||
           params_lock_context == KK_SAMPLER_PARAMS_HEAP_LOCK_HELD);
-   (void)params_lock_context;
+   result = kk_sampler_cap_finalize(dev, sampler, pCreateInfo,
+                                    params_lock_context);
+   /* Native samplers retain logical identity independently of physical RCs.
+    * Finalization has released every native sampler mutex before allocation. */
+   if (result == VK_SUCCESS && sampler->params_gpu_address == 0) {
+      struct kk_sampler_params params;
+      kk_sampler_params_init(&params, pCreateInfo);
+      result = params_lock_context == KK_SAMPLER_PARAMS_HEAP_LOCK_HELD
+         ? kk_sampler_params_alloc_locked(dev, &params,
+                                           &sampler->params_gpu_address)
+         : kk_sampler_params_alloc(dev, &params, &sampler->params_gpu_address);
+   }
+   if (result != VK_SUCCESS) {
+      kk_DestroySampler(device, kk_sampler_to_handle(sampler), pAllocator);
+      return result;
+   }
    *pSampler = kk_sampler_to_handle(sampler);
 
    return VK_SUCCESS;
