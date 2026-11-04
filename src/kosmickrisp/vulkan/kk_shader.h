@@ -37,6 +37,7 @@ enum kk_feature_bit {
    KK_FEAT_MESH_QUERIES,
    KK_FEAT_POLY_LAYER_REPLAY,
    KK_FEAT_FRAGMENT_SHADING_RATE,
+   KK_FEAT_PIXEL_ENVELOPE,
    KK_FEAT_COUNT,
 };
 
@@ -109,6 +110,7 @@ struct kk_mesh_shader_info {
 };
 
 struct kk_shader_info {
+   bool interlock_envelope;
    mesa_shader_stage stage;
    bool uses_per_draw_data;
    struct kk_mesh_shader_info mesh;
@@ -242,6 +244,8 @@ struct vk_sampler_state;
 
 struct kk_shader {
    struct vk_shader vk;
+   struct kk_interlock_shader *interlock;
+   struct kk_interlock_pipeline *interlock_pipeline;
    /* Canonical states may be serialized; these CPU/GPU pointers never are. */
    bool cache_uses_embedded_samplers;
    uint32_t embedded_sampler_count;

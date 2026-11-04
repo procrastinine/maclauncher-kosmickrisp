@@ -67,5 +67,5 @@ kk_finish_geometry_statistics(struct kk_cmd_buffer *cmd)
       api_gs ? kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT) : 0,
       kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT),
       kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT),
-      MAX2(1, util_bitcount(cmd->state.gfx.render.view_mask)));
+      cmd->interlock_heap_active ? 1 : MAX2(1, util_bitcount(cmd->state.gfx.render.view_mask)));
 }

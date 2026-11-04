@@ -38,12 +38,17 @@ msl_attachment_sample_fetch(nir_builder *b, nir_intrinsic_instr *intr,
       b->cursor = nir_before_instr(&intr->instr);
       nir_io_semantics semantics = {.location = FRAG_RESULT_DATA0 + slot,
                                    .num_slots = 1};
-      nir_def *current = nir_load_output(b, intr->def.num_components,
-         intr->def.bit_size, nir_imm_int(b, 0),
-         .dest_type = nir_intrinsic_dest_type(intr), .io_semantics = semantics);
+      nir_def *current = state->interlock_shadow_samples ?
+         nir_load_tile_image(b, intr->def.num_components, intr->def.bit_size,
+            nir_imm_int(b, 0), multisample ? intr->src[2].ssa : nir_imm_int(b, 0),
+            .dest_type = nir_intrinsic_dest_type(intr), .io_semantics = semantics,
+            .access = ACCESS_COHERENT) :
+         nir_load_output(b, intr->def.num_components,
+            intr->def.bit_size, nir_imm_int(b, 0),
+            .dest_type = nir_intrinsic_dest_type(intr), .io_semantics = semantics);
       nir_def *matches = constant ? nir_imm_true(b) :
          nir_ieq_imm(b, nir_iadd_imm(b, intr->src[3].ssa, index), attachment);
-      if (multisample) {
+      if (multisample && !state->interlock_shadow_samples) {
          matches = nir_iand(b, matches,
             nir_ieq(b, intr->src[2].ssa, nir_load_sample_id(b)));
       }

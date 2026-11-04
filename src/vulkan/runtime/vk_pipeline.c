@@ -1521,7 +1521,9 @@ vk_get_graphics_pipeline_compile_info(struct vk_graphics_pipeline_compile_info *
     */
    if (info->stage_count == 0) {
       info->part_count = 0;
-   } else if (info->optimize) {
+   } else if (info->optimize ||
+              (device->shader_ops->require_graphics_stage_linking &&
+               device->shader_ops->require_graphics_stage_linking(device))) {
       info->partition[1] = info->stage_count;
       info->part_count = 1;
    } else if (info->stages[0].stage == MESA_SHADER_FRAGMENT) {

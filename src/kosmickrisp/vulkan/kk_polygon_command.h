@@ -10,7 +10,10 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    struct kk_shader *gs = kk_geometry_shader(cmd);
    mtl_compute_encoder *enc = cs_get_compute(cmd);
    struct mtl_size local = {KK_POLY_WG_SIZE, 1, 1};
-   libkk_polygon_capture_setup(cmd, kk_grid_1d(1), true, geometry_params, kk_heap(cmd));
+   if (cmd->interlock_heap_active)
+      kk_interlock_source_setup(cmd, geometry_params);
+   else
+      libkk_polygon_capture_setup(cmd, kk_grid_1d(1), true, geometry_params, kk_heap(cmd));
    enc = cs_get_compute(cmd);
    mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
    mtl_compute_set_pipeline_state(enc, vs->pipeline.gfx.polygon_capture);
@@ -49,6 +52,9 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    if (dyn->rs.rasterizer_discard_enable ||
        (gfx->is_cull_front_and_back && vs->info.polygon.primitive_vertices > 2))
       return (struct kk_draw_data){.grid = kk_grid_1d(0)};
+
+   if (cmd->interlock_heap_active && kk_interlock_source_arity(cmd) < 3)
+      return kk_interlock_source_assemble(cmd, geometry_params);
 
    struct kk_grid triangles = kk_grid_indirect(capture +
       offsetof(struct poly_geometry_capture, clip_groups));

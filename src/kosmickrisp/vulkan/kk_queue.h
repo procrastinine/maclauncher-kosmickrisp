@@ -21,6 +21,7 @@
 struct kk_queue {
    struct vk_queue vk;
    struct mtl_command_queue *mtl_handle;
+   struct kk_interlock_queue *interlock_submission;
 
    /* Resources for command buffer re-recording. These are required for
     * SIMULTANEOUS_USE command buffers where the same command buffer can be

@@ -268,6 +268,9 @@ struct vk_device_shader_ops {
    VkShaderStageFlags (*get_rt_group_linking)(struct vk_physical_device *device,
                                               VkShaderStageFlags stages);
 
+   /** Require one compilation partition for all available graphics stages. */
+   bool (*require_graphics_stage_linking)(struct vk_device *device);
+
    /** Hash a vk_graphics_state object and a vk_features object.
     *
     * This callback hashes whatever bits of vk_graphics_pipeline_state might

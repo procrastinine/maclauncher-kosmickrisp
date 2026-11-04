@@ -22,6 +22,7 @@
 #include "kk_shader.h"
 #include "kk_fragment_shading_rate_cache.h"
 #include "kk_interlock_device.h"
+#include "kk_interlock_submit.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/mtl_device.h"
@@ -382,6 +383,9 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
 
    /* The optional set can fail into cleanup that destroys this mutex. */
    simple_mtx_init(&dev->blit_queue_mutex, mtx_plain);
+   result = kk_interlock_submission_init(dev);
+   if (result != VK_SUCCESS)
+      goto fail_vab_memory;
    list_inithead(&dev->residency_set.priority_memories);
    if (dev->vk.enabled_features.memoryPriority ||
        dev->vk.enabled_features.pageableDeviceLocalMemory) {
@@ -473,6 +477,7 @@ fail_lib:
    kk_dgc_finish(dev);
    kk_device_finish_lib(dev);
 fail_sampler_heap:
+   kk_interlock_device_finish(dev);
    kk_destroy_sampler_heap(dev, &dev->samplers);
 fail_query_table:
    kk_query_table_finish(dev, &dev->occlusion_queries);
@@ -483,6 +488,7 @@ fail_mem_cache:
    while (dev->queue_count > 0)
       kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
 fail_vab_memory:
+   kk_interlock_submission_finish(dev);
    simple_mtx_destroy(&dev->blit_queue_mutex);
    if (dev->residency_set.priority_handle) {
       mtl_residency_set_end_residency(dev->residency_set.priority_handle);
@@ -528,6 +534,9 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    while (dev->queue_count > 0)
       kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
 
+   /* Common workers and per-queue providers are finished; close the retained
+    * interlock registry before destroying shared meta/query/heap state. */
+   kk_interlock_submission_drain(dev);
    /* Meta first since it may destroy Vulkan objects */
    kk_device_finish_meta(dev);
    kk_dgc_finish(dev);
@@ -557,6 +566,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
    kk_release_compiler(dev);
+   kk_interlock_submission_finish(dev);
 
    vk_device_finish(&dev->vk);
 

@@ -10,6 +10,7 @@
 #include "kosmickrisp/bridge/mtl_types.h"
 
 #include "vk_sync.h"
+#include "util/list.h"
 #include "util/u_atomic.h"
 #include "c11/threads.h"
 
@@ -18,6 +19,8 @@ struct kk_queue;
 struct kk_sync_timeline {
    struct vk_sync base;
    mtl_shared_event *mtl_handle;
+   struct list_head interlock_link;
+   bool interlock_registered;
    /* Highest value whose GPU signal has actually been committed. */
    uint64_t pending_value;
    /* Completion queries must not free this sync while its signal publisher

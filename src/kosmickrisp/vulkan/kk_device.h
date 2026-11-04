@@ -136,6 +136,7 @@ struct kk_device {
    struct kk_bo *atomic64_locks;
    struct kk_bo *heap;
    struct kk_bo *interlock_guard;
+   struct kk_interlock_registry *interlock_registry;
    util_once_flag heap_init_once;
 };
 

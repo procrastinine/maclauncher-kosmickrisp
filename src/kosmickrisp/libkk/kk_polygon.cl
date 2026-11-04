@@ -56,14 +56,14 @@ polygon_position(global struct poly_geometry_capture *p, uint invocation,
       polygon_slot(p, VARYING_SLOT_POS)]);
 }
 
-KERNEL(1)
-libkk_polygon_capture_setup(global struct poly_geometry_params *geometry,
-                            global struct poly_heap *heap)
+static void
+polygon_capture_setup(global struct poly_geometry_params *geometry,
+                       global struct poly_heap *heap, uint arity, bool interlock)
 {
    global struct poly_geometry_capture *p = polygon_capture(geometry);
    uint streams = geometry->input_primitives * p->streams;
    uint vertices = streams * p->vertices_out;
-   uint triangles = streams * sub_sat(p->vertices_out, p->primitive_vertices - 1u);
+   uint triangles = streams * sub_sat(p->vertices_out, arity - 1u);
    p->invocations = geometry->input_primitives;
    p->dispatch_groups[0] = geometry->grid[0] / 64 + (geometry->grid[0] % 64 != 0);
    p->dispatch_groups[1] = geometry->grid[1];
@@ -75,7 +75,11 @@ libkk_polygon_capture_setup(global struct poly_geometry_params *geometry,
    p->counts = (uintptr_t)poly_heap_alloc(heap, streams * 4, 4);
    p->primitive_counts = (uintptr_t)poly_heap_alloc(heap, streams * 4, 4);
    p->triangles = (uintptr_t)poly_heap_alloc(heap, triangles * 16, 16);
-   p->clipped = (uintptr_t)poly_heap_alloc(heap, triangles * 8, 8);
+   uint clipped_size = triangles * 8;
+   if (interlock && arity < 3)
+      clipped_size = align(clipped_size, 16u) +
+         triangles * arity * sizeof(struct kk_polygon_vertex);
+   p->clipped = (uintptr_t)poly_heap_alloc(heap, clipped_size, interlock && arity < 3 ? 16 : 8);
    p->clip_counts = (uintptr_t)poly_heap_alloc(heap, triangles * 4, 4);
    polygon_grid(p->capture_grid, p->capture_groups, p->vertices_out * p->streams, p->invocations);
    polygon_grid(p->clip_grid, p->clip_groups, triangles, 1);
@@ -83,6 +87,14 @@ libkk_polygon_capture_setup(global struct poly_geometry_params *geometry,
    p->draw[1] = 1;
    p->draw[2] = 0;
    p->draw[3] = 0;
+}
+
+KERNEL(1)
+libkk_polygon_capture_setup(global struct poly_geometry_params *geometry,
+                            global struct poly_heap *heap)
+{
+   polygon_capture_setup(geometry, heap,
+      polygon_capture(geometry)->primitive_vertices, false);
 }
 
 static bool
@@ -551,3 +563,5 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
 }
 
 #include "kk_conservative.cl"
+
+#include "kk_interlock_source.cl"

@@ -14,6 +14,7 @@ struct lower_ia_state {
    const struct vk_input_attachment_location_state *ial;
    const struct vk_color_attachment_location_state *cal;
    const struct vk_render_pass_state *rp;
+   bool interlock_shadow_samples;
 };
 
 #include "msl_attachment_samples.h"
@@ -47,7 +48,7 @@ void
 msl_nir_lower_input_attachments(
    nir_shader *nir, const struct vk_input_attachment_location_state *ial,
    const struct vk_color_attachment_location_state *cal,
-   const struct vk_render_pass_state *rp)
+   const struct vk_render_pass_state *rp, bool interlock_shadow_samples)
 {
    assert(nir->info.stage == MESA_SHADER_FRAGMENT);
 
@@ -56,6 +57,7 @@ msl_nir_lower_input_attachments(
          .ial = ial,
          .cal = cal,
          .rp = rp,
+         .interlock_shadow_samples = interlock_shadow_samples,
       };
       NIR_PASS(_, nir, msl_nir_lower_frag_input_attachments, &state);
    }

@@ -6,6 +6,9 @@
  */
 
 #include "kk_cmd_buffer.h"
+#include "kk_interlock_submit.h"
+#include "kk_interlock_heap.h"
+#include "kk_interlock_draw.h"
 #include "util/half_float.h"
 #include "kk-writable-msaa.h"
 #include "kk_sparse.h"
@@ -55,6 +58,8 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    }
    util_dynarray_clear(&cmd->msrtss_images);
    kk_dgc_release_commands(cmd);
+   kk_interlock_segments_finish(cmd);
+   kk_interlock_heap_finish(cmd);
    kk_cmd_release_dynamic_ds_state(cmd);
    kk_descriptor_state_fini(cmd, &cmd->state.gfx.descriptors);
    kk_descriptor_state_fini(cmd, &cmd->state.cs.descriptors);
@@ -153,6 +158,27 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
    vk_free(&pool->vk.alloc, cmd);
 }
 
+mtl_argument_table *
+kk_new_command_argument_table(struct kk_device *dev)
+{
+   mtl_argument_table *table;
+      mtl_argument_table_descriptor *desc = mtl_new_argument_table_descriptor();
+      /* Root at 0, samplers at 1 and per draw data at 2 */
+      mtl_set_max_buffer_binding_count(desc,
+         kk_argument_table_buffer_count((struct kk_argument_table_usage){
+            .interlock_guard = dev->interlock_guard != NULL,
+            .poly_layer_replay = dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader,
+         }));
+      table = mtl_new_argument_table(dev->mtl_handle, desc);
+      if (dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader)
+         mtl_set_address(table, 0, KK_ARGUMENT_POLY_LAYER_REPLAY);
+      mtl_set_address(table, dev->samplers.table.bo->gpu, KK_ARGUMENT_SAMPLERS);
+      if (dev->interlock_guard)
+         mtl_set_address(table, dev->interlock_guard->gpu, KK_ARGUMENT_INTERLOCK_GUARD);
+      mtl_release(desc);
+   return table;
+}
+
 static VkResult
 kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
                      VkCommandBufferLevel level,
@@ -186,22 +212,7 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    cmd->mesh_allocators = UTIL_DYNARRAY_INIT;
    cmd->post_render_writes = UTIL_DYNARRAY_INIT;
 
-   {
-      mtl_argument_table_descriptor *desc = mtl_new_argument_table_descriptor();
-      /* Root at 0, samplers at 1 and per draw data at 2 */
-      mtl_set_max_buffer_binding_count(desc,
-         kk_argument_table_buffer_count((struct kk_argument_table_usage){
-            .interlock_guard = dev->interlock_guard != NULL,
-            .poly_layer_replay = dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader,
-         }));
-      cmd->argument_table = mtl_new_argument_table(dev->mtl_handle, desc);
-      if (dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader)
-         mtl_set_address(cmd->argument_table, 0, KK_ARGUMENT_POLY_LAYER_REPLAY);
-      mtl_set_address(cmd->argument_table, dev->samplers.table.bo->gpu, KK_ARGUMENT_SAMPLERS);
-      if (dev->interlock_guard)
-         mtl_set_address(cmd->argument_table, dev->interlock_guard->gpu, KK_ARGUMENT_INTERLOCK_GUARD);
-      mtl_release(desc);
-   }
+   cmd->argument_table = kk_new_command_argument_table(dev);
 
    cmd->large_bos = UTIL_DYNARRAY_INIT;
    cmd->dgc_commands = UTIL_DYNARRAY_INIT;

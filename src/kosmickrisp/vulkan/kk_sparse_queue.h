@@ -27,18 +27,23 @@ kk_sparse_first_commit_callback(struct mtl_feedback_data *data)
    mtx_unlock(&queue->mutex);
 }
 
-static void
+static VkResult
 kk_sparse_commit_first(struct kk_queue *queue, struct kk_cmd_buffer *cmd)
 {
    struct kk_device *dev = kk_queue_device(queue);
-   if (!kk_sparse_residency_used(dev)) {
-      kk_queue_commit(queue, cmd, commit_callback, dev);
-      return;
-   }
+   if (!kk_sparse_residency_used(dev))
+      return kk_queue_commit(queue, cmd, commit_callback, dev);
    mtx_lock(&queue->mutex);
    queue->commits_in_flight++;
    bool tracked = kk_sparse_submission_begin(dev);
    assert(tracked); (void)tracked;
-   kk_queue_commit(queue, cmd, kk_sparse_first_commit_callback, queue);
+   VkResult result = kk_queue_commit(queue, cmd, kk_sparse_first_commit_callback, queue);
+   if (result != VK_SUCCESS) {
+      kk_sparse_submission_end(dev);
+      assert(queue->commits_in_flight > 0u);
+      if (--queue->commits_in_flight == 0u)
+         cnd_broadcast(&queue->cond);
+   }
    mtx_unlock(&queue->mutex);
+   return result;
 }

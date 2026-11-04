@@ -12,6 +12,7 @@
 #include "kk_entrypoints.h"
 #include "kk_physical_device.h"
 #include "kk_sync.h"
+#include "kk_interlock_submit.h"
 #include "kk_sparse.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -50,6 +51,7 @@ check_device_lost(struct kk_device *dev, struct mtl_feedback_data *data)
       vk_device_set_lost(
          &dev->vk, "Command queue error: %s, with message \"%s\"",
          mtl_command_queue_error_to_string(data->error), data->error_message);
+      kk_interlock_submission_lost(dev);
    }
 }
 
@@ -92,11 +94,13 @@ kk_cmd_buffer_has_work(struct kk_cmd_buffer *cmd)
    return cmd->metal.cmd_buf;
 }
 
-static void
+static VkResult
 kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
                 mtl_feedback_handler_callback callback, void *user_data)
 {
    assert(kk_cmd_buffer_has_work(cmd));
+   if (cmd->interlock_segments)
+      return kk_interlock_commit(queue, cmd, callback, user_data);
    const uint32_t retained_count = util_dynarray_num_elements(
       &cmd->submit_drawables, void *);
    void **drawables = util_dynarray_begin(&cmd->submit_drawables);
@@ -137,6 +141,7 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
       mtl_release(cmd->drawable);
       cmd->drawable = NULL;
    }
+   return VK_SUCCESS;
 }
 
 #include "kk_sparse_queue.h"
@@ -225,9 +230,19 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
    kk_device_make_resources_resident(dev);
 
    queue->commits_in_flight++;
-   mtl_feedback_handler_callback callback = kk_sparse_submission_begin(dev) ?
+   const bool sparse_tracked = kk_sparse_submission_begin(dev);
+   mtl_feedback_handler_callback callback = sparse_tracked ?
       kk_sparse_rerecord_commit_callback : rerecord_commit_callback;
-   kk_queue_commit(queue, rerecord, callback, commit);
+   result = kk_queue_commit(queue, rerecord, callback, commit);
+   if (result != VK_SUCCESS) {
+      if (sparse_tracked)
+         kk_sparse_submission_end(dev);
+      assert(queue->commits_in_flight > 0u);
+      if (--queue->commits_in_flight == 0u)
+         cnd_broadcast(&queue->cond);
+      vk_free(&dev->vk.alloc, commit);
+      goto release;
+   }
    *committed = true;
 
    mtx_unlock(&queue->mutex);
@@ -300,7 +315,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
             &submit->command_buffers[i], submit->command_buffer_count - i,
             &consumed, &committed);
          if (result != VK_SUCCESS)
-            return result;
+            return result == VK_ERROR_DEVICE_LOST
+               ? kk_interlock_submission_lost(dev) : result;
          for (uint32_t j = 0; committed && j < consumed; j++) {
             struct kk_cmd_buffer *source = container_of(
                submit->command_buffers[i + j], struct kk_cmd_buffer, vk);
@@ -317,7 +333,10 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
          }
          continue;
       } else if (kk_cmd_buffer_has_work(cmd_buffer)) {
-         kk_sparse_commit_first(queue, cmd_buffer);
+         VkResult result = kk_sparse_commit_first(queue, cmd_buffer);
+         if (result != VK_SUCCESS)
+            return result == VK_ERROR_DEVICE_LOST ?
+               kk_interlock_submission_lost(dev) : result;
       }
 
       cmd_buffer->submitted = true;
@@ -391,6 +410,7 @@ kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
 
    queue->free_cmd_buffers = UTIL_DYNARRAY_INIT;
    queue->commits_in_flight = 0u;
+   queue->interlock_submission = NULL;
    mtx_init(&queue->mutex, mtx_plain);
    cnd_init(&queue->cond);
 
@@ -420,6 +440,9 @@ kk_queue_finish(struct kk_device *dev, struct kk_queue *queue)
    if (queue->deferred.resume)
       (void)kk_queue_resume_deferred(queue, true);
 
+   /* The common worker and its one cancel callback are finished. Drain all
+    * interlock C packets/native callbacks while pools and mutex remain live. */
+   kk_interlock_queue_finish(queue);
    /* There may be in-flight command buffers, wait for them to finish. */
    kk_queue_wait_for_commits(queue);
 

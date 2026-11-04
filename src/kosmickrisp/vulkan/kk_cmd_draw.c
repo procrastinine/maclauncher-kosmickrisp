@@ -11,6 +11,9 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "kk_interlock_heap.h"
+#include "kk_interlock_draw.h"
+#include "kk_interlock_envelope.h"
 #include "vk_standard_sample_locations.h"
 #include "kk-writable-msaa.h"
 #include "kk_conservative.h"
@@ -1138,7 +1141,7 @@ kk_init_heap(const void *data)
    struct kk_cmd_buffer *cmd = (struct kk_cmd_buffer *)data;
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
 
-   size_t size = 128 * 1024 * 1024;
+   size_t size = KK_POLY_HEAP_SIZE;
    kk_alloc_bo(dev, &dev->vk.base, size, 0, &dev->heap);
 
    struct poly_heap *map = (struct poly_heap *)dev->heap->cpu;
@@ -1150,16 +1153,28 @@ kk_init_heap(const void *data)
    };
 }
 
+static struct kk_bo *
+kk_draw_heap(struct kk_cmd_buffer *cmd)
+{
+   if (cmd->interlock_heap_active)
+      return kk_interlock_heap_bo(cmd->interlock_heap);
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   util_call_once_data(&dev->heap_init_once, kk_init_heap, cmd);
+   return dev->heap;
+}
+
 static uint64_t
 kk_heap(struct kk_cmd_buffer *cmd)
 {
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
 
-   util_call_once_data(&dev->heap_init_once, kk_init_heap, cmd);
+   kk_draw_heap(cmd);
 
    /* We need to free all allocations after each command buffer execution */
-   if (!cmd->uses_heap) {
-      uint64_t addr = dev->heap->gpu;
+   bool *uses_heap = cmd->interlock_heap_active ?
+      &cmd->interlock_heap_used : &cmd->uses_heap;
+   if (!*uses_heap) {
+      uint64_t addr = kk_draw_heap(cmd)->gpu;
 
       /* Zeroing the allocated index frees everything. Force compute encoder
        * since this path is only taken by tessellation, GS and unroll, which
@@ -1175,10 +1190,10 @@ kk_heap(struct kk_cmd_buffer *cmd)
       mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
                                        MTL_STAGE_DISPATCH);
 
-      cmd->uses_heap = true;
+      *uses_heap = true;
    }
 
-   return dev->heap->gpu;
+   return kk_draw_heap(cmd)->gpu;
 }
 
 /* GPU-generated indices are allocated from the heap, past its header */
@@ -1191,7 +1206,7 @@ kk_heap_indices(struct kk_cmd_buffer *cmd)
    /* TODO_KOSMICKRISP Self-contained until we have rodata at the device. */
    return (struct kk_addr_range){
       .addr = heap + sizeof(struct poly_heap),
-      .range = dev->heap->size_B - sizeof(struct poly_heap),
+      .range = kk_draw_heap(cmd)->size_B - sizeof(struct poly_heap),
    };
 }
 
@@ -1338,7 +1353,7 @@ kk_upload_tess_params(struct kk_cmd_buffer *cmd, struct poly_tess_params *out,
 
    /* heap is allocated by kk_heap */
    /* TODO_KOSMICKRISP Self-contained until we have rodata at the device. */
-   args.patch_coord_buffer = dev->heap->gpu + sizeof(struct poly_heap);
+   args.patch_coord_buffer = kk_draw_heap(cmd)->gpu + sizeof(struct poly_heap);
 
    if (!kk_grid_is_indirect(draw->grid)) {
       unsigned in_patches = draw->grid.size.x / args.input_patch_size;
@@ -1482,7 +1497,7 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
       gfx->gs.index.range = size_B;
    }
 
-   if (gfx->polygon_points) {
+   if (gfx->polygon_points || cmd->interlock_heap_active) {
       const struct poly_gs_capture_info *capture = &gs->info.polygon;
       const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
       struct poly_geometry_capture point = {
@@ -1578,7 +1593,20 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          }
          params.capture = gfx->polygon_capture = capture_data.gpu;
       } else {
+         if (cmd->interlock_heap_active) {
+         gfx->interlock_capture = kk_pool_alloc(cmd, sizeof(struct kk_interlock_envelope), 8);
+         if (gfx->interlock_capture.cpu) {
+            memset(gfx->interlock_capture.cpu, 0, sizeof(struct kk_interlock_envelope));
+            struct kk_interlock_envelope *env = gfx->interlock_capture.cpu;
+            env->geometry = point;
+            env->view_mask = gfx->render.view_mask;
+            env->source_view = gfx->interlock_source_view;
+            env->source_view_ordinal = gfx->interlock_source_view_ordinal;
+         }
+         params.capture = gfx->polygon_capture = gfx->interlock_capture.gpu;
+      } else {
          params.capture = gfx->polygon_capture = kk_pool_upload(cmd, &point, sizeof(point), 8).gpu;
+      }
       }
       }
    }
@@ -2310,10 +2338,10 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
          struct kk_device *dev = kk_cmd_buffer_device(cmd);
          struct kk_per_draw_data *pd = &gfx->per_draw_data;
          pd->per_vertex_indirect_addr = gfx->tess.out_draws_addr;
-         pd->per_vertex_index_addr = dev->heap->gpu + sizeof(struct poly_heap);
+         pd->per_vertex_index_addr = kk_draw_heap(cmd)->gpu + sizeof(struct poly_heap);
          pd->per_vertex_index_size = 4u;
          pd->per_vertex_index_count =
-            (dev->heap->size_B - sizeof(struct poly_heap)) / 4u;
+            (kk_draw_heap(cmd)->size_B - sizeof(struct poly_heap)) / 4u;
          pd->per_vertex_first_vertex = 0u;
          pd->per_vertex_base_vertex = 0;
          pd->per_vertex_topology = gfx->tess.prim;
@@ -2458,7 +2486,7 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
    uint64_t cp = clip ? kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT) : 0;
    if (tcs_stat || tes_stat || ci || cp)
       libkk_accumulate_tess_statistics(cmd, kk_grid_1d(1), true, state,
-         tcs_stat, tes_stat, ci, cp, MAX2(1, util_bitcount(gfx->render.view_mask)));
+         tcs_stat, tes_stat, ci, cp, cmd->interlock_heap_active ? 1 : MAX2(1, util_bitcount(gfx->render.view_mask)));
 
    draw.grid = kk_grid_indirect(gfx->tess.out_draws_addr);
 
@@ -2500,6 +2528,7 @@ kk_draw_without_restart(struct kk_cmd_buffer *cmd,
    return draw;
 }
 
+#include "kk_interlock_source_command.h"
 #include "kk_polygon_command.h"
 
 /* Runs the stage feeding the GS and the GS compute pass, returning the draw
@@ -2571,7 +2600,7 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
    mtl_compute_set_pipeline_state(
       enc, vs->pipeline.gfx.pre_render[pre_render_count - 2u]);
    kk_dispatch_compute(enc, grid_vs, local_size);
-   if (gfx->polygon_points)
+   if (gfx->polygon_points || cmd->interlock_heap_active)
       return kk_launch_polygon_points(cmd, grid_gs, geometry_params);
 
    bool queries = cmd->state.pipeline_statistics_flags &
@@ -2701,6 +2730,14 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_FRONT_FACE);
    }
 
+   if (vs->info.interlock_envelope || cmd->interlock_heap_active) {
+      VkResult result = kk_interlock_heap_select(cmd,
+         vs->info.interlock_envelope && dyn->ms.rasterization_samples > 1);
+      if (result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&cmd->vk, result);
+         goto layered_bc_done;
+      }
+   }
    kk_flush_gfx_state(cmd);
    if (!kk_layered_bc_begin_draw(cmd, data)) goto layered_bc_done;
 
@@ -2765,13 +2802,22 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    bool per_vertex_gs = geom && emulates_per_vertex;
 
    for (uint32_t i = 0; i < data->draw_count; i++) {
+      uint32_t source_views = cmd->interlock_heap_active && gfx->render.view_mask ?
+         gfx->render.view_mask : 1;
+      unsigned source_ordinal = 0;
+      while (source_views) {
+         gfx->interlock_source_view = gfx->render.view_mask && cmd->interlock_heap_active ?
+            ffs(source_views) - 1 : 0;
+         gfx->interlock_source_view_ordinal = source_ordinal++;
+         source_views &= source_views - 1;
       struct kk_draw_data draw_data = build_draw_data(cmd, data, i);
 
       if (per_vertex)
          kk_prepare_per_vertex_draw(cmd, data, i, per_vertex_draws, &draw_data);
 
-      if (data->upload_mask)
-         kk_upload_per_draw_data(cmd, data->upload_mask, i + gfx->indirect_draw_id, &draw_data,
+      if (data->upload_mask || cmd->interlock_heap_active)
+         kk_upload_per_draw_data(cmd, data->upload_mask |
+            (cmd->interlock_heap_active ? BITFIELD_BIT(MESA_SHADER_GEOMETRY) : 0), i + gfx->indirect_draw_id, &draw_data,
                                  gs_restart);
 
       if (tess)
@@ -2837,7 +2883,16 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
          }
          mtl_set_vertex_amplification_count(cs_get_render(cmd), layers, count);
       }
-      kk_poly_layer_dispatch_draw(cmd, draw_data);
+      if (cmd->interlock_heap_active) {
+         VkResult result = kk_interlock_record_draw(cmd);
+         if (result != VK_SUCCESS) {
+            vk_command_buffer_set_error(&cmd->vk, result);
+            goto layered_bc_done;
+         }
+      } else {
+         kk_poly_layer_dispatch_draw(cmd, draw_data);
+      }
+      }
    }
 
 layered_bc_done:

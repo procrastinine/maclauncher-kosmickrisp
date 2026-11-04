@@ -7,6 +7,7 @@
 #include "kk_sync.h"
 
 #include "kk_device.h"
+#include "kk_interlock_submit.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 
@@ -21,12 +22,15 @@ kk_timeline_init(struct vk_device *device, struct vk_sync *sync,
    if (mtx_init(&timeline->publish_mutex, mtx_plain) != thrd_success)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    timeline->mtl_handle = mtl_new_shared_event(dev->mtl_handle);
+   if (!timeline->mtl_handle)
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
    if (!timeline->mtl_handle) {
       mtx_destroy(&timeline->publish_mutex);
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
    }
    p_atomic_set(&timeline->pending_value, initial_value);
    mtl_shared_event_set_signaled_value(timeline->mtl_handle, initial_value);
+   kk_interlock_sync_init(dev, timeline);
 
    return VK_SUCCESS;
 }
@@ -36,6 +40,7 @@ kk_timeline_finish(struct vk_device *device, struct vk_sync *sync)
 {
    struct kk_sync_timeline *timeline =
       container_of(sync, struct kk_sync_timeline, base);
+   kk_interlock_sync_finish(container_of(device, struct kk_device, vk), timeline);
    mtl_release(timeline->mtl_handle);
    mtx_destroy(&timeline->publish_mutex);
 }
@@ -50,7 +55,7 @@ kk_timeline_signal(struct vk_device *device, struct vk_sync *sync,
    mtl_shared_event_set_signaled_value(timeline->mtl_handle, value);
    kk_sync_mark_pending(timeline, value);
    mtx_unlock(&timeline->publish_mutex);
-   return VK_SUCCESS;
+   return kk_interlock_sync_result(device, VK_SUCCESS);
 }
 
 static VkResult
@@ -62,7 +67,7 @@ kk_timeline_get_value(struct vk_device *device, struct vk_sync *sync,
    mtx_lock(&timeline->publish_mutex);
    *value = mtl_shared_event_get_signaled_value(timeline->mtl_handle);
    mtx_unlock(&timeline->publish_mutex);
-   return vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
+   return kk_interlock_sync_result(device, vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS);
 }
 
 static VkResult
@@ -110,7 +115,7 @@ kk_timeline_wait(struct vk_device *device, struct vk_sync *sync,
       if (completed) {
          mtx_lock(&timeline->publish_mutex);
          mtx_unlock(&timeline->publish_mutex);
-         return vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
+         return kk_interlock_sync_result(device, vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS);
       }
       if (abs_timeout_ns != OS_TIMEOUT_INFINITE) {
          uint64_t now = os_time_get_nano();

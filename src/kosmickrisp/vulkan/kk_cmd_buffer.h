@@ -233,6 +233,9 @@ struct kk_graphics_state {
    bool polygon_points;
    bool conservative;
    uint64_t polygon_capture;
+   struct kk_ptr interlock_capture;
+   uint32_t interlock_source_view;
+   uint32_t interlock_source_view_ordinal;
    struct kk_rendering_state render;
    struct kk_descriptor_state descriptors;
    struct kk_per_draw_data per_draw_data;
@@ -354,6 +357,10 @@ struct kk_whole_pass_state {
 
 struct kk_cmd_buffer {
    struct vk_command_buffer vk;
+   struct kk_interlock_segment *interlock_segments;
+   struct kk_interlock_heap *interlock_heap;
+   bool interlock_heap_active;
+   bool interlock_heap_used;
    struct kk_whole_pass_state whole_pass;
    bool deferred_render_chain;
    bool transient_safe;

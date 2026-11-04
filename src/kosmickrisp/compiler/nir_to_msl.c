@@ -2577,7 +2577,10 @@ msl_gather_info(struct nir_to_msl_ctx *ctx, struct nir_to_msl_options *options)
           * the fragment was generated for. This is why we need to compute it
           * using sample id. */
          if (BITSET_TEST(ctx->shader->info.system_values_read,
-                         SYSTEM_VALUE_SAMPLE_MASK_IN))
+                         SYSTEM_VALUE_SAMPLE_MASK_IN) &&
+             (!(ctx->shader->info.fs.pixel_interlock_ordered ||
+                ctx->shader->info.fs.pixel_interlock_unordered) ||
+              ctx->shader->info.fs.uses_sample_shading))
             BITSET_SET(ctx->shader->info.system_values_read,
                        SYSTEM_VALUE_SAMPLE_ID);
 
