@@ -51,6 +51,7 @@ kk_cmd_pool_destroy_bos(struct kk_cmd_pool *pool)
       kk_cmd_bo_destroy(pool, bo);
 
    list_inithead(&pool->free_bos);
+   pool->num_free_bos = 0;
 }
 
 VkResult
@@ -148,6 +149,7 @@ kk_CreateCommandPool(VkDevice _device,
    pool->metal.free_cmd_bufs = UTIL_DYNARRAY_INIT;
 
    list_inithead(&pool->free_bos);
+   pool->num_free_bos = 0;
 
    *pCmdPool = kk_cmd_pool_to_handle(pool);
 
