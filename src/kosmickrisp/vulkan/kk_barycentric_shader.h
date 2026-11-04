@@ -27,16 +27,6 @@ kk_state_provoking_last(const struct vk_graphics_pipeline_state *state)
 }
 
 static bool
-fs_reads_flat_inputs(nir_shader *nir)
-{
-   nir_foreach_shader_in_variable(var, nir) {
-      if (var->data.interpolation == INTERP_MODE_FLAT && !var->data.per_vertex)
-         return true;
-   }
-   return false;
-}
-
-static bool
 interpolates_off_center(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
    if (intr->intrinsic != nir_intrinsic_load_interpolated_input)
@@ -91,11 +81,31 @@ kk_barycentric_shader_info(struct kk_shader *shader,
 
 }
 
+enum kk_barycentric_input_flags {
+   KK_BARYCENTRIC_INPUT_PER_VERTEX = 1u << 0,
+   KK_BARYCENTRIC_INPUT_FLAT = 1u << 1,
+};
+
+/* Capture the layout before IO lowering removes the input variables. */
+static unsigned
+kk_barycentric_input_flags(nir_shader *fs)
+{
+   unsigned flags = 0;
+   nir_foreach_shader_in_variable(var, fs) {
+      if (var->data.per_vertex)
+         flags |= KK_BARYCENTRIC_INPUT_PER_VERTEX;
+      else if (var->data.interpolation == INTERP_MODE_FLAT)
+         flags |= KK_BARYCENTRIC_INPUT_FLAT;
+   }
+   return flags;
+}
+
 static bool
 kk_barycentric_force_per_vertex(uint32_t shader_count,
                                 struct vk_shader_compile_info *infos,
                                 const struct vk_graphics_pipeline_state *state,
-                                const struct vk_features *enabled_features)
+                                const struct vk_features *enabled_features,
+                                unsigned input_flags)
 {
    /* Barycentrics of strips, fans and adjacency primitives, including the
     * strips a GS outputs, need the emulated draw path so their vertex order
@@ -104,12 +114,14 @@ kk_barycentric_force_per_vertex(uint32_t shader_count,
     * primitives, which reorders native barycentrics.
     */
    bool force_per_vertex = false;
-   if (enabled_features->fragmentShaderBarycentric && state && state->ia &&
+   if (enabled_features->fragmentShaderBarycentric && shader_count && state && state->ia &&
        infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT) {
       nir_shader *fs = infos[shader_count - 1u].nir;
-      nir_foreach_shader_in_variable(var, fs)
-         force_per_vertex |= var->data.per_vertex;
+      force_per_vertex = input_flags & KK_BARYCENTRIC_INPUT_PER_VERTEX;
+      bool flat_inputs = input_flags & KK_BARYCENTRIC_INPUT_FLAT;
       enum kk_barycentric_usage usage = kk_nir_barycentric_usage(fs);
+      if (usage == KK_BARYCENTRIC_NONE)
+         return force_per_vertex;
       /* A GS outputs points, line strips or triangle strips */
       nir_shader *gs = shader_count >= 2u && infos[shader_count - 2u].stage ==
                                                 MESA_SHADER_GEOMETRY
@@ -121,7 +133,7 @@ kk_barycentric_force_per_vertex(uint32_t shader_count,
       force_per_vertex |=
          usage == KK_BARYCENTRIC_EXACT ||
          (usage == KK_BARYCENTRIC_PIXEL &&
-          (reordered || (provoking_last && fs_reads_flat_inputs(fs))));
+          (reordered || (provoking_last && flat_inputs)));
    }
 
    return force_per_vertex;

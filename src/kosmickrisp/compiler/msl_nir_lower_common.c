@@ -760,8 +760,14 @@ scalarize_clip_cull_distance_filter(const nir_intrinsic_instr *intrin,
 void
 msl_nir_lower_clip_cull_distance(nir_shader *nir, unsigned num_cull_distances)
 {
-   NIR_PASS(_, nir, nir_lower_io_to_scalar, nir_var_shader_out,
-            scalarize_clip_cull_distance_filter, NULL);
+   /* Fragment outputs cannot carry clip/cull distances. Pre-raster shaders
+    * without either array need neither scalarization nor distance lowering.
+    * Expanded Poly outputs are scalarized by their dedicated interface pass. */
+   if (nir->info.stage != MESA_SHADER_FRAGMENT &&
+       (nir->info.clip_distance_array_size || nir->info.cull_distance_array_size)) {
+      NIR_PASS(_, nir, nir_lower_io_to_scalar, nir_var_shader_out,
+               scalarize_clip_cull_distance_filter, NULL);
+   }
    if (nir->info.stage == MESA_SHADER_FRAGMENT)
       NIR_PASS(_, nir, msl_nir_lower_cull_distance_fs, num_cull_distances);
    else

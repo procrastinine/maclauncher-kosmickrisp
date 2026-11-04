@@ -24,6 +24,9 @@ kk_per_vertex_identity(struct kk_cmd_buffer *cmd, uint32_t count)
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    count = MAX2(count, 1u);
    if (gfx->index.identity.range < count * sizeof(uint32_t)) {
+      /* Grow geometrically so progressively larger indirect draws do not
+       * allocate and refill a new identity buffer for each exact size. */
+      count = util_next_power_of_two(count);
       struct kk_ptr ptr =
          kk_pool_alloc(cmd, count * sizeof(uint32_t), sizeof(uint32_t));
       if (unlikely(!ptr.gpu))

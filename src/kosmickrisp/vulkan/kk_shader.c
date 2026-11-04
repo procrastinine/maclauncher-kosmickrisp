@@ -138,14 +138,17 @@ struct kk_vs_key {
 
 static void
 kk_populate_vs_key(struct kk_vs_key *key,
-                   const struct vk_graphics_pipeline_state *state)
+                   const struct vk_graphics_pipeline_state *state,
+                   bool barycentric)
 {
    memset(key, 0, sizeof(*key));
    key->is_points = state->ia && state->ia->primitive_topology ==
                                     VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
    key->dynamic_vi = !kk_vi_is_static(state);
-   key->strip_fan_or_adjacency = kk_state_strip_fan_or_adjacency(state);
-   key->provoking_last = kk_state_provoking_last(state);
+   if (barycentric) {
+      key->strip_fan_or_adjacency = kk_state_strip_fan_or_adjacency(state);
+      key->provoking_last = kk_state_provoking_last(state);
+   }
    if (!key->dynamic_vi)
       key->vi = *state->vi;
 }
@@ -256,7 +259,7 @@ kk_hash_graphics_state(struct vk_physical_device *device,
 
    if (stages & VK_SHADER_STAGE_VERTEX_BIT) {
       struct kk_vs_key key;
-      kk_populate_vs_key(&key, state);
+      kk_populate_vs_key(&key, state, enabled_features->fragmentShaderBarycentric);
       _mesa_blake3_update(&blake3_ctx, &key, sizeof(key));
    }
 
@@ -1652,7 +1655,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
             BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE));
          if (opts->poly_layer_replay) kk_poly_layer_lower_vs(point_vs);
-         NIR_PASS(_, point_vs, kk_nir_lower_polygon_scalar_outputs);
+         NIR_PASS(_, point_vs, kk_nir_lower_polygon_scalar_outputs,
+                  shader->info.polygon.outputs);
          if (pixel_envelope)
             kk_interlock_source_resolved_cull(point_vs, &shader->info.polygon);
          NIR_PASS(_, point_vs, msl_nir_vs_io_types);
@@ -2497,8 +2501,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       (enabled_features->pipelineFragmentShadingRate ||
        enabled_features->primitiveFragmentShadingRate ||
        enabled_features->attachmentFragmentShadingRate);
-   bool force_per_vertex = kk_barycentric_force_per_vertex(
-      shader_count, infos, state, enabled_features);
+   unsigned barycentric_inputs = 0;
+   if (enabled_features->fragmentShaderBarycentric && shader_count &&
+       infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT)
+      barycentric_inputs = kk_barycentric_input_flags(infos[shader_count - 1u].nir);
 
    /* Lower shaders, notably lowering IO. This is a prerequisite for intershader
     * optimization. */
@@ -2711,6 +2717,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    nir_shader *conservative_fs = kk_conservative_possible(state) &&
       nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT
       ? nir_shader_clone(NULL, nir_shaders[total_shaders - 1u]) : NULL;
+   /* The normal fragment finish gathered current system-value metadata.
+    * Classify only now: early preprocessing metadata predates sysval lowering. */
+   bool force_per_vertex = kk_barycentric_force_per_vertex(
+      shader_count, infos, state, enabled_features, barycentric_inputs);
    struct kk_per_vertex_map per_vertex_map = {0};
    if (total_shaders >= 2u &&
        nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT &&
@@ -2846,7 +2856,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          NIR_PASS(_, native_pair[0], nir_opt_dce);
          NIR_PASS(_, native_pair[0], kk_nir_lower_descriptors, false,
                   vertex_robustness, 0, NULL);
-         NIR_PASS(_, native_pair[0], kk_nir_lower_polygon_scalar_outputs);
+         NIR_PASS(_, native_pair[0], kk_nir_lower_polygon_scalar_outputs,
+                  native_pair[0]->info.outputs_written);
          kk_compile_msl(dev, native_pair[0], state, &shaders[0]->polygon_native);
          kk_line_fragment(native_pair[1], false, state);
          kk_compile_msl(dev, native_pair[1], state, &shaders[0]->polygon_native_fs);

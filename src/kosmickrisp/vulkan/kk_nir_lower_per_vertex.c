@@ -9,7 +9,6 @@
 #include "kk_debug.h"
 
 #include "nir_builder.h"
-#include "kk_fragment_offset_planes.h"
 
 static bool
 is_per_vertex_input(nir_intrinsic_instr *intr)
@@ -144,6 +143,14 @@ is_barycentric_coord(nir_intrinsic_instr *intr)
 enum kk_barycentric_usage
 kk_nir_barycentric_usage(nir_shader *fs)
 {
+   /* Linked IO has current gather-info from fragment finishing. Ordinary
+    * shaders need no instruction walk, even on a barycentric-enabled device.
+    * Keep the full analysis for callers with pre-lowering metadata. */
+   if (fs->info.io_lowered &&
+       !BITSET_TEST(fs->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD) &&
+       !BITSET_TEST(fs->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD))
+      return KK_BARYCENTRIC_NONE;
+
    bool persp = false, linear = false, exact = false;
    nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {
@@ -295,16 +302,36 @@ buffer_offset(const struct kk_per_vertex_map *map, unsigned location,
 
 static nir_def *load_per_draw(nir_builder *b, unsigned bit_size, unsigned offset);
 
+static nir_def *
+load_buffer_address(nir_builder *b, const struct kk_per_vertex_map *map)
+{
+   return nir_pack_64_2x32(
+      b, nir_load_input(b, 2, 32, nir_imm_int(b, 0), .base = 0u,
+                        .component = 0u, .dest_type = nir_type_uint32,
+                        .io_semantics.location = map->buffer_slot,
+                        .io_semantics.num_slots = 1u));
+}
+
+static nir_def *
+load_buffer_corner_value(nir_builder *b, nir_intrinsic_instr *intr,
+                          const struct kk_per_vertex_map *map,
+                          unsigned location, nir_def *corner)
+{
+   unsigned stride = buffer_offset(map, location, 1) -
+                     buffer_offset(map, location, 0);
+   nir_def *addr = nir_iadd(b, load_buffer_address(b, map),
+      nir_u2u64(b, nir_imul_imm(b, corner, stride)));
+   return kk_nir_load_primitive_corner(b, addr,
+      buffer_offset(map, location, 0) + nir_intrinsic_component(intr) * 4u,
+      intr->def.num_components, intr->def.bit_size);
+}
+
 static void
 load_buffer_corner_values(nir_builder *b, nir_intrinsic_instr *intr,
                           const struct kk_per_vertex_map *map,
                           unsigned location, nir_def *values[3])
 {
-   nir_def *addr = nir_pack_64_2x32(
-      b, nir_load_input(b, 2, 32, nir_imm_int(b, 0), .base = 0u,
-                        .component = 0u, .dest_type = nir_type_uint32,
-                        .io_semantics.location = map->buffer_slot,
-                        .io_semantics.num_slots = 1u));
+   nir_def *addr = load_buffer_address(b, map);
    unsigned offset = nir_intrinsic_component(intr) * 4u;
    for (unsigned v = 0; v < 3; ++v) {
       values[v] = kk_nir_load_primitive_corner(b, addr,
@@ -317,13 +344,10 @@ static nir_def *
 load_per_vertex_buffer_value(nir_builder *b, nir_intrinsic_instr *intr,
                              const struct kk_per_vertex_map *map)
 {
-   nir_def *values[3];
-   load_buffer_corner_values(b, intr, map, io_location(intr, 1), values);
-   if (nir_src_is_const(intr->src[0]))
-      return values[MIN2(nir_src_as_uint(intr->src[0]), 2u)];
-   nir_def *vertex = intr->src[0].ssa;
-   return nir_bcsel(b, nir_ieq_imm(b, vertex, 0), values[0],
-      nir_bcsel(b, nir_ieq_imm(b, vertex, 1), values[1], values[2]));
+   /* Select the record address before reading it. A dynamic PerVertex index
+    * needs one corner load, not three loads followed by a vector select. */
+   nir_def *corner = nir_umin_imm(b, intr->src[0].ssa, 2u);
+   return load_buffer_corner_value(b, intr, map, io_location(intr, 1), corner);
 }
 
 /* A full interface leaves no room for an address and basis varyings. Move
@@ -377,9 +401,6 @@ load_buffered_input(nir_builder *b, nir_intrinsic_instr *intr,
                      const struct kk_per_vertex_map *map)
 {
    bool interpolated = intr->intrinsic == nir_intrinsic_load_interpolated_input;
-   nir_def *values[3];
-   load_buffer_corner_values(b, intr, map,
-                            io_location(intr, interpolated ? 1 : 0), values);
    if (!interpolated) {
       nir_def *last = load_per_draw(b, 32,
          offsetof(struct kk_per_draw_data, provoking_last));
@@ -391,9 +412,10 @@ load_buffered_input(nir_builder *b, nir_intrinsic_instr *intr,
                        nir_ieq_imm(b, topology, MESA_PRIM_LINE_STRIP)),
             nir_imm_int(b, 1), nir_imm_int(b, 2)));
       corner = nir_bcsel(b, nir_ine_imm(b, last, 0), corner, nir_imm_int(b, 0));
-      return nir_bcsel(b, nir_ieq_imm(b, corner, 0), values[0],
-         nir_bcsel(b, nir_ieq_imm(b, corner, 1), values[1], values[2]));
+      return load_buffer_corner_value(b, intr, map, io_location(intr, 0), corner);
    }
+   nir_def *values[3];
+   load_buffer_corner_values(b, intr, map, io_location(intr, 1), values);
    nir_intrinsic_instr *original = nir_src_as_intrinsic(intr->src[0]);
    enum glsl_interp_mode mode = nir_intrinsic_interp_mode(original);
    nir_def *interpolation = intr->src[0].ssa;
@@ -440,8 +462,6 @@ kk_nir_apply_fs_per_vertex_map(nir_shader *fs, struct kk_per_vertex_map *map)
       }
    }
 
-   /* Run after per-vertex lowering has introduced its basis inputs. */
-   kk_nir_lower_fs_offset_planes(fs);
    map->active = true;
    gather_flat_locations(fs, map);
    nir_foreach_function_impl(body, fs)
@@ -716,15 +736,23 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
    if (!map || !map->active)
       return nir_no_progress(impl);
 
-   nir_function *corner_function = nir_function_create(nir, "kk_vs_corner");
-   corner_function->num_params = 3;
-   corner_function->params = rzalloc_array(nir, nir_parameter, 3);
-   for (unsigned i = 0u; i < 3u; ++i)
-      corner_function->params[i] =
-         (nir_parameter){.num_components = 1, .bit_size = i == 2u ? 64 : 32};
-
+   /* Basis-only shaders need no original values from the other corners.
+    * Flat-only shaders need just the provoking corner, not three guarded
+    * copies of its body. Keep three templates for real per-corner transport. */
+   bool flat_only = !map->locations && !map->projected_basis;
+   unsigned template_count = flat_only ? (map->flat_locations ? 1u : 0u) : 3u;
    nir_function_impl *templates[3];
-   for (unsigned v = 0u; v < 3u; ++v) {
+   nir_function *corner_function = NULL;
+   if (template_count) {
+      corner_function = nir_function_create(nir, "kk_vs_corner");
+      corner_function->num_params = 3;
+      corner_function->params = rzalloc_array(nir, nir_parameter, 3);
+      for (unsigned i = 0u; i < 3u; ++i)
+         corner_function->params[i] =
+            (nir_parameter){.num_components = 1, .bit_size = i == 2u ? 64 : 32};
+   }
+
+   for (unsigned v = 0u; v < template_count; ++v) {
       templates[v] = nir_function_impl_clone(nir, impl);
       templates[v]->function = corner_function;
       make_corner_template(nir, templates[v], map, v);
@@ -900,10 +928,16 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
                        .io_semantics.location = map->barycentric_slot[i],
                        .io_semantics.num_slots = 1u);
    }
-   for (unsigned v = 0u; v < 3u; ++v) {
+   for (unsigned v = 0u; v < template_count; ++v) {
+      nir_def *index = indices[v];
+      if (flat_only) {
+         index = nir_bcsel(&b, nir_ieq_imm(&b, provoking_corner, 0), indices[0],
+            nir_bcsel(&b, nir_ieq_imm(&b, provoking_corner, 1), indices[1], indices[2]));
+      }
       nir_def *params[3] = {
-         indices[v],
-         nir_b2i32(&b, nir_ieq_imm(&b, provoking_corner, v)),
+         index,
+         flat_only ? nir_imm_int(&b, 1) :
+            nir_b2i32(&b, nir_ieq_imm(&b, provoking_corner, v)),
          buffer,
       };
       nir_inline_function_impl(&b, templates[v], params, NULL);

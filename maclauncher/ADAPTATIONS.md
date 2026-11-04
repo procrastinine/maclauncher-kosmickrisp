@@ -1562,17 +1562,17 @@ Consumers: DXVK, vkd3d-proton.
 
 Implementation: [kk_conservative.h](../src/kosmickrisp/libkk/kk_conservative.h), [kk_conservative.cl](../src/kosmickrisp/libkk/kk_conservative.cl), [kk_conservative_inner.cl](../src/kosmickrisp/libkk/kk_conservative_inner.cl), [kk_conservative_inner_nir.h](../src/kosmickrisp/vulkan/kk_conservative_inner_nir.h), [kk_conservative_inner_msl.h](../src/kosmickrisp/vulkan/kk_conservative_inner_msl.h), [kk_conservative_nir.h](../src/kosmickrisp/vulkan/kk_conservative_nir.h), [kk_conservative_fs_link.h](../src/kosmickrisp/vulkan/kk_conservative_fs_link.h), [kk_conservative_fs_prolog.c](../src/kosmickrisp/vulkan/kk_conservative_fs_prolog.c), [kk_shader.h](../src/kosmickrisp/vulkan/kk_shader.h), [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_cmd_draw.c](../src/kosmickrisp/vulkan/kk_cmd_draw.c), [kk_physical_device.c](../src/kosmickrisp/vulkan/kk_physical_device.c).
 
-### Fragment offset interpolation through screen-space planes
+### Native fragment offset interpolation
 
-Vulkan contract: Fragment offset interpolation through screen-space planes.
+Vulkan contract: explicit fragment input interpolation at a pixel-relative offset.
 
-Evaluates fixed-location float32 offset inputs in primitive-corner and canonical interfaces from entry-hoisted affine numerator and reciprocal-W planes. Reciprocal-W pole quads retain native offset interpolation. Ordinary native interfaces, centroid/sample and dynamically selected input paths retain their existing interpolation.
+Metal interpolant operations evaluate native inputs and the shared primitive-corner basis at the requested offset. The same path handles perspective and non-perspective inputs, including partially covered pixels whose pixel-center reciprocal-W is zero. Independently compiled fragment stages with explicit interpolation retain their final-link compilation route.
 
 Scope: fragment offset interpolation, primitive-corner and canonical fragment inputs. Device support and operation restrictions are defined by the linked implementation.
 
 Consumers: ANGLE GLES 3.2, DXVK, vkd3d-proton, Wine vkd3d.
 
-Implementation: [kk_fragment_offset_planes.h](../src/kosmickrisp/vulkan/kk_fragment_offset_planes.h), [kk_nir_lower_per_vertex.c](../src/kosmickrisp/vulkan/kk_nir_lower_per_vertex.c).
+Implementation: [kk_nir_lower_per_vertex.c](../src/kosmickrisp/vulkan/kk_nir_lower_per_vertex.c), [nir_to_msl.c](../src/kosmickrisp/compiler/nir_to_msl.c).
 
 ### Native block alias texture construction
 
