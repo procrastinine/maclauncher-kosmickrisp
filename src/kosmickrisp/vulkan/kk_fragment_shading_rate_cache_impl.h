@@ -7,9 +7,8 @@
 #include "nir_serialize.h"
 #include "kosmickrisp/bridge/mtl_fragment_shading_rate.h"
 #include "kk_fragment_shading_rate_cells_nir.h"
-#include "kk_fragment_shading_rate_shadow_nir.h"
 
-#define KK_VRS_SOURCE_SCHEMA 22u
+#define KK_VRS_SOURCE_SCHEMA 21u
 #define KK_VRS_ARTIFACT_SCHEMA 5u
 #define KK_VRS_KEY_SIZE 48u
 struct kk_vrs_source {
@@ -26,7 +25,6 @@ struct kk_vrs_artifact {
    struct msl_compile_data data;
    mtl_library *library;
    mtl_function_descriptor *function;
-   mtl_compute_pipeline_state *compute[2];
    enum mtl_language_version version;
    enum mtl_math_mode math;
    enum mtl_math_floating_point_functions functions;
@@ -257,8 +255,6 @@ kk_vrs_artifact_destroy(struct vk_device *device,
                         struct vk_pipeline_cache_object *base)
 {
    struct kk_vrs_artifact *artifact = container_of(base, struct kk_vrs_artifact, base);
-   mtl_release(artifact->compute[1]);
-   mtl_release(artifact->compute[0]);
    mtl_release(artifact->function);
    mtl_release(artifact->library);
    ralloc_free(artifact->data.code);
@@ -292,8 +288,7 @@ static struct vk_pipeline_cache_object *
 kk_vrs_artifact_deserialize(struct vk_pipeline_cache *cache,
    const void *key, size_t key_size, struct blob_reader *blob)
 {
-   if (key_size != KK_VRS_KEY_SIZE ||
-       (memcmp(key, "KK-VRS-FRAG", 11) && memcmp(key, "KK-VRS-STATE", 12)) ||
+   if (key_size != KK_VRS_KEY_SIZE || memcmp(key, "KK-VRS-FRAG", 11) ||
        ((const uint8_t *)key)[12] != KK_VRS_ARTIFACT_SCHEMA ||
        ((const uint8_t *)key)[13] >= KK_VRS_FRAGMENT_KIND_COUNT ||
        blob_read_uint32(blob) != KK_VRS_ARTIFACT_SCHEMA)
@@ -310,8 +305,7 @@ kk_vrs_artifact_deserialize(struct vk_pipeline_cache *cache,
    if (reads > 1) goto fail;
    artifact->framebuffer_reads = reads;
    artifact->input_stride = blob_read_uint32(blob);
-   if (((const uint8_t *)key)[13] == KK_VRS_TRANSACTION ||
-       ((const uint8_t *)key)[13] == KK_VRS_CAPTURE) {
+   if (((const uint8_t *)key)[13] >= KK_VRS_TRANSACTION) {
       if (artifact->input_stride < 32 || artifact->input_stride % 16 ||
           artifact->input_stride > ALIGN_POT(UINT16_MAX + 96u, 16))
          goto fail;
@@ -592,16 +586,10 @@ kk_vrs_build_linked_fragment_impl(struct kk_device *dev,
    struct vk_graphics_pipeline_state state = {.rp = &rp, .cal = &cal};
 
    glsl_type_singleton_init_or_ref();
-   VkResult result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
-   nir_shader *nir;
-   if (kind >= KK_VRS_SHADOW_LOAD) {
-      nir = kk_vrs_shadow_shader(kind, &kk_nir_options, &rp, &cal);
-      if (!nir) goto finish;
-      goto compile;
-   }
    struct blob_reader code;
    blob_reader_init(&code, source->nir, source->nir_size);
-   nir = nir_deserialize(NULL, &kk_nir_options, &code);
+   nir_shader *nir = nir_deserialize(NULL, &kk_nir_options, &code);
+   VkResult result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    if (!nir || code.overrun || code.current != code.end ||
        kk_nir_vrs_result_stride(nir) != source->result_stride ||
        kk_nir_vrs_uses_per_draw(nir) != source->uses_per_draw ||
@@ -659,7 +647,6 @@ kk_vrs_build_linked_fragment_impl(struct kk_device *dev,
       result = VK_ERROR_FEATURE_NOT_PRESENT;
       goto finish;
    }
-compile:
    kk_compile_msl_options(dev, nir, &state, out, NULL, framebuffer_reads, NULL);
    nir = NULL; /* The common compiler consumes its compilation clone. */
    if (out->requires_msl41 && pdev->info.msl_version < MTL_LANGUAGE_VERSION_4_1) {
@@ -744,18 +731,7 @@ kk_vrs_transaction_key(const struct kk_vrs_source *source,
    key[13] = kind;
    struct mesa_blake3 hash;
    _mesa_blake3_init(&hash);
-   if (kind >= KK_VRS_SHADOW_LOAD) {
-      memset(key, 0, KK_VRS_KEY_SIZE);
-      memcpy(key, "KK-VRS-STATE", 12);
-      key[12] = KK_VRS_ARTIFACT_SCHEMA;
-      key[13] = kind;
-      kk_vrs_hash_u32(&hash, source->data.abi_size);
-      _mesa_blake3_update(&hash, source->data.abi, source->data.abi_size);
-      kk_vrs_hash_u32(&hash, source->data.options_size);
-      _mesa_blake3_update(&hash, source->data.options, source->data.options_size);
-   } else {
-      _mesa_blake3_update(&hash, source->key, KK_VRS_KEY_SIZE);
-   }
+   _mesa_blake3_update(&hash, source->key, KK_VRS_KEY_SIZE);
    kk_vrs_hash_u32(&hash, epilogue->size);
    _mesa_blake3_update(&hash, epilogue->data, epilogue->size);
    _mesa_blake3_final(&hash, key + 16);
@@ -771,8 +747,7 @@ kk_vrs_state_get(struct kk_device *dev, struct kk_vrs_source *source,
        !(source->data.application_flags & KK_VRS_FREQUENCY_KNOWN) ||
        (source->data.application_flags & KK_VRS_SAMPLE_FREQUENCY))
       return VK_ERROR_FEATURE_NOT_PRESENT;
-   if (kind < KK_VRS_SHADOW_LOAD &&
-       !(source->data.application_flags & KK_VRS_DYNAMIC_SAMPLES)) {
+   if (!(source->data.application_flags & KK_VRS_DYNAMIC_SAMPLES)) {
       struct blob_reader declared;
       blob_reader_init(&declared, source->data.epilogue, source->data.epilogue_size);
       uint32_t count = blob_read_uint32(&declared);
@@ -816,128 +791,6 @@ kk_vrs_capture_get(struct kk_device *dev, struct kk_vrs_source *source,
    const struct kk_vrs_transaction_options *state, struct kk_vrs_artifact **out)
 {
    return kk_vrs_state_get(dev, source, state, KK_VRS_CAPTURE, out);
-}
-
-VkResult
-kk_vrs_shadow_get(struct kk_device *dev, struct kk_vrs_source *source,
-   const struct kk_vrs_transaction_options *state, enum kk_vrs_fragment_kind kind,
-   struct kk_vrs_artifact **out)
-{
-   if (kind < KK_VRS_SHADOW_LOAD || kind > KK_VRS_CAPTURE_CLEAR) {
-      *out = NULL;
-      return VK_ERROR_FEATURE_NOT_PRESENT;
-   }
-   return kk_vrs_state_get(dev, source, state, kind, out);
-}
-
-VkResult
-kk_vrs_artifact_compute(struct kk_device *dev, struct kk_vrs_artifact *artifact,
-   bool statistics, mtl_compute_pipeline_state **out)
-{
-   *out = NULL;
-   if (!dev->vrs || !artifact ||
-       (artifact->key[13] != KK_VRS_TRANSACTION && artifact->key[13] != KK_VRS_SHADOW_LOAD &&
-        artifact->key[13] != KK_VRS_CAPTURE_CLEAR))
-      return VK_ERROR_FEATURE_NOT_PRESENT;
-   statistics &= artifact->data.uses_pipeline_statistics;
-   simple_mtx_lock(&dev->vrs->compile_mutex);
-   VkResult result = VK_SUCCESS;
-   if (!artifact->compute[statistics]) {
-      mtl_function_descriptor *function = statistics ?
-         mtl_specialize_pipeline_statistics(artifact->function) : artifact->function;
-      if (!function) {
-         result = VK_ERROR_OUT_OF_HOST_MEMORY;
-      } else {
-         artifact->compute[statistics] = mtl_new_compute_pipeline_state(
-            dev->mtl_compiler_handle, function,
-            artifact->key[13] == KK_VRS_SHADOW_LOAD ? 64 : 256);
-         if (!artifact->compute[statistics]) result = VK_ERROR_INVALID_SHADER_NV;
-         if (statistics) mtl_release(function);
-      }
-   }
-   *out = artifact->compute[statistics];
-   simple_mtx_unlock(&dev->vrs->compile_mutex);
-   return result;
-}
-
-void
-kk_vrs_shadow_programs_finish(struct kk_device *dev, struct kk_vrs_shadow_programs *p)
-{
-   if (!p) return;
-   kk_vrs_artifact_unref(dev, p->clear);
-   kk_vrs_artifact_unref(dev, p->vertex);
-   kk_vrs_artifact_unref(dev, p->replay);
-   kk_vrs_artifact_unref(dev, p->load);
-   kk_vrs_artifact_unref(dev, p->transaction);
-   kk_vrs_artifact_unref(dev, p->capture);
-   memset(p, 0, sizeof(*p));
-}
-
-VkResult
-kk_vrs_shadow_programs_get(struct kk_device *dev, struct kk_vrs_source *source,
-   const struct kk_vrs_transaction_options *state, bool statistics,
-   struct kk_vrs_shadow_programs *p)
-{
-   memset(p, 0, sizeof(*p));
-   VkResult result = kk_vrs_capture_get(dev, source, state, &p->capture);
-   if (result != VK_SUCCESS) goto fail;
-   result = kk_vrs_transaction_get(dev, source, state, &p->transaction);
-   if (result != VK_SUCCESS) goto fail;
-   result = kk_vrs_shadow_get(dev, source, state, KK_VRS_SHADOW_LOAD, &p->load);
-   if (result != VK_SUCCESS) goto fail;
-   result = kk_vrs_shadow_get(dev, source, state, KK_VRS_SHADOW_REPLAY, &p->replay);
-   if (result != VK_SUCCESS) goto fail;
-   result = kk_vrs_shadow_get(dev, source, state, KK_VRS_TILE_VERTEX, &p->vertex);
-   if (result != VK_SUCCESS) goto fail;
-   result = kk_vrs_shadow_get(dev, source, state, KK_VRS_CAPTURE_CLEAR, &p->clear);
-   if (result != VK_SUCCESS) goto fail;
-   p->input_stride = p->capture->input_stride;
-   if (p->input_stride < 64 || p->input_stride != p->transaction->input_stride) {
-      result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
-      goto fail;
-   }
-   p->statistics = statistics && p->transaction->data.uses_pipeline_statistics;
-   result = kk_vrs_artifact_compute(dev, p->load, false, &p->load_pipeline);
-   if (result != VK_SUCCESS) goto fail;
-   result = kk_vrs_artifact_compute(dev, p->transaction, p->statistics, &p->transaction_pipeline);
-   if (result != VK_SUCCESS) goto fail;
-   result = kk_vrs_artifact_compute(dev, p->clear, false, &p->clear_pipeline);
-   if (result != VK_SUCCESS) goto fail;
-   p->samples = state->samples;
-   p->uses_per_draw = source->data.uses_per_draw;
-   p->has_depth = state->depth_format != VK_FORMAT_UNDEFINED;
-   p->has_stencil = state->stencil_format != VK_FORMAT_UNDEFINED;
-   for (unsigned physical = 0; physical < state->color_count; physical++) {
-      unsigned logical = state->color_map[physical];
-      if (logical != MESA_VK_ATTACHMENT_UNUSED &&
-          state->color_formats[physical] != VK_FORMAT_UNDEFINED)
-         p->formats[logical] = vk_format_to_mtl_pixel_format(state->color_formats[physical]);
-   }
-   return VK_SUCCESS;
-fail:
-   kk_vrs_shadow_programs_finish(dev, p);
-   return result;
-}
-
-VkResult
-kk_vrs_shadow_pipelines_create(struct kk_device *dev,
-   const struct kk_vrs_shadow_programs *programs,
-   kk_vrs_capture_descriptor_factory raster, void *data,
-   struct mtl_vrs_shadow_pipelines **out)
-{
-   *out = NULL;
-   if (!programs || !programs->capture || !programs->vertex || !programs->replay ||
-       !programs->load_pipeline || !programs->transaction_pipeline || !raster)
-      return VK_ERROR_FEATURE_NOT_PRESENT;
-   /* All artifact/compute gets have dropped the device compilation mutex.
-    * Only the actual producer's factory may select its retained descriptor. */
-   mtl_render_pipeline_descriptor *capture = raster(data, programs->capture->function);
-   if (!capture) return VK_ERROR_INVALID_SHADER_NV;
-   *out = mtl_vrs_new_shadow_pipelines(dev->mtl_compiler_handle, capture,
-      programs->vertex->function, programs->replay->function,
-      programs->formats, programs->samples);
-   mtl_release(capture);
-   return *out ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
 }
 
 #include "kk_fragment_shading_rate_support_cache.h"

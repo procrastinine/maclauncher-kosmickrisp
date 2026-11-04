@@ -84,20 +84,8 @@ kk_vrs_cells_begin(nir_builder *b, struct kk_interlock_program_nir *program, voi
    nir_store_var(b, s->source_pixel, nir_load_var(b, s->cell), 3);
    nir_store_var(b, s->source_sample, nir_imm_int(b, 0), 1);
    /* Every active four-lane group owns one full logical derivative quad. */
-   nir_def *local = nir_isub(b, region_pixel, nir_vec2(b,
-      kk_interlock_env(b, env, tile_x), kk_interlock_env(b, env, tile_y)));
-   nir_def *width = kk_interlock_env(b, env, tile_width);
-   nir_def *height = kk_interlock_env(b, env, tile_height);
-   /* Adaptive windows still contain whole8x8 rate/derivative regions. Reject
-    * inactive regions before any fine-record or coverage address is read. */
-   nir_def *inside = nir_iand(b,
-      nir_iand(b, nir_uge_imm(b, width, 8), nir_uge_imm(b, height, 8)),
-      nir_iand(b, nir_uge(b, nir_iadd_imm(b, width, -8), nir_channel(b, local, 0)),
-         nir_uge(b, nir_iadd_imm(b, height, -8), nir_channel(b, local, 1))));
-   return nir_iand(b, inside, nir_iand(b,
-      nir_ult(b, nir_load_var(b, s->storage), kk_interlock_env(b, env, primitive_count)),
-      nir_iand(b, nir_ult_imm(b, region, 16),
-         nir_ult(b, quad, nir_ushr_imm(b, nir_imul(b, columns, rows), 2)))));
+   return nir_iand(b, nir_ult_imm(b, region, 16),
+      nir_ult(b, quad, nir_ushr_imm(b, nir_imul(b, columns, rows), 2)));
 }
 
 static nir_def *
