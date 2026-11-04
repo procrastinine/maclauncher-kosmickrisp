@@ -1434,6 +1434,11 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    struct kk_physical_device *pdev = kk_device_physical(dev);
    KK_PERF_VOID(dev, KK_PERF_NIR,
                 kk_finish_msl_nir(nir, opts && opts->pipeline_statistics));
+   /* Ray tracing parts can keep undefined values, including 64-bit addresses
+    * on paths that pipeline flags exclude. MSL has no undefined literal of
+    * every width, so they become zero. */
+   if (mesa_shader_stage_is_rt(nir->info.stage))
+      NIR_PASS(_, nir, nir_lower_undef_to_zero, NULL);
    if (has_framebuffer_reads)
       *has_framebuffer_reads = nir->info.stage == MESA_SHADER_FRAGMENT &&
                                nir->info.outputs_read != 0;
