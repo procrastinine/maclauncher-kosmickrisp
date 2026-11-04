@@ -302,9 +302,9 @@ vtn_handle_subgroup(struct vtn_builder *b, SpvOp opcode,
 
       struct vtn_ssa_value *value = vtn_ssa_value(b, w[4]);
       struct vtn_ssa_value *delta = vtn_ssa_value(b, w[5]);
-      vtn_push_nir_ssa(b, w[2],
+      vtn_push_ssa_value(b, w[2],
          vtn_build_subgroup_instr(b, nir_intrinsic_rotate,
-                                  value, NULL, delta->def, cluster_size, 0)->def);
+                                  value, NULL, delta->def, cluster_size, 0));
       break;
    }
 
