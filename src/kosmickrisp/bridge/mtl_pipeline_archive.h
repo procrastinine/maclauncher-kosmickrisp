@@ -552,6 +552,30 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
              piece_by_identity[key])
             kk_archive_add_hint(hints, hint, key);
       }
+      /* Open the pieces that hints reference, in publication order, off the
+       * compile threads: a warm launch requests pipelines roughly in the order
+       * they were captured, and its first lookups then find their pieces
+       * resident instead of waiting for a read, a temporary file and an open.
+       * Stops at three quarters of the resident bound; later pieces open on
+       * first use as before. */
+      NSMutableSet *referenced = [NSMutableSet set];
+      for (NSData *hint in hints) [referenced addObjectsFromArray:hints[hint]];
+      NSMutableArray *order = [NSMutableArray array];
+      for (KKArchivePiece *piece in pieces)
+         if ([referenced containsObject:piece->identity]) [order addObject:piece];
+      if (order.count)
+         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            for (KKArchivePiece *piece in order) @autoreleasepool {
+               bool full;
+               @synchronized(self) {
+                  full = finished ||
+                     resident_bytes >= KK_RESIDENT_ARCHIVE_BYTES / 4 * 3 ||
+                     resident_pieces.count >= KK_RESIDENT_ARCHIVE_LIMIT / 4 * 3;
+               }
+               if (full) break;
+               [self archiveForPiece:piece];
+            }
+         });
    });
 }
 
