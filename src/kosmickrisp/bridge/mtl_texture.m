@@ -91,34 +91,58 @@ mtl_texture_swizzle(enum pipe_swizzle swizzle)
    return map[swizzle];
 }
 
-mtl_texture *
-mtl_new_texture_view_with(mtl_texture *texture, const struct kk_view_layout *layout)
+bool
+mtl_texture_view_min_lod_supported(void)
+{
+#if defined(MAC_OS_VERSION_27_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_VERSION_27_0
+   if (@available(macOS 27, *)) return true;
+#endif
+   return false;
+}
+
+static mtl_texture *
+mtl_texture_view(mtl_texture *texture, const struct kk_view_layout *layout, bool swizzle)
 {
    @autoreleasepool {
       id<MTLTexture> tex = (id<MTLTexture>)texture;
       MTLTextureType type = tex.textureType == MTLTextureTypeTextureBuffer ?
-         MTLTextureTypeTextureBuffer :
-         mtl_texture_view_type(layout->view_type, layout->sample_count_sa);
+         MTLTextureTypeTextureBuffer : mtl_texture_view_type(layout->view_type, layout->sample_count_sa);
+      MTLTextureSwizzleChannels channels = MTLTextureSwizzleChannelsMake(
+         mtl_texture_swizzle(layout->swizzle.red), mtl_texture_swizzle(layout->swizzle.green),
+         mtl_texture_swizzle(layout->swizzle.blue), mtl_texture_swizzle(layout->swizzle.alpha));
+#if defined(MAC_OS_VERSION_27_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_VERSION_27_0
+      if (layout->min_lod_clamp > 0) {
+         if (@available(macOS 27, *)) {
+            MTLTextureViewDescriptor *desc = [[MTLTextureViewDescriptor new] autorelease];
+            desc.pixelFormat = layout->format.mtl;
+            desc.textureType = type;
+            desc.levelRange = NSMakeRange(layout->base_level, layout->num_levels);
+            desc.sliceRange = NSMakeRange(layout->base_array_layer, layout->array_len);
+            desc.minLOD = layout->min_lod_clamp;
+            if (swizzle) desc.swizzle = channels;
+            return [tex newTextureViewWithDescriptor:desc];
+         }
+      }
+#endif
       NSRange levels = NSMakeRange(layout->base_level, layout->num_levels);
       NSRange slices = NSMakeRange(layout->base_array_layer, layout->array_len);
-      MTLTextureSwizzleChannels swizzle = MTLTextureSwizzleChannelsMake(mtl_texture_swizzle(layout->swizzle.red),
-                                                                        mtl_texture_swizzle(layout->swizzle.green),
-                                                                        mtl_texture_swizzle(layout->swizzle.blue),
-                                                                        mtl_texture_swizzle(layout->swizzle.alpha));
-      return [tex newTextureViewWithPixelFormat:layout->format.mtl textureType:type levels:levels slices:slices swizzle:swizzle];
+      if (swizzle)
+         return [tex newTextureViewWithPixelFormat:layout->format.mtl textureType:type
+            levels:levels slices:slices swizzle:channels];
+      return [tex newTextureViewWithPixelFormat:layout->format.mtl textureType:type levels:levels slices:slices];
    }
+}
+
+mtl_texture *
+mtl_new_texture_view_with(mtl_texture *texture, const struct kk_view_layout *layout)
+{
+   return mtl_texture_view(texture, layout, true);
 }
 
 mtl_texture *
 mtl_new_texture_view_with_no_swizzle(mtl_texture *texture, const struct kk_view_layout *layout)
 {
-   @autoreleasepool {
-      id<MTLTexture> tex = (id<MTLTexture>)texture;
-      MTLTextureType type = mtl_texture_view_type(layout->view_type, layout->sample_count_sa);
-      NSRange levels = NSMakeRange(layout->base_level, layout->num_levels);
-      NSRange slices = NSMakeRange(layout->base_array_layer, layout->array_len);
-      return [tex newTextureViewWithPixelFormat:layout->format.mtl textureType:type levels:levels slices:slices];
-   }
+   return mtl_texture_view(texture, layout, false);
 }
 
 void

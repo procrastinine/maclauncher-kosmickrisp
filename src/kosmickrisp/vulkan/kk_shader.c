@@ -258,7 +258,8 @@ kk_populate_fs_key(struct kk_fs_key *key,
 }
 
 static kk_feature_key
-kk_make_feature_key(const struct vk_features *feats)
+kk_make_feature_key(const struct vk_features *feats,
+                    const struct kk_physical_device *pdev)
 {
    kk_feature_key key = 0;
    if (feats->deviceGeneratedCommands || feats->drawIndirectCount)
@@ -285,7 +286,7 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_NON_SEAMLESS_CUBE);
    if (feats->samplerFilterMinmax)
       key |= BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX);
-   if (feats->minLod)
+   if (feats->minLod && !pdev->info.native_image_view_min_lod)
       key |= BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD);
    if (feats->imageSlicedViewOf3D)
       key |= BITFIELD_BIT(KK_FEAT_SLICED_3D);
@@ -338,6 +339,7 @@ kk_hash_graphics_state(struct vk_physical_device *device,
                        const struct vk_features *enabled_features,
                        VkShaderStageFlags stages, blake3_hash blake3_out)
 {
+   const struct kk_physical_device *pdev = container_of(device, struct kk_physical_device, vk);
    struct mesa_blake3 blake3_ctx;
    _mesa_blake3_init(&blake3_ctx);
 
@@ -417,7 +419,7 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       sizeof(struct kk_shader_info),
       offsetof(struct kk_per_draw_data, geometry_statistics),
       KK_STATISTICS_SHADER_ABI,
-      kk_make_feature_key(enabled_features),
+      kk_make_feature_key(enabled_features, pdev),
    };
    _mesa_blake3_update(&blake3_ctx, &feature_key, sizeof(feature_key));
    const bool layer_alias = kk_poly_layer_alias_possible(state, enabled_features);
@@ -3749,7 +3751,7 @@ kk_compile_unlinked_native_stage(struct kk_device *dev,
 
    if (vertex)
       nir->info.next_stage = MESA_SHADER_FRAGMENT;
-   kk_feature_key features = kk_make_feature_key(enabled);
+   kk_feature_key features = kk_make_feature_key(enabled, kk_device_physical(dev));
    struct kk_physical_device *pdev = kk_device_physical(dev);
    msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
    kk_lower_nir(dev, nir, false, info->robustness, info->set_layout_count,
@@ -3852,7 +3854,7 @@ kk_compile_fragment_body(struct kk_device *dev,
    fragment.ial = NULL;
    fragment.fsr = NULL;
    state = &fragment;
-   kk_feature_key features = kk_make_feature_key(enabled);
+   kk_feature_key features = kk_make_feature_key(enabled, kk_device_physical(dev));
    msl_preprocess_nir_workarounds(nir, kk_device_physical(dev)->settings.disabled_workarounds);
    kk_lower_nir(dev, nir, false, info->robustness, info->set_layout_count,
       info->set_layouts, state, features, info, NULL, false, false, true);
@@ -4055,7 +4057,7 @@ kk_compile_preraster_body(struct kk_device *dev,
    state = &preraster;
    nir->info.next_stage = MESA_SHADER_FRAGMENT;
    msl_preprocess_nir_workarounds(nir, kk_device_physical(dev)->settings.disabled_workarounds);
-   kk_feature_key features = kk_make_feature_key(enabled);
+   kk_feature_key features = kk_make_feature_key(enabled, kk_device_physical(dev));
    kk_lower_nir(dev, nir, false, info->robustness, info->set_layout_count,
       info->set_layouts, state, features, info, NULL, false, false, false);
    nir_shader_intrinsics_pass(nir, gather_vs_inputs, nir_metadata_all,
@@ -4158,7 +4160,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    struct kk_device *dev = container_of(device, struct kk_device, vk);
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
-   kk_feature_key features = kk_make_feature_key(enabled_features);
+   kk_feature_key features = kk_make_feature_key(enabled_features, pdev);
    if (sparse_modes & KK_SPARSE_BUFFER)
       features |= BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER);
    if (sparse_modes & KK_SPARSE_STANDARD_3D)

@@ -57,6 +57,7 @@ struct kk_device_info {
    bool supports_query_texture_lod;
    bool supports_bc_texture_compression;
    bool supports_32_bit_float_filtering;
+   bool native_image_view_min_lod;
 };
 
 struct kk_env_settings {

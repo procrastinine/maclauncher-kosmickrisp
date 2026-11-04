@@ -757,3 +757,10 @@ transfers on the ordinary side, preserving opaque mip layouts. The staging
 buffer and its GPU barriers belong to those copies; draws add no waits.
 Standalone stages compile the canonical 2D route at creation so images bound
 later work through the same descriptors. Ordinary images select native sampling.
+
+Native image-view minimum LOD
+-----------------------------
+
+On Apple11 and later with macOS 27 and an SDK providing texture-view minimum
+LOD, views apply their floating-point LOD clamp natively. Earlier families,
+systems and SDKs retain the shader implementation.

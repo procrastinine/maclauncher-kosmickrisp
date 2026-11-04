@@ -230,7 +230,8 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .EXT_hdr_metadata = true,
       .EXT_image_2d_view_of_3d = true,
       .EXT_image_sliced_view_of_3d = true,
-      .EXT_image_view_min_lod = KK_EXPERIMENTAL(IMAGE_VIEW_MIN_LOD),
+      .EXT_image_view_min_lod = pdev->info.native_image_view_min_lod ||
+                                KK_EXPERIMENTAL(IMAGE_VIEW_MIN_LOD),
       .EXT_load_store_op_none = true,
       .EXT_map_memory_placed = true,
       .EXT_memory_budget = true,
@@ -1406,6 +1407,9 @@ get_metal_limits(struct kk_physical_device *pdev)
       mtl_device_supports_32_bit_float_filtering(pdev->mtl_dev_handle);
    pdev->info.gpu_apple_family =
       mtl_device_get_gpu_apple_family(pdev->mtl_dev_handle);
+
+   pdev->info.native_image_view_min_lod = pdev->info.gpu_apple_family >= 11 &&
+      mtl_texture_view_min_lod_supported();
 
    /* Determine the supported MSL version based on the OS. The version used to
     * compile determines what features are available. */

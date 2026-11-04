@@ -26,6 +26,7 @@ mtl_texture_first_mipmap_in_tail(mtl_texture *texture)
 }
 
 /* Texture view creation */
+bool mtl_texture_view_min_lod_supported(void) { return false; }
 mtl_texture *
 mtl_new_texture_view_with(mtl_texture *texture,
                           const struct kk_view_layout *layout)

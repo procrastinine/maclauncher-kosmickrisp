@@ -224,7 +224,8 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
          .num_levels = view->vk.level_count,
          .base_array_layer = view->vk.base_array_layer,
          .array_len = view->vk.layer_count,
-         .min_lod_clamp = view->vk.min_lod,
+         .min_lod_clamp = kk_device_physical(dev)->info.native_image_view_min_lod
+            ? view->vk.min_lod : 0,
       };
       uint8_t view_swizzle[4] = {vk_swizzle_to_pipe(view->vk.swizzle.r),
                                  vk_swizzle_to_pipe(view->vk.swizzle.g),
