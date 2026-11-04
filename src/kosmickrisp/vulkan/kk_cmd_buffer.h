@@ -148,6 +148,8 @@ struct kk_per_draw_data {
    uint64_t per_vertex_indirect_addr;
    /* Heap the PerVertexKHR buffer is allocated from, 0 if unused. */
    uint64_t per_vertex_heap;
+   /* Optional Poly multiview tail. Ordinary draws do not upload it. */
+   uint64_t multiview_index;
 };
 
 struct kk_attachment {

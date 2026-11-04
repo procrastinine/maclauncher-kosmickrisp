@@ -2244,7 +2244,11 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
          cmd->vk.dynamic_graphics_state.rs.provoking_vertex ==
          VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
    /* The optional tail adds no upload bytes to ordinary shaders. */
-   uint32_t per_draw_size = per_vertex ? sizeof(gfx->per_draw_data) :
+   bool multiview = gfx->render.view_mask &&
+      (cmd->state.shaders[MESA_SHADER_TESS_EVAL] ||
+       cmd->state.shaders[MESA_SHADER_VERTEX]->info.api_geometry);
+   uint32_t per_draw_size = multiview ? sizeof(gfx->per_draw_data) :
+      per_vertex ? offsetof(struct kk_per_draw_data, multiview_index) :
       offsetof(struct kk_per_draw_data, per_vertex_index_addr);
    struct kk_ptr shader_data_gpu =
       kk_pool_upload(cmd, &gfx->per_draw_data, per_draw_size, 8u);
@@ -2570,7 +2574,7 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
 #include "kk_barycentric_draw.h"
 
 static void
-kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
    kk_sparse_refresh_shader(cmd, MESA_SHADER_VERTEX);
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
@@ -2725,8 +2729,43 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       if (cmd->state.gfx.need_to_start_render_pass)
          kk_flush_gfx_state(cmd);
 
+      if (gfx->render.view_mask) {
+         uint32_t layers[KK_MAX_MULTIVIEW_VIEW_COUNT] = {0};
+         uint32_t count = 0;
+         if (tess || vs->info.api_geometry) {
+            count = 1;
+         } else {
+            u_foreach_bit(view, gfx->render.view_mask)
+               layers[count++] = view;
+         }
+         mtl_set_vertex_amplification_count(cs_get_render(cmd), layers, count);
+      }
       kk_dispatch_draw(cmd, draw_data);
    }
+}
+
+static void
+kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+{
+   struct kk_graphics_state *gfx = &cmd->state.gfx;
+   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   uint32_t view_mask = gfx->render.view_mask;
+   if (!view_mask || !(vs->info.api_geometry ||
+                      cmd->state.shaders[MESA_SHADER_TESS_EVAL])) {
+      kk_draw_one_view(cmd, data);
+      return;
+   }
+
+   /* As in Honeykrisp, replay actual work for each view. A one-bit mask keeps
+    * every real query producer at one view per replay; EndQuery publishes the
+    * summed first query plus the reset zero entries for the other views. */
+   u_foreach_bit(view, view_mask) {
+      gfx->render.view_mask = BITFIELD_BIT(view);
+      gfx->per_draw_data.multiview_index = view;
+      struct kk_draw_command per_view = *data;
+      kk_draw_one_view(cmd, &per_view);
+   }
+   gfx->render.view_mask = view_mask;
 }
 
 VKAPI_ATTR void VKAPI_CALL

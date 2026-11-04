@@ -29,6 +29,7 @@
 #include "poly/nir/poly_nir.h"
 #include "kosmickrisp/compiler/msl_compute_derivatives.h"
 #include "poly/geometry.h"
+#include "kk_multiview_nir.h"
 #include "kk_statistics_nir.h"
 
 #include "vk_blend.h"
@@ -250,6 +251,13 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       _mesa_blake3_update(&blake3_ctx, &state->mv->view_mask,
                           sizeof(state->mv->view_mask));
    }
+
+   /* Pre-raster multiview also changes shaders without an FS. Keep
+    * ordinary no-multiview keys unchanged. */
+   if (!(stages & VK_SHADER_STAGE_FRAGMENT_BIT) && state && state->mv &&
+       state->mv->view_mask)
+      _mesa_blake3_update(&blake3_ctx, &state->mv->view_mask,
+                          sizeof(state->mv->view_mask));
 
    const uint32_t feature_key[] = {
       KK_FEAT_COUNT, kk_make_feature_key(enabled_features),
@@ -783,9 +791,23 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
       NIR_PASS(_, nir, kk_nir_prepare_descriptor_heaps,
                compile_info->embedded_sampler_count, embedded, features & BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER));
 
+   bool poly_preraster = state &&
+      (state->shader_stages & (VK_SHADER_STAGE_GEOMETRY_BIT |
+                              VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT));
+   bool poly_multiview = poly_preraster && state->mv->view_mask;
+   bool last_preraster = nir->info.stage == MESA_SHADER_GEOMETRY ||
+      (nir->info.stage == MESA_SHADER_TESS_EVAL &&
+       !(state->shader_stages & VK_SHADER_STAGE_GEOMETRY_BIT));
+   /* Scan actual intrinsics: early system_values_read predates MSL
+    * preprocessing and cannot gate ViewIndex lowering for these stages. */
+   if (poly_preraster && nir->info.stage != MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, nir, kk_nir_lower_poly_multiview, poly_multiview,
+               last_preraster);
+
    /* Massage IO related variables to please Metal */
    if (nir->info.stage == MESA_SHADER_VERTEX) {
-      NIR_PASS(_, nir, kk_nir_lower_vs_multiview, state->mv->view_mask);
+      if (!poly_multiview)
+         NIR_PASS(_, nir, kk_nir_lower_vs_multiview, state->mv->view_mask);
 
       /* kk_nir_lower_vs_multiview may create a temporary array to assign the
        * correct view index. Since we don't handle derefs, we need to get rid of
@@ -1686,7 +1708,11 @@ gather_graphics_pipeline_create_info(
             ? vk_format_to_mtl_pixel_format(rp->stencil_attachment_format)
             : MTL_PIXEL_FORMAT_INVALID;
 
-      info->vs.view_mask = state->mv->view_mask;
+      bool poly_multiview = state->mv->view_mask &&
+         (state->shader_stages & (VK_SHADER_STAGE_GEOMETRY_BIT |
+                                 VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT));
+      /* Poly already replays the stages for one view at a time. */
+      info->vs.view_mask = poly_multiview ? 1u : state->mv->view_mask;
    }
 
    info->vs.has_ds = has_static_depth_stencil_state(state);

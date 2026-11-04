@@ -297,6 +297,10 @@ cs_start_render(struct kk_cmd_buffer *cmd)
 {
    struct kk_graphics_state *state = &cmd->state.gfx;
    uint32_t view_mask = state->render.view_mask;
+   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   if (view_mask && vs && (vs->info.api_geometry ||
+       cmd->state.shaders[MESA_SHADER_TESS_EVAL]))
+      view_mask = 0; /* A Poly replay writes its explicit layer. */
    assert(state->render_pass_descriptor);
 
    /* Ensure no other active encoder, aka compute */

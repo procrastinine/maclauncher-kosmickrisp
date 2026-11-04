@@ -319,8 +319,12 @@ kk_CmdClearAttachments(VkCommandBuffer commandBuffer, uint32_t attachmentCount,
    kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS,
                  "meta:vkCmdClearAttachments");
    cmd->state.cond_render = cond_render;
+   /* vk_meta expands one explicit-layer rectangle for each original view.
+    * Preserve its single-amplification draw while leaving render_info intact. */
+   cmd->state.gfx.render.view_mask = 0;
    vk_meta_clear_attachments(&cmd->vk, &dev->meta, &render_info,
                              attachmentCount, pAttachments, rectCount, pRects);
+   cmd->state.gfx.render.view_mask = view_mask;
    kk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
 
    uint32_t count = 0u;

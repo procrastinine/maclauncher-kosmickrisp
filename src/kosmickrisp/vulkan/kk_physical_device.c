@@ -316,6 +316,8 @@ kk_get_device_features(
 
       /* Vulkan 1.1 */
       .multiview = true,
+      .multiviewGeometryShader = true,
+      .multiviewTessellationShader = true,
       .samplerYcbcrConversion = true,
       .shaderDrawParameters = true,
       .storageBuffer16BitAccess = true,
