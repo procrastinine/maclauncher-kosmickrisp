@@ -806,6 +806,17 @@ kk_flush_vp_state(struct kk_cmd_buffer *cmd)
       }
    }
 
+   if (cmd->state.gfx.polygon_points) {
+      const struct kk_rendering_state *render = &cmd->state.gfx.render;
+      double width = MAX2(render->area.offset.x + render->area.extent.width, 1);
+      double height = MAX2(render->area.offset.y + render->area.extent.height, 1);
+      for (unsigned i = 0; i < count; ++i) {
+         viewports[i] = (struct mtl_viewport){
+            .originX = 0, .originY = height, .width = width, .height = -height,
+            .znear = 0, .zfar = 1,
+         };
+      }
+   }
    mtl_set_viewports(encoder, viewports, count);
 }
 
@@ -1017,9 +1028,9 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
       mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
    }
 
-   if (IS_SHADER_DIRTY(VERTEX)) {
+   if (IS_SHADER_DIRTY(VERTEX) || IS_DIRTY(RS_POLYGON_MODE)) {
       struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
-      mtl_render_set_pipeline_state(enc, vs->pipeline.gfx.render);
+      mtl_render_set_pipeline_state(enc, gfx->polygon_points ? vs->pipeline.gfx.polygon_render : vs->pipeline.gfx.render);
       if (gfx->depth_stencil_state)
          mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
    }
@@ -1382,6 +1393,52 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
       gfx->gs.index.range = size_B;
    }
 
+   if (gfx->polygon_points) {
+      const struct poly_gs_capture_info *capture = &gs->info.polygon;
+      const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
+      struct poly_geometry_capture point = {
+         .outputs = capture->outputs,
+         .float_outputs = capture->float_outputs,
+         .noperspective_outputs = fs ? fs->info.fs.noperspective_outputs : 0,
+         .vertex_stride = util_bitcount64(capture->outputs) * 16,
+         .vertices_out = capture->vertices_out,
+         .streams = capture->streams,
+         .clip_count = capture->clip_count,
+         .cull_count = capture->cull_count,
+         .cull_mode = dyn->rs.cull_mode,
+         .front_ccw = dyn->rs.front_face != VK_FRONT_FACE_CLOCKWISE,
+         .depth_clip = vk_rasterization_state_depth_clip_enable(&dyn->rs),
+         .depth_clamp = dyn->rs.depth_clamp_enable,
+         .negative_one_to_one = dyn->vp.depth_clip_negative_one_to_one,
+         .provoking_last = dyn->rs.provoking_vertex == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT,
+         .rasterization_stream = dyn->rs.rasterization_stream,
+         .depth_bias_constant = dyn->rs.depth_bias.constant_factor,
+         .depth_bias_slope = dyn->rs.depth_bias.slope_factor,
+         .depth_bias_clamp = dyn->rs.depth_bias.clamp,
+         .depth_bias_enable = dyn->rs.depth_bias.enable,
+         .depth_mantissa_bits = 23, .depth_is_float = true,
+         .render_size = {
+            MAX2(gfx->render.area.offset.x + gfx->render.area.extent.width, 1),
+            MAX2(gfx->render.area.offset.y + gfx->render.area.extent.height, 1)},
+      };
+      if (cmd->state.shaders[MESA_SHADER_TESS_EVAL]) {
+         point.front_ccw ^= gfx->tess.info.ccw;
+         point.front_ccw ^= dyn->ts.domain_origin == VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT;
+      }
+      VkFormat depth = gfx->render.depth_att.vk_format;
+      if (depth == VK_FORMAT_D16_UNORM || depth == VK_FORMAT_D16_UNORM_S8_UINT) {
+         point.depth_mantissa_bits = 16; point.depth_is_float = false;
+      } else if (depth == VK_FORMAT_X8_D24_UNORM_PACK32 || depth == VK_FORMAT_D24_UNORM_S8_UINT) {
+         point.depth_mantissa_bits = 24; point.depth_is_float = false;
+      }
+      for (unsigned i = 0; i < dyn->vp.viewport_count; ++i) {
+         const VkViewport *vp = &dyn->vp.viewports[i];
+         point.viewport[i][0] = vp->x; point.viewport[i][1] = vp->y;
+         point.viewport[i][2] = vp->width; point.viewport[i][3] = vp->height;
+         point.viewport[i][4] = vp->minDepth; point.viewport[i][5] = vp->maxDepth;
+      }
+      params.capture = gfx->polygon_capture = kk_pool_upload(cmd, &point, sizeof(point), 8).gpu;
+   }
    return kk_pool_upload(cmd, &params, sizeof(params), 8).gpu;
 }
 
@@ -1422,7 +1479,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
          set_empty_scissor(enc);
       } else {
          mtl_set_cull_mode(enc,
-                           vk_front_face_to_mtl_cull_mode(dyn->rs.cull_mode));
+                           gfx->polygon_points ? MTL_CULL_MODE_NONE : vk_front_face_to_mtl_cull_mode(dyn->rs.cull_mode));
          /* Enforce setting the correct scissors */
          BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORT_COUNT);
       }
@@ -1455,10 +1512,10 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
    }
 
    if (IS_DIRTY(RS_POLYGON_MODE))
-      mtl_set_triangle_fill_lines(enc, dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE);
+      mtl_set_triangle_fill_lines(enc, !gfx->polygon_points && dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE);
 
    if (IS_DIRTY(RS_DEPTH_BIAS_FACTORS) || IS_DIRTY(RS_DEPTH_BIAS_ENABLE)) {
-      if (dyn->rs.depth_bias.enable)
+      if (dyn->rs.depth_bias.enable && !gfx->polygon_points)
          mtl_set_depth_bias(enc, dyn->rs.depth_bias.constant_factor,
                             dyn->rs.depth_bias.slope_factor,
                             dyn->rs.depth_bias.clamp);
@@ -1484,7 +1541,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       bool clip = vk_rasterization_state_depth_clip_enable(&dyn->rs);
 
       enum mtl_depth_clip_mode mode =
-         clip ? MTL_DEPTH_CLIP_MODE_CLIP : MTL_DEPTH_CLIP_MODE_CLAMP;
+         clip && !gfx->polygon_points ? MTL_DEPTH_CLIP_MODE_CLIP : MTL_DEPTH_CLIP_MODE_CLAMP;
       mtl_set_depth_clip_mode(enc, mode);
 
       desc->root.draw.emulate_depth_clamp = clamp && clip;
@@ -2246,6 +2303,8 @@ kk_draw_without_restart(struct kk_cmd_buffer *cmd,
    return draw;
 }
 
+#include "kk_polygon_command.h"
+
 /* Runs the stage feeding the GS and the GS compute pass, returning the draw
  * that rasterizes its output. */
 static struct kk_draw_data
@@ -2315,6 +2374,8 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
    mtl_compute_set_pipeline_state(
       enc, vs->pipeline.gfx.pre_render[pre_render_count - 2u]);
    kk_dispatch_compute(enc, grid_vs, local_size);
+   if (gfx->polygon_points)
+      return kk_launch_polygon_points(cmd, grid_gs, geometry_params);
 
    bool queries = false;
    for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; ++i)
@@ -2406,6 +2467,18 @@ static void
 kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
+   struct kk_graphics_state *gfx = &cmd->state.gfx;
+   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   bool point = vs->info.polygon_point && dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT;
+   if (point != gfx->polygon_points) {
+      gfx->polygon_points = point;
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_CULL_MODE);
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORTS);
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_FACTORS);
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_DEPTH_CLIP_ENABLE);
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_FRONT_FACE);
+   }
 
    kk_flush_gfx_state(cmd);
 

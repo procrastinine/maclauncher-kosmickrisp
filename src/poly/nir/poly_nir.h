@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "poly/geometry.h"
+#include "poly/geometry_capture.h"
 #include "nir.h"
 #include "nir_xfb_info.h"
 #include "shader_enums.h"
@@ -51,6 +52,12 @@ struct poly_gs_info {
 bool poly_nir_lower_gs(struct nir_shader *gs, struct nir_shader **gs_count,
                        struct nir_shader **gs_copy, struct nir_shader **pre_gs,
                        struct poly_gs_info *info);
+
+bool poly_nir_lower_gs_capture(struct nir_shader *gs,
+   struct nir_shader **gs_count, struct nir_shader **gs_copy,
+   struct nir_shader **pre_gs, struct poly_gs_info *info,
+   struct poly_gs_capture_info *capture_info,
+   struct nir_shader **capture, struct nir_shader **capture_xfb);
 
 bool poly_nir_lower_tcs(struct nir_shader *tcs,
                         bool can_ignore_shader_out_barriers);

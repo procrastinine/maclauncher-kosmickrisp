@@ -1240,9 +1240,13 @@ optimize_static_topology(struct poly_gs_info *info, nir_shader *gs)
    info->shape = POLY_GS_SHAPE_STATIC_INDEXED;
 }
 
+#include "poly_nir_capture_gs.h"
+
 bool
-poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
-                  nir_shader **pre_gs, struct poly_gs_info *info)
+poly_nir_lower_gs_capture(nir_shader *gs, nir_shader **gs_count,
+   nir_shader **gs_copy, nir_shader **pre_gs, struct poly_gs_info *info,
+   struct poly_gs_capture_info *capture_info,
+   nir_shader **capture, nir_shader **capture_xfb)
 {
    /* Lower I/O as assumed by the rest of GS lowering */
    if (gs->xfb_info != NULL) {
@@ -1354,6 +1358,10 @@ poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
    /* Ensure that outputs_written is still accurate after DCE. */
    nir_shader_gather_info(gs, nir_shader_get_entrypoint(gs));
 
+   if (capture) {
+      *capture = create_gs_capture_shader(gs, &gs_state, capture_info);
+      *capture_xfb = create_gs_capture_xfb_shader(gs, &gs_state);
+   }
    *gs_copy = create_gs_rast_shader(gs, &gs_state);
 
    NIR_PASS(_, gs, nir_shader_intrinsics_pass, lower_id,
@@ -1524,4 +1532,12 @@ poly_nir_lower_vs_before_gs(struct nir_shader *vs)
    /* Lower vertex stores to memory stores */
    return nir_shader_intrinsics_pass(vs, lower_vs_before_gs,
                                      nir_metadata_control_flow, NULL);
+}
+
+bool
+poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count,
+   nir_shader **gs_copy, nir_shader **pre_gs, struct poly_gs_info *info)
+{
+   return poly_nir_lower_gs_capture(gs, gs_count, gs_copy, pre_gs, info,
+                                   NULL, NULL, NULL);
 }

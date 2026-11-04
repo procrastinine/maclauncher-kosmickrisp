@@ -318,9 +318,11 @@ struct poly_geometry_params {
     * layout() declared input class.
     */
    uint32_t input_topology;
+   uint32_t capture_pad;
+   uint64_t capture;
 } PACKED;
-static_assert(sizeof(struct poly_geometry_params) == 79 * 4,
-              "struct poly_geometry_params must be 79 words");
+static_assert(sizeof(struct poly_geometry_params) == 82 * 4,
+              "struct poly_geometry_params must be 82 words");
 
 static inline void
 poly_geometry_params_init(struct poly_geometry_params *p,

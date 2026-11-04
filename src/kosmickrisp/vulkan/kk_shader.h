@@ -67,6 +67,8 @@ struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
    bool has_geometry;
+   bool polygon_point;
+   struct poly_gs_capture_info polygon;
    struct poly_gs_info geometry;
    uint8_t gs_aux_mask;
 
@@ -125,6 +127,7 @@ struct kk_shader_info {
       struct {
          bool uses_flat_varyings;
          uint64_t flat_outputs;
+         uint64_t noperspective_outputs;
       } fs;
 
       struct {
@@ -142,6 +145,9 @@ struct kk_pipeline_handles {
    union {
       struct {
          mtl_render_pipeline_state *render;
+         mtl_render_pipeline_state *polygon_render;
+         mtl_compute_pipeline_state *polygon_capture;
+         mtl_compute_pipeline_state *polygon_xfb;
          /* VS, TCS, TES and the GS compute pass at most run before the render
           * pipeline. */
          mtl_compute_pipeline_state *pre_render[4];
@@ -167,6 +173,7 @@ struct kk_shader {
    /* Compute pass of a GS. Its rasterization VS is in
     * msl_data[MESA_SHADER_GEOMETRY]. */
    struct msl_compile_data gs_main;
+   struct msl_compile_data polygon[4];
    struct msl_compile_data gs_aux[2];
 };
 

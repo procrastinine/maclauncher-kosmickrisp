@@ -5,6 +5,7 @@
 libkk_shader_files = files(
   'kk_draws.cl',
   'kk_geometry.cl',
+  'kk_polygon.cl',
   'kk_query.cl',
   'kk_tessellation.cl',
   'kk_tessellator.cl',
