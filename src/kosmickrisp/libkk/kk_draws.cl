@@ -149,3 +149,16 @@ libkk_unroll_adjacency(uint64_t index_buffer, global struct poly_heap *heap,
    if (tid == 0)
       out_draw[0] = prims * out_per_prim;
 }
+
+/* Count restart-separated primitives without rewriting the rendered indices. */
+KERNEL(1024)
+libkk_primitives_generated_restart(global uint64_t *report,
+   constant uint32_t *draw, uint64_t indices, uint32_t range_el,
+   uint32_t index_size, uint32_t restart_index, uint32_t mode)
+{
+   POLY_DECL_UNROLL_RESTART_SCRATCH(scratch, 1024);
+   uint prims = poly_count_restart_prims(draw, indices, range_el,
+                                        index_size, restart_index, mode, scratch);
+   if (cl_local_id.x == 0)
+      *report += (uint64_t)prims * draw[1];
+}

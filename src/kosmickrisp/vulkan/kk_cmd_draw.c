@@ -2526,6 +2526,29 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       if (geom)
          draw_data = kk_launch_gs_prerast(cmd, data, draw_data, gs_restart);
 
+      if (!geom && gfx->primitives_query[0]) {
+         enum mesa_prim mode = tess ? gfx->tess.prim : data->prim;
+         uint64_t draw = kk_grid_is_indirect(draw_data.grid)
+            ? draw_data.grid.addr : 0;
+         if (!tess && data->restart && draw_data.index.el_size_B) {
+            if (!draw) {
+               VkDrawIndexedIndirectCommand direct = {
+                  .indexCount = draw_data.grid.size.x,
+                  .instanceCount = draw_data.grid.size.y,
+               };
+               draw = kk_pool_upload(cmd, &direct, sizeof(direct), 4).gpu;
+            }
+            libkk_primitives_generated_restart(cmd, kk_grid_1d(1024), true,
+               gfx->primitives_query[0], draw, draw_data.index.gpu.addr,
+               draw_data.index.gpu.range / draw_data.index.el_size_B,
+               draw_data.index.el_size_B, data->restart_index, mode);
+         } else {
+            libkk_primitives_generated(cmd, kk_grid_1d(1), true,
+               gfx->primitives_query[0], draw,
+               draw_data.grid.size.x, draw_data.grid.size.y, mode);
+         }
+      }
+
       /* TODO_KOSMICKRISP Remove this once unroll, tess and any compute does not
        * split render pass */
       if (cmd->state.gfx.need_to_start_render_pass)

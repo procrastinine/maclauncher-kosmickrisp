@@ -81,3 +81,17 @@ libkk_xfb_draw(constant uint32_t *counter, global uint32_t *draw,
    draw[2] = 0;
    draw[3] = first_instance;
 }
+
+/* Count the actual post-assembly draw when no application/synthetic GS runs.
+ * The same two leading words describe direct/indexed/tessellated draws.
+ * Predicates and topology rewrites have already been applied. */
+KERNEL(1)
+libkk_primitives_generated(global uint64_t *report, constant uint32_t *draw,
+                           uint32_t vertices, uint32_t instances, uint32_t mode)
+{
+   if (draw) {
+      vertices = draw[0];
+      instances = draw[1];
+   }
+   *report += (uint64_t)u_decomposed_prims_for_vertices(mode, vertices) * instances;
+}
