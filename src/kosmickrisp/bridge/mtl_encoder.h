@@ -69,6 +69,9 @@ void mtl_encoder_pop_debug_group(void *encoder);
 mtl_compute_encoder *
 mtl_new_compute_command_encoder(mtl_command_buffer *cmd_buffer);
 
+void mtl_fill_buffer(mtl_compute_encoder *encoder, mtl_buffer *buffer,
+                       size_t offset, size_t size, uint8_t value);
+
 void mtl_copy_from_buffer_to_buffer(mtl_compute_encoder *encoder,
                                     mtl_buffer *src_buf, size_t src_offset,
                                     mtl_buffer *dst_buf, size_t dst_offset,

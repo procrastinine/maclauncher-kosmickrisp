@@ -79,6 +79,12 @@ mtl_encoder_pop_debug_group(void *encoder)
 }
 
 void
+mtl_fill_buffer(mtl_compute_encoder *encoder, mtl_buffer *buffer,
+                  size_t offset, size_t size, uint8_t value)
+{
+}
+
+void
 mtl_copy_from_buffer_to_buffer(mtl_compute_encoder *encoder,
                                mtl_buffer *src_buf, size_t src_offset,
                                mtl_buffer *dst_buf, size_t dst_offset,

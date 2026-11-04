@@ -137,6 +137,17 @@ mtl_new_compute_command_encoder(mtl_command_buffer *cmd_buffer)
 }
 
 void
+mtl_fill_buffer(mtl_compute_encoder *encoder, mtl_buffer *buffer,
+                  size_t offset, size_t size, uint8_t value)
+{
+   KK_MTL_REPLAY_POOL({
+      id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
+      [enc fillBuffer:(id<MTLBuffer>)buffer range:NSMakeRange(offset, size)
+                value:value];
+   });
+}
+
+void
 mtl_copy_from_buffer_to_buffer(mtl_compute_encoder *encoder,
                                mtl_buffer *src_buf, size_t src_offset,
                                mtl_buffer *dst_buf, size_t dst_offset,

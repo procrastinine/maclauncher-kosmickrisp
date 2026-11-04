@@ -24,6 +24,31 @@
 #include "util/format/u_format.h"
 
 VKAPI_ATTR void VKAPI_CALL
+kk_CmdFillBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer,
+                  VkDeviceSize dstOffset, VkDeviceSize size, uint32_t data)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   VK_FROM_HANDLE(kk_buffer, dst, dstBuffer);
+
+   /* Native fill repeats one byte. Keep arbitrary uint32 patterns and sparse
+    * address adaptation on the common path. In particular, zero clears do not
+    * need a meta pipeline, push constants or shader dispatch. */
+   const uint8_t byte = data;
+   if (!dst->metal.handle ||
+       (dst->vk.create_flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) ||
+       data != (uint32_t)byte * 0x01010101u) {
+      vk_common_CmdFillBuffer(commandBuffer, dstBuffer, dstOffset, size, data);
+      return;
+   }
+
+   const uint64_t bytes = vk_buffer_range(&dst->vk, dstOffset, size) & ~3ull;
+   if (!bytes)
+      return;
+   mtl_fill_buffer(cs_get_compute(cmd), dst->metal.handle,
+                    kk_buffer_mtl_offset(dst, dstOffset), bytes, byte);
+}
+
+VKAPI_ATTR void VKAPI_CALL
 kk_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
                   const VkCopyBufferInfo2 *info)
 {
