@@ -57,6 +57,10 @@ struct nir_to_msl_ctx {
    /* Floating-point math mode of the open ALU statement scope, if any.
     * Consecutive ALU statements with the same mode share one scope. */
    const char *open_math_mode;
+   /* The function body may test the root buffer address through kk_buf0
+    * and kk_nobuf0, which are declared before the body when it does. */
+   bool buf0_guard;
+   bool buf0_guard_used;
    bool uses_pipeline_statistics;
    bool uses_atomic64 : 1;
    bool uses_image_atomic64 : 1;

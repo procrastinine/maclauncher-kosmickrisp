@@ -214,6 +214,20 @@ msl_has_buf0(const struct nir_to_msl_ctx *ctx)
    return !ctx->current_function || ctx->current_function->is_entrypoint;
 }
 
+/* KK_WORKAROUND_14 condition: the guarded value is replaced by 1 when the
+ * root buffer address is null. The address is never null at run time, but
+ * the compiler cannot prove that, so it cannot fold through the guarded
+ * value. Vector results select per component. */
+static void
+msl_print_nobuf0(struct nir_to_msl_ctx *ctx, unsigned num_components)
+{
+   ctx->buf0_guard_used = true;
+   if (num_components > 1)
+      P(ctx, "bool%u(kk_nobuf0)", num_components)
+   else
+      P(ctx, "kk_nobuf0")
+}
+
 /* Bit-preserving storage for function temporaries: numeric scalars and
  * vectors use unsigned words of their width, booleans stay bool, and arrays
  * keep their dimensions. Struct temporaries are split before emission. */
@@ -497,8 +511,19 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    case nir_op_fmul:
       if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) && msl_has_buf0(ctx) &&
           (nir_alu_instr_is_inf_preserve(instr) ||
-           nir_alu_instr_is_nan_preserve(instr)))
+           nir_alu_instr_is_nan_preserve(instr))) {
+         if (ctx->buf0_guard) {
+            /* select() keeps the guard a single selection, without the
+             * branch a conditional expression produces. */
+            P(ctx, "select(");
+            ALU_BINOP("*");
+            P(ctx, ", %s(1), ", msl_type_for_def(ctx->types, &instr->def));
+            msl_print_nobuf0(ctx, instr->def.num_components);
+            P(ctx, ")");
+            break;
+         }
          P(ctx, "!&buf0.contents[0] ? 1 : ")
+      }
       ALU_BINOP("*");
       break;
    case nir_op_idiv:
@@ -677,11 +702,21 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
          P(ctx, " - ");
          alu_src_to_msl(ctx, instr, 0);
          P(ctx, ") * (");
-         if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) && msl_has_buf0(ctx) &&
-             (nir_alu_instr_is_inf_preserve(instr) ||
-              nir_alu_instr_is_nan_preserve(instr)))
-            P(ctx, "!&buf0.contents[0] ? 1 : ")
-         alu_src_to_msl(ctx, instr, 2);
+         bool guard = !(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&
+                      msl_has_buf0(ctx) &&
+                      (nir_alu_instr_is_inf_preserve(instr) ||
+                       nir_alu_instr_is_nan_preserve(instr));
+         if (guard && ctx->buf0_guard) {
+            P(ctx, "select(");
+            alu_src_to_msl(ctx, instr, 2);
+            P(ctx, ", %s(1), ", msl_type_for_def(ctx->types, &instr->def));
+            msl_print_nobuf0(ctx, instr->def.num_components);
+            P(ctx, ")");
+         } else {
+            if (guard)
+               P(ctx, "!&buf0.contents[0] ? 1 : ")
+            alu_src_to_msl(ctx, instr, 2);
+         }
          P(ctx, ")");
       } else {
          alu_funclike(ctx, instr, "mix");
@@ -3072,7 +3107,10 @@ msl_emit_impl(struct nir_to_msl_ctx *ctx, nir_function_impl *impl,
    BITSET_WORD *assigned = body ? rzalloc_array(body, BITSET_WORD,
                                                 BITSET_WORDS(impl->ssa_alloc)) : NULL;
    if (!assigned) {
-      /* Without a body buffer, every declaration keeps its zero. */
+      /* Without a body buffer, every declaration keeps its zero and the
+       * workarounds test the root buffer address inline. */
+      bool buf0_guard = ctx->buf0_guard;
+      ctx->buf0_guard = false;
       if (body)
          _mesa_string_buffer_destroy(body);
       predeclare_ssa_values(ctx, impl);
@@ -3080,6 +3118,7 @@ msl_emit_impl(struct nir_to_msl_ctx *ctx, nir_function_impl *impl,
          cf_node_to_metal(ctx, node);
       if (entry)
          emit_output_return(ctx, entry);
+      ctx->buf0_guard = buf0_guard;
       return;
    }
    ctx->text = body;
@@ -3089,6 +3128,11 @@ msl_emit_impl(struct nir_to_msl_ctx *ctx, nir_function_impl *impl,
    if (entry)
       emit_output_return(ctx, entry);
    ctx->text = declarations;
+   if (ctx->buf0_guard_used) {
+      P_IND(ctx, "const bool kk_buf0 = (ulong)&buf0.contents[0] != 0;\n");
+      P_IND(ctx, "const bool kk_nobuf0 = !kk_buf0;\n");
+      ctx->buf0_guard_used = false;
+   }
    predeclare_ssa_values(ctx, impl);
    ctx->assigned_defs = NULL;
    _mesa_string_buffer_append_len(declarations, body->buf, body->length);
@@ -3255,7 +3299,9 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
          P_IND(&ctx, "}\n");
       }
    }
+   ctx.buf0_guard = true;
    msl_emit_impl(&ctx, impl, shader);
+   ctx.buf0_guard = false;
    ctx.indentlevel--;
    P(&ctx, "}\n");
    }
