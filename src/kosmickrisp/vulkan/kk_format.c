@@ -17,6 +17,19 @@
 #include "vk_enum_defines.h"
 #include "vk_format.h"
 
+enum pipe_format
+kk_host_texel_buffer_format(VkFormat format)
+{
+   switch (format) {
+   case VK_FORMAT_G16B16G16R16_422_UNORM:
+      return PIPE_FORMAT_Y16U16Y16V16_422_UNORM;
+   case VK_FORMAT_B16G16R16G16_422_UNORM:
+      return PIPE_FORMAT_U16Y16V16Y16_422_UNORM;
+   default:
+      return vk_format_to_pipe_format(format);
+   }
+}
+
 #define MTL_FMT_ALL_NO_ATOMIC(width)                                           \
    .bit_widths = width, .filter = 1u, .write = 1u, .color = 1u, .blend = 1u,   \
    .msaa = 1u, .resolve = 1u, .sparse = 1u, .atomic = 0u

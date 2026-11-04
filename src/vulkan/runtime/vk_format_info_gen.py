@@ -42,6 +42,15 @@ TEMPLATE_H = Template(COPYRIGHT + """\
 extern "C" {
 #endif
 
+struct vk_format_block_info {
+   uint16_t size_B;
+   uint16_t texel_count;
+};
+
+/* Registry blockSize and texelsPerBlock, independent of Mesa storage layout. */
+struct vk_format_block_info
+vk_format_get_block_info(VkFormat format);
+
 enum vk_format_class {
    MESA_VK_FORMAT_CLASS_UNKNOWN,
 % for name in format_classes:
@@ -78,6 +87,7 @@ TEMPLATE_C = Template(COPYRIGHT + """
 
 struct vk_format_info {
    enum vk_format_class class;
+   struct vk_format_block_info block;
 };
 
 % for id, ext in extensions.items():
@@ -85,6 +95,7 @@ static const struct vk_format_info ext${id}_format_infos[] = {
 %   for name, format in ext.formats.items():
    [${format.offset}] = {
       .class = ${to_enum_name('MESA_VK_FORMAT_CLASS_', format.cls)},
+      .block = { ${format.block_size}, ${format.texel_count} },
    },
 %   endfor
 };
@@ -131,6 +142,12 @@ static const struct vk_format_class_info class_infos[] = {
 % endfor
 };
 
+struct vk_format_block_info
+vk_format_get_block_info(VkFormat format)
+{
+   return vk_format_get_info(format)->block;
+}
+
 const struct vk_format_class_info *
 vk_format_class_get_info(enum vk_format_class class)
 {
@@ -149,7 +166,7 @@ vk_format_get_class_info(VkFormat format)
 def to_enum_name(prefix, name):
     return "%s" % prefix + re.sub('([^A-Za-z0-9_])', '_', name).upper()
 
-Format = namedtuple('Format', ['name', 'cls', 'ext', 'offset'])
+Format = namedtuple('Format', ['name', 'cls', 'ext', 'offset', 'block_size', 'texel_count'])
 FormatClass = namedtuple('FormatClass', ['name', 'formats'])
 Extension = namedtuple('Extension', ['id', 'formats'])
 
@@ -180,7 +197,11 @@ def get_formats(doc):
             offset = int(enum.attrib['value'])
 
         assert(ext != None)
-        format = Format(fmt.attrib['name'], fmt.attrib['class'], ext, offset)
+        block_size = int(fmt.attrib['blockSize'])
+        texel_count = int(fmt.attrib['texelsPerBlock'])
+        assert 0 < block_size <= 65535 and 0 < texel_count <= 65535
+        format = Format(fmt.attrib['name'], fmt.attrib['class'], ext, offset,
+                        block_size, texel_count)
         formats[format.name] = format
 
     return formats

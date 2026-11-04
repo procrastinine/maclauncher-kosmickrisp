@@ -153,12 +153,21 @@ access span. R64 uses stride 8. The underlying resource and residency map follow
 the selected buffer's legal-reader lifetime; copying descriptor bytes does not
 retain the resource.
 
-Address writers validate the already-selected live source before publishing
-bytes and perform no native view creation, cache insertion or allocation.
-Ordinary alias selection requires the same actual native buffer interval, or
-proven equal intervals of the same placement heap. Equal numerical device
-addresses alone do not establish native storage identity. Distinct Sparse
-virtual buffers remain distinct sources.
+Address-only writers classify the exact requested range once through the existing
+complete Sparse virtual-range directory. An ordinary range needs no public buffer
+lookup. A Sparse range supplies its actual record index for bounded-buffer word 12
+and its map/prefix for the typed tail. The underlying resource follows Vulkan's
+valid-use lifetime; classification does not retain a public object or native owner.
+Unknown or incomplete classification leaves destination bytes untouched. No native
+view creation, cache insertion or allocation occurs during encoding.
+
+Host block size and texels-per-block come from the Vulkan registry, including
+planar formats and packed formats whose block extent differs from their texel
+count. The host resolver preserves existing exact Pipe format identities without
+adding shader support. Packed `B16G16R16G16_422_UNORM` uses the distinct
+`U16Y16V16Y16_422_UNORM` Pipe identity for U0/Y0/V0/Y1 component order;
+its Vulkan host geometry remains 8 bytes and one element per block. Encoding
+bytes does not enable unsupported shader access.
 
 Raw decoding is selected during the existing descriptor pass for actual
 Heap/descriptor-buffer shader binding flags. Those flags already participate in

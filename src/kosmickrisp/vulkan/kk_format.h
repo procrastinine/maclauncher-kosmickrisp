@@ -72,6 +72,10 @@ const struct kk_va_format *kk_get_va_format(enum pipe_format format);
 
 enum mtl_pixel_format vk_format_to_mtl_pixel_format(enum VkFormat vkformat);
 
+/* Host byte encoding may use real Pipe formats not exposed for shader access. */
+enum pipe_format kk_host_texel_buffer_format(VkFormat format);
+
+
 /* Formats handled by Mesa's shared typed pack/unpack operations. R64 integer
  * operations use the existing full-width address path instead. */
 static inline bool

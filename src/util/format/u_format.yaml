@@ -3484,3 +3484,14 @@
   block: {width: 1, height: 1, depth: 1}
   channels: [X8, SP8, SP8, SP8]
   swizzles: [W, Z, Y, 1]
+
+
+# Packed U0, Y0, V0, Y1: four 16-bit components for a two-pixel 4:2:2 block.
+# The opaque 64-bit channel follows the existing packed YUV metadata convention.
+- name: U16Y16V16Y16_422_UNORM
+  layout: subsampled
+  colorspace: YUV
+  subsampling: 422
+  block: {width: 2, height: 1, depth: 1}
+  channels: [X64]
+  swizzles: [X, Y, Z, 1]

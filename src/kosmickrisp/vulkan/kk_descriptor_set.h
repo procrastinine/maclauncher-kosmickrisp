@@ -103,19 +103,17 @@ struct kk_buffer *kk_descriptor_buffer_from_address_locked(struct kk_device *dev
 VkResult kk_descriptor_write_texel_buffer_locked(struct kk_device *dev,
    uint64_t address, uint64_t size, VkFormat format, VkDescriptorType type,
    void *destination, uint32_t descriptor_size);
-/* No allocation, lookup or native realization. A failed validation returns
- * before touching destination. A valid supported selected source is encoded
- * infallibly; these are validation errors, never HOST/DEVICE OOM. The caller
- * holds descriptor_heap_lock and the selected source's valid host lifetime. */
-VkResult kk_descriptor_write_raw_texel_buffer_locked(struct kk_device *dev,
-   const struct kk_buffer *selected, uint64_t address, uint64_t size,
-   VkFormat format, VkDescriptorType type, void *destination,
-   uint32_t descriptor_size);
-/* The same live source, or ordinary aliases with proven native intervals.
- * Different Sparse virtual sources and unknown storage are not equivalent.
- * This query acquires no resource ownership. */
-bool kk_descriptor_raw_texel_sources_equal_locked(const struct kk_buffer *a,
-   const struct kk_buffer *b, uint64_t address, uint64_t size, VkFormat format);
+/* Address-only bytes use one complete Sparse-directory classification and
+ * never recover a public VkBuffer/native owner. Resource validity and lifetime
+ * remain the API caller's requirements. UNKNOWN/unmapped inputs fail before
+ * any destination write; nulls consult no directory or ignored format/range.
+ * These allocate/create/hash nothing. The Sparse helper takes its own mutex;
+ * descriptor_heap_lock may already be held, but is not required here. */
+VkResult kk_descriptor_write_raw_buffer(struct kk_device *dev,
+   uint64_t address, uint64_t size, void *destination, uint32_t descriptor_size);
+VkResult kk_descriptor_write_raw_texel_buffer(struct kk_device *dev,
+   uint64_t address, uint64_t size, VkFormat format, VkDescriptorType type,
+   void *destination, uint32_t descriptor_size);
 
 VkResult kk_heap_embedded_sampler_table(struct kk_device *dev,
    uint32_t count, const struct vk_sampler_state *states, uint64_t *gpu_address);

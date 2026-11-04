@@ -5,6 +5,7 @@
 #include "kk_format.h"
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "vk_sampler.h"
+#include "vk_format_info.h"
 #include "util/hash_table.h"
 
 #define KK_HEAP_SAMPLER_DESCRIPTOR_SIZE sizeof(uint64_t)
@@ -549,78 +550,63 @@ kk_descriptor_buffer_from_address_locked(struct kk_device *dev,
 }
 
 VkResult
-kk_descriptor_write_raw_texel_buffer_locked(struct kk_device *dev,
-   const struct kk_buffer *selected, uint64_t address, uint64_t size,
-   VkFormat format, VkDescriptorType type, void *destination,
-   uint32_t descriptor_size)
+kk_descriptor_write_raw_buffer(struct kk_device *dev,
+   uint64_t address, uint64_t size, void *destination, uint32_t descriptor_size)
+{
+   if (!destination || descriptor_size < sizeof(struct kk_buffer_address))
+      return VK_ERROR_UNKNOWN;
+   struct kk_buffer_address descriptor = {};
+   if (address) {
+      if (size > UINT32_MAX)
+         return VK_ERROR_UNKNOWN;
+      struct kk_sparse_address_token token;
+      if (kk_sparse_classify_buffer_address(dev, address, size, &token) ==
+          KK_SPARSE_ADDRESS_UNKNOWN)
+         return VK_ERROR_UNKNOWN;
+      descriptor.base_addr = address;
+      descriptor.size = size;
+      descriptor.zero = token.record_index;
+   }
+   memset(destination, 0, descriptor_size);
+   memcpy(destination, &descriptor, sizeof(descriptor));
+   return VK_SUCCESS;
+}
+
+VkResult
+kk_descriptor_write_raw_texel_buffer(struct kk_device *dev,
+   uint64_t address, uint64_t size, VkFormat format, VkDescriptorType type,
+   void *destination, uint32_t descriptor_size)
 {
    if ((type != VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER &&
         type != VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER) ||
        !destination || descriptor_size < sizeof(struct kk_texel_buffer_descriptor))
       return VK_ERROR_UNKNOWN;
    struct kk_texel_buffer_descriptor descriptor = {};
-   /* Nulls have no selected virtual source and do not read ignored format or
-    * range state. They keep the common all-zero representation. */
+   /* Nulls have no source, classification or ignored format/range access. */
    if (address) {
-      if (!selected || !selected->vk.device_address ||
-          address < selected->vk.device_address)
+      struct kk_sparse_address_token token;
+      if (kk_sparse_classify_buffer_address(dev, address, size, &token) ==
+          KK_SPARSE_ADDRESS_UNKNOWN)
          return VK_ERROR_UNKNOWN;
-      const uint64_t offset = address - selected->vk.device_address;
-      if (offset > selected->vk.size || size > selected->vk.size - offset)
-         return VK_ERROR_UNKNOWN;
-      const VkFormatFeatureFlags2 needed = type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER
-         ? VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT
-         : VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT;
-      if (!(kk_get_buffer_format_features(kk_device_physical(dev), format) & needed))
+      /* Host encoding is independent of shader format support. */
+      const enum pipe_format pipe = kk_host_texel_buffer_format(format);
+      if (pipe <= PIPE_FORMAT_NONE || pipe >= PIPE_FORMAT_COUNT)
          return VK_ERROR_FORMAT_NOT_SUPPORTED;
-      const enum pipe_format pipe = vk_format_to_pipe_format(format);
-      if (!kk_raw_texel_format_supported(pipe))
+      const struct vk_format_block_info block = vk_format_get_block_info(format);
+      if (!block.size_B || !block.texel_count)
          return VK_ERROR_FORMAT_NOT_SUPPORTED;
-      const uint32_t texel_size = util_format_get_blocksize(pipe);
-      const uint64_t count = size / texel_size;
-      if (count > UINT32_MAX)
+      const uint64_t blocks = size / block.size_B;
+      if (blocks > UINT32_MAX / block.texel_count)
          return VK_ERROR_UNKNOWN;
       descriptor.image.image_gpu_resource_id = address;
       descriptor.image.texel_offset = KK_TEXEL_BUFFER_RAW_ADDRESS | pipe;
-      descriptor.image.texel_count = count;
-      descriptor.sparse = kk_sparse_buffer_range_descriptor(selected, offset,
-                                                            texel_size, false);
+      descriptor.image.texel_count = blocks * block.texel_count;
+      descriptor.sparse = kk_sparse_token_view_descriptor(&token, block.size_B, false);
    }
-   /* Validation is complete. No remaining operation can allocate or fail. */
+   /* Known classification and validated geometry leave no fallible step. */
    memset(destination, 0, descriptor_size);
    memcpy(destination, &descriptor, sizeof(descriptor));
    return VK_SUCCESS;
-}
-
-bool
-kk_descriptor_raw_texel_sources_equal_locked(const struct kk_buffer *a,
-   const struct kk_buffer *b, uint64_t address, uint64_t size, VkFormat format)
-{
-   if (!a || !b || !a->vk.device_address || !b->vk.device_address ||
-       address < a->vk.device_address || address < b->vk.device_address)
-      return false;
-   const uint64_t a_offset = address - a->vk.device_address;
-   const uint64_t b_offset = address - b->vk.device_address;
-   if (a_offset > a->vk.size || size > a->vk.size - a_offset ||
-       b_offset > b->vk.size || size > b->vk.size - b_offset ||
-       a->sparse_record != b->sparse_record)
-      return false;
-   (void)format; /* Format validation/encoding belongs to the selected writer. */
-   if (a == b)
-      return true;
-   if (a->sparse_residency || b->sparse_residency ||
-       a->sparse_record || b->sparse_record)
-      return false;
-   /* The bridge checks retained native-buffer intervals or actual placement
-    * heap identity/intervals. Numerical VA coverage alone is not proof. */
-   if (!a->metal.handle || !b->metal.handle ||
-       a->metal.offset > UINT64_MAX - a_offset ||
-       b->metal.offset > UINT64_MAX - b_offset)
-      return false;
-   const uint64_t native_a = a->metal.offset + a_offset;
-   const uint64_t native_b = b->metal.offset + b_offset;
-   return mtl_buffer_ranges_alias(a->metal.handle, native_a,
-                                  b->metal.handle, native_b, size);
 }
 
 VkResult
@@ -628,27 +614,8 @@ kk_descriptor_write_texel_buffer_locked(struct kk_device *dev,
    uint64_t address, uint64_t size, VkFormat format, VkDescriptorType type,
    void *destination, uint32_t descriptor_size)
 {
-   const struct kk_buffer *selected = NULL;
-   if (address) {
-      for (struct kk_buffer *buffer = dev->heap_buffers; buffer;
-           buffer = buffer->heap_next) {
-         const uint64_t base = buffer->vk.device_address;
-         if (!base || address < base || address - base > buffer->vk.size ||
-             size > buffer->vk.size - (address - base))
-            continue;
-         if (selected && !kk_descriptor_raw_texel_sources_equal_locked(selected,
-               buffer, address, size, format))
-            return VK_ERROR_UNKNOWN;
-         if (!selected)
-            selected = buffer;
-      }
-      if (!selected)
-         return VK_ERROR_UNKNOWN;
-   }
-   /* All address-only typed producers use the same allocation-free mode.
-    * Explicit VkBufferView writers remain native and never enter this route. */
-   return kk_descriptor_write_raw_texel_buffer_locked(dev, selected, address,
-      size, format, type, destination, descriptor_size);
+   return kk_descriptor_write_raw_texel_buffer(dev, address, size, format,
+                                               type, destination, descriptor_size);
 }
 
 VKAPI_ATTR VkDeviceSize VKAPI_CALL
@@ -699,11 +666,11 @@ kk_WriteResourceDescriptorsEXT(VkDevice _device, uint32_t resourceCount,
       const size_t size = kk_GetPhysicalDeviceDescriptorSizeEXT(
          vk_physical_device_to_handle(dev->vk.physical), resource->type);
       assert(dst->size >= size);
-      memset(dst->address, 0, size);
       switch (resource->type) {
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
       case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
       case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
+         memset(dst->address, 0, size);
          const VkImageDescriptorInfoEXT *info = resource->data.pImage;
          if (!info)
             break;
@@ -731,32 +698,17 @@ kk_WriteResourceDescriptorsEXT(VkDevice _device, uint32_t resourceCount,
       case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
       case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
          const VkDeviceAddressRangeEXT *range = resource->data.pAddressRange;
-         if (range) {
-            struct kk_buffer *buffer = range->address ?
-               kk_descriptor_buffer_from_address_locked(dev, range->address,
-                                                        range->size) : NULL;
-            if (range->address && !buffer) {
-               result = vk_error(dev, VK_ERROR_UNKNOWN);
-               break;
-            }
-            const struct kk_addr_range addr_range = {
-               .addr = range->address,
-               .range = range->address ? range->size : 0,
-            };
-            const struct kk_buffer_address descriptor =
-               kk_buffer_descriptor(buffer, addr_range);
-            memcpy(dst->address, &descriptor, sizeof(descriptor));
-         }
+         result = kk_descriptor_write_raw_buffer(dev,
+            range ? range->address : 0, range ? range->size : 0, dst->address, size);
          break;
       }
       case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
       case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: {
          const VkTexelBufferDescriptorInfoEXT *info = resource->data.pTexelBuffer;
-         if (info && info->addressRange.address && info->addressRange.size) {
-            result = kk_descriptor_write_texel_buffer_locked(dev,
-               info->addressRange.address, info->addressRange.size, info->format,
-               resource->type, dst->address, size);
-         }
+         result = kk_descriptor_write_raw_texel_buffer(dev,
+            info ? info->addressRange.address : 0, info ? info->addressRange.size : 0,
+            info ? info->format : VK_FORMAT_UNDEFINED, resource->type,
+            dst->address, size);
          break;
       }
       case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
