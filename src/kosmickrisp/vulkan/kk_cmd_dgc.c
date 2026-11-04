@@ -15,6 +15,7 @@
 
 struct kk_indirect_commands_layout {
    struct vk_indirect_command_layout vk;
+   uint32_t token_span;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(kk_indirect_commands_layout, vk.base,
                                VkIndirectCommandsLayoutEXT,
@@ -57,6 +58,7 @@ VKAPI_ATTR VkResult VKAPI_CALL kk_CreateIndirectCommandsLayoutEXT(
                                          sizeof(*layout));
    if (!layout)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   layout->token_span = kk_dgc_token_span(&layout->vk);
    *out = kk_indirect_commands_layout_to_handle(layout);
    return VK_SUCCESS;
 }
@@ -77,7 +79,7 @@ VKAPI_ATTR void VKAPI_CALL kk_GetGeneratedCommandsMemoryRequirementsEXT(
                   info->indirectCommandsLayout);
    requirements->memoryRequirements = (VkMemoryRequirements){
        .size = SNAPSHOT_HEADER + (uint64_t)info->maxSequenceCount *
-                                     kk_dgc_token_span(&layout->vk),
+                                     layout->token_span,
        .alignment = 64,
        .memoryTypeBits = 1,
    };
@@ -267,6 +269,10 @@ VKAPI_ATTR void VKAPI_CALL kk_CmdPreprocessGeneratedCommandsEXT(
    VK_FROM_HANDLE(kk_cmd_buffer, state, stateCommandBuffer);
    if (!info->maxSequenceCount)
       return;
+   if (!kk_dgc_init(kk_cmd_buffer_device(cmd))) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
+      return;
+   }
    VK_FROM_HANDLE(kk_indirect_commands_layout, layout,
                   info->indirectCommandsLayout);
    /* Execution must bind the same descriptors, push values and graphics state.
@@ -278,15 +284,15 @@ VKAPI_ATTR void VKAPI_CALL kk_CmdPreprocessGeneratedCommandsEXT(
       .output = info->preprocessAddress,
       .maximum = info->maxSequenceCount,
       .stream_stride = layout->vk.stride,
-      .record_stride = kk_dgc_token_span(&layout->vk),
+      .record_stride = layout->token_span,
       .args_offset = SNAPSHOT_HEADER,
       .execution_range = info->preprocessAddress + SNAPSHOT_COUNT,
    };
    uint64_t parameters = kk_pool_upload(cmd, &p, sizeof(p), 8).gpu;
    if (!parameters)
       return;
-   kk_dgc_encode(kk_cmd_buffer_device(cmd), cs_get_compute(cmd), parameters,
-                 NULL, p.maximum, 0);
+   if (!kk_dgc_encode(cmd, cs_get_compute(cmd), parameters, p.maximum, 0))
+      return;
    mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
 }
@@ -309,6 +315,10 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
                                       struct kk_dgc_params p, bool compute)
 {
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   if (!kk_dgc_init(dev)) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
+      return;
+   }
    kk_sparse_refresh_shader(cmd, compute ? MESA_SHADER_COMPUTE : MESA_SHADER_VERTEX);
    if (!p.base_root || !p.base_draw || (p.patch_count && !p.patches) ||
        (p.attribute_count && !p.attributes))
@@ -372,7 +382,8 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
       uint64_t parameters = kk_pool_upload(cmd, &data, sizeof(data), 8).gpu;
       if (!parameters)
          return;
-      kk_dgc_encode(dev, cs_get_compute(cmd), parameters, icb, count, 1);
+      if (!kk_dgc_encode(cmd, cs_get_compute(cmd), parameters, count, poly ? 1 : 2))
+         break;
       if (poly) {
          mtl_compute_set_argument_table(cmd->metal.compute,
                                         cmd->argument_table);
@@ -393,7 +404,6 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
             break;
          continue;
       }
-      kk_dgc_encode(dev, cs_get_compute(cmd), parameters, icb, count, 2);
       if (compute) {
          kk_dgc_execute_compute(
              cs_get_compute(cmd), icb, p.execution_range,
@@ -423,13 +433,15 @@ VKAPI_ATTR void VKAPI_CALL kk_CmdExecuteGeneratedCommandsEXT(
       kk_dgc_flush_graphics(cmd);
    if (!preprocessed)
       kk_CmdPreprocessGeneratedCommandsEXT(commandBuffer, info, commandBuffer);
+   if (cmd->vk.record_result != VK_SUCCESS)
+      return;
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    VK_FROM_HANDLE(kk_indirect_commands_layout, layout,
                   info->indirectCommandsLayout);
    struct kk_dgc_params p = kk_dgc_state(cmd, cmd, info);
    p.stream = info->preprocessAddress + SNAPSHOT_HEADER;
    p.count = info->preprocessAddress + SNAPSHOT_COUNT;
-   p.stream_stride = kk_dgc_token_span(&layout->vk);
+   p.stream_stride = layout->token_span;
    struct kk_descriptor_state *desc =
        compute ? &cmd->state.cs.descriptors : &cmd->state.gfx.descriptors;
    p.root_size =
@@ -468,9 +480,7 @@ bool kk_dgc_draw_indirect_count(struct kk_cmd_buffer *cmd,
                                 bool indexed)
 {
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
-   simple_mtx_lock(&dev->residency_set.mutex);
-   bool ready = dev->dgc || kk_dgc_init(dev);
-   simple_mtx_unlock(&dev->residency_set.mutex);
+   bool ready = kk_dgc_init(dev);
    if (!ready) {
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
       return true;
@@ -504,10 +514,10 @@ bool kk_dgc_draw_indirect_count(struct kk_cmd_buffer *cmd,
 uint64_t kk_dgc_offset_count(struct kk_cmd_buffer *cmd, uint64_t address,
                              uint32_t first)
 {
+   if (!first)
+      return address;
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
-   simple_mtx_lock(&dev->residency_set.mutex);
-   bool ready = dev->dgc || kk_dgc_init(dev);
-   simple_mtx_unlock(&dev->residency_set.mutex);
+   bool ready = kk_dgc_init(dev);
    if (!ready) {
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
       return 0;
@@ -517,7 +527,8 @@ uint64_t kk_dgc_offset_count(struct kk_cmd_buffer *cmd, uint64_t address,
    uint64_t parameters = kk_pool_upload(cmd, &p, sizeof(p), 8).gpu;
    if (!p.output || !parameters)
       return 0;
-   kk_dgc_encode(dev, cs_get_compute(cmd), parameters, NULL, 1, 3);
+   if (!kk_dgc_encode(cmd, cs_get_compute(cmd), parameters, 1, 3))
+      return 0;
    mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
    return p.output;

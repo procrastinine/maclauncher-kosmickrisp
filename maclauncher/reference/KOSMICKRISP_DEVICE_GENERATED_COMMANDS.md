@@ -17,3 +17,5 @@ Linked graphics stages use two wrapper-buffer GPU addresses supplied by the sele
 The interlock guard has a separate per-command binding at the shared guard slot. It does not replace either linked-stage wrapper buffer. Ordinary argument tables and indirect-command descriptors use the shared usage-based capacity calculation.
 
 Graphics sequences targeting layered attachment aliases use the shared producer and retained raster-reader path. GPU-generated counts, predicates and token state remain in indirect records. Each sequence completes its logical-layer raster readers before the following sequence can reuse the preparation heap or generated-record scratch.
+
+The device creates the generated-command library on first use and compiles each preprocessing or execution kernel when that operation first needs it. Native indirect execution expands sequence state and encodes its Metal command in one invocation. Dispatches reuse the command buffer's argument table and restore its ordinary root and sampler bindings. Graphics replay eligibility is recorded only for devices enabling generated commands or indirect-count draws; the shader cache distinguishes this metadata.

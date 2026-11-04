@@ -23,6 +23,7 @@
 #include "vk_device.h"
 #include "vk_meta.h"
 #include "vk_queue.h"
+#include "util/u_call_once.h"
 
 struct kk_heap_sampler;
 struct kk_heap_metadata_page;
@@ -107,6 +108,7 @@ struct kk_device {
    struct kk_buffer *heap_buffers;
 
    struct kk_vrs_device *vrs;
+   util_once_flag dgc_once;
    struct kk_dgc_metal *dgc;
    mtl_device *mtl_handle;
    mtl_compiler *mtl_compiler_handle;

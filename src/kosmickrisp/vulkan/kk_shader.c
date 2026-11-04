@@ -216,6 +216,8 @@ static kk_feature_key
 kk_make_feature_key(const struct vk_features *feats)
 {
    kk_feature_key key = 0;
+   if (feats->deviceGeneratedCommands || feats->drawIndirectCount)
+      key |= BITFIELD_BIT(KK_FEAT_DGC_REPLAY);
    if (feats->fragmentShaderPixelInterlock)
       key |= BITFIELD_BIT(KK_FEAT_PIXEL_ENVELOPE);
    if (feats->pipelineFragmentShadingRate || feats->primitiveFragmentShadingRate ||
@@ -1070,7 +1072,8 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
    kk_shader_embedded_samplers_finish(dev, shader);
-   mtl_release(shader->dgc_compute);
+   if (shader->dgc_compute)
+      mtl_release(shader->dgc_compute);
    kk_sparse_shader_finish(shader);
    for (unsigned i = 0; i < 2; ++i)
       if (shader->mesh_retained[i])
@@ -2450,6 +2453,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
 
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */
+   const bool dgc_graphics = infos[0].stage != MESA_SHADER_COMPUTE &&
+      (features & BITFIELD_BIT(KK_FEAT_DGC_REPLAY));
    bool dgc_replay = false;
    uint32_t heap_push_size = 0;
    nir_shader *nir_shaders[shader_count + 2u];
@@ -2512,7 +2517,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
             }
          }
       }
-      dgc_replay |= kk_dgc_shader_needs_replay(nir);
+      if (dgc_graphics && !dgc_replay)
+         dgc_replay = kk_dgc_shader_needs_replay(nir);
 
       /* Stages before the tessellator or a GS run as compute */
       bool emulated_stage =
@@ -2775,9 +2781,11 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
 
    /* Retain the stage-filtered layout extent in serialized shader info.
     * Graphics stages share one root, including stages lowered through Poly. */
-   for (uint32_t i = 0; i < total_shaders; ++i)
-      dgc_replay |= shaders[i]->info.stage == MESA_SHADER_FRAGMENT &&
-                    shaders[i]->info.fs.emulates_per_vertex_inputs;
+   if (dgc_graphics && !dgc_replay) {
+      for (uint32_t i = 0; i < total_shaders; ++i)
+         dgc_replay |= shaders[i]->info.stage == MESA_SHADER_FRAGMENT &&
+                       shaders[i]->info.fs.emulates_per_vertex_inputs;
+   }
    for (uint32_t i = 0; i < total_shaders; ++i) {
       shaders[i]->info.dgc_replay = dgc_replay;
       shaders[i]->info.indirect_bindable =

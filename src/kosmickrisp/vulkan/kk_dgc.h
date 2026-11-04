@@ -50,8 +50,8 @@ bool kk_dgc_init(struct kk_device *dev);
 void kk_dgc_finish(struct kk_device *dev);
 void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute);
 uint64_t kk_dgc_icb_id(void *icb);
-void kk_dgc_encode(struct kk_device *dev, mtl_compute_encoder *enc,
-                   uint64_t parameters, void *icb, uint32_t count,
+bool kk_dgc_encode(struct kk_cmd_buffer *cmd, mtl_compute_encoder *enc,
+                   uint64_t parameters, uint32_t count,
                    uint32_t phase);
 void kk_dgc_execute_compute(mtl_compute_encoder *enc, void *icb, uint64_t range,
                             mtl_compute_pipeline_state *pipeline);

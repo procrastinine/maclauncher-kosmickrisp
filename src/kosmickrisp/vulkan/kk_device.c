@@ -427,6 +427,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    dev->vk.enabled_features.samplerFilterMinmax |=
       dev->vk.enabled_extensions.EXT_sampler_filter_minmax;
 
+   dev->dgc_once = (util_once_flag)UTIL_ONCE_FLAG_INIT;
    kk_descriptor_heap_init(dev);
    result = kk_vrs_device_init(dev);
    if (result != VK_SUCCESS) goto fail_init;
@@ -539,12 +540,6 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       mtl_start_gpu_capture(dev->mtl_handle, capture_directory);
    }
 
-   if (dev->vk.enabled_features.deviceGeneratedCommands && !kk_dgc_init(dev)) {
-      result = VK_ERROR_INITIALIZATION_FAILED;
-      kk_dgc_finish(dev);
-   kk_device_finish_lib(dev);
-      goto fail_sampler_heap;
-   }
    *pDevice = kk_device_to_handle(dev);
 
    return VK_SUCCESS;
