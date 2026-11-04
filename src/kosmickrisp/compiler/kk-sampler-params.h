@@ -16,6 +16,10 @@ enum kk_sampler_params_lock_context {
 #define KK_SAMPLER_FILTER_VIRTUAL (1u << 3)
 /* Original parameter address presence is independent of sampling dispatch. */
 #define KK_SAMPLER_FILTER_PARAMS_POINTER (1u << 4)
+/* Finalized emulation categories share the existing descriptor filter word.
+ * Native dispatch can test only the categories that its operation supports. */
+#define KK_SAMPLER_FILTER_REDUCTION (1u << 5)
+#define KK_SAMPLER_FILTER_BORDER (1u << 6)
 #define KK_SAMPLER_PARAMS_ALIGNMENT 16u
 #define KK_SAMPLER_PARAMS_STRIDE 32u
 

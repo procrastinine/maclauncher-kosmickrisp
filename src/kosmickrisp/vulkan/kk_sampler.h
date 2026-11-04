@@ -57,6 +57,13 @@ kk_sampler_needs_emulation(const struct kk_sampler *sampler)
           (sampler->filter_bits & KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE);
 }
 
+static inline uint16_t
+kk_sampler_emulation_filter_bits(const struct kk_sampler *sampler)
+{
+   return (sampler->reduction_mode ? KK_SAMPLER_FILTER_REDUCTION : 0) |
+          (sampler->has_border ? KK_SAMPLER_FILTER_BORDER : 0);
+}
+
 static inline void
 kk_sampler_publish_emulation(struct kk_device *dev, const struct kk_sampler *sampler)
 {

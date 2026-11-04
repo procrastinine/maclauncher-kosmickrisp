@@ -228,22 +228,20 @@ kk_sample_native_dispatch(nir_builder *b, nir_tex_instr *tex,
    nir_def *plane = nir_get_tex_src(tex, nir_tex_src_plane);
    unsigned offset = plane ? nir_src_as_uint(nir_src_for_ssa(plane)) *
       sizeof(struct kk_sampled_image_descriptor) : 0;
-   nir_def *emulated = nir_imm_false(b);
-   if (flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_MINMAX)) {
-      nir_def *metadata = load_resource_deref_desc(b, 2, 16, deref,
-         offset + offsetof(struct kk_sampled_image_descriptor, sampler_reduction_mode),
-         &ctx->descriptors);
-      if (flags & KK_SAMPLE_VIRTUAL)
-         emulated = nir_test_mask(b, nir_channel(b, metadata, 1), KK_SAMPLER_FILTER_VIRTUAL);
-      if (flags & KK_SAMPLE_MINMAX)
-         emulated = nir_ior(b, emulated, nir_ine_imm(b, nir_channel(b, metadata, 0), 0));
-   }
-   if (flags & KK_SAMPLE_BORDER) {
-      nir_def *border = load_resource_deref_desc(b, 1, 16, deref,
-         offset + offsetof(struct kk_sampled_image_descriptor, clamp_0_sampler_index_or_negative),
-         &ctx->descriptors);
-      emulated = nir_ior(b, emulated, nir_ige_imm(b, border, 0));
-   }
+   /* The producer publishes finalized reduction/border categories in the
+    * existing filter word. One load replaces the reduction pair and separate
+    * border-index read. Do not test reduction for shadow/gather operations. */
+   unsigned mask = 0;
+   if (flags & KK_SAMPLE_VIRTUAL)
+      mask |= KK_SAMPLER_FILTER_VIRTUAL;
+   if (flags & KK_SAMPLE_MINMAX)
+      mask |= KK_SAMPLER_FILTER_REDUCTION;
+   if (flags & KK_SAMPLE_BORDER)
+      mask |= KK_SAMPLER_FILTER_BORDER;
+   nir_def *metadata = load_resource_deref_desc(b, 1, 16, deref,
+      offset + offsetof(struct kk_sampled_image_descriptor, sampler_filter_bits),
+      &ctx->descriptors);
+   nir_def *emulated = nir_test_mask(b, metadata, mask);
    /* Implicit candidates have quad-uniform descriptor selection. Only this
     * uniform emulation branch needs quad derivatives or software LOD. Explicit
     * level/gradient candidates carry all their original derivative inputs. */

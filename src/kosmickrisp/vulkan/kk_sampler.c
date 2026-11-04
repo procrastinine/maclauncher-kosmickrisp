@@ -305,6 +305,7 @@ kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
       kk_DestroySampler(device, kk_sampler_to_handle(sampler), pAllocator);
       return result;
    }
+   sampler->filter_bits |= kk_sampler_emulation_filter_bits(sampler);
    kk_sampler_publish_emulation(dev, sampler);
    *pSampler = kk_sampler_to_handle(sampler);
 
