@@ -111,7 +111,7 @@ mtl_compiler_finish_cache(mtl_compiler *compiler)
 @end
 
 static char kk_compile_queue_association, kk_task_queue_association;
-static char kk_predicted_queue_association;
+static char kk_predicted_queue_association, kk_stage_queue_association;
 static unsigned kk_background_pending;
 /* Last start or end of a demand (non-background) Metal compile, from
  * kk_archive_now(). Deferred builds start only after this much quiet:
@@ -351,20 +351,30 @@ kk_foreground_cleanup(void **token)
  * second queue of two utility workers that demand compiles never suspend, so
  * they are ready before their first bind instead of compiling on the binding
  * thread. */
-/* Called with kk_compile_queue_lock held. */
+enum kk_queue_kind { KK_QUEUE_DEFERRED, KK_QUEUE_PREDICTED, KK_QUEUE_STAGE };
+
+/* Deferred builds share one background queue that demand compiles pause.
+ * Predicted builds use two utility workers that are never paused. The second
+ * stage of a demand library pair uses its own user-initiated queue, so the
+ * two stages of a pipeline compile in parallel even while deferred builds
+ * are queued. Called with kk_compile_queue_lock held. */
 static KKCompileQueue *
-kk_compile_queue(mtl_compiler *compiler, bool predicted)
+kk_compile_queue(mtl_compiler *compiler, enum kk_queue_kind kind)
 {
-   void *association = predicted ? &kk_predicted_queue_association : &kk_compile_queue_association;
+   void *association = kind == KK_QUEUE_PREDICTED ? &kk_predicted_queue_association :
+      kind == KK_QUEUE_STAGE ? &kk_stage_queue_association : &kk_compile_queue_association;
    KKCompileQueue *queue = objc_getAssociatedObject((id)compiler, association);
    if (queue || !kk_pin_worker_image()) return queue;
    queue = [[KKCompileQueue alloc] init];
    if (!queue) return nil;
    NSUInteger cores = MIN((NSUInteger)8, [NSProcessInfo processInfo].activeProcessorCount);
-   queue.maxConcurrentOperationCount = predicted ? MIN((NSUInteger)2, cores) : cores > 1 ? cores - 1 : 1;
+   queue.maxConcurrentOperationCount = kind == KK_QUEUE_PREDICTED ? MIN((NSUInteger)2, cores) :
+      kind == KK_QUEUE_STAGE ? cores : cores > 1 ? cores - 1 : 1;
    /* A queue's service level is also the floor for its operations. */
-   queue.qualityOfService = predicted ? NSQualityOfServiceUtility : NSQualityOfServiceBackground;
-   queue.name = predicted ? @"KosmicKrisp predicted builds" : @"KosmicKrisp compiler";
+   queue.qualityOfService = kind == KK_QUEUE_PREDICTED ? NSQualityOfServiceUtility :
+      kind == KK_QUEUE_STAGE ? NSQualityOfServiceUserInitiated : NSQualityOfServiceBackground;
+   queue.name = kind == KK_QUEUE_PREDICTED ? @"KosmicKrisp predicted builds" :
+      kind == KK_QUEUE_STAGE ? @"KosmicKrisp pipeline stages" : @"KosmicKrisp compiler";
    objc_setAssociatedObject((id)compiler, association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
    [queue release];
    return queue;
@@ -377,10 +387,11 @@ kk_compiler_submit(mtl_compiler *compiler, void *data,
 {
    @autoreleasepool {
       pthread_mutex_lock(&kk_compile_queue_lock);
-      KKCompileQueue *queue = kk_compile_queue(compiler, predicted);
-      /* A pair never queues behind unrelated jobs. Its caller can compile both
-       * stages synchronously when this same bounded queue is already occupied. */
-      if (!queue || (frontend && (queue->background_tasks || queue.operationCount >= queue.maxConcurrentOperationCount))) {
+      KKCompileQueue *queue = kk_compile_queue(compiler, frontend ? KK_QUEUE_STAGE :
+         predicted ? KK_QUEUE_PREDICTED : KK_QUEUE_DEFERRED);
+      /* A pair stage never waits for a worker: its caller compiles both stages
+       * when every stage worker is busy. */
+      if (!queue || (frontend && queue.operationCount >= queue.maxConcurrentOperationCount)) {
          pthread_mutex_unlock(&kk_compile_queue_lock);
          return NULL;
       }
@@ -437,7 +448,7 @@ mtl_compiler_task_prestart(mtl_compiler *compiler, void *task)
       KKCompileOperation *operation = (KKCompileOperation *)task;
       if (!operation || operation->frontend || operation.payloadRetired) return;
       pthread_mutex_lock(&kk_compile_queue_lock);
-      KKCompileQueue *queue = kk_compile_queue(compiler, true);
+      KKCompileQueue *queue = kk_compile_queue(compiler, KK_QUEUE_PREDICTED);
       pthread_mutex_unlock(&kk_compile_queue_lock);
       if (!queue) return;
       [operation retain];
