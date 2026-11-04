@@ -54,10 +54,17 @@ VkResult kk_create_heap_sampler(struct kk_device *dev,
    const VkSamplerCreateInfo *info, VkSampler *sampler,
    enum kk_sampler_params_lock_context params_lock_context);
 
+/* Immutable after publication; shared cache ownership outlives local RCs. */
+struct kk_sampler_native_state {
+   struct mtl_sampler_packed key;
+   mtl_sampler *handle;
+};
+
 VkResult kk_sampler_cap_native_init(struct kk_device *dev);
+
 void kk_sampler_cap_native_finish(struct kk_device *dev);
-uint32_t kk_sampler_cap_native_keys(struct kk_device *dev,
-   const struct mtl_sampler_packed **keys);
+uint32_t kk_sampler_cap_native_states(struct kk_device *dev,
+   const struct kk_sampler_native_state **states);
 VkResult kk_sampler_cap_get_canonical(struct kk_device *dev,
    const struct mtl_sampler_packed *key, struct kk_rc_sampler **out, bool native_only);
 VkResult kk_sampler_cap_finalize(struct kk_device *dev, struct kk_sampler *sampler,

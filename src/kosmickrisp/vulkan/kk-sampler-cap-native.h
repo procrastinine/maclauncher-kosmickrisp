@@ -9,10 +9,6 @@
 #include "util/hash_table.h"
 #include <stdlib.h>
 
-struct kk_sampler_native_state {
-   struct mtl_sampler_packed key;
-   mtl_sampler *handle;
-};
 struct kk_sampler_native_cache {
    struct kk_sampler_native_cache *next;
    uint64_t registry_id;
@@ -20,7 +16,7 @@ struct kk_sampler_native_cache {
    struct hash_table *states;
    struct mtl_sampler_id_check *id_check;
    bool acceleration_closed;
-   struct mtl_sampler_packed canonical[KK_SAMPLER_CAP_CANONICAL_MAX];
+   struct kk_sampler_native_state canonical[KK_SAMPLER_CAP_CANONICAL_MAX];
 };
 static struct kk_sampler_native_cache *kk_sampler_native_caches;
 static simple_mtx_t kk_sampler_native_mutex;
@@ -37,6 +33,30 @@ kk_sampler_native_mutex_init(void)
 
 /* The process-wide mutex protects cache membership and the actual native
  * descriptor budget, including materialization requested by sparse queries. */
+static bool
+kk_sampler_native_state_create(struct kk_device *dev,
+                               struct kk_sampler_native_cache *cache,
+                               struct kk_sampler_native_state *state)
+{
+   assert(!cache->acceleration_closed &&
+          kk_sampler_native_count < kk_sampler_native_limit);
+   mtl_sampler_descriptor *descriptor = create_sampler_descriptor(dev, &state->key);
+   state->handle = mtl_new_sampler(dev->mtl_handle, descriptor);
+   mtl_release(descriptor);
+   if (!state->handle)
+      return false;
+   if (!mtl_sampler_id_check_matches(cache->id_check, state->handle)) {
+      /* Never publish a state whose raw ID differs from ordinary encoding. */
+      cache->acceleration_closed = true;
+   } else if (_mesa_hash_table_insert(cache->states, &state->key, state)) {
+      ++kk_sampler_native_count;
+      return true;
+   }
+   mtl_release(state->handle);
+   state->handle = NULL;
+   return false;
+}
+
 static mtl_sampler *
 kk_sampler_native_materialize(struct kk_device *dev,
                               struct kk_sampler_native_cache *cache,
@@ -53,28 +73,10 @@ kk_sampler_native_materialize(struct kk_device *dev,
    if (!state)
       return NULL;
    memcpy(&state->key, key, sizeof(*key));
-   mtl_sampler_descriptor *descriptor = create_sampler_descriptor(dev, key);
-   state->handle = mtl_new_sampler(dev->mtl_handle, descriptor);
-   mtl_release(descriptor);
-   if (!state->handle) {
+   if (!kk_sampler_native_state_create(dev, cache, state)) {
       ralloc_free(state);
       return NULL;
    }
-   if (!mtl_sampler_id_check_matches(cache->id_check, state->handle)) {
-      /* A non-nil state may have a raw ID that differs from ordinary Metal
-       * argument encoding. Never publish it or retry new acceleration while
-       * this cache lives; reserved canonical states continue serving requests. */
-      cache->acceleration_closed = true;
-      mtl_release(state->handle);
-      ralloc_free(state);
-      return NULL;
-   }
-   if (!_mesa_hash_table_insert(cache->states, &state->key, state)) {
-      mtl_release(state->handle);
-      ralloc_free(state);
-      return NULL;
-   }
-   ++kk_sampler_native_count;
    return state->handle;
 }
 
@@ -127,10 +129,14 @@ kk_sampler_cap_native_init(struct kk_device *dev)
    cache->limit = kk_device_physical(dev)->info.max_sampler_count;
    const uint32_t prior_limit = kk_sampler_native_limit;
    kk_sampler_native_limit = MIN2(kk_sampler_native_limit, cache->limit);
-   cache->canonical_count = kk_sampler_cap_canonical_keys(cache->canonical);
+   struct mtl_sampler_packed keys[KK_SAMPLER_CAP_CANONICAL_MAX];
+   cache->canonical_count = kk_sampler_cap_canonical_keys(keys);
    VkResult result = VK_SUCCESS;
    for (uint32_t i = 0; i < cache->canonical_count; ++i) {
-      if (!kk_sampler_native_materialize(dev, cache, &cache->canonical[i])) {
+      memcpy(&cache->canonical[i].key, &keys[i], sizeof(keys[i]));
+      if (cache->acceleration_closed ||
+          kk_sampler_native_count >= kk_sampler_native_limit ||
+          !kk_sampler_native_state_create(dev, cache, &cache->canonical[i])) {
          result = VK_ERROR_OUT_OF_HOST_MEMORY;
          break;
       }
@@ -171,11 +177,11 @@ kk_sampler_cap_native_finish(struct kk_device *dev)
 }
 
 uint32_t
-kk_sampler_cap_native_keys(struct kk_device *dev,
-                           const struct mtl_sampler_packed **keys)
+kk_sampler_cap_native_states(struct kk_device *dev,
+                             const struct kk_sampler_native_state **states)
 {
    const struct kk_sampler_native_cache *cache = dev->samplers.native_cache;
-   *keys = cache->canonical;
+   *states = cache->canonical;
    return cache->canonical_count;
 }
 

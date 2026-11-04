@@ -84,6 +84,7 @@ struct kk_sampler_heap {
    struct kk_sampler_native_cache *native_cache;
    uint32_t canonical_count;
    uint32_t indexed_count;
+   bool sparse_queries;
    simple_mtx_t lock;
 
    struct kk_query_table table;

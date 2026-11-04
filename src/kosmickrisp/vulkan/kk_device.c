@@ -147,6 +147,8 @@ kk_init_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h)
    }
 
    simple_mtx_init(&h->lock, mtx_plain);
+   h->sparse_queries = dev->vk.enabled_features.sparseResidencyImage2D ||
+                       dev->vk.enabled_features.sparseResidencyImage3D;
    return VK_SUCCESS;
 }
 
@@ -274,43 +276,65 @@ kk_sampler_cap_reserve_locked(struct kk_device *dev)
    VkResult result = kk_sampler_cap_native_init(dev);
    if (result != VK_SUCCESS)
       return result;
-   const struct mtl_sampler_packed *keys;
-   uint32_t count = kk_sampler_cap_native_keys(dev, &keys);
+   const struct kk_sampler_native_state *states;
+   uint32_t count = kk_sampler_cap_native_states(dev, &states);
    for (uint32_t i = 0; i < count; ++i) {
-      struct kk_rc_sampler *rc;
-      result = kk_sampler_heap_add_locked(dev, h, keys[i], &rc, true);
-      if (result != VK_SUCCESS) {
-         /* Initialization publishes no application handles. Unwind only this
-          * device's references; another device may retain the shared cache. */
-         hash_table_foreach(h->ht, entry) {
-            struct kk_rc_sampler *partial = entry->data;
-            if (partial->index != UINT16_MAX)
-               kk_query_table_remove(dev, &h->table, partial->index);
-            mtl_release(partial->handle);
-            ralloc_free(partial);
-         }
-         _mesa_hash_table_clear(h->ht, NULL);
-         h->indexed_count = 0;
-         kk_sampler_cap_native_finish(dev);
-         return result;
+      /* The published canonical family is immutable. Bind it directly rather
+       * than repeating key normalization, two hash lookups and a global lock
+       * for every local reference. Cache ownership keeps each handle alive. */
+      struct kk_rc_sampler *rc = rzalloc(h->ht, struct kk_rc_sampler);
+      if (!rc) {
+         result = VK_ERROR_OUT_OF_HOST_MEMORY;
+         goto fail;
       }
+      memcpy(&rc->key, &states[i].key, sizeof(rc->key));
+      rc->handle = states[i].handle;
+      mtl_retain(rc->handle);
+      rc->refcount = 1;
+      rc->index = UINT16_MAX;
       rc->canonical = true;
+      result = kk_sampler_require_index(dev, h, rc);
+      if (result == VK_SUCCESS &&
+          !_mesa_hash_table_insert(h->ht, &rc->key, rc))
+         result = VK_ERROR_OUT_OF_HOST_MEMORY;
+      if (result != VK_SUCCESS) {
+         if (rc->index != UINT16_MAX) {
+            kk_query_table_remove(dev, &h->table, rc->index);
+            --h->indexed_count;
+         }
+         mtl_release(rc->handle);
+         ralloc_free(rc);
+         goto fail;
+      }
    }
    h->canonical_count = count;
    return VK_SUCCESS;
+
+fail:
+   /* No application handles were published. Other devices may still own the
+    * shared cache; unwind only this device's complete or partial references. */
+   hash_table_foreach(h->ht, entry) {
+      struct kk_rc_sampler *partial = entry->data;
+      if (partial->index != UINT16_MAX)
+         kk_query_table_remove(dev, &h->table, partial->index);
+      mtl_release(partial->handle);
+      ralloc_free(partial);
+   }
+   _mesa_hash_table_clear(h->ht, NULL);
+   h->indexed_count = 0;
+   kk_sampler_cap_native_finish(dev);
+   return result;
 }
 
 VkResult
 kk_sampler_cap_get_canonical(struct kk_device *dev,
    const struct mtl_sampler_packed *requested, struct kk_rc_sampler **out, bool native_only)
 {
-   struct mtl_sampler_packed key;
-   kk_sampler_cap_key(&key, requested);
    struct kk_sampler_heap *h = &dev->samplers;
    simple_mtx_lock(&h->lock);
    VkResult result = kk_sampler_cap_reserve_locked(dev);
    if (result == VK_SUCCESS)
-      result = kk_sampler_cap_fallback_locked(dev, h, &key, out, !native_only);
+      result = kk_sampler_cap_fallback_locked(dev, h, requested, out, !native_only);
    simple_mtx_unlock(&h->lock);
    return result;
 }
@@ -328,7 +352,8 @@ kk_sampler_heap_add(struct kk_device *dev, struct mtl_sampler_packed desc,
    VkResult result = kk_sampler_cap_reserve_locked(dev);
    if (result == VK_SUCCESS)
       result = kk_sampler_heap_add_locked(dev, h, desc, out, true);
-   if (result == VK_SUCCESS && kk_sampler_cap_keys_equal(&desc, &(*out)->key)) {
+   if (result == VK_SUCCESS && h->sparse_queries &&
+       kk_sampler_cap_keys_equal(&desc, &(*out)->key)) {
       result = kk_sparse_sampler_added(dev, *out);
       if (result != VK_SUCCESS) kk_sampler_heap_remove_locked(dev, h, *out);
    }
@@ -346,7 +371,8 @@ kk_sampler_native_add(struct kk_device *dev, struct mtl_sampler_packed desc,
    VkResult result = kk_sampler_cap_reserve_locked(dev);
    if (result == VK_SUCCESS)
       result = kk_sampler_heap_add_locked(dev, h, desc, out, false);
-   if (result == VK_SUCCESS && kk_sampler_cap_keys_equal(&desc, &(*out)->key)) {
+   if (result == VK_SUCCESS && h->sparse_queries &&
+       kk_sampler_cap_keys_equal(&desc, &(*out)->key)) {
       result = kk_sparse_sampler_added(dev, *out);
       if (result != VK_SUCCESS) kk_sampler_heap_remove_locked(dev, h, *out);
    }
@@ -362,7 +388,8 @@ kk_sampler_heap_remove_locked(struct kk_device *dev, struct kk_sampler_heap *h,
    rc->refcount--;
 
    if (rc->refcount == 0) {
-      kk_sparse_sampler_removed(dev, rc);
+      if (h->sparse_queries)
+         kk_sparse_sampler_removed(dev, rc);
       mtl_release(rc->handle);
       if (rc->index != UINT16_MAX) {
          kk_query_table_remove(dev, &h->table, rc->index);

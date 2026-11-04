@@ -1034,6 +1034,8 @@ Vulkan contract: Logical sampler capacity and native canonical states.
 
 Reserves canonical native tap states before acceleration consumes the application budget, validates native IDs against ordinary Metal argument encoding before publication, shares native materialization across logical devices, and retains original logical sampler parameters for shared sampling.
 
+The canonical pool and native-ID publication checker are initialized at the first sampler or sampled sparse view. Fixed canonical states reside in the shared native cache, and local device tables bind references to that published family. Devices without sampled sparse features omit sampler-row notifications.
+
 Scope: native sampler construction, sampler cache and table allocation. Device support and operation restrictions are defined by the linked implementation.
 
 Consumers: DXVK, vkd3d-proton, descriptor heaps.
