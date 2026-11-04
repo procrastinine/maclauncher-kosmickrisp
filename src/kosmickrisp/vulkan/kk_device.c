@@ -390,6 +390,14 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       mtl_residency_set_request_residency(dev->residency_set.priority_handle);
    }
 
+   /* Weak entries reuse live shaders and their native Metal pipelines. */
+   struct vk_pipeline_cache_create_info cache_info = {.weak_ref = true};
+   dev->vk.mem_cache = vk_pipeline_cache_create(&dev->vk, &cache_info, NULL);
+   if (dev->vk.mem_cache == NULL) {
+      result = VK_ERROR_OUT_OF_HOST_MEMORY;
+      goto fail_mem_cache;
+   }
+
    for (uint32_t i = 0; i < pCreateInfo->queueCreateInfoCount; ++i) {
       const VkDeviceQueueCreateInfo *info = &pCreateInfo->pQueueCreateInfos[i];
       for (uint32_t q = 0; q < info->queueCount; ++q) {
@@ -468,6 +476,7 @@ fail_query_table:
 fail_meta:
    kk_device_finish_meta(dev);
 fail_mem_cache:
+   vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
    while (dev->queue_count > 0)
       kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
 fail_vab_memory:
@@ -541,6 +550,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    mtl_release(dev->residency_set.handle);
    simple_mtx_destroy(&dev->residency_set.mutex);
 
+   vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
    kk_release_compiler(dev);
 
    vk_device_finish(&dev->vk);

@@ -1159,6 +1159,16 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
    STATIC_ASSERT(BLAKE3_KEY_LEN >= VK_UUID_SIZE);
    memcpy(pdev->vk.properties.pipelineCacheUUID, blake3, VK_UUID_SIZE);
    memcpy(pdev->vk.properties.shaderBinaryUUID, blake3, VK_UUID_SIZE);
+
+#ifdef ENABLE_SHADER_CACHE
+   char renderer[32];
+   snprintf(renderer, sizeof(renderer), "kosmickrisp_apple_%u", pdev->info.gpu_apple_family);
+   char timestamp[BLAKE3_HEX_LEN];
+   /* driver_build_sha is a16-byte UUID; format its full BLAKE3 digest. */
+   _mesa_blake3_format(timestamp, blake3);
+   pdev->vk.disk_cache = disk_cache_create(renderer, timestamp,
+                                          pdev->settings.disabled_workarounds);
+#endif
 }
 
 static void
