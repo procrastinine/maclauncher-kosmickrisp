@@ -1122,6 +1122,7 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
 }
 
 #include "kk_polygon_nir.h"
+#include "kk_polygon_scalar_io.h"
 
 static VkResult
 kk_compile_shader(struct kk_device *dev, nir_shader *nir,
@@ -1260,6 +1261,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       if (polygon) {
          shader->info.polygon_point = true;
          nir_shader *point_vs = kk_polygon_vertex_shader(&shader->info.polygon, nir->options);
+         NIR_PASS(_, point_vs, kk_nir_lower_polygon_scalar_outputs);
          NIR_PASS(_, point_vs, msl_nir_vs_io_types);
          NIR_PASS(_, point_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
          kk_compile_msl(pdev, point_vs, state, &shader->polygon[2]);
