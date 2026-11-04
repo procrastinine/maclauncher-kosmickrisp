@@ -310,6 +310,56 @@ logical_value(nir_builder *b, struct native_coarse_values *v,
    return quad_select(b, value, physical);
 }
 
+/* Keep subgroup indices and explicit quad operations consistent with the
+ * logical derivative quad. The permutation is local to each four-lane group;
+ * no invocations are packed across different native subgroups. */
+static nir_def *
+logical_subgroup_id(nir_builder *b, struct native_coarse_values *v)
+{
+   return nir_ior(b, nir_iand_imm(b, nir_load_subgroup_invocation(b), ~3u), v->logical);
+}
+
+static nir_def *
+logical_subgroup_ballot(nir_builder *b, struct native_coarse_values *v,
+                        nir_def *predicate)
+{
+   nir_def *live = nir_inot(b, nir_ior(b, v->helper, nir_is_helper_invocation(b, 1)));
+   nir_def *result = nir_imm_int(b, 0);
+   for (unsigned lane = 0; lane < 4; lane++) {
+      nir_def *mask = nir_ballot(b, 1, 32, nir_iand(b, live,
+         nir_iand(b, predicate, nir_ieq_imm(b, v->logical, lane))));
+      /* Collapse only this quad's four physical bits to its base bit. */
+      nir_def *base = mask;
+      for (unsigned shift = 1; shift < 4; shift++)
+         base = nir_ior(b, base, nir_ushr_imm(b, mask, shift));
+      result = nir_ior(b, result,
+         nir_ishl_imm(b, nir_iand_imm(b, base, 0x11111111u), lane));
+   }
+   return result;
+}
+
+static nir_def *
+physical_subgroup_index(nir_builder *b, struct native_coarse_values *v,
+                        nir_def *logical)
+{
+   nir_def *base = nir_iand_imm(b, logical, ~3u);
+   nir_def *wanted = nir_iand_imm(b, logical, 3);
+   nir_def *live = nir_ballot(b, 1, 32,
+      nir_inot(b, nir_ior(b, v->helper, nir_is_helper_invocation(b, 1))));
+   nir_def *physical = nir_imm_int(b, 0);
+   for (unsigned lane = 0; lane < 4; lane++) {
+      nir_def *candidate = nir_ior_imm(b, base, lane);
+      nir_def *mapped = nir_shuffle(b, v->logical, candidate);
+      nir_def *active = nir_ine_imm(b, nir_iand(b, live,
+         nir_ishl(b, nir_imm_int(b, 1), candidate)), 0);
+      physical = nir_bcsel(b, nir_iand(b, active, nir_ieq(b, mapped, wanted)),
+                           candidate, physical);
+   }
+   /* An inactive/out-of-range requested invocation has undefined API data.
+    * It must not allow an inactive candidate to override a real live match. */
+   return physical;
+}
+
 static nir_def *
 interpolate_logical_pixel(nir_builder *b, struct native_coarse_values *v,
                           nir_def *native, bool perspective, nir_def *point)
@@ -391,14 +441,59 @@ lower_native_application(nir_builder *b, nir_instr *instr, void *data)
       nir_pop_if(b, NULL);
       nir_instr_remove(instr);
       return true;
-   case nir_intrinsic_ballot:
+   case nir_intrinsic_load_subgroup_invocation:
+      replace = logical_subgroup_id(b, v);
+      break;
+   case nir_intrinsic_ballot: {
+      nir_def *mask = logical_subgroup_ballot(b, v, intr->src[0].ssa);
+      nir_def *words[NIR_MAX_VEC_COMPONENTS];
+      words[0] = nir_u2uN(b, mask, intr->def.bit_size);
+      for (unsigned i = 1; i < intr->def.num_components; i++)
+         words[i] = nir_imm_intN_t(b, 0, intr->def.bit_size);
+      replace = nir_vec(b, words, intr->def.num_components);
+      break;
+   }
+   case nir_intrinsic_first_invocation:
+   case nir_intrinsic_elect:
+   case nir_intrinsic_read_first_invocation: {
+      nir_def *first = nir_find_lsb(b, logical_subgroup_ballot(b, v, nir_imm_true(b)));
+      if (intr->intrinsic == nir_intrinsic_first_invocation)
+         replace = first;
+      else if (intr->intrinsic == nir_intrinsic_read_first_invocation)
+         replace = nir_shuffle(b, intr->src[0].ssa, physical_subgroup_index(b, v, first));
+      else
+         replace = nir_iand(b, nir_inot(b, nir_ior(b, v->helper,
+            nir_is_helper_invocation(b, 1))), nir_ieq(b, logical_subgroup_id(b, v), first));
+      break;
+   }
+   case nir_intrinsic_read_invocation:
+   case nir_intrinsic_shuffle:
+   case nir_intrinsic_shuffle_up:
+   case nir_intrinsic_shuffle_down:
+   case nir_intrinsic_shuffle_xor: {
+      nir_def *index = intr->src[1].ssa;
+      if (intr->intrinsic == nir_intrinsic_shuffle_up)
+         index = nir_isub(b, logical_subgroup_id(b, v), index);
+      else if (intr->intrinsic == nir_intrinsic_shuffle_down)
+         index = nir_iadd(b, logical_subgroup_id(b, v), index);
+      else if (intr->intrinsic == nir_intrinsic_shuffle_xor)
+         index = nir_ixor(b, logical_subgroup_id(b, v), index);
+      replace = nir_shuffle(b, intr->src[0].ssa, physical_subgroup_index(b, v, index));
+      break;
+   }
+   case nir_intrinsic_quad_broadcast:
+      replace = logical_value(b, v, intr->src[0].ssa, intr->src[1].ssa);
+      break;
+   case nir_intrinsic_quad_swap_horizontal:
+   case nir_intrinsic_quad_swap_vertical:
+   case nir_intrinsic_quad_swap_diagonal: {
+      unsigned direction = intr->intrinsic == nir_intrinsic_quad_swap_horizontal ? 1 :
+         intr->intrinsic == nir_intrinsic_quad_swap_vertical ? 2 : 3;
+      replace = logical_value(b, v, intr->src[0].ssa, nir_ixor(b, v->logical, nir_imm_int(b, direction)));
+      break;
+   }
    case nir_intrinsic_vote_any:
    case nir_intrinsic_vote_all:
-   case nir_intrinsic_reduce:
-   case nir_intrinsic_inclusive_scan:
-   case nir_intrinsic_exclusive_scan:
-   case nir_intrinsic_elect:
-   case nir_intrinsic_read_first_invocation:
    case nir_intrinsic_vote_feq:
    case nir_intrinsic_vote_ieq:
       return msl_lower_virtual_subgroup(b, intr,
@@ -521,12 +616,20 @@ native_implicit_gradients(nir_shader *nir)
 }
 
 static bool
+native_reduce_only(const nir_intrinsic_instr *intr, const void *data)
+{
+   return intr->intrinsic == nir_intrinsic_reduce ||
+          intr->intrinsic == nir_intrinsic_inclusive_scan ||
+          intr->intrinsic == nir_intrinsic_exclusive_scan;
+}
+
+static bool
 lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *linked)
 {
    if (nir->info.stage != MESA_SHADER_FRAGMENT ||
        (!linked && nir->info.outputs_written != BITFIELD64_BIT(FRAG_RESULT_DATA0))) return false;
    if (!native_implicit_gradients(nir)) return false;
-   bool needs_centroid = false;
+   bool needs_centroid = false, needs_reduce = false;
    nir_foreach_function_impl(impl, nir) nir_foreach_block(block, impl)
       nir_foreach_instr(instr, block) {
          if (instr->type == nir_instr_type_tex) {
@@ -546,6 +649,11 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
          if (instr->type != nir_instr_type_intrinsic) continue;
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
          switch (intr->intrinsic) {
+         case nir_intrinsic_reduce:
+         case nir_intrinsic_inclusive_scan:
+         case nir_intrinsic_exclusive_scan:
+            needs_reduce = true;
+            break;
          case nir_intrinsic_demote: case nir_intrinsic_demote_if:
          case nir_intrinsic_terminate: case nir_intrinsic_terminate_if:
             break;
@@ -569,6 +677,13 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
          default: break;
          }
       }
+   if (needs_reduce) {
+      const nir_lower_subgroups_options options = {
+         .subgroup_size = 32, .ballot_bit_size = 32, .ballot_components = 1,
+         .lower_reduce = true, .filter = native_reduce_only,
+      };
+      NIR_PASS(_, nir, nir_lower_subgroups, &options);
+   }
    nir_variable *output = NULL;
    nir_foreach_variable_with_modes(var, nir, nir_var_shader_out)
       if (var->data.location == FRAG_RESULT_DATA0) output = var;
