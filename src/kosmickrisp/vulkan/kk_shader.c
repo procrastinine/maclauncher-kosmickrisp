@@ -3400,7 +3400,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       !infos[0].nir->xfb_info && !infos[0].nir->info.cull_distance_array_size &&
       !(infos[0].flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT) &&
       !depth_bounds && !pixel_candidate && !polygon_capture && !poly_layer_replay &&
-      !barycentric_inputs && !kk_polygon_native_possible(state) &&
+      !(barycentric_inputs & (KK_BARYCENTRIC_INPUT_PER_VERTEX | KK_BARYCENTRIC_INPUT_COORD)) &&
+      !kk_polygon_native_possible(state) &&
       !kk_depth_bias_native_possible(depth_bias_control, state);
    nir_shader *coarse_fs = NULL;
    for (uint32_t step = 0u; step < shader_count; ++step) {
