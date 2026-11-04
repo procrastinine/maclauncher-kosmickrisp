@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "mtl_pipeline_archive.h"
+#include "mtl_function_constants.h"
 
 /* Immutable process diagnostic, initialized before compiler publication. */
 static NSString *debug_msl_prefix;
@@ -235,8 +236,12 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
    @autoreleasepool {
       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
 
+      bool valid = true;
+      MTL4FunctionDescriptor *prepared =
+         kk_prepare_function_constants((MTL4FunctionDescriptor *)function, &valid);
+      if (!valid) return NULL;
       MTL4ComputePipelineDescriptor *desc = [[MTL4ComputePipelineDescriptor new] autorelease];
-      desc.computeFunctionDescriptor = (MTL4FunctionDescriptor *)function;
+      desc.computeFunctionDescriptor = prepared;
       desc.maxTotalThreadsPerThreadgroup = max_total_threads_per_threadgroup;
 
       NSError *error;
@@ -340,7 +345,9 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
 {
    @autoreleasepool {
       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
-      MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+      MTL4PipelineDescriptor *desc =
+         kk_prepare_render_function_constants((MTL4PipelineDescriptor *)descriptor);
+      if (!desc) return NULL;
 
       NSError *error = nil;
       id<MTLRenderPipelineState> pipeline = kk_archive_render(compiler, desc);

@@ -6,23 +6,12 @@
 #include "util/u_atomic.h"
 #include "kk_perf.h"
 
-static bool
-kk_attachment_reads_disabled(const struct kk_shader_info *info,
-                             const enum mtl_pixel_format *formats)
-{
-   u_foreach_bit(i, info->framebuffer_read_mask) {
-      if (formats[i] == MTL_PIXEL_FORMAT_INVALID)
-         return true;
-   }
-   return false;
-}
-
 /* The retained descriptor stays unspecialized for later format variants. */
 static mtl_render_pipeline_state *
 kk_attachment_compile_pipeline(struct kk_device *device,
    struct kk_shader *shader, mtl_render_pipeline_descriptor *descriptor)
 {
-   if (!kk_attachment_reads_disabled(&shader->info, shader->info.vs.rt_formats))
+   if (!shader->info.framebuffer_read_mask)
       return KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_render_pipeline(device->mtl_compiler_handle, descriptor));
    return KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_render_pipeline_for_attachments(device->mtl_compiler_handle,
       descriptor, shader->info.vs.rt_formats, MAX_DRAW_BUFFERS, 0,
@@ -215,7 +204,7 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
       variant->pipeline = KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_render_pipeline_for_raster_attachments(
          device->mtl_compiler_handle,
          descriptor, formats, MAX_DRAW_BUFFERS, disabled, samples,
-         (shader->info.framebuffer_read_mask & disabled) != 0, topology));
+         shader->info.framebuffer_read_mask != 0, topology));
       mtl_release(descriptor);
       result = VK_ERROR_INVALID_SHADER_NV;
       if (variant->pipeline) {

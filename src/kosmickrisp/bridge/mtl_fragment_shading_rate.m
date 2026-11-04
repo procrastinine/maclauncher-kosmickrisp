@@ -85,7 +85,6 @@ new_function_pipelines(mtl_compiler *compiler,
          if (!specialized) return NULL;
          application = [(MTL4FunctionDescriptor *)specialized autorelease];
       }
-      id<MTL4Compiler> c = (id<MTL4Compiler>)compiler;
       NSError *error = nil;
       id<MTLLibrary> support = support_library
          ? [(id<MTLLibrary>)support_library retain]
@@ -104,7 +103,7 @@ new_function_pipelines(mtl_compiler *compiler,
          early_fragment_tests ? "kk_vrs_capture_early" : "kk_vrs_capture");
       for (unsigned i = 0; i < 8; i++)
          r.colorAttachments[i].writeMask = MTLColorWriteMaskNone;
-      p->coverage = [c newRenderPipelineStateWithDescriptor:r compilerTaskOptions:nil error:&error];
+      p->coverage = (id<MTLRenderPipelineState>)mtl_new_render_pipeline(compiler, (void *)r);
       if (p->coverage) {
          MTL4RenderPipelineDescriptor *fine = replay ? [original copy] : [r copy];
          fine.fragmentFunctionDescriptor = replay ? replay : function(support, "kk_vrs_replay");
@@ -122,14 +121,14 @@ new_function_pipelines(mtl_compiler *compiler,
          body.fragmentFunctionDescriptor = application;
          for (unsigned i = 0; i < 8; i++)
             body.colorAttachments[i].writeMask = MTLColorWriteMaskNone;
-         p->coarse = [c newRenderPipelineStateWithDescriptor:body compilerTaskOptions:nil error:&error];
+         p->coarse = (id<MTLRenderPipelineState>)mtl_new_render_pipeline(compiler, (void *)body);
          [body release];
          MTL4TileRenderPipelineDescriptor *order = [[[MTL4TileRenderPipelineDescriptor alloc] init] autorelease];
          order.tileFunctionDescriptor = function(support, "kk_vrs_order");
          for (unsigned i = 0; i < 8; i++)
             order.colorAttachments[i].pixelFormat = original.colorAttachments[i].pixelFormat;
          order.rasterSampleCount = original.rasterSampleCount;
-         p->order = [c newRenderPipelineStateWithDescriptor:order compilerTaskOptions:nil error:&error];
+         p->order = (id<MTLRenderPipelineState>)mtl_new_render_pipeline(compiler, (void *)order);
          MTL4RenderPipelineDescriptor *prepare = [[[MTL4RenderPipelineDescriptor alloc] init] autorelease];
          prepare.vertexFunctionDescriptor = function(support, "kk_vrs_prepare_mesh_job");
          prepare.rasterizationEnabled = NO;
@@ -138,7 +137,7 @@ new_function_pipelines(mtl_compiler *compiler,
             prepare.colorAttachments[i].pixelFormat = original.colorAttachments[i].pixelFormat;
             prepare.colorAttachments[i].writeMask = MTLColorWriteMaskNone;
          }
-         p->prepare = [c newRenderPipelineStateWithDescriptor:prepare compilerTaskOptions:nil error:&error];
+         p->prepare = (id<MTLRenderPipelineState>)mtl_new_render_pipeline(compiler, (void *)prepare);
       }
       if (p->replay && !native_application) {
          MTL4TileRenderPipelineDescriptor *t = [[[MTL4TileRenderPipelineDescriptor alloc] init] autorelease];
@@ -146,7 +145,7 @@ new_function_pipelines(mtl_compiler *compiler,
          t.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA32Float;
          t.rasterSampleCount = 1;
          t.threadgroupSizeMatchesTileSize = YES;
-         p->coarse = [c newRenderPipelineStateWithDescriptor:t compilerTaskOptions:nil error:&error];
+         p->coarse = (id<MTLRenderPipelineState>)mtl_new_render_pipeline(compiler, (void *)t);
       }
       [support release];
       if (!p->coverage || !p->replay || !p->coarse || (native_application && (!p->order || !p->prepare))) {
