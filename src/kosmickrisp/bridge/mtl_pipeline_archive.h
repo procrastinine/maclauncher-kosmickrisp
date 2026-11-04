@@ -7,6 +7,7 @@
 #include <dispatch/dispatch.h>
 #include <objc/runtime.h>
 #include <pthread.h>
+#include <pthread/qos.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -184,6 +185,7 @@ kk_archive_temporary_path(void)
    MTLMathFloatingPointFunctions floating;
    NSCondition *changed;
    id<MTLLibrary> library;
+   pthread_t background_owner;
    bool complete;
 }
 @end
@@ -573,6 +575,17 @@ kk_compiler_archive(mtl_compiler *compiler)
    return objc_getAssociatedObject((id)compiler, &kk_archive_association);
 }
 
+/* Background compiles keep their priority while another thread waits for them.
+ * A waiter above background raises the compiling thread for the wait; Metal
+ * carries that override to MTLCompilerService through its synchronous request.
+ * The caller keeps the compiling thread alive across this call. */
+static pthread_override_t
+kk_raise_background_compile(pthread_t thread)
+{
+   if (!thread || qos_class_self() == QOS_CLASS_BACKGROUND) return NULL;
+   return pthread_override_qos_class_start_np(thread, QOS_CLASS_USER_INITIATED, 0);
+}
+
 /* Pending entries are created only when a KK worker/caller enters a compile,
  * never while enqueueing. Completed-only probes cannot wait. Thus pending entries cannot depend on queued work
  * behind their waiters. Native calls and waits hold no archive/cache lock. */
@@ -629,6 +642,7 @@ kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vert
                   entry->math = desc.options.mathMode;
                   entry->floating = desc.options.mathFloatingPointFunctions;
                   entry->changed = [NSCondition new];
+                  if (qos_class_self() == QOS_CLASS_BACKGROUND) entry->background_owner = pthread_self();
                   if (entry->source && entry->changed && cache->cached_libraries) {
                      [cache->cached_libraries addObject:entry];
                      cache->cached_source_bytes += bytes;
@@ -646,9 +660,13 @@ kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vert
    if (!entry && completed_only) return nil;
    if (entry && !owner) {
       [entry->changed lock];
+      /* The owner publishes completion under this lock, so it is still alive. */
+      pthread_override_t raised = __atomic_load_n(&entry->complete, __ATOMIC_ACQUIRE) ? NULL :
+         kk_raise_background_compile(entry->background_owner);
       while (!__atomic_load_n(&entry->complete, __ATOMIC_ACQUIRE)) [entry->changed wait];
       id<MTLLibrary> result = [entry->library retain];
       [entry->changed unlock];
+      if (raised) pthread_override_qos_class_end_np(raised);
       [entry release];
       return result;
    }

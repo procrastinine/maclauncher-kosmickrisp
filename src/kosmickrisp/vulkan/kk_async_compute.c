@@ -223,10 +223,14 @@ job_wait(struct kk_async_compute *job, const char *reason, bool require_finished
 {
    bool pending = !p_atomic_read(&job->ready);
    if (!pending && !require_finished) return;
+   static const char *const modes[] = {
+      [MTL_COMPILER_JOIN_NONE] = "none", [MTL_COMPILER_JOIN_HERE] = "here",
+      [MTL_COMPILER_JOIN_QUEUED] = "queued", [MTL_COMPILER_JOIN_RUNNING] = "running",
+   };
    uint64_t start = pending && job->dev->perf ? kk_perf_now() : 0;
-   mtl_compiler_task_wait(job->task);
+   enum mtl_compiler_join join = mtl_compiler_task_join(job->task);
    if (start)
-      kk_perf_async_join(job->dev->perf, job->parent_id, reason,
+      kk_perf_async_join(job->dev->perf, job->parent_id, reason, modes[join],
                           start, kk_perf_now() - start);
 }
 
@@ -313,9 +317,20 @@ kk_async_compute_device_finish(struct kk_device *dev)
       mtl_compiler_task_cancel(job->task);
       job_unref(job);
    }
+   /* Builds still active are compiling at background priority. Raise their
+    * workers so device destruction does not wait at that priority. */
    pthread_mutex_lock(&owner->mutex);
+   unsigned raised_count = 0, capacity = owner->active;
+   void **raised = capacity ? calloc(capacity, sizeof(*raised)) : NULL;
+   for (struct kk_async_compute *job = owner->jobs; job && raised && raised_count < capacity;
+        job = job->active_next) {
+      void *token = mtl_compiler_task_raise(job->task);
+      if (token) raised[raised_count++] = token;
+   }
    while (owner->active) pthread_cond_wait(&owner->drained, &owner->mutex);
    pthread_mutex_unlock(&owner->mutex);
+   for (unsigned i = 0; i < raised_count; ++i) mtl_compiler_task_raise_end(raised[i]);
+   free(raised);
    kk_async_compute_drain(dev);
    pthread_cond_destroy(&owner->drained);
    pthread_mutex_destroy(&owner->mutex);

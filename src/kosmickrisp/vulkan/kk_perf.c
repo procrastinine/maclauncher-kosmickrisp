@@ -597,13 +597,13 @@ kk_perf_async_compute(struct kk_perf *p, int queued_delta, int active_delta)
 
 void
 kk_perf_async_join(struct kk_perf *p, uint64_t parent, const char *reason,
-                    uint64_t start, uint64_t duration)
+                   const char *mode, uint64_t start, uint64_t duration)
 {
    if (!p->compile_details) return;
    pthread_mutex_lock(&p->mutex);
    fprintf(p->log, "{\"kk_async_join\":1,\"device\":\"%p\",\"parent_id\":%"PRIu64
-      ",\"reason\":\"%s\",\"thread\":%"PRIu64",\"start_ms\":%.6f,\"wall_ms\":%.6f}\n",
-      (void *)p, parent, reason, kk_perf_thread_id(), (start - p->created) / 1e6, duration / 1e6);
+      ",\"reason\":\"%s\",\"mode\":\"%s\",\"thread\":%"PRIu64",\"start_ms\":%.6f,\"wall_ms\":%.6f}\n",
+      (void *)p, parent, reason, mode, kk_perf_thread_id(), (start - p->created) / 1e6, duration / 1e6);
    fflush(p->log);
    pthread_mutex_unlock(&p->mutex);
 }

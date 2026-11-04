@@ -136,6 +136,8 @@ kk_pin_worker_image(void)
    void (*execute)(void *), (*failed)(void *, const char *), (*cleanup)(void *);
    KKCompileQueue *ownerQueue;
    pthread_mutex_t state;
+   pthread_cond_t retired;
+   pthread_t worker;
    bool callback_entered, payload_claimed, payload_retired, frontend;
 }
 - (void)retirePayload:(BOOL)onlyQueued;
@@ -146,6 +148,11 @@ kk_pin_worker_image(void)
 {
    self = [super init];
    if (self && pthread_mutex_init(&state, NULL)) { [super dealloc]; return nil; }
+   if (self && pthread_cond_init(&retired, NULL)) {
+      pthread_mutex_destroy(&state);
+      [super dealloc];
+      return nil;
+   }
    return self;
 }
 - (BOOL)payloadRetired { return __atomic_load_n(&payload_retired, __ATOMIC_ACQUIRE); }
@@ -176,7 +183,55 @@ kk_pin_worker_image(void)
       __atomic_sub_fetch(&kk_background_pending, 1, __ATOMIC_RELEASE);
    }
    finish_payload(payload);
+   pthread_mutex_lock(&state);
    __atomic_store_n(&payload_retired, true, __ATOMIC_RELEASE);
+   pthread_cond_broadcast(&retired);
+   pthread_mutex_unlock(&state);
+}
+- (void)waitRetired
+{
+   pthread_mutex_lock(&state);
+   while (!payload_retired) pthread_cond_wait(&retired, &state);
+   pthread_mutex_unlock(&state);
+}
+- (void)run
+{
+   bool background = kk_background_thread;
+   NSOperation *previous = kk_current_operation;
+   kk_background_thread = true;
+   kk_current_operation = self;
+   @try { if (!self.cancelled) execute(data); }
+   @catch (NSException *exception) { failed(data, exception.reason.UTF8String); }
+   @finally {
+      kk_current_operation = previous;
+      kk_background_thread = background;
+      [self retirePayload:NO];
+   }
+}
+/* A waiter runs a payload that no worker has entered, at its own priority,
+ * instead of waiting for a queue slot. The worker that later starts this
+ * operation finds the payload entered and returns. */
+- (BOOL)runHere
+{
+   pthread_mutex_lock(&state);
+   bool claim = !payload_claimed && !callback_entered;
+   if (claim) callback_entered = true;
+   pthread_mutex_unlock(&state);
+   if (!claim) return NO;
+   [self retain];
+   @autoreleasepool { [self run]; }
+   [self release];
+   return YES;
+}
+/* Raise the worker compiling this payload. Retirement takes the state lock,
+ * so the worker is alive while the override starts. */
+- (pthread_override_t)raiseWorker
+{
+   pthread_mutex_lock(&state);
+   pthread_override_t raised = callback_entered && !payload_claimed && worker ?
+      kk_raise_background_compile(worker) : NULL;
+   pthread_mutex_unlock(&state);
+   return raised;
 }
 - (void)cancel
 {
@@ -194,24 +249,19 @@ kk_pin_worker_image(void)
          pthread_cond_wait(&kk_compile_queue_changed, &kk_compile_queue_lock);
       pthread_mutex_unlock(&kk_compile_queue_lock);
       pthread_mutex_lock(&state);
-      bool retired = payload_claimed;
-      if (!retired) callback_entered = true;
-      pthread_mutex_unlock(&state);
-      if (retired) return;
-      kk_background_thread = true;
-      kk_current_operation = self;
-      @try { if (!self.cancelled) execute(data); }
-      @catch (NSException *exception) { failed(data, exception.reason.UTF8String); }
-      @finally {
-         kk_current_operation = nil;
-         kk_background_thread = false;
-         [self retirePayload:NO];
+      bool skip = payload_claimed || callback_entered;
+      if (!skip) {
+         callback_entered = true;
+         if (!frontend) worker = pthread_self();
       }
+      pthread_mutex_unlock(&state);
+      if (!skip) [self run];
    }
 }
 - (void)dealloc
 {
    [ownerQueue release];
+   pthread_cond_destroy(&retired);
    pthread_mutex_destroy(&state);
    [super dealloc];
 }
@@ -271,7 +321,8 @@ kk_compiler_submit(mtl_compiler *compiler, void *data,
          if (queue) {
             NSUInteger cores = MIN((NSUInteger)8, [NSProcessInfo processInfo].activeProcessorCount);
             queue.maxConcurrentOperationCount = cores > 1 ? cores - 1 : 1;
-            queue.qualityOfService = NSQualityOfServiceUtility;
+            /* A queue's service level is also the floor for its operations. */
+            queue.qualityOfService = NSQualityOfServiceBackground;
             queue.name = @"KosmicKrisp compiler";
             objc_setAssociatedObject((id)compiler, &kk_compile_queue_association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [queue release];
@@ -291,7 +342,9 @@ kk_compiler_submit(mtl_compiler *compiler, void *data,
       operation->cleanup = cleanup;
       operation->ownerQueue = [queue retain];
       operation->frontend = frontend;
-      operation.qualityOfService = frontend ? NSQualityOfServiceUserInitiated : NSQualityOfServiceUtility;
+      /* Deferred builds yield the CPU and the compiler service to the
+       * application; a waiter runs or raises the one it needs. */
+      operation.qualityOfService = frontend ? NSQualityOfServiceUserInitiated : NSQualityOfServiceBackground;
       if (frontend) {
          operation.queuePriority = NSOperationQueuePriorityVeryHigh;
          ++queue->urgent;
@@ -321,12 +374,14 @@ mtl_compiler_task_cancel(void *task)
    [(NSOperation *)task cancel];
 }
 
-void
-mtl_compiler_task_wait(void *task)
+enum mtl_compiler_join
+mtl_compiler_task_join(void *task)
 {
-   if (!task) return;
+   if (!task) return MTL_COMPILER_JOIN_NONE;
    KKCompileOperation *operation = (KKCompileOperation *)task;
-   if (operation.payloadRetired) return;
+   if (operation.payloadRetired) return MTL_COMPILER_JOIN_NONE;
+   if (!operation->frontend && [operation runHere]) return MTL_COMPILER_JOIN_HERE;
+   enum mtl_compiler_join join = MTL_COMPILER_JOIN_QUEUED;
    if (!operation.finished) {
       /* Wait only for this pipeline. Promote a queued first-use request over
        * unrelated cold misses; running native jobs remain machine-bounded. */
@@ -341,7 +396,10 @@ mtl_compiler_task_wait(void *task)
          pthread_cond_broadcast(&kk_compile_queue_changed);
          pthread_mutex_unlock(&kk_compile_queue_lock);
       }
+      pthread_override_t raised = operation->frontend ? NULL : [operation raiseWorker];
+      if (raised) join = MTL_COMPILER_JOIN_RUNNING;
       [operation waitUntilFinished];
+      if (raised) pthread_override_qos_class_end_np(raised);
       if (queue) {
          pthread_mutex_lock(&kk_compile_queue_lock);
          --queue->urgent;
@@ -350,6 +408,28 @@ mtl_compiler_task_wait(void *task)
          pthread_mutex_unlock(&kk_compile_queue_lock);
       }
    }
+   /* A payload run by a waiter can outlast its finished operation. */
+   [operation waitRetired];
+   return join;
+}
+
+void
+mtl_compiler_task_wait(void *task)
+{
+   mtl_compiler_task_join(task);
+}
+
+void *
+mtl_compiler_task_raise(void *task)
+{
+   KKCompileOperation *operation = (KKCompileOperation *)task;
+   return operation && !operation->frontend ? [operation raiseWorker] : NULL;
+}
+
+void
+mtl_compiler_task_raise_end(void *raised)
+{
+   if (raised) pthread_override_qos_class_end_np(raised);
 }
 
 void

@@ -191,6 +191,9 @@ void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
    void (*cleanup)(void *)) { return NULL; }
 void mtl_compiler_task_wait(void *task) {}
 void mtl_compiler_task_cancel(void *task) {}
+enum mtl_compiler_join mtl_compiler_task_join(void *task) { return MTL_COMPILER_JOIN_NONE; }
+void *mtl_compiler_task_raise(void *task) { return NULL; }
+void mtl_compiler_task_raise_end(void *raised) {}
 void *mtl_compiler_foreground_begin(mtl_compiler *compiler) { return NULL; }
 void mtl_compiler_foreground_end(void *token) {}
 void mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,

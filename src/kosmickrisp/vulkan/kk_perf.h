@@ -53,7 +53,7 @@ void kk_perf_compile_begin(struct kk_perf *, struct kk_perf_compile_scope *);
 void kk_perf_compile_end(struct kk_perf_compile_scope *, bool binary, int result);
 void kk_perf_compile_parent(struct kk_perf *, uint64_t *request, uint64_t *parent);
 void kk_perf_async_compute(struct kk_perf *, int queued_delta, int active_delta);
-void kk_perf_async_join(struct kk_perf *, uint64_t parent, const char *reason,
+void kk_perf_async_join(struct kk_perf *, uint64_t parent, const char *reason, const char *mode,
                         uint64_t start, uint64_t duration);
 void kk_perf_msl_source(struct kk_perf *, unsigned stage, const char *source);
 

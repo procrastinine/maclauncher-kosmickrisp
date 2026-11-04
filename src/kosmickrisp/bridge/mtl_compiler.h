@@ -109,6 +109,20 @@ void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
    void (*cleanup)(void *));
 void mtl_compiler_task_wait(void *task);
 void mtl_compiler_task_cancel(void *task);
+/* How a wait completed a task: no wait, ran an unentered payload on the
+ * waiting thread, waited for a queued or frontend task, or waited for a
+ * deferred payload already compiling and raised its worker for the wait. */
+enum mtl_compiler_join {
+   MTL_COMPILER_JOIN_NONE,
+   MTL_COMPILER_JOIN_HERE,
+   MTL_COMPILER_JOIN_QUEUED,
+   MTL_COMPILER_JOIN_RUNNING,
+};
+enum mtl_compiler_join mtl_compiler_task_join(void *task);
+/* Raise the worker of a deferred payload already compiling until the
+ * returned token is ended. NULL when no worker is compiling it. */
+void *mtl_compiler_task_raise(void *task);
+void mtl_compiler_task_raise_end(void *raised);
 void *mtl_compiler_foreground_begin(mtl_compiler *compiler);
 void mtl_compiler_foreground_end(void *token);
 void mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,

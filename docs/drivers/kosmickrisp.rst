@@ -417,13 +417,15 @@ Compute pipeline creation
 
 A single compute pipeline created without a native archive hit returns once
 its MSL is generated, including any sparse residency guards. The Metal
-library and pipeline compile on the bounded compiler queue. Binding the
-pipeline waits for that compile and raises its queue priority; a native
-compile failure loses the device at first use. Destroying a pipeline does not
-wait. When the last pipeline or pipeline cache reference to the shader is
+library and pipeline compile on the bounded compiler queue at background
+priority. Binding the pipeline compiles it on the binding thread when its
+compile has not started, or waits for the compile in progress and raises the
+compiling thread to user-initiated priority for the wait; a native compile
+failure loses the device at first use. Destroying a pipeline does not wait.
+When the last pipeline or pipeline cache reference to the shader is
 destroyed, a compile that has not started is cancelled, and a compile in
-progress is joined and its result discarded. Device destruction does the same
-for every remaining compile. Creation stays
+progress is joined at user-initiated priority and its result discarded.
+Device destruction does the same for every remaining compile. Creation stays
 synchronous for multi-pipeline calls, creation feedback, compile-required and
 early-return failures, statistics and internal-representation capture,
 indirect-bindable pipelines, shaders that use 64-bit atomic locks and sparse
@@ -436,9 +438,11 @@ Each cached compiler retains up to 1024 Metal libraries and 64 MiB of shader
 source characters. Reuse requires identical generated source, including any
 diagnostic salt, and identical language version, math mode and floating point
 function options. Concurrent identical requests share the synchronous native
-compilation. Completed entries are evicted in insertion order; active entries
-are retained until compilation finishes. Requests outside the bounds compile
-without retention. Failed compilations are retried by later requests.
+compilation; a request waiting for a background-priority compile raises it to
+user-initiated priority for the wait. Completed entries are evicted in
+insertion order; active entries are retained until compilation finishes.
+Requests outside the bounds compile without retention. Failed compilations
+are retried by later requests.
 
 This in-memory reuse applies to every library the driver compiles: vertex and
 fragment pairs, compute, mesh, ray tracing and internal kernels. Function
