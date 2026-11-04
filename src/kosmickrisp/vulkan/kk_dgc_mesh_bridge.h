@@ -4,6 +4,9 @@ struct kk_dgc_mesh_metal {
    mtl_library *library;
    mtl_compute_pipeline_state *pipeline[2];
    bool failed[2];
+   mtl_library *expand_library;
+   mtl_compute_pipeline_state *expand_pipeline;
+   bool expand_failed;
 };
 
 static char *
@@ -189,6 +192,8 @@ static void kk_dgc_mesh_finish(struct kk_dgc_mesh_metal *mesh)
 {
    if (!mesh) return;
    for (unsigned i = 0; i < 2; ++i) mtl_release(mesh->pipeline[i]);
+   mtl_release(mesh->expand_pipeline);
+   mtl_release(mesh->expand_library);
    mtl_release(mesh->library);
    free(mesh);
 }

@@ -442,6 +442,8 @@ struct kk_render_pass_cache {
    bool leased;
 };
 
+#include "kk_mesh_expand.h"
+
 struct kk_cmd_buffer {
    struct vk_command_buffer vk;
    struct kk_queue *scene_queue;
@@ -484,10 +486,11 @@ struct kk_cmd_buffer {
    struct util_dynarray mesh_command_buffers;
    struct util_dynarray mesh_allocators;
    uint32_t mesh_batches_in_part, mesh_draws_in_part;
-   /* Nonzero only in a submit-owned, bounded indirect Mesh continuation. */
+   /* Nonzero only in a submit-owned, bounded Task/Mesh continuation. */
    struct {
       bool active;
       uint32_t groups, base, draw, maximum;
+      struct kk_mesh_exact_batch exact;
    } mesh_chunk;
    /* Pending timestamp resolves (struct kk_ts_resolve), flushed at cs_end. */
    bool writable_msaa_meta;

@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
 #include "kosmickrisp/libkk/kk_mesh_types.h"
+#include "kk_mesh_expand.h"
 
 #define KK_DGC_PIPELINE_COUNT 4096u
 #define KK_DGC_PIPELINE_STAGES (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT)

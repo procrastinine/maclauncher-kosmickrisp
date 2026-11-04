@@ -256,5 +256,6 @@ mtl_compute_pipeline_state *kk_dgc_get_compute_pipeline(struct kk_device *dev, s
 }
 
 #include "kk_dgc_mesh_bridge.h"
+#include "kk_mesh_expand_bridge.h"
 
 #include "kk_dgc_pipeline_bridge.h"
