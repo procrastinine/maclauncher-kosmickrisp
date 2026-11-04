@@ -195,7 +195,7 @@
    * - ``device_generated_commands``
      - Generated graphics and compute sequences with push-data and vertex/index-buffer tokens.
        Controls: ``VK_EXT_device_generated_commands``, ``deviceGeneratedCommands``, ``dynamicGeneratedPipelineLayout``, ``maxIndirectPipelineCount``, ``maxIndirectShaderObjectCount``, ``maxIndirectSequenceCount``, ``maxIndirectCommandsTokenCount``, ``maxIndirectCommandsTokenOffset``, ``maxIndirectCommandsIndirectStride``, ``supportedIndirectCommandsInputModes``, ``supportedIndirectCommandsShaderStages``, ``supportedIndirectCommandsShaderStagesPipelineBinding``, ``supportedIndirectCommandsShaderStagesShaderBinding``, ``deviceGeneratedCommandsTransformFeedback``, ``deviceGeneratedCommandsMultiDrawIndirectCount``.
-     - GPU token expansion / native Metal ICB. Used sequences snapshot token bytes and expand root, draw and vertex-input data on the GPU before native ICB execution. Native expansion and command encoding share one dispatch per 512-sequence slice; graphics crosses from compute to render. Poly stages retain their own expansion. The shared runtime library is compiled only for generated-command or indirect-count execution; application shaders gain no DGC MSL.
+     - GPU token expansion / native Metal ICB. Used sequences snapshot token bytes and expand root, draw and vertex-input data on the GPU before native ICB execution. Native expansion and command encoding share one dispatch per native ICB slice; graphics crosses from compute to render. Poly stages retain their own expansion. The shared runtime library is compiled only for generated-command or indirect-count execution; application shaders gain no DGC MSL.
      - No Apple family
      - On
      - Keeps state-changing D3D12 ExecuteIndirect signatures working where vkd3d-proton has no complete fallback; unused DGC adds no application-shader MSL or GPU preprocessing.
@@ -204,7 +204,7 @@
    * - ``draw_indirect_count``
      - GPU-counted ordinary multi-draw indirect commands.
        Controls: ``VK_KHR_draw_indirect_count``, ``VK_AMD_draw_indirect_count``, ``drawIndirectCount``.
-     - GPU count filtering / native Metal ICB. Large native batches expand active draw records and encode ICB commands in one dispatch per 512-draw slice. Other selected routes filter indirect arguments on the GPU and retain their own stage work. Counts remain GPU-resident. No count command adds application-shader MSL. The shared maxDrawIndirectCount limit also serves native fixed-count draws and is retained.
+     - GPU count filtering / native Metal ICB. Large native batches expand active draw records and encode ICB commands in one dispatch per native ICB slice. Other selected routes filter indirect arguments on the GPU and retain their own stage work. Counts remain GPU-resident. No count command adds application-shader MSL. The shared maxDrawIndirectCount limit also serves native fixed-count draws and is retained.
      - No Apple family
      - On
      - Preserves D3D12 counter-backed ExecuteIndirect and predication semantics; vkd3d-proton returns without executing these commands if drawIndirectCount is unavailable.
