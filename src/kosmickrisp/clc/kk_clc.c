@@ -289,8 +289,8 @@ main(int argc, char **argv)
                   nir_address_format_62bit_generic);
 
          msl_preprocess_nir(s);
-         msl_preprocess_nir_workarounds(nir, 0);
-         msl_optimize_nir(nir);
+         msl_preprocess_nir_workarounds(s, 0);
+         msl_optimize_nir(s);
 
          NIR_PASS(_, s, nir_opt_deref);
          NIR_PASS(_, s, nir_lower_vars_to_ssa);
