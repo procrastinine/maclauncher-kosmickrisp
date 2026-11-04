@@ -928,6 +928,8 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
    const bool raw_texel = binding_flags & (VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT |
                                          VK_SHADER_CREATE_DESCRIPTOR_BUFFER_BIT_MESA);
    struct kk_physical_device *pdev = kk_device_physical(dev);
+   if (descriptor_heap && nir->info.stage == MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, nir, kk_nir_finish_heap_image_loads);
    if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
       NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
 

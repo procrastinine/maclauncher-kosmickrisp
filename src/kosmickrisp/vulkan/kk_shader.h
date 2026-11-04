@@ -423,6 +423,7 @@ void kk_shader_embedded_samplers_finish(struct kk_device *dev,
 
 bool kk_nir_prepare_descriptor_heaps(nir_shader *nir, uint32_t embedded_count, const uint64_t *embedded, bool sparse_buffers);
 bool kk_nir_finish_sparse_heap_buffers(nir_shader *nir);
+bool kk_nir_finish_heap_image_loads(nir_shader *nir);
 
 bool kk_nir_prepare_layered_bc_cubes(nir_shader *nir,
    const struct vk_pipeline_robustness_state *rs, uint32_t set_layout_count,

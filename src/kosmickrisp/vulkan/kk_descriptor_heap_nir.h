@@ -5,6 +5,7 @@ struct kk_heap_nir_context {
    const uint64_t *embedded;
    uint32_t embedded_count;
    bool sparse_buffers;
+   bool defer_image_loads;
 };
 
 static nir_def *
@@ -88,6 +89,14 @@ kk_prepare_heap_instr(nir_builder *b, nir_instr *instr, void *data)
       return true;
    }
    if (!strncmp(nir_intrinsic_infos[intr->intrinsic].name, "image_heap_", 11)) {
+      /* Fragment linking regathers image-load metadata using variable-backed
+       * derefs. Keep address-only loads in the heap representation until the
+       * fragment finish pass; subpass lowering still runs before linking. */
+      if (ctx->defer_image_loads &&
+          intr->intrinsic == nir_intrinsic_image_heap_load &&
+          nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_SUBPASS &&
+          nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_SUBPASS_MS)
+         return false;
       enum glsl_base_type base = GLSL_TYPE_UINT;
       if (nir_intrinsic_has_dest_type(intr) &&
           nir_alu_type_get_base_type(nir_intrinsic_dest_type(intr)) == nir_type_float)
@@ -116,7 +125,12 @@ bool
 kk_nir_prepare_descriptor_heaps(nir_shader *nir, uint32_t embedded_count,
                                  const uint64_t *embedded, bool sparse_buffers)
 {
-   const struct kk_heap_nir_context ctx = {embedded, embedded_count, sparse_buffers};
+   const struct kk_heap_nir_context ctx = {
+      .embedded = embedded,
+      .embedded_count = embedded_count,
+      .sparse_buffers = sparse_buffers,
+      .defer_image_loads = nir->info.stage == MESA_SHADER_FRAGMENT,
+   };
    return nir_shader_instructions_pass(nir, kk_prepare_heap_instr,
                                        nir_metadata_control_flow, (void *)&ctx);
 }
@@ -124,7 +138,25 @@ kk_nir_prepare_descriptor_heaps(nir_shader *nir, uint32_t embedded_count,
 bool
 kk_nir_finish_sparse_heap_buffers(nir_shader *nir)
 {
-   const struct kk_heap_nir_context ctx = {0};
+   const struct kk_heap_nir_context ctx = {
+      .defer_image_loads = nir->info.stage == MESA_SHADER_FRAGMENT,
+   };
    return nir_shader_instructions_pass(nir, kk_prepare_heap_instr,
                                        nir_metadata_control_flow, (void *)&ctx);
+}
+
+static bool
+kk_finish_heap_image_load(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_image_heap_load)
+      return false;
+   return kk_prepare_heap_instr(b, &intr->instr, data);
+}
+
+bool
+kk_nir_finish_heap_image_loads(nir_shader *nir)
+{
+   const struct kk_heap_nir_context ctx = {0};
+   return nir_shader_intrinsics_pass(nir, kk_finish_heap_image_load,
+                                    nir_metadata_control_flow, (void *)&ctx);
 }
