@@ -214,12 +214,12 @@
      - On
      - On Apple7-9: selected reduction samplers use multiple native taps to retain tiled tier4. On Apple10-11: native sampler reduction.
    * - ``descriptor_heap``
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off Apple7-11: A non-sparse buffer access without robustness checks loads an 8-byte heap root and a 16-byte descriptor packet. A sampled texture and sampler pair loads two 8-byte heap roots and an 8-byte sampler-metadata pointer before shared decoding. Shaders using descriptor sets emit no heap access.
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: Actual heap users load heap roots and descriptor packets through native resource handles. Descriptor-set shaders add no heap access, and device enablement alone does not defer command recording.
    * - ``zero_initialize_device_memory``
      - Off
      - Off

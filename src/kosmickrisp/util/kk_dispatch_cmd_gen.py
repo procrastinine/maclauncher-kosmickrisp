@@ -88,6 +88,9 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
     cmd->deferred_render_chain |= pRenderingInfo->flags &
         (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT);
     kk_cmd_record_rendering_attachments(cmd, pRenderingInfo);
+    % elif e.name in ('CmdBindSamplerHeapEXT', 'CmdBindResourceHeapEXT', 'CmdPushDataEXT'):
+    if (kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
+        return;
     % elif e.name in ('CmdBeginQuery', 'CmdBeginQueryIndexedEXT'):
     VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
     if (pool->vk.query_type == VK_QUERY_TYPE_OCCLUSION &&

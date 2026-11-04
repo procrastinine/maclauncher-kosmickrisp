@@ -416,8 +416,9 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
                                       cmd->vk.base.object_name);
    }
 
-   cmd->enqueue_commands = cmd->vk.level != VK_COMMAND_BUFFER_LEVEL_PRIMARY ||
-      kk_cmd_buffer_device(cmd)->vk.enabled_features.descriptorHeap;
+   /* Device feature enablement must not defer ordinary descriptor-set work.
+    * Heap commands select submit-owned recording at their actual use. */
+   cmd->enqueue_commands = cmd->vk.level != VK_COMMAND_BUFFER_LEVEL_PRIMARY;
    struct kk_device *sparse_dev = kk_cmd_buffer_device(cmd);
    cmd->sparse_guarded = kk_sparse_residency_used(sparse_dev);
    cmd->uses_sparse_buffers = false;

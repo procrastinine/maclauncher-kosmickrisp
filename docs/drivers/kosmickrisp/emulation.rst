@@ -278,8 +278,8 @@
        Controls: ``VK_EXT_descriptor_heap``, ``descriptorHeap``, ``descriptorHeapCaptureReplay``, ``samplerHeapAlignment``, ``resourceHeapAlignment``, ``maxSamplerHeapSize``, ``maxResourceHeapSize``, ``samplerDescriptorSize``, ``imageDescriptorSize``, ``bufferDescriptorSize``, ``samplerDescriptorAlignment``, ``imageDescriptorAlignment``, ``bufferDescriptorAlignment``, ``maxPushDataSize``, ``maxDescriptorHeapEmbeddedSamplers``, ``samplerYcbcrConversionCount``.
      - native resource handles / descriptor indirection. A non-sparse buffer access without robustness checks loads an 8-byte heap root and a 16-byte descriptor packet. A sampled texture and sampler pair loads two 8-byte heap roots and an 8-byte sampler-metadata pointer before shared decoding. Shaders using descriptor sets emit no heap access.
      - No Apple family
-     - Off
-     - DXVK and vkd3d-proton retain conventional descriptor binding, device creation and D3D shader-model and feature-level support without this optional interface.
+     - On
+     - Descriptor-set shaders retain their binding model and ordinary command buffers retain native recording. Only heap shader flags select heap indirection; actual heap binds or push-data commands defer recording to submission.
      - The Vulkan heap interface and vkd3d-proton experimental work graphs are unavailable, and byte-offset views require descriptor-buffer support. Conventional descriptor bindings remain available.
      - ``performance,+descriptor_heap``
    * - ``zero_initialize_device_memory``

@@ -836,12 +836,18 @@
       "maxDescriptorHeapEmbeddedSamplers",
       "samplerYcbcrConversionCount"
     ],
-    "performance": false,
-    "performance_reason": "DXVK and vkd3d-proton retain conventional descriptor binding, device creation and D3D shader-model and feature-level support without this optional interface.",
+    "performance": true,
+    "performance_reason": "Descriptor-set shaders retain their binding model and ordinary command buffers retain native recording. Only heap shader flags select heap indirection; actual heap binds or push-data commands defer recording to submission.",
     "off_consequence": "The Vulkan heap interface and vkd3d-proton experimental work graphs are unavailable, and byte-offset views require descriptor-buffer support. Conventional descriptor bindings remain available.",
     "native_from": null,
-    "performance_families": [],
-    "family_cost_note": "Off Apple7-11: A non-sparse buffer access without robustness checks loads an 8-byte heap root and a 16-byte descriptor packet. A sampled texture and sampler pair loads two 8-byte heap roots and an 8-byte sampler-metadata pointer before shared decoding. Shaders using descriptor sets emit no heap access."
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Actual heap users load heap roots and descriptor packets through native resource handles. Descriptor-set shaders add no heap access, and device enablement alone does not defer command recording."
   },
   {
     "name": "zero_initialize_device_memory",
