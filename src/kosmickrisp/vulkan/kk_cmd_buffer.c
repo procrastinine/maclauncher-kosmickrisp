@@ -18,6 +18,7 @@
 #include "kk-writable-msaa.h"
 #include "kk_sparse.h"
 #include "kk_dgc.h"
+#include "kk_temporal.h"
 
 #include "kk_buffer.h"
 #include "kk_cmd_pool.h"
@@ -91,6 +92,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    util_dynarray_foreach(&cmd->submit_drawables, void *, drawable)
       mtl_release(*drawable);
    util_dynarray_clear(&cmd->submit_drawables);
+   kk_temporal_cmd_reset(cmd);
 }
 
 /* Also used by a submit-owned suffix: its Vulkan state is already pending.
@@ -189,6 +191,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
    util_dynarray_fini(&cmd->ts_resolves);
    util_dynarray_fini(&cmd->ts_stage_map);
    util_dynarray_fini(&cmd->submit_drawables);
+   util_dynarray_fini(&cmd->temporal_records);
 
    vk_free(&pool->vk.alloc, cmd);
 }
@@ -243,6 +246,7 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    cmd->ts_resolves = UTIL_DYNARRAY_INIT;
    cmd->ts_stage_map = UTIL_DYNARRAY_INIT;
    cmd->submit_drawables = UTIL_DYNARRAY_INIT;
+   cmd->temporal_records = UTIL_DYNARRAY_INIT;
    cmd->mesh_command_buffers = UTIL_DYNARRAY_INIT;
    cmd->mesh_allocators = UTIL_DYNARRAY_INIT;
    cmd->post_render_writes = UTIL_DYNARRAY_INIT;
@@ -993,6 +997,8 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    kk_cmd_pipeline_barriers(cmd, 1, pDependencyInfo);
+   if (unlikely(pDependencyInfo->pNext != NULL))
+      kk_temporal_record(cmd, pDependencyInfo);
 }
 
 static void

@@ -121,6 +121,7 @@ struct kk_device {
    struct kk_vrs_device *vrs;
    util_once_flag dgc_once;
    struct kk_dgc_metal *dgc;
+   struct kk_temporal *temporal;
    mtl_device *mtl_handle;
    mtl_compiler *mtl_compiler_handle;
    struct kk_async_compute_owner *async_compute;

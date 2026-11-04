@@ -17,6 +17,7 @@
 #include "kk_interlock_submit.h"
 #include "kk_perf.h"
 #include "kk_sparse.h"
+#include "kk_temporal.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/vk_to_mtl_map.h"
@@ -145,21 +146,24 @@ kk_queue_commit_native(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
       cmd->drawable = primary_drawable;
       return vk_error(kk_queue_device(queue), VK_ERROR_OUT_OF_HOST_MEMORY);
    }
+   /* Forwarded temporal frames run between parts; the last commit carries the feedback. */
+   const uint32_t first = unlikely(cmd->temporal_records.size) ?
+      kk_temporal_commit_prefix(queue, cmd) : 0;
+   mtl_command_buffer **buffers = cmd->native_submit.buffers + first;
+   const uint32_t parts = cmd->native_submit.count - first;
    struct kk_perf *perf = kk_queue_device(queue)->perf;
    if (unlikely(perf)) {
       if (queue->native_submit == kk_queue_submit_verbose) {
-         kk_queue_commit_tracked(queue, cmd, options, callback, user_data, perf);
+         kk_queue_commit_tracked(queue, cmd, buffers, parts, options, callback, user_data, perf);
       } else {
          mtl_commit_options_add_tracked_feedback_handler(
             options, callback, user_data, kk_queue_gpu_range, perf,
-            kk_perf_frame_id(perf), cmd->native_submit.count, cmd->native_submit.buffers);
-         mtl_command_queue_commit(queue->mtl_handle, cmd->native_submit.buffers,
-                                  cmd->native_submit.count, options);
+            kk_perf_frame_id(perf), parts, buffers);
+         mtl_command_queue_commit(queue->mtl_handle, buffers, parts, options);
       }
    } else {
       mtl_commit_options_add_feedback_handler(options, callback, user_data);
-      mtl_command_queue_commit(queue->mtl_handle, cmd->native_submit.buffers,
-                               cmd->native_submit.count, options);
+      mtl_command_queue_commit(queue->mtl_handle, buffers, parts, options);
    }
    mtl_release(options);
    for (uint32_t i = 0; i < count; i++) {
@@ -570,6 +574,7 @@ kk_queue_finish(struct kk_device *dev, struct kk_queue *queue)
    mtl_command_queue_remove_residency_set(queue->mtl_handle,
                                           dev->residency_set.handle);
    mtl_release(queue->mtl_handle);
+   kk_temporal_queue_finish(queue);
 
    kk_DestroyCommandPool(kk_device_to_handle(dev),
                          kk_cmd_pool_to_handle(queue->cmd_pool), NULL);

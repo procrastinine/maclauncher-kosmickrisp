@@ -66,6 +66,7 @@ TEMPLATE_C = Template(COPYRIGHT + """\
 #include "kk_perf.h"
 #include "kk_query_pool.h"
 #include "kk_dispatch_cmd.h"
+#include "kk_temporal.h"
 #define VK_ENTRY_USE_WEAK 1
 #include "vk_cmd_enqueue_entrypoints.h"
 #undef VK_ENTRY_USE_WEAK
@@ -126,6 +127,10 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
     % if e.return_type == 'void':
     KK_PERF_VOID(dev, KK_PERF_RECORD,
         cmd->record_dispatch->${e.name}(${e.call_params()}));
+      % if e.name == 'CmdPipelineBarrier2':
+    if (unlikely(pDependencyInfo->pNext != NULL))
+        kk_temporal_copy_enqueued(cmd, pDependencyInfo);
+      % endif
     % else:
     return KK_PERF_CALL(dev, KK_PERF_RECORD,
         cmd->record_dispatch->${e.name}(${e.call_params()}));

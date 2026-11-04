@@ -18,6 +18,7 @@
 #include "kk_instance.h"
 #include "kk_nir_lower_vbo.h"
 #include "kk_sync.h"
+#include "kk_temporal.h"
 #include "kk_wsi.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -1156,8 +1157,8 @@ kk_get_device_properties(
    memcpy(properties->driverUUID, instance->driver_build_sha, VK_UUID_SIZE);
 
    snprintf(properties->driverName, VK_MAX_DRIVER_NAME_SIZE, "KosmicKrisp");
-   snprintf(properties->driverInfo, VK_MAX_DRIVER_INFO_SIZE,
-            "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
+   snprintf(properties->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa %s%s",
+            PACKAGE_VERSION MESA_GIT_SHA1, kk_temporal_driver_info(pdev->mtl_dev_handle));
 
    properties->maxGeometryCount = KK_AS_MAX_GEOMETRIES;
    properties->maxInstanceCount = KK_AS_MAX_INSTANCES;

@@ -24,6 +24,9 @@ struct kk_queue {
    /* Immutable setup-selected callback, retained by actual-use adapters. */
    VkResult (*native_submit)(struct vk_queue *, struct vk_queue_submit *);
    struct kk_interlock_queue *interlock_submission;
+   /* Classic queue and event of forwarded temporal frames, made at the first. */
+   void *temporal_queue, *temporal_event;
+   uint64_t temporal_value;
 
    /* Resources for command buffer re-recording. These are required for
     * SIMULTANEOUS_USE command buffers where the same command buffer can be

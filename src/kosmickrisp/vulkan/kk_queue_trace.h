@@ -36,12 +36,12 @@ kk_tracked_commit_feedback(struct mtl_feedback_data *feedback)
 
 static void
 kk_queue_commit_tracked(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
+   mtl_command_buffer **buffers, uint32_t count,
    mtl_commit_options *options, mtl_feedback_handler_callback callback,
    void *user_data, struct kk_perf *perf)
 {
    const void *submit = queue->vk.driver_submit_active;
    const void *native = cmd->metal.cmd_buf;
-   const uint32_t count = cmd->native_submit.count;
    const uint64_t id = kk_perf_commit_trace(perf, "begin", 0, queue, submit,
       cmd, native, count, 0);
    struct kk_tracked_commit *trace = malloc(sizeof(*trace));
@@ -53,17 +53,16 @@ kk_queue_commit_tracked(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
       };
       mtl_commit_options_add_tracked_feedback_handler(options,
          kk_tracked_commit_feedback, trace, kk_queue_gpu_range, perf,
-         kk_perf_frame_id(perf), count, cmd->native_submit.buffers);
+         kk_perf_frame_id(perf), count, buffers);
    } else {
       /* Diagnostic allocation failure must not drop the real callback/work. */
       kk_perf_commit_trace(perf, "snapshot_oom", id, queue, submit,
          cmd, native, count, VK_ERROR_OUT_OF_HOST_MEMORY);
       mtl_commit_options_add_tracked_feedback_handler(options,
          callback, user_data, kk_queue_gpu_range, perf,
-         kk_perf_frame_id(perf), count, cmd->native_submit.buffers);
+         kk_perf_frame_id(perf), count, buffers);
    }
-   mtl_command_queue_commit(queue->mtl_handle, cmd->native_submit.buffers,
-                            count, options);
+   mtl_command_queue_commit(queue->mtl_handle, buffers, count, options);
    kk_perf_commit_trace(perf, "return", id, queue, submit, cmd, native, count, 0);
    if (trace)
       kk_tracked_commit_release(trace);

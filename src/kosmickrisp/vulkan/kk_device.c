@@ -24,6 +24,7 @@
 #include "kk_sparse.h"
 #include "kk_descriptor_set.h"
 #include "kk_dgc.h"
+#include "kk_temporal.h"
 
 #include "kk_buffer.h"
 #include "kk_buffer_view.h"
@@ -1025,6 +1026,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_device_finish_meta(dev);
    kk_depth_stencil_cache_finish(dev);
    kk_dgc_finish(dev);
+   kk_temporal_finish(dev);
    kk_device_finish_lib(dev);
    kk_interlock_device_finish(dev);
    kk_vrs_device_finish(dev);

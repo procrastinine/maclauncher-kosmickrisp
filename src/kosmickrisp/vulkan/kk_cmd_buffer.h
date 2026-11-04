@@ -463,6 +463,8 @@ struct kk_cmd_buffer {
 
    void *drawable;
    struct util_dynarray submit_drawables;
+   /* Temporal frames forwarded between native parts (struct kk_temporal_record *), freed at reset. */
+   struct util_dynarray temporal_records;
    mtl_argument_table *argument_table;
    mtl_argument_table *mesh_table;
 
