@@ -54,6 +54,38 @@ remove_1d_view_types(enum VkImageViewType type)
    return type;
 }
 
+/* Native allocation/view failure must not become a successful descriptor with
+ * a zero resource ID in release builds. Validate once at view construction. */
+static const char *
+kk_image_view_plane_error(const struct kk_device *dev,
+                          const struct kk_image_view *view, unsigned p)
+{
+   if ((view->vk.usage & VK_IMAGE_USAGE_SAMPLED_BIT) &&
+       (!view->planes[p].mtl_handle_sampled ||
+        !view->planes[p].sampled_gpu_resource_id))
+      return "sampled";
+   if ((view->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
+       (!view->planes[p].mtl_handle_storage ||
+        !view->planes[p].storage_gpu_resource_id))
+      return "storage";
+   if ((view->vk.usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) &&
+       (!view->planes[p].mtl_handle_input ||
+        !view->planes[p].input_gpu_resource_id))
+      return "input attachment";
+   if ((view->vk.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
+       !view->planes[p].mtl_handle_render)
+      return "render attachment";
+   if ((view->vk.usage & VK_IMAGE_USAGE_SAMPLED_BIT) &&
+       dev->vk.enabled_features.nonSeamlessCubeMap &&
+       (view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE ||
+        view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY) &&
+       (!view->planes[p].mtl_handle_cube_face ||
+        !view->planes[p].cube_face_gpu_resource_id))
+      return "cube face";
+   return NULL;
+}
+
 VkResult
 kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
                    const VkImageViewCreateInfo *pCreateInfo)
@@ -292,6 +324,17 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
                view->planes[view_plane].mtl_handle_render =
                   mtl_retain(mtl_handle);
          }
+      }
+      const char *failure = kk_image_view_plane_error(dev, view, view_plane);
+      if (failure) {
+         VkResult result = vk_errorf(
+            dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+            "Failed native %s image view (plane=%u format=%u type=%u "
+            "mip=%u+%u layer=%u+%u)", failure, view_plane, view->vk.format,
+            view->vk.view_type, view->vk.base_mip_level, view->vk.level_count,
+            view->vk.base_array_layer, view->vk.layer_count);
+         kk_image_view_finish(dev, view);
+         return result;
       }
       VkResult alias_result = kk_image_view_init_alias(dev, view, view_plane,
                                                        mtl_handle, &view_layout);
