@@ -78,6 +78,7 @@ kk_files = files(
   'kk_descriptor_set.h',
   'kk_descriptor_set.c',
   'kk_device_lib.c',
+  'kk_frame_capture.c',
   'kk_device_memory.h',
   'kk_device_memory.c',
   'kk_device.h',

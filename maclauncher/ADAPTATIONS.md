@@ -1762,6 +1762,20 @@ Implementation: [kk_scene.m](../src/kosmickrisp/vulkan/kk_scene.m), [scene opera
 
 ## Detailed specifications
 
+### On-demand presentation capture
+
+`KK_CAPTURE_DIR` selects a diagnostic output directory at device creation.
+Creating an empty `request` file in that directory captures layer zero of the
+first swapchain in the next available present. One capture is in flight at a
+time. Rendering semaphores order an image-to-host-buffer copy before ordinary
+presentation. A worker writes `frame-<frame>.ppm` and a one-line
+`frame-<frame>.txt` containing monotonic time in nanoseconds, dimensions, present
+number and source format, then removes the request. PPM stores RGB8; higher
+precision formats are converted to that range. Capture covers the swapchain
+image before surface scaling or display composition and needs no Screen
+Recording permission. File writing and GPU completion waits run on the worker.
+With the variable unset, ordinary device dispatch and presentation are unchanged.
+
 * [ATOMIC INT64](reference/KOSMICKRISP_ATOMIC_INT64.md)
 * [ATTACHMENT ACCESS](reference/KOSMICKRISP_ATTACHMENT_ACCESS.md)
 * [CLIP DISTANCES](reference/KOSMICKRISP_CLIP_DISTANCES.md)

@@ -31,6 +31,7 @@ struct kk_heap_border;
 struct kk_buffer;
 struct kk_bo;
 struct kk_physical_device;
+struct kk_frame_capture;
 struct vk_pipeline_cache;
 struct kk_perf;
 
@@ -148,6 +149,7 @@ struct kk_device {
    struct kk_bo *interlock_guard;
    struct kk_interlock_registry *interlock_registry;
    util_once_flag heap_init_once;
+   struct kk_frame_capture *frame_capture;
 };
 
 VK_DEFINE_HANDLE_CASTS(kk_device, vk.base, VkDevice, VK_OBJECT_TYPE_DEVICE)

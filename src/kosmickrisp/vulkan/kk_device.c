@@ -7,6 +7,7 @@
 
 #include "kk_device.h"
 #include "kk_perf.h"
+#include "kk_frame_capture.h"
 #include "kk_sampler.h"
 #include "kk-sampler-cap-keys.h"
 #include "kk_bo.h"
@@ -560,6 +561,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       mtl_start_gpu_capture(dev->mtl_handle, capture_directory);
    }
 
+   kk_frame_capture_init(dev);
    *pDevice = kk_device_to_handle(dev);
 
    return VK_SUCCESS;
