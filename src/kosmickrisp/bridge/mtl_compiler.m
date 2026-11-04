@@ -82,6 +82,77 @@ mtl_compiler_finish_cache(mtl_compiler *compiler)
    @autoreleasepool { [kk_compiler_archive(compiler) finish]; }
 }
 
+static char kk_compile_queue_association;
+static pthread_mutex_t kk_compile_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Native miss scheduling only: cached deserialization stays on its original
+ * synchronous path. Never retain caller create-info or feedback pointers. */
+void *
+mtl_compiler_submit(mtl_compiler *compiler, void *data,
+   void (*execute)(void *), void (*failed)(void *, const char *),
+   void (*cleanup)(void *))
+{
+   @autoreleasepool {
+      /* Queue availability is independent of disk-cache availability. This
+       * lock covers lookup/publication only, never a native compile or wait;
+       * do not synchronize on Metal's compiler object/internal monitor. */
+      pthread_mutex_lock(&kk_compile_queue_lock);
+      NSOperationQueue *queue = objc_getAssociatedObject((id)compiler,
+         &kk_compile_queue_association);
+      if (!queue) {
+         queue = [NSOperationQueue new];
+         NSUInteger cores = MIN((NSUInteger)8, [NSProcessInfo processInfo].activeProcessorCount);
+         queue.maxConcurrentOperationCount = cores > 1 ? cores - 1 : 1;
+         queue.qualityOfService = NSQualityOfServiceUserInitiated;
+         queue.name = @"kosmickrisp.compute";
+         if (queue) {
+            objc_setAssociatedObject((id)compiler, &kk_compile_queue_association,
+                                      queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [queue release];
+         }
+      }
+      pthread_mutex_unlock(&kk_compile_queue_lock);
+      if (!queue) return NULL;
+      /* The device owner drains its jobs before compiler-table release.
+       * Do not hide a compiler retain in the operation: workaround11 must
+       * still retire the final native compiler before publishing a new one. */
+      NSBlockOperation *operation = [[NSBlockOperation blockOperationWithBlock:^{
+         @autoreleasepool {
+            @try { execute(data); }
+            @catch (NSException *exception) { failed(data, exception.reason.UTF8String); }
+         }
+      }] retain];
+      if (!operation) return NULL;
+      operation.completionBlock = ^{ @autoreleasepool { cleanup(data); } };
+      [queue addOperation:operation];
+      return operation;
+   }
+}
+
+void
+mtl_compiler_task_wait(void *task)
+{
+   if (!task) return;
+   NSOperation *operation = (NSOperation *)task;
+   if (!operation.finished) {
+      /* Wait only for this pipeline. Promote a queued first-use request over
+       * unrelated cold misses; running native jobs remain machine-bounded. */
+      operation.queuePriority = NSOperationQueuePriorityVeryHigh;
+      [operation waitUntilFinished];
+   }
+}
+
+void
+mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,
+   size_t key_size, const void *bytes, size_t size)
+{
+   KKPipelineArchive *cache = kk_compiler_archive(compiler);
+   if (!cache) return;
+   [cache load];
+   if (cache->available && cache->operations.store_shader)
+      cache->operations.store_shader(cache->cache_data, key, key_size, bytes, size);
+}
+
 /* Library */
 static MTL4LibraryDescriptor *
 mtl_library_descriptor(const char *src, enum mtl_language_version msl_version,
@@ -120,8 +191,40 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
    }
 }
 
+mtl_library *
+mtl_new_library_async_wait(mtl_compiler *compiler, const char *src,
+   enum mtl_language_version version, enum mtl_math_mode mode,
+   enum mtl_math_floating_point_functions fp)
+{
+   @autoreleasepool {
+      MTL4LibraryDescriptor *desc = mtl_library_descriptor(src, version, mode, fp);
+      dispatch_group_t completion = dispatch_group_create();
+      if (!completion) return NULL;
+      __block id<MTLLibrary> result = nil;
+      dispatch_group_enter(completion);
+      id<MTL4CompilerTask> task = nil;
+      @try {
+         task = [(id<MTL4Compiler>)compiler newLibraryWithDescriptor:desc
+         completionHandler:^(id<MTLLibrary> library, NSError *error) {
+            result = [library retain];
+            if (!library)
+               fprintf(stderr, "Failed to create MTLLibrary: %s\n",
+                  error.localizedDescription.UTF8String ?: "Unknown Metal error");
+            dispatch_group_leave(completion);
+         }];
+         dispatch_group_wait(completion, DISPATCH_TIME_FOREVER);
+      } @catch (NSException *exception) {
+         [result release];
+         @throw;
+      } @finally {
+         [task release];
+         dispatch_release(completion);
+      }
+      return (mtl_library *)result;
+   }
+}
+
 struct mtl_library_pair {
-   bool heap_owned;
    id<MTL4Compiler> compiler;
    dispatch_group_t completion;
    id<MTL4CompilerTask> tasks[2];
@@ -157,63 +260,6 @@ mtl_library_pair_submit(struct mtl_library_pair *pair, unsigned index,
       }];
 }
 
-struct mtl_library_pair *
-mtl_library_pair_begin(mtl_compiler *compiler,
-   const struct mtl_library_source *vertex, enum mtl_math_mode math_mode,
-   enum mtl_math_floating_point_functions math_fp_fns)
-{
-   @autoreleasepool {
-      struct mtl_library_pair *pair = calloc(1, sizeof(*pair));
-      if (!pair) return NULL;
-      pair->completion = dispatch_group_create();
-      if (!pair->completion) { free(pair); return NULL; }
-      pair->heap_owned = true;
-      pair->compiler = [(id<MTL4Compiler>)compiler retain];
-      pair->math_mode = math_mode;
-      pair->math_fp_fns = math_fp_fns;
-      mtl_library_pair_submit(pair, 0, vertex);
-      return pair;
-   }
-}
-
-void
-mtl_library_pair_discard(struct mtl_library_pair *pair)
-{
-   if (!pair) return;
-   dispatch_group_wait(pair->completion, DISPATCH_TIME_FOREVER);
-   for (unsigned i = 0; i < 2; ++i) {
-      [(id)pair->libraries[i] release];
-      [pair->tasks[i] release];
-   }
-   dispatch_release(pair->completion);
-   if (pair->heap_owned) {
-      [pair->compiler release];
-      free(pair);
-   }
-}
-
-bool
-mtl_library_pair_finish(struct mtl_library_pair *pair,
-   const struct mtl_library_source *fragment, mtl_library *libraries[2])
-{
-   @autoreleasepool {
-      libraries[0] = libraries[1] = NULL;
-      if (!pair) return false;
-      /* Submit FS before waiting even if VS has not finished. */
-      mtl_library_pair_submit(pair, 1, fragment);
-      dispatch_group_wait(pair->completion, DISPATCH_TIME_FOREVER);
-      bool success = pair->libraries[0] && pair->libraries[1];
-      if (success) {
-         for (unsigned i = 0; i < 2; ++i) {
-            libraries[i] = pair->libraries[i];
-            pair->libraries[i] = NULL;
-         }
-      }
-      mtl_library_pair_discard(pair);
-      return success;
-   }
-}
-
 bool
 mtl_new_library_pair(mtl_compiler *compiler,
                      const struct mtl_library_source sources[2],
@@ -222,19 +268,24 @@ mtl_new_library_pair(mtl_compiler *compiler,
                      mtl_library *libraries[2])
 {
    @autoreleasepool {
-      /* Keep the existing immediate pair stack-owned: cache restore and
-       * optional siblings gain no heap allocation or compiler retain. */
       struct mtl_library_pair pair = {
          .compiler = (id<MTL4Compiler>)compiler,
          .completion = dispatch_group_create(),
          .math_mode = math_mode, .math_fp_fns = math_fp_fns,
       };
-      if (!pair.completion) {
-         libraries[0] = libraries[1] = NULL;
-         return false;
+      libraries[0] = libraries[1] = NULL;
+      if (!pair.completion) return false;
+      for (unsigned i = 0; i < 2; ++i)
+         mtl_library_pair_submit(&pair, i, &sources[i]);
+      dispatch_group_wait(pair.completion, DISPATCH_TIME_FOREVER);
+      bool success = pair.libraries[0] && pair.libraries[1];
+      for (unsigned i = 0; i < 2; ++i) {
+         if (success) libraries[i] = pair.libraries[i];
+         else [(id)pair.libraries[i] release];
+         [pair.tasks[i] release];
       }
-      mtl_library_pair_submit(&pair, 0, &sources[0]);
-      return mtl_library_pair_finish(&pair, &sources[1], libraries);
+      dispatch_release(pair.completion);
+      return success;
    }
 }
 

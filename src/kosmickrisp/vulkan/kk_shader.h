@@ -247,8 +247,16 @@ struct kk_pipeline_handles {
          uint32_t pre_render_count;
       } gfx;
       mtl_compute_pipeline_state *cs;
+      struct {
+         mtl_compute_pipeline_state *handle; /* aliases cs */
+         struct kk_async_compute *pending;
+      } compute;
    };
 };
+
+static_assert(sizeof(((struct kk_pipeline_handles *)0)->compute) <=
+              sizeof(((struct kk_pipeline_handles *)0)->gfx),
+              "pending compute state fits the existing native-handle union");
 
 struct msl_compile_data {
    char *code;

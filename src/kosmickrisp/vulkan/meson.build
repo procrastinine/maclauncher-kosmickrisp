@@ -142,6 +142,7 @@ kk_files = files(
   'kk_sampler.c',
   'kk_shader.h',
   'kk_shader.c',
+  'kk_async_compute.c',
   'kk_conservative_fs_prolog.c',
   'kk_sync.h',
   'kk_sync.c',

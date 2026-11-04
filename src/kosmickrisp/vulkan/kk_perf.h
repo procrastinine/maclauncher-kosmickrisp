@@ -36,13 +36,18 @@ enum kk_perf_metric {
 struct kk_perf_compile_scope {
    struct kk_perf_compile_scope *previous;
    struct kk_perf *perf;
-   uint64_t id, start, request_id, thread_id;
+   uint64_t id, start, request_id, thread_id, parent_id;
+   bool asynchronous;
    uint32_t input_count, stage_mask;
    uint64_t ns[KK_PERF_METRIC_COUNT];
    uint64_t count[KK_PERF_METRIC_COUNT];
 };
 void kk_perf_compile_begin(struct kk_perf *, struct kk_perf_compile_scope *);
 void kk_perf_compile_end(struct kk_perf_compile_scope *, bool binary, int result);
+void kk_perf_compile_parent(struct kk_perf *, uint64_t *request, uint64_t *parent);
+void kk_perf_async_compute(struct kk_perf *, int queued_delta, int active_delta);
+void kk_perf_async_join(struct kk_perf *, uint64_t parent, const char *reason,
+                        uint64_t start, uint64_t duration);
 void kk_perf_msl_source(struct kk_perf *, unsigned stage, const char *source);
 
 struct kk_perf *kk_perf_create(void);

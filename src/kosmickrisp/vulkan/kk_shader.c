@@ -6,6 +6,7 @@
  */
 
 #include "kk_shader.h"
+#include "kk_async_compute.h"
 #include "util/hash_table.h"
 #include "kk_depth_bias_control.h"
 #include "kk_atomic64.h"
@@ -1144,6 +1145,8 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
 {
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
+   if (shader->info.stage == MESA_SHADER_COMPUTE && shader->pipeline.compute.pending)
+      kk_async_compute_shader_finish(shader);
    kk_shader_embedded_samplers_finish(dev, shader);
    const bool mesh_stage = kk_shader_stage_has_mesh_info(shader->vk.stage);
    kk_sparse_shader_finish(shader);
@@ -1962,17 +1965,11 @@ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
 }
 
 static VkResult
-kk_compile_compute_pipeline_mode(struct kk_device *device,
-                            const struct msl_compile_data *data,
-                            uint32_t local_size_threads,
-                            mtl_compute_pipeline_state **pipe, bool indirect,
-                            mtl_function_descriptor **retained_function)
+kk_compile_compute_with_library(struct kk_device *device,
+   const struct msl_compile_data *data, uint32_t local_size_threads,
+   mtl_compute_pipeline_state **pipe, bool indirect,
+   mtl_function_descriptor **retained_function, mtl_library *library)
 {
-   struct kk_physical_device *pdev = kk_device_physical(device);
-
-   mtl_library *library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY, mtl_new_library(
-      device->mtl_compiler_handle, data->code, kk_msl_language_version(data, pdev->info.msl_version),
-      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
    if (library == NULL)
       return VK_ERROR_INVALID_SHADER_NV;
 
@@ -2003,11 +2000,41 @@ kk_compile_compute_pipeline_mode(struct kk_device *device,
 }
 
 static VkResult
+kk_compile_compute_pipeline_mode(struct kk_device *device,
+                            const struct msl_compile_data *data,
+                            uint32_t local_size_threads,
+                            mtl_compute_pipeline_state **pipe, bool indirect,
+                            mtl_function_descriptor **retained_function)
+{
+   struct kk_physical_device *pdev = kk_device_physical(device);
+
+   mtl_library *library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY, mtl_new_library(
+      device->mtl_compiler_handle, data->code, kk_msl_language_version(data, pdev->info.msl_version),
+      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
+   return kk_compile_compute_with_library(device, data, local_size_threads,
+      pipe, indirect, retained_function, library);
+}
+
+static VkResult
 kk_compile_compute_pipeline(struct kk_device *device,
                             const struct msl_compile_data *data,
                             uint32_t threads, mtl_compute_pipeline_state **pipe)
 {
    return kk_compile_compute_pipeline_mode(device, data, threads, pipe, false, NULL);
+}
+
+static VkResult
+kk_compile_async_compute(struct kk_device *device, struct kk_shader *shader)
+{
+   const struct msl_compile_data *data = &shader->msl_data[MESA_SHADER_COMPUTE];
+   struct kk_physical_device *pdev = kk_device_physical(device);
+   mtl_library *library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY,
+      mtl_new_library_async_wait(device->mtl_compiler_handle, data->code,
+         kk_msl_language_version(data, pdev->info.msl_version), MTL_MATH_MODE_FAST,
+         MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
+   struct mtl_size local = shader->info.cs.local_size;
+   return kk_compile_compute_with_library(device, data, local.x * local.y * local.z,
+                                          &shader->pipeline.cs, false, NULL, library);
 }
 
 VkResult
@@ -2573,14 +2600,8 @@ kk_compile_graphics_prerender(struct kk_device *device, struct kk_shader *vs,
    return VK_SUCCESS;
 }
 
-struct kk_graphics_library_compile {
-   struct mtl_library_pair *pair;
-   uint64_t start;
-};
-
 static VkResult
-kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs,
-   unsigned polygon, struct kk_graphics_library_compile *early)
+kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
 {
    struct kk_physical_device *pdev = kk_device_physical(device);
    VkResult result = VK_SUCCESS;
@@ -2601,19 +2622,11 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
       {fs_data->code, kk_msl_language_version(fs_data, pdev->info.msl_version)},
    };
    mtl_library *libraries[2];
-   bool compiled;
-   if (early && early->pair) {
-      compiled = mtl_library_pair_finish(early->pair, &sources[1], libraries);
-      early->pair = NULL;
-      if (unlikely(device->perf))
-         kk_perf_add(device->perf, KK_PERF_METAL_LIBRARY_PAIR,
-                     kk_perf_now() - early->start);
-   } else {
-      compiled = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY_PAIR,
-         mtl_new_library_pair(device->mtl_compiler_handle, sources,
-            MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST, libraries));
-   }
-   if (!compiled) return VK_ERROR_INVALID_SHADER_NV;
+   if (!KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY_PAIR,
+                    mtl_new_library_pair(device->mtl_compiler_handle, sources,
+                       MTL_MATH_MODE_FAST,
+                       MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST, libraries)))
+      return VK_ERROR_INVALID_SHADER_NV;
    mtl_library *vertex_library = libraries[0];
    mtl_library *fragment_library = libraries[1];
    mtl_function_descriptor *vertex_function = NULL;
@@ -2690,9 +2703,9 @@ kk_compile_polygon_siblings(struct kk_device *device, struct kk_shader *vs)
    }
    }
    if (vs->polygon[2].code)
-      result = kk_compile_graphics_pipeline_native(device, vs, true, NULL);
+      result = kk_compile_graphics_pipeline_native(device, vs, true);
    if (result == VK_SUCCESS && vs->info.conservative)
-      result = kk_compile_graphics_pipeline_native(device, vs, 2, NULL);
+      result = kk_compile_graphics_pipeline_native(device, vs, 2);
    if (result == VK_SUCCESS && vs->interlock)
       result = kk_interlock_pipeline_compile(device, vs);
    return result;
@@ -2717,8 +2730,7 @@ kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader)
 }
 
 static VkResult
-kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
-   struct kk_graphics_library_compile *early)
+kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
 {
    u_foreach_bit(i, vs->info.gs_aux_mask)
       vs->pipeline.gfx.gs_aux_once[i] = (util_once_flag)UTIL_ONCE_FLAG_INIT;
@@ -2743,7 +2755,7 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
       vs->lazy_polygon->device = device;
       vs->lazy_polygon->shader = vs;
    }
-   VkResult result = kk_compile_graphics_pipeline_native(device, vs, false, early);
+   VkResult result = kk_compile_graphics_pipeline_native(device, vs, false);
    if (result != VK_SUCCESS)
       return result;
    if (siblings && !vs->lazy_polygon) {
@@ -3217,14 +3229,6 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       .geometry_reports = features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS),
       .conservative_fs = conservative_fs,
    };
-   struct kk_graphics_library_compile early = {0};
-   /* IO linking, late metadata and producer selection are already final.
-    * Only this selected plain pair can start before FS finishing. */
-   const bool early_pair = state && total_shaders == 2 &&
-      nir_shaders[0]->info.stage == MESA_SHADER_VERTEX &&
-      nir_shaders[1]->info.stage == MESA_SHADER_FRAGMENT &&
-      !native_pair[0] && !polygon_capture && !poly_layer_replay &&
-      !pixel_envelope && !conservative_fs;
    for (uint32_t i = 0; i < total_shaders; i++) {
       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
       struct kk_compile_options stage_options = compile_options;
@@ -3249,7 +3253,6 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       }
 
       if (result != VK_SUCCESS) {
-         mtl_library_pair_discard(early.pair);
          /* Clean up all the shaders before this point */
          for (uint32_t j = 0; j < i; j++)
             kk_shader_destroy(&dev->vk, shaders[j], pAllocator);
@@ -3266,15 +3269,6 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
 
          return result;
-      }
-      if (early_pair && i == 0) {
-         const struct msl_compile_data *data = &shaders[0]->msl_data[MESA_SHADER_VERTEX];
-         const struct mtl_library_source source = {
-            data->code, kk_msl_language_version(data, pdev->info.msl_version),
-         };
-         if (unlikely(dev->perf)) early.start = kk_perf_now();
-         early.pair = mtl_library_pair_begin(dev->mtl_compiler_handle, &source,
-            MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
       }
    }
 
@@ -3312,9 +3306,12 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       uint32_t local_size_threads = s->info.cs.local_size.x *
                                     s->info.cs.local_size.y *
                                     s->info.cs.local_size.z;
-      result =
-         kk_compile_compute_pipeline(dev, &s->msl_data[MESA_SHADER_COMPUTE],
-                                     local_size_threads, &s->pipeline.cs);
+      bool deferred = kk_defer_compute && !s->info.indirect_bindable &&
+         !s->msl_data[MESA_SHADER_COMPUTE].uses_atomic64_locks && !sparse_modes &&
+         kk_async_compute_start(dev, s, kk_compile_async_compute);
+      if (!deferred)
+         result = kk_compile_compute_pipeline(dev, &s->msl_data[MESA_SHADER_COMPUTE],
+                                              local_size_threads, &s->pipeline.cs);
       if (result == VK_SUCCESS && s->info.indirect_bindable &&
           !kk_dgc_get_compute_pipeline(dev, s))
          result = VK_ERROR_INVALID_SHADER_NV;
@@ -3343,8 +3340,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          shaders[0]->info.polygon_native = true;
       }
       shaders[0]->info.api_geometry = explicit_geometry;
-      result = kk_compile_graphics_pipeline(dev, shaders[shaders[0]->info.stage == MESA_SHADER_TASK ? 1 : 0], &early);
-      mtl_library_pair_discard(early.pair);
+      result = kk_compile_graphics_pipeline(dev, shaders[shaders[0]->info.stage == MESA_SHADER_TASK ? 1 : 0]);
 
       /* Generated Poly and empty-fragment leaves are already copied into the
        * original vertex pipeline and share its normal lifetime. */
@@ -3407,6 +3403,9 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
 {
    struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
 
+   if (shader->info.stage == MESA_SHADER_COMPUTE && shader->pipeline.compute.pending &&
+       !kk_async_compute_serializable(shader))
+      return false;
    if (!kk_shader_cache_write_bindings(shader, blob))
       return false;
    blob_write_bytes(blob, &shader->info, sizeof(shader->info));
@@ -3567,7 +3566,7 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
           !kk_dgc_get_compute_pipeline(dev, shader))
          result = VK_ERROR_INVALID_SHADER_NV;
    } else if (info.stage == MESA_SHADER_VERTEX || info.stage == MESA_SHADER_MESH) {
-      result = kk_compile_graphics_pipeline(dev, shader, NULL);
+      result = kk_compile_graphics_pipeline(dev, shader);
    }
 
    if (result != VK_SUCCESS)
@@ -3625,6 +3624,13 @@ kk_sparse_shader_bound(struct kk_cmd_buffer *cmd, const struct kk_shader *shader
 static void
 kk_cmd_bind_compute_shader_selected(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
 {
+   VkResult ready = shader && shader->info.stage == MESA_SHADER_COMPUTE &&
+      shader->pipeline.compute.pending ? kk_async_compute_join(shader) : VK_SUCCESS;
+   if (unlikely(ready != VK_SUCCESS)) {
+      cmd->state.shaders[MESA_SHADER_COMPUTE] = shader;
+      vk_command_buffer_set_error(&cmd->vk, ready);
+      return;
+   }
    kk_sparse_shader_bound(cmd, shader);
    if (shader && shader->msl_data[MESA_SHADER_COMPUTE].uses_matrix_coordinates &&
        !cmd->state.cs.matrix_coordinates_initialized)

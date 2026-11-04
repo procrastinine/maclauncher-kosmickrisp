@@ -164,11 +164,13 @@ void *mtl_compiler_cache_begin(mtl_compiler *compiler) { return NULL; }
 void mtl_compiler_cache_end(void *token) {}
 void mtl_compiler_cache_record_pipeline(mtl_compiler *compiler) {}
 
-struct mtl_library_pair *
-mtl_library_pair_begin(mtl_compiler *compiler,
-   const struct mtl_library_source *vertex, enum mtl_math_mode math_mode,
-   enum mtl_math_floating_point_functions math_fp_fns) { return NULL; }
-bool mtl_library_pair_finish(struct mtl_library_pair *pair,
-   const struct mtl_library_source *fragment, mtl_library *libraries[2])
-{ libraries[0] = libraries[1] = NULL; return false; }
-void mtl_library_pair_discard(struct mtl_library_pair *pair) {}
+void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
+   void (*execute)(void *), void (*failed)(void *, const char *),
+   void (*cleanup)(void *)) { return NULL; }
+void mtl_compiler_task_wait(void *task) {}
+void mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,
+   size_t key_size, const void *bytes, size_t size) {}
+
+mtl_library *mtl_new_library_async_wait(mtl_compiler *compiler, const char *src,
+   enum mtl_language_version version, enum mtl_math_mode mode,
+   enum mtl_math_floating_point_functions fp) { return NULL; }

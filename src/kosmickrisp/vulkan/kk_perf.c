@@ -50,6 +50,8 @@ struct kk_perf {
    uint64_t frame_interval, time_interval, sequence;
    int64_t pending, submit_pending, compiler_active;
    uint64_t pending_peak, submit_peak, compiler_peak, invalid_gpu;
+   int64_t async_compute_queued, async_compute_active;
+   uint64_t async_compute_peak;
    struct kk_perf_stat stat[KK_PERF_METRIC_COUNT];
    struct kk_perf_gpu_stat gpu[256];
    unsigned gpu_count;
@@ -158,6 +160,9 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
            ",\"compiler_active\":%"PRId64",\"compiler_peak\":%"PRIu64
            ",\"gpu_unavailable\":%"PRIu64,
            p->pending, p->pending_peak, p->compiler_active, p->compiler_peak, p->invalid_gpu);
+   fprintf(p->log, ",\"async_compute_queued\":%"PRId64",\"async_compute_active\":%"PRId64
+           ",\"async_compute_peak\":%"PRIu64,
+           p->async_compute_queued, p->async_compute_active, p->async_compute_peak);
    struct mtl_compiler_cache_stats archive;
    if (p->metal_compiler && mtl_compiler_get_cache_stats(p->metal_compiler, &archive))
       fprintf(p->log, ",\"metal_archive\":{\"scope\":\"shared_compiler_lifetime\","
@@ -467,6 +472,42 @@ kk_perf_encoder_scope_end(struct kk_perf_encoder_scope *scope)
 static _Thread_local struct kk_perf_compile_scope *compile_scope;
 
 void
+kk_perf_compile_parent(struct kk_perf *p, uint64_t *request, uint64_t *parent)
+{
+   *request = *parent = 0;
+   if (compile_scope && compile_scope->perf == p) {
+      *request = compile_scope->request_id;
+      *parent = compile_scope->id;
+   }
+}
+
+void
+kk_perf_async_compute(struct kk_perf *p, int queued_delta, int active_delta)
+{
+   pthread_mutex_lock(&p->mutex);
+   p->async_compute_queued += queued_delta;
+   p->async_compute_active += active_delta;
+   if (p->async_compute_active > 0 &&
+       (uint64_t)p->async_compute_active > p->async_compute_peak)
+      p->async_compute_peak = p->async_compute_active;
+   pthread_mutex_unlock(&p->mutex);
+}
+
+
+void
+kk_perf_async_join(struct kk_perf *p, uint64_t parent, const char *reason,
+                    uint64_t start, uint64_t duration)
+{
+   if (!p->compile_details) return;
+   pthread_mutex_lock(&p->mutex);
+   fprintf(p->log, "{\"kk_async_join\":1,\"device\":\"%p\",\"parent_id\":%"PRIu64
+      ",\"reason\":\"%s\",\"thread\":%"PRIu64",\"start_ms\":%.6f,\"wall_ms\":%.6f}\n",
+      (void *)p, parent, reason, kk_perf_thread_id(), (start - p->created) / 1e6, duration / 1e6);
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+}
+
+void
 kk_perf_compile_begin(struct kk_perf *p, struct kk_perf_compile_scope *scope)
 {
    memset(scope, 0, sizeof(*scope));
@@ -492,9 +533,9 @@ kk_perf_compile_end(struct kk_perf_compile_scope *scope, bool binary, int result
    pthread_mutex_lock(&p->mutex);
    fprintf(p->log, "{\"kk_compile\":1,\"device\":\"%p\",\"id\":%"PRIu64
            ",\"request_id\":%"PRIu64",\"thread\":%"PRIu64",\"input_count\":%u,\"stage_mask\":%u,"
-           "\"origin\":\"%s\",\"result\":%d,\"start_ms\":%.6f,\"wall_ms\":%.6f,"
+           "\"origin\":\"%s\",\"asynchronous\":%s,\"parent_id\":%"PRIu64",\"result\":%d,\"start_ms\":%.6f,\"wall_ms\":%.6f,"
            "\"cpu_spans\":\"nested_caller_thread_wall_ms\",\"metrics\":{",
-           (void *)p, scope->id, scope->request_id, scope->thread_id, scope->input_count, scope->stage_mask, binary ? "deserialize" : "compile", result,
+           (void *)p, scope->id, scope->request_id, scope->thread_id, scope->input_count, scope->stage_mask, binary ? "deserialize" : "compile", scope->asynchronous ? "true" : "false", scope->parent_id, result,
            (scope->start-p->created)/1e6, (end-scope->start)/1e6);
    for (unsigned i = 0; i < KK_PERF_METRIC_COUNT; i++)
       fprintf(p->log, "%s\"%s\":{\"count\":%"PRIu64",\"total_ms\":%.6f}",

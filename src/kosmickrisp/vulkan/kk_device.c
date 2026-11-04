@@ -6,6 +6,7 @@
  */
 
 #include "kk_device.h"
+#include "kk_async_compute.h"
 #include "kosmickrisp-rt-commands.h"
 #include "kk_perf.h"
 #include "kk_opaque_sync.h"
@@ -47,6 +48,7 @@
 
 #include "vulkan/wsi/wsi_common.h"
 #include "vk_pipeline_cache.h"
+#include "vk_pipeline.h"
 
 #include <time.h>
 
@@ -184,6 +186,19 @@ kk_compiler_cache_store_piece(void *data, const void *bytes, size_t size,
    return complete;
 }
 
+/* Same portable object key and factory namespace as vk_pipeline_cache.c;
+ * native archive parent keys are deliberately not used for shader blobs. */
+static void
+kk_compiler_cache_store_shader(void *data, const void *key, size_t key_size,
+                                const void *bytes, size_t size)
+{
+   struct kk_compiler_cache *cache = data;
+   if (!size || !kk_compiler_cache_init(cache)) return;
+   cache_key disk_key;
+   disk_cache_compute_key(cache->disk, key, key_size, disk_key);
+   disk_cache_put(cache->disk, disk_key, bytes, size, NULL);
+}
+
 static void
 kk_compiler_cache_destroy(void *data)
 {
@@ -223,6 +238,7 @@ kk_new_compiler(struct kk_device *dev)
       .store = kk_compiler_cache_store,
       .load_piece = kk_compiler_cache_load_piece,
       .store_piece = kk_compiler_cache_store_piece,
+      .store_shader = kk_compiler_cache_store_shader,
       .destroy = kk_compiler_cache_destroy,
    };
    return mtl_new_cached_compiler(dev->mtl_handle, &ops, cache);
@@ -648,6 +664,7 @@ kk_CreateGraphicsPipelines(VkDevice device, VkPipelineCache cache,
                           VkPipeline *pipelines)
 {
    VK_FROM_HANDLE(kk_device, dev, device);
+   kk_async_compute_drain(dev);
    VkResult result = count ? kk_ensure_pipeline_cache(dev) : VK_SUCCESS;
    if (result != VK_SUCCESS) {
       memset(pipelines, 0, count * sizeof(*pipelines));
@@ -665,13 +682,40 @@ kk_CreateComputePipelines(VkDevice device, VkPipelineCache cache,
                          VkPipeline *pipelines)
 {
    VK_FROM_HANDLE(kk_device, dev, device);
+   kk_async_compute_drain(dev);
    VkResult result = count ? kk_ensure_pipeline_cache(dev) : VK_SUCCESS;
    if (result != VK_SUCCESS) {
       memset(pipelines, 0, count * sizeof(*pipelines));
       return result;
    }
-   return vk_common_CreateComputePipelines(device, cache, count, infos,
-                                           allocator, pipelines);
+   bool previous = kk_defer_compute;
+   bool defer = kk_async_compute_can_defer(count, infos);
+   kk_defer_compute = defer;
+   result = vk_common_CreateComputePipelines(device, cache, count, infos,
+                                             allocator, pipelines);
+   kk_defer_compute = previous;
+   return kk_async_compute_finish_creation(dev, count, infos, allocator,
+                                            pipelines, result, !defer);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+kk_DestroyPipeline(VkDevice device, VkPipeline pipeline,
+                    const VkAllocationCallbacks *allocator)
+{
+   if (pipeline != VK_NULL_HANDLE) {
+      struct vk_pipeline *base = vk_pipeline_from_handle(pipeline);
+      if (base->bind_point == VK_PIPELINE_BIND_POINT_COMPUTE && base->ops->get_shader) {
+         struct vk_shader *vk_shader = base->ops->get_shader(base, MESA_SHADER_COMPUTE);
+         if (vk_shader) {
+            struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
+            if (shader->pipeline.compute.pending)
+               kk_async_compute_wait_for_destroy(shader);
+         }
+      }
+   }
+   vk_common_DestroyPipeline(device, pipeline, allocator);
+   VK_FROM_HANDLE(kk_device, dev, device);
+   kk_async_compute_drain(dev);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -687,7 +731,11 @@ kk_CreateShadersEXT(VkDevice device, uint32_t count,
       memset(shaders, 0, count * sizeof(*shaders));
       return result;
    }
-   return vk_common_CreateShadersEXT(device, count, infos, allocator, shaders);
+   bool previous = kk_defer_compute;
+   kk_defer_compute = false;
+   result = vk_common_CreateShadersEXT(device, count, infos, allocator, shaders);
+   kk_defer_compute = previous;
+   return result;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -901,6 +949,7 @@ fail_query_table:
 fail_meta:
    kk_device_finish_meta(dev);
 fail_mem_cache:
+   kk_async_compute_device_finish(dev);
    if (dev->vk.mem_cache)
       vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
    simple_mtx_destroy(&dev->pipeline_cache_init_mutex);
@@ -961,6 +1010,8 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
     * Join/cancel submit workers and drain their native callbacks first. */
    while (dev->queue_count > 0)
       kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
+
+   kk_async_compute_device_finish(dev);
 
    /* Common workers and per-queue providers are finished; close the retained
     * interlock registry before destroying shared meta/query/heap state. */

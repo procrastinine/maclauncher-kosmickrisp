@@ -34,6 +34,8 @@ struct mtl_compiler_cache_ops {
    void *(*load_piece)(void *data, const uint8_t id[32], size_t *size);
    /* Complete the piece write before allowing an index to reference it. */
    bool (*store_piece)(void *data, const void *bytes, size_t size, uint8_t id[32]);
+   void (*store_shader)(void *data, const void *key, size_t key_size,
+                        const void *bytes, size_t size);
    void (*destroy)(void *data);
 };
 mtl_compiler *mtl_new_cached_compiler(mtl_device *device,
@@ -68,28 +70,32 @@ void mtl_compiler_cache_record_pipeline(mtl_compiler *compiler);
 })
 #endif
 
+/* Native compute jobs use the same compiler cache and a bounded, lazy queue.
+ * Caller owns the task and drains it before releasing the compiler. Cleanup
+ * runs after the operation is finished. */
+void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
+   void (*execute)(void *), void (*failed)(void *, const char *),
+   void (*cleanup)(void *));
+void mtl_compiler_task_wait(void *task);
+void mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,
+   size_t key_size, const void *bytes, size_t size);
+
 /* Library */
 mtl_library *
 mtl_new_library(mtl_compiler *compiler, const char *src,
                 enum mtl_language_version msl_version,
                 enum mtl_math_mode math_mode,
                 enum mtl_math_floating_point_functions math_fp_fns);
+/* Used only on the bounded native compute workers. */
+mtl_library *mtl_new_library_async_wait(mtl_compiler *compiler, const char *src,
+   enum mtl_language_version version, enum mtl_math_mode mode,
+   enum mtl_math_floating_point_functions fp);
 /* Each source preserves its own language version. Both returned libraries are
  * owned by the caller; on failure both outputs are NULL. */
 struct mtl_library_source {
    const char *code;
    enum mtl_language_version language_version;
 };
-
-/* Begin one selected VS before FS code generation; finish queues FS before
- * waiting. Discard drains callbacks. No pipeline may publish before finish. */
-struct mtl_library_pair;
-struct mtl_library_pair *mtl_library_pair_begin(mtl_compiler *compiler,
-   const struct mtl_library_source *vertex, enum mtl_math_mode math_mode,
-   enum mtl_math_floating_point_functions math_fp_fns);
-bool mtl_library_pair_finish(struct mtl_library_pair *pair,
-   const struct mtl_library_source *fragment, mtl_library *libraries[2]);
-void mtl_library_pair_discard(struct mtl_library_pair *pair);
 
 bool mtl_new_library_pair(mtl_compiler *compiler,
                          const struct mtl_library_source sources[2],
