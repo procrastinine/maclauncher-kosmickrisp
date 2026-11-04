@@ -949,9 +949,7 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
                             (pdev->info.gpu_apple_family == 7 ||
                              pdev->info.gpu_apple_family == 8) &&
                             state->ms && state->ms->rasterization_samples > 1;
-      /* KK_WORKAROUND_19: diagnostic-only triangle-merge comparison. */
-      if (!ms_bug_present &&
-          !(pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)))
+      if (!ms_bug_present)
          NIR_PASS(_, nir, msl_disable_triangle_merge);
    }
 
@@ -1891,6 +1889,9 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
       ? *opts->msl_custom : (struct nir_to_msl_options){0};
    translate_options.mem_ctx = NULL;
    translate_options.disabled_workarounds = pdev->settings.disabled_workarounds;
+   if (!(opts && opts->indirect_gs_spill_workaround &&
+         nir->info.stage == MESA_SHADER_COMPUTE))
+      translate_options.disabled_workarounds |= BITFIELD64_BIT(19);
    translate_options.native_sampler_lod_bias = pdev->info.gpu_apple_family >= 10;
    translate_options.native_query_texture_lod = pdev->info.supports_query_texture_lod;
    translate_options.independent_interface |= opts && opts->independent_interface;
@@ -2044,6 +2045,13 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    static const struct kk_compile_options defaults;
    if (!opts)
       opts = &defaults;
+   const bool gs_spill = opts->indirect_gs_spill_workaround;
+   struct kk_compile_options stage_options = *opts;
+   stage_options.indirect_gs_spill_workaround &=
+      nir->info.next_stage == MESA_SHADER_GEOMETRY;
+   opts = &stage_options;
+   struct kk_compile_options gs_options = *opts;
+   gs_options.indirect_gs_spill_workaround = gs_spill;
    const bool pixel_envelope = opts->pixel_envelope;
    const bool pixel_sample_shading = opts->pixel_sample_shading;
    const struct kk_per_vertex_map *per_vertex_map = opts->per_vertex_map;
@@ -2362,7 +2370,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          aux[i]->info.workgroup_size[1] = aux[i]->info.workgroup_size[2] = 1;
          msl_preprocess_nir(aux[i]);
          kk_compile_msl_options(dev, aux[i], state, &shader->gs_aux[i],
-                                opts, NULL, NULL);
+                                i == 0 ? &gs_options : opts, NULL, NULL);
       }
       shader->info.geometry_statistics =
          shader->gs_aux[1].uses_pipeline_statistics;
@@ -2370,7 +2378,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       nir->info.stage = MESA_SHADER_COMPUTE;
       memset(&nir->info.cs, 0, sizeof(nir->info.cs));
       nir->xfb_info = NULL;
-      kk_compile_msl_options(dev, nir, state, &shader->gs_main, opts, NULL, NULL);
+      kk_compile_msl_options(dev, nir, state, &shader->gs_main, &gs_options, NULL, NULL);
 
       /* From here on, nir is the rasterization VS of the GS */
       nir = rast;
@@ -4570,6 +4578,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    }
 
    const struct kk_compile_options compile_options = {
+      .indirect_gs_spill_workaround = explicit_geometry &&
+         !(pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)),
       .depth_bounds = depth_bounds,
       .pixel_envelope = pixel_envelope,
       .pixel_sample_shading = pixel_sample_shading,

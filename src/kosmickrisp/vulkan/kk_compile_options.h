@@ -29,6 +29,8 @@ struct kk_compile_options {
    bool mesh_queries;
    bool pipeline_statistics;
    bool geometry_reports;
+   /* Upstream WA19: only kernels using indirect dispatchThreads. */
+   bool indirect_gs_spill_workaround;
    uint32_t *mesh_retained_strides;
    uint32_t *mesh_retained_fields;
    const struct nir_to_msl_options *msl_custom;

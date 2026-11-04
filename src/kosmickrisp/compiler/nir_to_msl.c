@@ -122,6 +122,10 @@ static void
 emit_inputs(struct nir_to_msl_ctx *ctx, nir_shader *shader,
             enum msl_parameter_mode mode)
 {
+   if (shader->info.stage == MESA_SHADER_COMPUTE &&
+       !(ctx->disabled_workarounds & BITFIELD64_BIT(19)))
+      emit_parameter(ctx, "threadgroup uint32_t *kk_wa19_tg", "kk_wa19_tg",
+                     "threadgroup(0)", mode, true);
    if (shader->info.stage == MESA_SHADER_FRAGMENT)
       emit_parameter(ctx, "FragmentIn in", "in", "stage_in", mode, true);
    if (ctx->raster_vertex_inputs && !ctx->raster_vertex_fetch &&
@@ -3533,6 +3537,15 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    P(&ctx, ")\n");
    P(&ctx, "{\n");
    ctx.indentlevel++;
+   /* Upstream WA19 keeps indirect-dispatch spill storage valid on M1/M2. */
+   if (shader->info.stage == MESA_SHADER_COMPUTE &&
+       !(ctx.disabled_workarounds & BITFIELD64_BIT(19))) {
+      P_IND(&ctx, "if (buf0.contents[0] == 0xFFFFFFFFFFFFFFFFul) {\n"
+                  "    kk_wa19_tg[0] = 1u;\n"
+                  "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+                  "    *(device uint *)(buf0.contents[0]) = kk_wa19_tg[1];\n"
+                  "}\n");
+   }
    if (options->raster_module == MSL_RASTER_WRAPPER) {
       if (ctx.raster_vertex_inputs) {
          P_IND(&ctx, "VertexIn in = %s(\n", options->raster_vertex_fetch_name);

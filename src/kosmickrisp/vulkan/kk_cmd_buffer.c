@@ -1519,6 +1519,9 @@ kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
                     bool pre_gfx, enum libkk_program idx, void *data,
                     size_t data_size)
 {
+   /* KK_WORKAROUND_19 */
+   assert(grid.mode != KK_GRID_INDIRECT_LOCAL);
+
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    KK_PERF_ENCODER_SCOPE(dev, KK_PERF_ENCODER_STATE, state);
    struct kk_precompiled_shader *prog = kk_device_get_precompiled(dev, idx);

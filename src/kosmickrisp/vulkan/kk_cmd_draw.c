@@ -2870,6 +2870,14 @@ kk_pre_gs_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
    return kk_cmd_sampler_compute_pipeline(cmd, shader, pipeline);
 }
 
+static void
+kk_gs_spill_memory(struct kk_cmd_buffer *cmd, mtl_compute_encoder *enc)
+{
+   const struct kk_physical_device *pdev = kk_device_physical(kk_cmd_buffer_device(cmd));
+   if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)))
+      mtl_set_threadgroup_memory_length(enc, 16u, 0u);
+}
+
 #include "kk_polygon_command.h"
 
 /* Runs the stage feeding the GS and the GS compute pass, returning the draw
@@ -2935,6 +2943,7 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
    uint32_t pre_render_count = vs->pipeline.gfx.pre_render_count;
    struct mtl_size local_size = {KK_POLY_WG_SIZE, 1, 1};
    mtl_compute_encoder *enc = cs_get_compute(cmd);
+   kk_gs_spill_memory(cmd, enc);
 
    KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH,
                                     MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
@@ -2966,6 +2975,7 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
       if (gs->info.geometry.prefix_sum)
          libkk_prefix_sum_geometry(cmd, kk_grid_1d(1024 * gs->info.geometry.count_words), true, geometry_params);
       enc = cs_get_compute(cmd);
+      kk_gs_spill_memory(cmd, enc);
       if (vs->info.gs_aux_mask & BITFIELD_BIT(1)) {
          mtl_compute_pipeline_state *pipeline = kk_pre_gs_pipeline(cmd, vs, statistics);
          if (!pipeline)
