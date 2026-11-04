@@ -47,6 +47,14 @@ mtl_render_pass_descriptor_get_stencil_attachment(
 }
 
 void
+mtl_render_pass_attachment_descriptor_set_common(
+   mtl_render_pass_attachment_descriptor *descriptor, mtl_texture *texture,
+   uint32_t level, uint32_t slice, bool set_subresource,
+   enum mtl_load_action load_action)
+{
+}
+
+void
 mtl_render_pass_attachment_descriptor_set_texture(
    mtl_render_pass_attachment_descriptor *descriptor, mtl_texture *texture)
 {

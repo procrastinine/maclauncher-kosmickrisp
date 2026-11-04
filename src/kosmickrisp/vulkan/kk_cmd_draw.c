@@ -137,7 +137,7 @@ kk_clear_common_attachment_description(
    mtl_render_pass_attachment_descriptor_set_resolve_texture(descriptor, NULL);
 }
 
-static void
+static enum mtl_load_action
 kk_fill_common_attachment_description(
    mtl_render_pass_attachment_descriptor *descriptor,
    const struct kk_attachment *info, const struct kk_rendering_state *render,
@@ -147,20 +147,6 @@ kk_fill_common_attachment_description(
    const struct kk_image_view *iview = info->iview;
    assert(iview->plane_count ==
           1); /* TODO_KOSMICKRISP Handle multiplanar images? */
-   mtl_render_pass_attachment_descriptor_set_texture(
-      descriptor, kk_transient_render_texture(iview));
-   /* If a view is being used e.g. for format change, it already points to the
-    * required slice and level */
-   if (!iview->planes[0].render_is_view) {
-      mtl_render_pass_attachment_descriptor_set_level(descriptor,
-                                                      iview->vk.base_mip_level);
-      mtl_render_pass_attachment_descriptor_set_slice(
-         descriptor, iview->vk.base_array_layer);
-   }
-
-   if (render->layered_bc)
-      kk_layered_bc_attachment_description(descriptor, info, render, false);
-
    /* STORE_OP_NONE behaves like DONT_CARE if there are writes
     * (CLEAR or DONT_CARE are writes).
     * If there are no writes, we need to preserve the contents. */
@@ -173,10 +159,14 @@ kk_fill_common_attachment_description(
          ? MTL_LOAD_ACTION_LOAD
          : vk_attachment_load_op_to_mtl_load_action(info->load_op);
 
-   mtl_render_pass_attachment_descriptor_set_load_action(descriptor,
-                                                         load_action);
-   mtl_render_pass_attachment_descriptor_set_store_action(
-      descriptor, MTL_STORE_ACTION_UNKNOWN);
+   /* A render view already selects its source subresource. Keep all base
+    * writes in one bridge entry and preserve view/resolve override rules. */
+   mtl_render_pass_attachment_descriptor_set_common(
+      descriptor, kk_transient_render_texture(iview), iview->vk.base_mip_level,
+      iview->vk.base_array_layer, !iview->planes[0].render_is_view, load_action);
+
+   if (render->layered_bc)
+      kk_layered_bc_attachment_description(descriptor, info, render, false);
 
    if (attach_resolve_texture) {
       mtl_render_pass_attachment_descriptor_set_resolve_texture(
@@ -191,6 +181,7 @@ kk_fill_common_attachment_description(
       if (render->layered_bc)
          kk_layered_bc_attachment_description(descriptor, info, render, true);
    }
+   return load_action;
 }
 
 static struct mtl_clear_color
@@ -270,15 +261,17 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
          &render->color_att[i], rendering_to_whole_framebuffer,
          VK_IMAGE_ASPECT_COLOR_BIT);
 
-      kk_fill_common_attachment_description(attachment_descriptor, color_att, render,
-                                            force_attachment_load,
-                                            renderpass_resolve);
+      enum mtl_load_action load_action = kk_fill_common_attachment_description(
+         attachment_descriptor, color_att, render, force_attachment_load,
+         renderpass_resolve);
 
-      struct mtl_clear_color clear_color =
-         vk_clear_color_value_to_mtl_clear_color(color_att->clear_value.color,
-                                                 iview->planes[0].format);
-      mtl_render_pass_attachment_descriptor_set_clear_color(
-         attachment_descriptor, clear_color);
+      if (load_action == MTL_LOAD_ACTION_CLEAR) {
+         struct mtl_clear_color clear_color =
+            vk_clear_color_value_to_mtl_clear_color(color_att->clear_value.color,
+                                                    iview->planes[0].format);
+         mtl_render_pass_attachment_descriptor_set_clear_color(
+            attachment_descriptor, clear_color);
+      }
    }
 }
 
@@ -453,15 +446,14 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
 
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
          mtl_render_pass_descriptor_get_depth_attachment(pass_descriptor);
-      kk_fill_common_attachment_description(
+      enum mtl_load_action load_action = kk_fill_common_attachment_description(
          attachment_descriptor, &render->depth_att, render, force_attachment_load,
          renderpass_resolve);
 
       /* clearValue.depthStencil.depth could have invalid values such as NaN
        * which will trigger a Metal validation error. Ensure we only use this
        * value if the attachment is actually cleared. */
-      if (pRenderingInfo->pDepthAttachment->loadOp ==
-          VK_ATTACHMENT_LOAD_OP_CLEAR)
+      if (load_action == MTL_LOAD_ACTION_CLEAR)
          mtl_render_pass_attachment_descriptor_set_clear_depth(
             attachment_descriptor,
             pRenderingInfo->pDepthAttachment->clearValue.depthStencil.depth);
@@ -483,12 +475,13 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
 
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
          mtl_render_pass_descriptor_get_stencil_attachment(pass_descriptor);
-      kk_fill_common_attachment_description(
+      enum mtl_load_action load_action = kk_fill_common_attachment_description(
          attachment_descriptor, &render->stencil_att, render, force_attachment_load,
          renderpass_resolve);
-      mtl_render_pass_attachment_descriptor_set_clear_stencil(
-         attachment_descriptor,
-         pRenderingInfo->pStencilAttachment->clearValue.depthStencil.stencil);
+      if (load_action == MTL_LOAD_ACTION_CLEAR)
+         mtl_render_pass_attachment_descriptor_set_clear_stencil(
+            attachment_descriptor,
+            pRenderingInfo->pStencilAttachment->clearValue.depthStencil.stencil);
 
       if (renderpass_resolve)
          mtl_render_pass_attachment_descriptor_set_stencil_resolve_filter(
