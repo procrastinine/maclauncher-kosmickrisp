@@ -2213,6 +2213,11 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
       P(ctx, ".get_num_samples();\n");
       break;
    case nir_texop_lod: {
+      /* Descriptor lowering routes all unsupported native queries through
+       * kk_sample's gradient/metadata fallback, including immutable samplers.
+       * Do not emit an unavailable builtin for an unlowered query. */
+      if (!ctx->native_query_texture_lod)
+         UNREACHABLE("LOD query requires the sampler helper fallback");
       nir_src *coord = nir_tex_get_src(tex, nir_tex_src_coord);
       nir_src *bias = nir_tex_get_src(tex, nir_tex_src_bias);
       nir_src *min = nir_tex_get_src(tex, nir_tex_src_min_lod);
@@ -2845,6 +2850,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    ctx.text = _mesa_string_buffer_create(options->mem_ctx, 1024);
    ctx.disabled_workarounds = options->disabled_workarounds;
    ctx.native_sampler_lod_bias = options->native_sampler_lod_bias;
+   ctx.native_query_texture_lod = options->native_query_texture_lod;
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    msl_interlock_prepare(shader);
    bool fp32_controls_helpers = kk_fp32_controls_lower(&ctx);

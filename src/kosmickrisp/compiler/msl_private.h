@@ -35,6 +35,7 @@ struct nir_to_msl_ctx {
    struct _mesa_string_buffer *text;
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;
+   bool native_query_texture_lod;
    bool uses_per_draw_data;
    bool has_sampler_helpers;
    bool uses_sampler_emulation;

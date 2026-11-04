@@ -426,7 +426,8 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, ", sampler native_sampler, constant SamplerTable &table, ulong address, float4 coord");
       kk_sample_parameters(ctx, tex, true);
       P(ctx, ", float reduction_lod) {\n    constant ushort *metadata = (constant ushort*)address;\n");
-      if (ctx->shader->info.stage != MESA_SHADER_COMPUTE) {
+      if (ctx->native_query_texture_lod &&
+          ctx->shader->info.stage != MESA_SHADER_COMPUTE) {
          P(ctx, "    float native_unclamped = image.calculate_unclamped_lod(native_sampler, coord.%.*s);\n", cube ? 3 : dims, "xyz");
          P(ctx, "    float native_clamped = image.calculate_clamped_lod(native_sampler, coord.%.*s);\n", cube ? 3 : dims, "xyz");
       }
@@ -440,7 +441,8 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
          P(ctx, "        return float2(lod, reduction_lod);\n    }\n");
       }
       kk_sample_emit_lod_values(ctx, "low", "high", "mip_linear", true);
-      if (ctx->shader->info.stage == MESA_SHADER_COMPUTE) {
+      if (!ctx->native_query_texture_lod ||
+          ctx->shader->info.stage == MESA_SHADER_COMPUTE) {
          P(ctx, "    float lod = clamp(clamp(reduction_lod, low, high), 0.0f, float(image.get_num_mip_levels() - 1u));\n");
          P(ctx, "    if (!mip_linear) lod = fmax(ceil(lod + 0.5f) - 1.0f, 0.0f);\n");
          P(ctx, "    return float2(lod, reduction_lod);\n}\n");

@@ -50,6 +50,7 @@ struct kk_device_info {
    uint32_t rendering_tile_height;
    VkSampleCountFlags supported_sample_counts;
    bool supports_32bit_msaa;
+   bool supports_query_texture_lod;
 };
 
 struct kk_env_settings {

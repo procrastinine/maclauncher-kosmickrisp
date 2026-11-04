@@ -28,6 +28,7 @@ struct nir_to_msl_options {
    void *mem_ctx;
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;
+   bool native_query_texture_lod;
    /* Output: the emitted source uses a Metal 4.1 operation. */
    bool requires_msl41;
    /* Output: an emitted FP8 matrix load/store consumes the coordinate ramp. */

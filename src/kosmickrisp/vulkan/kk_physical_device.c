@@ -1224,6 +1224,11 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
    _mesa_blake3_update(&blake3_ctx, instance->driver_build_sha,
                        sizeof(instance->driver_build_sha));
 
+   /* Devices in the same family may differ in LOD-query support. Keep
+    * serialized shaders and disk entries in the matching compiler domain. */
+   const uint32_t query_texture_lod = pdev->info.supports_query_texture_lod;
+   _mesa_blake3_update(&blake3_ctx, &query_texture_lod, sizeof(query_texture_lod));
+
    /* Keep diagnostic shaders out of default application pipeline caches and
     * shader binaries. Disk/native caches also key the workaround mask. */
    if (pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)) {
@@ -1334,6 +1339,8 @@ get_metal_limits(struct kk_physical_device *pdev)
    pdev->info.rendering_tile_width = 32;
    pdev->info.rendering_tile_height = 32;
 
+   pdev->info.supports_query_texture_lod =
+      mtl_device_supports_query_texture_lod(pdev->mtl_dev_handle);
    pdev->info.supports_32bit_msaa =
       mtl_device_supports_32bit_msaa(pdev->mtl_dev_handle);
    pdev->info.supported_sample_counts = VK_SAMPLE_COUNT_1_BIT;

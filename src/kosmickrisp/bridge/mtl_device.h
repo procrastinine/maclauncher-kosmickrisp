@@ -29,6 +29,7 @@ void mtl_device_get_architecture_name(mtl_device *dev, char buffer[256]);
 /* Returns 0 if no Apple family is supported */
 uint32_t mtl_device_get_gpu_apple_family(mtl_device *dev);
 uint64_t mtl_device_get_registry_id(mtl_device *dev);
+bool mtl_device_supports_query_texture_lod(mtl_device *dev);
 bool mtl_device_supports_32bit_msaa(mtl_device *dev);
 bool mtl_device_supports_sample_count(mtl_device *dev, uint32_t sample_count);
 bool mtl_device_supports_shader_barycentric_coordinates(mtl_device *dev);

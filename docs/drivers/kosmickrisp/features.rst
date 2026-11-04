@@ -588,9 +588,11 @@ Feature table
        ``imageCubeArray``, ``shaderResourceMinLod``,
        ``shaderImageGatherExtended``, LOD queries
      - Native with emulated cases: gathers with separate per-texel offsets
-       are split into single gathers, and 1D images use 2D textures.
+       are split into single gathers, and 1D images use 2D textures. LOD queries
+       use Metal when ``supportsQueryTextureLOD`` is true; otherwise shaders
+       calculate the gradient LOD and apply sampler and mip-level limits.
      - Apple2 for anisotropy, Apple4 for cube arrays, Apple8 for LOD queries
-       (some Apple7 devices); native on all families.
+       (some Apple7 devices). LOD-query eligibility is cached per device.
      - —
      - Always
      - —

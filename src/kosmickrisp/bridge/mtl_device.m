@@ -115,6 +115,12 @@ mtl_device_get_registry_id(mtl_device *dev)
 }
 
 bool
+mtl_device_supports_query_texture_lod(mtl_device *dev)
+{
+   return [(id<MTLDevice>)dev supportsQueryTextureLOD];
+}
+
+bool
 mtl_device_supports_32bit_msaa(mtl_device *dev)
 {
    return [(id<MTLDevice>)dev supports32BitMSAA];
