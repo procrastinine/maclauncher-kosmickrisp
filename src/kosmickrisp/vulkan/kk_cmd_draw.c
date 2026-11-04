@@ -2372,7 +2372,8 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
    /* The optional tail adds no upload bytes to ordinary shaders. */
    bool multiview = gfx->render.view_mask &&
       (cmd->state.shaders[MESA_SHADER_TESS_EVAL] ||
-       cmd->state.gfx.shader->info.api_geometry);
+       cmd->state.gfx.shader->info.api_geometry ||
+       gfx->layer_replay.bind || gfx->polygon_points);
    uint32_t per_draw_size = multiview ? sizeof(gfx->per_draw_data) :
       per_vertex ? offsetof(struct kk_per_draw_data, multiview_index) :
       offsetof(struct kk_per_draw_data, per_vertex_index_addr);
@@ -2876,7 +2877,8 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       if (gfx->render.view_mask) {
          uint32_t layers[KK_MAX_MULTIVIEW_VIEW_COUNT] = {0};
          uint32_t count = 0;
-         if (tess || vs->info.api_geometry) {
+         if (tess || vs->info.api_geometry || gfx->layer_replay.bind ||
+             (vs->info.poly_layer_replay && gfx->polygon_points)) {
             count = 1;
          } else {
             u_foreach_bit(view, gfx->render.view_mask)
@@ -2906,7 +2908,10 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_shader *vs = cmd->state.gfx.shader;
    uint32_t view_mask = gfx->render.view_mask;
-   if (!view_mask || !(vs->info.api_geometry ||
+   bool cached_views = vs->info.poly_layer_replay &&
+      (gfx->render.layered_bc || kk_polygon_expansion_active(cmd) ||
+       !vs->info.polygon_native);
+   if (!view_mask || !(vs->info.api_geometry || cached_views ||
                       cmd->state.shaders[MESA_SHADER_TESS_EVAL])) {
       kk_draw_one_view(cmd, data);
       return;

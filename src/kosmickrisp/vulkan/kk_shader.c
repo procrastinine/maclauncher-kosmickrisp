@@ -224,7 +224,8 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER);
    /* Cache entries with a replay input cannot alias entries without it.
     * This bit changes serialization only; the guard bit is selected on use. */
-   if (feats->shaderOutputLayer) key |= BITFIELD_BIT(KK_FEAT_POLY_LAYER_REPLAY);
+   if (feats->shaderOutputLayer || feats->multiview)
+      key |= BITFIELD_BIT(KK_FEAT_POLY_LAYER_REPLAY);
    if (feats->sparseResidencyBuffer || feats->sparseResidencyImage3D) key |= BITFIELD_BIT(KK_FEAT_SPARSE_REPLAY);
    if (feats->nullDescriptor)
       key |= BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR);
@@ -1323,6 +1324,7 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
 #include "kk_conservative_nir.h"
 #include "kk_polygon_scalar_io.h"
 #include "kk_poly_layer_replay_nir.h"
+#include "kk_poly_layer_multiview_nir.h"
 
 static void
 kk_vrs_finish_captured_fragment(nir_shader *point_fs,
@@ -2400,6 +2402,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          poly_layer_replay = infos[i].nir->info.outputs_written & VARYING_BIT_LAYER;
       }
    }
+   /* Multiview supplies the last producer's effective Layer even when
+    * the application has no Layer output. Mesh owns its canonical reader. */
+   poly_layer_replay |= layer_producer != MESA_SHADER_NONE && state &&
+      state->mv && state->mv->view_mask;
    bool force_per_vertex = kk_barycentric_force_per_vertex(
       shader_count, infos, state, enabled_features);
 
@@ -2523,6 +2529,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          if (nir_shaders[i]->info.stage == MESA_SHADER_FRAGMENT) insert = i;
       }
       assert(producer && state);
+      /* The native alternative was cloned above with ordinary amplification.
+       * Only its captured sibling consumes the existing per-view uniform. */
+      if (state->mv->view_mask && producer->info.stage == MESA_SHADER_VERTEX)
+         kk_poly_layer_capture_view(producer, state->mv->view_mask);
       producer->info.next_stage = MESA_SHADER_GEOMETRY;
       size_t key_size = poly_passthrough_gs_key_size(producer->xfb_info ? producer->xfb_info->output_count : 0);
       struct poly_passthrough_gs_key *key = rzalloc_size(NULL, key_size);

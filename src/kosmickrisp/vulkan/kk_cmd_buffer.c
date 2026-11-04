@@ -167,10 +167,10 @@ kk_new_command_argument_table(struct kk_device *dev)
       mtl_set_max_buffer_binding_count(desc,
          kk_argument_table_buffer_count((struct kk_argument_table_usage){
             .interlock_guard = dev->interlock_guard != NULL,
-            .poly_layer_replay = dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader,
+            .poly_layer_replay = dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader || dev->vk.enabled_features.multiview,
          }));
       table = mtl_new_argument_table(dev->mtl_handle, desc);
-      if (dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader)
+      if (dev->vk.enabled_features.shaderOutputLayer || dev->vk.enabled_features.geometryShader || dev->vk.enabled_features.multiview)
          mtl_set_address(table, 0, KK_ARGUMENT_POLY_LAYER_REPLAY);
       mtl_set_address(table, dev->samplers.table.bo->gpu, KK_ARGUMENT_SAMPLERS);
       if (dev->interlock_guard)
@@ -374,6 +374,8 @@ cs_start_render(struct kk_cmd_buffer *cmd)
    uint32_t view_mask = state->render.view_mask;
    struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
    if (view_mask && vs && (vs->info.api_geometry ||
+       state->layer_replay.bind ||
+       (vs->info.poly_layer_replay && state->polygon_points) ||
        cmd->state.shaders[MESA_SHADER_TESS_EVAL]))
       view_mask = 0; /* A Poly replay writes its explicit layer. */
    assert(state->render_pass_descriptor);
