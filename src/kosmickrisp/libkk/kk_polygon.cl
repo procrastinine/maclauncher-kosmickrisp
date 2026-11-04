@@ -396,9 +396,13 @@ polygon_depth_bias(global struct poly_geometry_capture *p, uint viewport,
    float ay = a.position[1] / a.position[3];
    float az = polygon_screen_z(p, viewport, &a);
    maximum_z = fabs(az);
-   for (uint i = 1; i < count; ++i) {
-      struct kk_polygon_vertex b = polygon[i];
-      maximum_z = fmax(maximum_z, fabs(polygon_screen_z(p, viewport, &b)));
+   /* Only floating-point FORMAT spacing depends on the clipped-depth
+    * exponent. FLOAT, FORCE_UNORM and fixed-point FORMAT do not use it. */
+   if (p->depth_is_float && p->depth_bias_representation == 0) {
+      for (uint i = 1; i < count; ++i) {
+         struct kk_polygon_vertex b = polygon[i];
+         maximum_z = fmax(maximum_z, fabs(polygon_screen_z(p, viewport, &b)));
+      }
    }
    for (uint i = 1; i + 1 < count; ++i) {
       struct kk_polygon_vertex b = polygon[i], c = polygon[i + 1];

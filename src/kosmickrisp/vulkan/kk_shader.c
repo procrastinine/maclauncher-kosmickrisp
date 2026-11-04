@@ -7,6 +7,7 @@
 
 #include "kk_shader.h"
 #include "util/hash_table.h"
+#include "kk_depth_bias_control.h"
 
 #include "kk_cmd_buffer.h"
 #include "kk_debug.h"
@@ -298,7 +299,8 @@ kk_hash_graphics_state(struct vk_physical_device *device,
                           sizeof(state->mv->view_mask));
 
    const uint32_t feature_key[] = {
-      KK_FEAT_COUNT, sizeof(struct kk_shader_info),
+      (KK_SHADER_INFO_CACHE_VERSION << 16) | KK_FEAT_COUNT,
+      sizeof(struct kk_shader_info),
       offsetof(struct kk_per_draw_data, geometry_statistics),
       kk_make_feature_key(enabled_features),
    };
@@ -332,14 +334,11 @@ kk_hash_graphics_state(struct vk_physical_device *device,
 
    /* Representation changes whether a Poly raster pipeline is required.
     * Keep ordinary pipeline cache keys while separating controlled pipelines. */
-   if (enabled_features->depthBiasControl && state && state->rs &&
-       (state->rs->depth_bias.enable ||
-        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_ENABLE)) &&
-       (state->rs->depth_bias.exact || state->rs->depth_bias.representation !=
-           VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT ||
-        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_FACTORS))) {
-      const uint32_t representation_key = 0x44424331;
-      _mesa_blake3_update(&blake3_ctx, &representation_key, sizeof(representation_key));
+   uint8_t depth_bias_control = kk_depth_bias_control_flags(
+      enabled_features->depthBiasControl, state);
+   if (depth_bias_control) {
+      const uint32_t representation_key[] = {0x44424332, depth_bias_control};
+      _mesa_blake3_update(&blake3_ctx, representation_key, sizeof(representation_key));
    }
    _mesa_blake3_final(&blake3_ctx, blake3_out);
 }
@@ -2748,7 +2747,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    /* Device enablement alone must not create a captured pipeline. The final
     * producer owns primitive rejection; earlier-stage distances are inputs
     * for that producer. Native mesh output performs its own cull test. */
-   const bool polygon_regular = cull_distance || kk_polygon_regular_possible(dev, state);
+   const uint8_t depth_bias_control = kk_depth_bias_control_flags(
+      enabled_features->depthBiasControl, state);
+   const bool polygon_regular = cull_distance ||
+      kk_polygon_regular_possible(state, depth_bias_control);
    const bool polygon_capture = polygon_regular || kk_conservative_possible(state);
    unsigned barycentric_inputs = 0;
    if (enabled_features->fragmentShaderBarycentric && shader_count &&
@@ -2838,7 +2840,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    nir_shader *native_pair[2] = {NULL, NULL};
    bool native_fragment_needs_finish = false;
    bool native_passthrough = !explicit_geometry && !xfb && !tess &&
-      (kk_polygon_native_possible(state) || poly_layer_replay);
+      (kk_polygon_native_possible(state) || poly_layer_replay ||
+       (!pixel_envelope && kk_depth_bias_native_possible(depth_bias_control, state)));
    nir_shader *native_vs = NULL, *native_fs = NULL;
    for (unsigned i = 0; i < shader_count; ++i) {
       nir_shader *n = nir_shaders[i];
@@ -3095,6 +3098,11 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          result = VK_ERROR_INVALID_SHADER_NV;
    } else {
       gather_graphics_pipeline_create_info(state, shaders, total_shaders);
+      if (depth_bias_control) {
+         struct kk_shader *producer = shaders[
+            shaders[0]->info.stage == MESA_SHADER_TASK ? 1 : 0];
+         producer->info.depth_bias_control = depth_bias_control;
+      }
       if (native_pair[0]) {
          NIR_PASS(_, native_pair[0], nir_opt_dce);
          nir_shader_gather_info(native_pair[0], nir_shader_get_entrypoint(native_pair[0]));

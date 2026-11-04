@@ -12,15 +12,6 @@ struct kk_depth_stencil_record {
    mtl_depth_stencil_state *read_only, *bypass;
 };
 
-mtl_depth_stencil_state *
-kk_cmd_selected_depth_stencil(struct kk_cmd_buffer *cmd,
-                             struct kk_shader *actual_producer)
-{
-   return cmd->state.gfx.is_depth_stencil_dynamic
-      ? cmd->state.gfx.depth_stencil_state
-      : kk_attachment_depth_stencil(cmd, actual_producer);
-}
-
 static const struct kk_image *
 kk_depth_stencil_image(const struct kk_attachment *attachment)
 {
@@ -94,6 +85,12 @@ kk_cmd_capture_depth_stencil(struct kk_cmd_buffer *cmd,
          s->memoryless_color_mask |= BITFIELD_BIT(i);
 
    record->next = cmd->depth_stencil_records;
+   /* BYPASS has no enabled tests or writes, independent of the snapshot's
+    * attachments and references. Move its command-owned cache to the head. */
+   if (record->next) {
+      record->bypass = record->next->bypass;
+      record->next->bypass = NULL;
+   }
    cmd->depth_stencil_records = record;
    *out = s;
    return VK_SUCCESS;
@@ -109,7 +106,7 @@ kk_cmd_depth_stencil_variant(const struct kk_depth_stencil_snapshot *s,
    struct kk_depth_stencil_record *record =
       container_of(s, struct kk_depth_stencil_record, snapshot);
    mtl_depth_stencil_state **slot = mode == KK_DEPTH_STENCIL_READ_ONLY
-      ? &record->read_only : &record->bypass;
+      ? &record->read_only : &s->command->depth_stencil_records->bypass;
    if (!*slot) {
       struct vk_depth_stencil_state ds = s->ds;
       ds.depth.write_enable = false;

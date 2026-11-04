@@ -32,17 +32,13 @@ kk_polygon_native_possible(const struct vk_graphics_pipeline_state *state)
 }
 
 static bool
-kk_polygon_regular_possible(const struct kk_device *dev, const struct vk_graphics_pipeline_state *state)
+kk_polygon_regular_possible(const struct vk_graphics_pipeline_state *state,
+   uint8_t depth_bias_control)
 {
    return state && state->rs &&
       (kk_wide_line_possible(state) || state->rs->polygon_mode == VK_POLYGON_MODE_POINT ||
        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE) ||
-       (dev->vk.enabled_features.depthBiasControl &&
-        (state->rs->depth_bias.enable ||
-         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_ENABLE)) &&
-        (state->rs->depth_bias.exact || state->rs->depth_bias.representation !=
-            VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT ||
-         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_FACTORS))));
+       depth_bias_control);
 }
 
 static uint64_t
@@ -133,8 +129,8 @@ kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
    nir_def *id = nir_load_vertex_id(&b);
    bool dynamic_polygon = !state ||
       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
-   nir_def *mode = dynamic_polygon ? kk_polygon_load(&b, 1, 32,
-      offsetof(struct poly_geometry_capture, polygon_mode), 4) :
+   nir_def *mode = dynamic_polygon ? kk_polygon_load(&b, 1, 8,
+      offsetof(struct poly_geometry_capture, polygon_mode), 1) :
       nir_imm_int(&b, state->rs->polygon_mode);
    nir_def *is_point = nir_ieq_imm(&b, mode, VK_POLYGON_MODE_POINT);
    nir_def *line_expand = info->primitive_vertices == 2 ? nir_imm_int(&b, 1) :

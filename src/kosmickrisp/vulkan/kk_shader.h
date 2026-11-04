@@ -119,6 +119,9 @@ struct kk_mesh_shader_info {
    uint32_t view_mask;
 };
 
+/* Serialized info may change within padding without changing sizeof. */
+#define KK_SHADER_INFO_CACHE_VERSION 1u
+
 struct kk_shader_info {
    bool interlock_envelope;
    mesa_shader_stage stage;
@@ -138,6 +141,7 @@ struct kk_shader_info {
    bool poly_layer_replay;
    bool conservative;
    bool conservative_full_coverage;
+   uint8_t depth_bias_control;
    uint64_t conservative_canonical_outputs;
    uint64_t conservative_canonical_components[2];
    struct poly_gs_capture_info polygon;

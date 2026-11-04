@@ -12,6 +12,7 @@
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
 #include "kk_depth_stencil_state.h"
+#include "kk_depth_bias_control.h"
 #include "kk_interlock_heap.h"
 #include "kk_interlock_draw.h"
 #include "kk_interlock_envelope.h"
@@ -913,9 +914,8 @@ kk_polygon_expansion_active(struct kk_cmd_buffer *cmd)
         (cmd->state.gfx.render.layered_bc && cmd->state.gfx.shader == vs)))
       return true;
    if (vs->info.polygon.cull_count) return true;
-   bool controlled_bias = dyn->rs.depth_bias.enable &&
-      (dyn->rs.depth_bias.exact || dyn->rs.depth_bias.representation !=
-         VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
+   bool controlled_bias = kk_depth_bias_control_active(
+      vs->info.depth_bias_control, &dyn->rs);
    bool lines = vs->info.polygon.primitive_vertices == 2 ||
       dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE;
    return (vs->info.conservative && dyn->rs.conservative_mode ==

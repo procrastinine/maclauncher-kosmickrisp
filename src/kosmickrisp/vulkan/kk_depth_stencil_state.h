@@ -35,9 +35,14 @@ struct kk_depth_stencil_snapshot {
 };
 
 /* Shared with ordinary pipeline binding. No allocation or encoder creation. */
-mtl_depth_stencil_state *
+static inline mtl_depth_stencil_state *
 kk_cmd_selected_depth_stencil(struct kk_cmd_buffer *cmd,
-                             struct kk_shader *actual_producer);
+                             struct kk_shader *actual_producer)
+{
+   return cmd->state.gfx.is_depth_stencil_dynamic
+      ? cmd->state.gfx.depth_stencil_state
+      : kk_attachment_depth_stencil(cmd, actual_producer);
+}
 
 /* Call after graphics-state flush for the actual producer and current render
  * encoder, before an internal coverage/body/replay sequence. The immutable CPU
@@ -49,8 +54,9 @@ kk_cmd_capture_depth_stencil(struct kk_cmd_buffer *cmd,
                             struct kk_shader *actual_producer,
                             const struct kk_depth_stencil_snapshot **out);
 
-/* Derived native states are compiled lazily through the existing compiler and
- * retained in the same command record. Never release a returned handle. */
+/* Derived native states are compiled lazily through the existing compiler.
+ * BYPASS is shared by the command; READ_ONLY belongs to its snapshot. Both
+ * remain retained until command retirement. Never release a returned handle. */
 mtl_depth_stencil_state *
 kk_cmd_depth_stencil_variant(const struct kk_depth_stencil_snapshot *snapshot,
                             enum kk_depth_stencil_mode mode);

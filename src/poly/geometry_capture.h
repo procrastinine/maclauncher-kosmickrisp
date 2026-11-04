@@ -47,11 +47,12 @@ struct poly_geometry_capture {
    float depth_bias_constant;
    float depth_bias_slope;
    float depth_bias_clamp;
-   uint32_t depth_mantissa_bits;
-   uint32_t depth_is_float;
-   uint32_t depth_bias_enable;
-   uint32_t depth_bias_representation;
-   uint32_t polygon_mode;
+   /* Shared compact state: mantissa <= 24, booleans and Vulkan enums 0..2. */
+   uint8_t depth_mantissa_bits;
+   uint8_t depth_is_float;
+   uint8_t depth_bias_enable;
+   uint8_t depth_bias_representation;
+   uint8_t polygon_mode;
    uint32_t primitive_vertices;
    uint32_t line_expand;
    uint32_t line_mode;
