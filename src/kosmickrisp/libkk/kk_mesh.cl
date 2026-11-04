@@ -54,13 +54,7 @@ libkk_mesh_filter_slices(global struct kk_mesh_params *p,
 KERNEL(1)
 libkk_mesh_snapshot(global struct kk_mesh_params *p, global uint32_t *out)
 {
-   uint32_t count = p->indirect_count ? *(global uint32_t *)p->indirect_count : p->max_draw_count;
-   out[3] = min(count, p->max_draw_count);
-   global uint32_t *grid = (global uint32_t *)p->indirect_grid;
-   bool active = p->draw_id < out[3] && kk_mesh_draw_enabled(p);
-   out[0] = active ? grid[0] : 0;
-   out[1] = active ? grid[1] : 1;
-   out[2] = active ? grid[2] : 1;
+   kk_mesh_snapshot_grid(p, out);
 }
 
 KERNEL(1)
@@ -68,4 +62,13 @@ libkk_mesh_prefix_expand(global struct kk_mesh_params *p,
    global uint32_t *grids, global uint32_t *range, uint32_t span, uint32_t capacity)
 {
    kk_mesh_prefix_expand(p, grids, range, span, capacity);
+}
+
+/* Pass preparation: independent records share one dispatch, no cross-lane wait. */
+KERNEL(64)
+libkk_mesh_snapshot_batch(global struct kk_mesh_params *parameters,
+   global uint32_t *out, uint32_t count)
+{
+   uint32_t i = cl_global_id.x;
+   if (i < count) kk_mesh_snapshot_grid(parameters + i, out + i * 4u);
 }
