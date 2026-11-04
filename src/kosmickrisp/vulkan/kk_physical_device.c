@@ -1339,6 +1339,15 @@ get_metal_limits(struct kk_physical_device *pdev)
    pdev->info.rendering_tile_width = 32;
    pdev->info.rendering_tile_height = 32;
 
+   if (pdev->info.gpu_apple_family >= 11 &&
+       pdev->info.msl_version >= MTL_LANGUAGE_VERSION_4_1) {
+      for (unsigned i = 0; i < ARRAY_SIZE(pdev->info.rgb32_texel_alignment); ++i) {
+         uint64_t alignment = mtl_minimum_texture_buffer_alignment_for_pixel_format(
+            pdev->mtl_dev_handle, MTL_PIXEL_FORMAT_R32G32B32_UINT + i);
+         pdev->info.rgb32_texel_alignment[i] = alignment <= UINT32_MAX ? alignment : 0;
+      }
+   }
+
    pdev->info.supports_query_texture_lod =
       mtl_device_supports_query_texture_lod(pdev->mtl_dev_handle);
    pdev->info.supports_32bit_msaa =

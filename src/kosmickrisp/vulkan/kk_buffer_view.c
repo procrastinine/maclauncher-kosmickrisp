@@ -15,6 +15,7 @@
 #include "kk_image_layout.h"
 #include "kk_nir_lower_vbo.h"
 #include "kk_physical_device.h"
+#include "kk_rgb32_texel.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/mtl_format.h"
@@ -102,14 +103,25 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
       *pBufferView = kk_buffer_view_to_handle(view);
       return VK_SUCCESS;
    }
-   enum pipe_format native_format = kk_texel_buffer_native_format(p_format);
+   struct kk_buffer *buffer = container_of(view->vk.buffer, struct kk_buffer, vk);
+   const struct kk_physical_device *pdev = kk_device_physical(dev);
+   uint32_t native_prefix_B = 0;
+   enum mtl_pixel_format native_rgb = MTL_PIXEL_FORMAT_INVALID;
+   if (kk_format_is_rgb32(p_format))
+      native_rgb = kk_native_rgb32_texel_format(p_format,
+         pdev->info.gpu_apple_family, pdev->info.msl_version,
+         buffer->vk.usage, buffer->vk.create_flags, view->vk.offset,
+         kk_buffer_mtl_offset(buffer, 0), pdev->info.rgb32_texel_alignment,
+         &native_prefix_B);
+   enum pipe_format native_format = native_rgb != MTL_PIXEL_FORMAT_INVALID
+      ? p_format : kk_texel_buffer_native_format(p_format);
    bool rgb32 = native_format != p_format;
    p_format = native_format;
    const struct kk_va_format *supported_format = kk_get_va_format(p_format);
 
    /* If we reached here, we support reading at least */
    enum mtl_texture_usage usage = MTL_TEXTURE_USAGE_SHADER_READ;
-   if (supported_format->texel_buffer.write)
+   if (native_rgb == MTL_PIXEL_FORMAT_INVALID && supported_format->texel_buffer.write)
       usage |= MTL_TEXTURE_USAGE_SHADER_WRITE;
 
    /* Only these formats allow atomics for texel buffers */
@@ -124,7 +136,8 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
    uint32_t alignment = KK_MIN_TEXEL_BUFFER_ALIGNMENT;
    while (alignment % texel_size)
       alignment += KK_MIN_TEXEL_BUFFER_ALIGNMENT;
-   VkDeviceSize prefix = view->vk.offset % alignment;
+   VkDeviceSize prefix = native_rgb != MTL_PIXEL_FORMAT_INVALID
+      ? native_prefix_B : view->vk.offset % alignment;
    view->texel_offset = prefix / texel_size;
    assert(view->texel_offset < KK_MIN_TEXEL_BUFFER_ALIGNMENT);
    assert(!(view->texel_offset & KK_TEXEL_BUFFER_RAW_ADDRESS));
@@ -140,7 +153,9 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
       .linear = true,
       .optimized_layout = false,
       .usage = usage,
-      .format = {.pipe = p_format, .mtl = supported_format->mtl_pixel_format},
+      .format = {.pipe = p_format,
+                 .mtl = native_rgb != MTL_PIXEL_FORMAT_INVALID
+                    ? native_rgb : supported_format->mtl_pixel_format},
       .swizzle =
          {
             .red = supported_format->unswizzle.red,
@@ -150,8 +165,6 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
          },
       .linear_stride_B = view->vk.range + prefix,
    };
-   struct kk_buffer *buffer =
-      container_of(view->vk.buffer, struct kk_buffer, vk);
    if (buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) {
       view->sparse_view_pool = mtl_new_sparse_buffer_view(buffer->metal.handle, &layout,
          kk_buffer_mtl_offset(buffer, view->vk.offset - prefix), &view->texel_buffer_gpu_id);

@@ -128,6 +128,13 @@ mtl_heap_buffer_size_and_align_with_length(mtl_device *device, uint64_t *size_B,
 }
 
 uint64_t
+mtl_minimum_texture_buffer_alignment_for_pixel_format(
+   mtl_device *device, enum mtl_pixel_format format)
+{
+   return 0;
+}
+
+uint64_t
 mtl_minimum_linear_texture_alignment_for_pixel_format(
    mtl_device *device, enum mtl_pixel_format format)
 {

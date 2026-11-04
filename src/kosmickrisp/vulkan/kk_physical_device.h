@@ -49,6 +49,7 @@ struct kk_device_info {
    uint32_t rendering_tile_width;
    uint32_t rendering_tile_height;
    VkSampleCountFlags supported_sample_counts;
+   uint32_t rgb32_texel_alignment[3]; /* Metal RGB32Uint, Sint, Float. */
    bool supports_32bit_msaa;
    bool supports_query_texture_lod;
 };

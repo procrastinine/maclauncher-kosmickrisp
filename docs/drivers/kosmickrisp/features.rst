@@ -656,10 +656,12 @@ Feature table
      - Always
      - —
    * - ``R32G32B32`` formats
-     - Emulated: texel buffers use a single-channel 32-bit view three times
-       as wide. Images use four-channel textures with a hidden fourth
-       component, and transfers keep the 12-byte layout through staging.
-     - Apple11 for read-only RGB texture buffers; emulated on all families.
+     - Native read-only texel buffers on Apple11 with macOS 27 when the
+       aligned view permits whole RGB texels. Writable, sparse and other
+       texel-buffer cases use a single-channel view three times as wide.
+       Images use four-channel textures with a hidden fourth component;
+       transfers keep the 12-byte layout through staging.
+     - Apple11 for read-only RGB texture buffers; other cases remain emulated.
      - —
      - Always
      - —
