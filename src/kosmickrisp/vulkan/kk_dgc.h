@@ -3,6 +3,7 @@
 #define KK_DGC_H
 #include "kosmickrisp/bridge/mtl_types.h"
 #include "kosmickrisp/libkk/kk_argument_table.h"
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
@@ -30,7 +31,10 @@ struct kk_dgc_params {
    uint64_t execution_range;
    uint32_t root_vertex_input, vertex_input_size, vertex_input_offset;
    uint32_t vertex_fetch_size, vertex_fetch_stride;
+   uint64_t linked_vs_buffer, linked_fs_buffer;
+   uint64_t interlock_guard;
 };
+static_assert(sizeof(struct kk_dgc_params) == 248, "DGC parameter ABI");
 struct kk_device;
 struct kk_cmd_buffer;
 struct kk_dgc_metal;
@@ -61,6 +65,8 @@ bool kk_dgc_draw_indirect_count(struct kk_cmd_buffer *cmd,
 bool kk_dgc_needs_poly(struct kk_cmd_buffer *cmd);
 void kk_dgc_draw_sequence(struct kk_cmd_buffer *cmd, uint64_t root,
                           uint64_t args, uint64_t binding, bool indexed, uint32_t draw_id);
+void kk_dgc_set_linked_table_buffers(struct kk_cmd_buffer *cmd,
+   uint64_t vertex_buffer, uint64_t fragment_buffer);
 void kk_dgc_release_commands(struct kk_cmd_buffer *cmd);
 uint32_t kk_dgc_primitive(struct kk_cmd_buffer *cmd);
 bool kk_dgc_prepare_graphics_root(struct kk_cmd_buffer *allocator, struct kk_cmd_buffer *state, struct kk_root_descriptor_table *root);

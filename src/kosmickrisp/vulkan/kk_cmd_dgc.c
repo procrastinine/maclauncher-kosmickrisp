@@ -290,6 +290,13 @@ VKAPI_ATTR void VKAPI_CALL kk_CmdPreprocessGeneratedCommandsEXT(
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
 }
 
+void kk_dgc_set_linked_table_buffers(struct kk_cmd_buffer *cmd,
+   uint64_t vertex_buffer, uint64_t fragment_buffer)
+{
+   cmd->state.gfx.dgc_linked_vs_buffer = vertex_buffer;
+   cmd->state.gfx.dgc_linked_fs_buffer = fragment_buffer;
+}
+
 static void kk_dgc_set_graphics_indirect(struct kk_cmd_buffer *cmd, bool indirect)
 {
    if (cmd->state.gfx.dgc_icb == indirect) return;
@@ -339,6 +346,13 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
            .gpu;
    if (!scratch)
       return;
+   if (!compute && !poly) {
+      kk_dgc_set_graphics_indirect(cmd, true);
+      kk_dgc_flush_graphics(cmd);
+      p.linked_vs_buffer = cmd->state.gfx.dgc_linked_vs_buffer;
+      p.linked_fs_buffer = cmd->state.gfx.dgc_linked_fs_buffer;
+      p.interlock_guard = dev->interlock_guard ? dev->interlock_guard->gpu : 0;
+   }
    for (uint32_t first = 0; first < maximum; first += KK_DGC_ICB_SLICE) {
       uint32_t count = MIN2(maximum - first, KK_DGC_ICB_SLICE);
       p.output = scratch;

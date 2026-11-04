@@ -207,6 +207,7 @@ struct kk_graphics_state {
    struct kk_per_draw_data per_draw_data;
    uint32_t indirect_draw_id;
    bool dgc_icb;
+   uint64_t dgc_linked_vs_buffer, dgc_linked_fs_buffer;
    uint64_t generated_root;
    uint64_t generated_heap_floor;
    struct kk_addr_range xfb[POLY_MAX_SO_BUFFERS];
