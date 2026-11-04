@@ -22,6 +22,9 @@ struct kk_mesh_msl_options {
    uint32_t view_mask, view_index_offset;
    bool flat_heap, projected_basis;
    unsigned flat_heap_offset;
+   /* Static last-vertex provoking: each triangle's indices rotate so the
+    * provoking vertex comes first, as Metal takes flat values from it. */
+   bool provoking_last;
 };
 
 /* Exact linked producer types for native pre-raster triangle attributes.

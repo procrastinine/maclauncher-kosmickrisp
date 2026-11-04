@@ -227,11 +227,15 @@ kk_mesh_emit_copy_outputs(struct nir_to_msl_ctx *ctx)
    P(ctx, ";\n#else\n");
    P_IND(ctx, "kk_output.set_primitive(i, primitive);\n");
    P(ctx, "#endif\n");
+   /* Last-vertex provoking triangles are emitted as (v2, v0, v1), which keeps
+    * their winding. Lines keep their order. */
+   const bool rotate = ctx->mesh.provoking_last && vpp == 3;
    for (unsigned v = 0; v < vpp; ++v) {
+      const unsigned src = rotate ? (v + 2) % 3 : v;
       P(ctx, "#ifdef KK_MESH_RETAINED_CAPTURE\n");
-      P_IND(ctx, "((device uint *)(kk_cache + KK_RETAINED_INDICES))[i * %u + %u] = kk_indices[i * %u + %u];\n", vpp, v, vpp, v);
+      P_IND(ctx, "((device uint *)(kk_cache + KK_RETAINED_INDICES))[i * %u + %u] = kk_indices[i * %u + %u];\n", vpp, v, vpp, src);
       P(ctx, "#else\n");
-      P_IND(ctx, "kk_output.set_index(i * %u + %u, kk_indices[i * %u + %u]);\n", vpp, v, vpp, v);
+      P_IND(ctx, "kk_output.set_index(i * %u + %u, kk_indices[i * %u + %u]);\n", vpp, v, vpp, src);
       P(ctx, "#endif\n");
    }
    ctx->indentlevel--;

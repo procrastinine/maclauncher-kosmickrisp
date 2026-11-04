@@ -304,6 +304,15 @@ kk_make_feature_key(const struct vk_features *feats)
    return key;
 }
 
+/* Dynamic or absent rasterization state keeps the first-vertex order. */
+static bool
+kk_mesh_static_provoking_last(const struct vk_graphics_pipeline_state *state)
+{
+   return state && state->rs &&
+          !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_PROVOKING_VERTEX) &&
+          state->rs->provoking_vertex == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
+}
+
 static void
 kk_hash_graphics_state(struct vk_physical_device *device,
                        const struct vk_graphics_pipeline_state *state,
@@ -326,6 +335,13 @@ kk_hash_graphics_state(struct vk_physical_device *device,
 
       _mesa_blake3_update(&blake3_ctx, &state->mv->view_mask,
                           sizeof(state->mv->view_mask));
+   }
+
+   /* Mesh index order follows a static last-vertex provoking mode. Other
+    * keys are unchanged. */
+   if ((stages & VK_SHADER_STAGE_MESH_BIT_EXT) && kk_mesh_static_provoking_last(state)) {
+      const uint32_t mesh_provoking_key = 0x4d50564cu;
+      _mesa_blake3_update(&blake3_ctx, &mesh_provoking_key, sizeof(mesh_provoking_key));
    }
 
    /* Pre-raster multiview also changes shaders without an FS. Keep
@@ -1728,6 +1744,9 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
          opts->per_vertex_map->projected_basis;
       mesh_options.flat_heap_offset = mesh_options.flat_heap
          ? offsetof(struct kk_per_draw_data, per_vertex_heap) : 0;
+      /* Flat-heap pipelines resolve the provoking vertex from per-draw data. */
+      mesh_options.provoking_last = nir->info.stage == MESA_SHADER_MESH &&
+         !mesh_options.flat_heap && kk_mesh_static_provoking_last(state);
       translate_options.mesh = &mesh_options;
    }
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {

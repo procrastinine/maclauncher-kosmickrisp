@@ -36,6 +36,7 @@ struct kk_mesh_msl_info {
    uint32_t view_mask, view_index_offset;
    bool flat_heap, projected_basis;
    unsigned flat_heap_offset;
+   bool provoking_last;
 };
 
 struct nir_to_msl_ctx {
