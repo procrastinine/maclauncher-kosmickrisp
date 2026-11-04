@@ -142,7 +142,7 @@ kk_queue_commit_native(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
       } else {
          mtl_commit_options_add_tracked_feedback_handler(
             options, callback, user_data, kk_queue_gpu_range, perf,
-            kk_perf_frame_id(perf), cmd->native_submit.count);
+            kk_perf_frame_id(perf), cmd->native_submit.count, cmd->native_submit.buffers);
          mtl_command_queue_commit(queue->mtl_handle, cmd->native_submit.buffers,
                                   cmd->native_submit.count, options);
       }

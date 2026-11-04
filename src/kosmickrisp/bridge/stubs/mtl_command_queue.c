@@ -24,7 +24,7 @@ void
 mtl_commit_options_add_tracked_feedback_handler(
    mtl_commit_options *options, mtl_feedback_handler_callback callback,
    void *data, mtl_gpu_range_callback gpu_callback, void *gpu_data,
-   uint64_t frame, uint32_t command_buffers)
+   uint64_t frame, uint32_t command_buffers, mtl_command_buffer **buffers)
 {
 }
 

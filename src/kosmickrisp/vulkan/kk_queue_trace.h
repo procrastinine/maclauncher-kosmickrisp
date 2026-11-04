@@ -53,14 +53,14 @@ kk_queue_commit_tracked(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
       };
       mtl_commit_options_add_tracked_feedback_handler(options,
          kk_tracked_commit_feedback, trace, kk_queue_gpu_range, perf,
-         kk_perf_frame_id(perf), count);
+         kk_perf_frame_id(perf), count, cmd->native_submit.buffers);
    } else {
       /* Diagnostic allocation failure must not drop the real callback/work. */
       kk_perf_commit_trace(perf, "snapshot_oom", id, queue, submit,
          cmd, native, count, VK_ERROR_OUT_OF_HOST_MEMORY);
       mtl_commit_options_add_tracked_feedback_handler(options,
          callback, user_data, kk_queue_gpu_range, perf,
-         kk_perf_frame_id(perf), count);
+         kk_perf_frame_id(perf), count, cmd->native_submit.buffers);
    }
    mtl_command_queue_commit(queue->mtl_handle, cmd->native_submit.buffers,
                             count, options);

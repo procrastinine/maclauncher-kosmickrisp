@@ -1,3 +1,4 @@
+#include "mtl_gpu_timing.h"
 /*
  * Copyright 2025 LunarG, Inc.
  * Copyright 2025 Google LLC
@@ -34,6 +35,8 @@ mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
        * returns its old-generation storage. Keep the new allocator alive
        * through native buffer deallocation, including after pool reset. */
       [cmd_buf beginCommandBufferWithAllocator:alloc];
+      if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
+         mtl_gpu_timing_reset_command(command_buffer);
       objc_setAssociatedObject(cmd_buf, &kk_command_buffer_allocator_key,
                                alloc, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
    }

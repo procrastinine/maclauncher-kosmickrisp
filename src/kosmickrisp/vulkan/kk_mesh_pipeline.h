@@ -1,3 +1,4 @@
+#include "kosmickrisp/bridge/mtl_gpu_timing.h"
 /* SPDX-License-Identifier: MIT */
 #ifndef KK_MESH_PIPELINE_H
 #define KK_MESH_PIPELINE_H
@@ -159,6 +160,8 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
       (fragment_requires ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
    pipe->gfx.render = kk_attachment_compile_pipeline(dev, shader, descriptor,
       sampler_stages, sampler_required);
+   if (virtual && __atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
+      mtl_gpu_timing_pipeline_kind(pipe->gfx.render, "mesh_virtual_pass");
    if (!pipe->gfx.render) {
       result = VK_ERROR_INVALID_SHADER_NV;
    } else {

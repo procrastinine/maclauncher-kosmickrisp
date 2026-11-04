@@ -53,6 +53,8 @@ void kk_perf_async_join(struct kk_perf *, uint64_t parent, const char *reason,
 void kk_perf_msl_source(struct kk_perf *, unsigned stage, const char *source);
 
 struct kk_perf *kk_perf_create(void);
+void kk_perf_gpu_init(struct kk_device *);
+void kk_perf_gpu_attach_command(struct kk_perf *, void *command);
 void kk_perf_destroy(struct kk_perf *perf);
 void kk_perf_metal_archive(struct kk_perf *, void *compiler);
 void kk_perf_bind_metal_compiler(struct kk_perf *, void *compiler);

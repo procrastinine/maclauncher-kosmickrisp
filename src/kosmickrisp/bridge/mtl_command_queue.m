@@ -1,3 +1,4 @@
+#include "mtl_gpu_timing.h"
 /*
  * Copyright 2025 LunarG, Inc.
  * Copyright 2025 Google LLC
@@ -25,8 +26,11 @@ mtl_commit_options_add_feedback_handler(mtl_commit_options *options,
 {
    @autoreleasepool {
       MTL4CommitOptions* opt = (MTL4CommitOptions *)options;
+      NSArray *encoder_samples = __atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)
+         ? mtl_gpu_timing_feedback_prepare(options) : nil;
       [opt addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
          @autoreleasepool {
+            if (encoder_samples) mtl_gpu_timing_resolve(encoder_samples, feedback.error == nil);
             NSError *error = feedback.error;
             struct mtl_feedback_data feedback_data = (struct mtl_feedback_data){
                .user_data = data,
@@ -41,6 +45,7 @@ mtl_commit_options_add_feedback_handler(mtl_commit_options *options,
             callback(&feedback_data);
          }
       }];
+      [encoder_samples release];
    }
 }
 
@@ -48,15 +53,18 @@ void
 mtl_commit_options_add_tracked_feedback_handler(
    mtl_commit_options *options, mtl_feedback_handler_callback callback,
    void *data, mtl_gpu_range_callback gpu_callback, void *gpu_data,
-   uint64_t frame, uint32_t command_buffers)
+   uint64_t frame, uint32_t command_buffers, mtl_command_buffer **buffers)
 {
    @autoreleasepool {
       MTL4CommitOptions *opt = (MTL4CommitOptions *)options;
+      NSArray *encoder_samples = __atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)
+         ? mtl_gpu_timing_snapshot(buffers, command_buffers) : nil;
       [opt addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
          @autoreleasepool {
             /* These are the whole Metal commit range, not independent
              * timestamps for each buffer. Capture before the owner callback
              * can publish completion and allow device tracking teardown. */
+            if (encoder_samples) mtl_gpu_timing_resolve(encoder_samples, feedback.error == nil);
             gpu_callback(gpu_data, frame, feedback.GPUStartTime,
                          feedback.GPUEndTime, command_buffers);
             NSError *error = feedback.error;
@@ -73,6 +81,7 @@ mtl_commit_options_add_tracked_feedback_handler(
             callback(&feedback_data);
          }
       }];
+      [encoder_samples release];
    }
 }
 
@@ -137,6 +146,8 @@ mtl_command_queue_commit(mtl_command_queue *queue,
       id<MTL4CommandQueue> q = (id<MTL4CommandQueue>)queue;
       id<MTL4CommandBuffer> *cmds = (id<MTL4CommandBuffer> *)command_buffers;
       MTL4CommitOptions *opt = (MTL4CommitOptions *)options;
+      if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
+         mtl_gpu_timing_feedback_capture(options, command_buffers, count);
       [q commit:cmds count:count options:opt];
    }
 }

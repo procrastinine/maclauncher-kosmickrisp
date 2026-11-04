@@ -1,3 +1,4 @@
+#include "kosmickrisp/bridge/mtl_gpu_timing.h"
 /* SPDX-License-Identifier: MIT */
 #include "kk_perf.h"
 #include "kosmickrisp/bridge/mtl_compiler.h"
@@ -45,7 +46,10 @@ struct kk_perf_attachment_stat {
    bool area_known;
 };
 
+struct kk_gpu_stats;
 struct kk_perf {
+   struct kk_gpu_stats *gpu_encoders;
+   void *gpu_context;
    pthread_mutex_t mutex;
    FILE *log;
    void *metal_compiler;
@@ -69,6 +73,8 @@ struct kk_perf {
    uint64_t render_count, render_samples[8];
    uint64_t render_dropped_passes, render_dropped_attachments;
 };
+
+#include "kk_gpu_stats.h"
 
 static const char *const names[KK_PERF_METRIC_COUNT] = {
    "record", "replay", "encode", "submit", "acquire", "present",
@@ -114,6 +120,8 @@ kk_perf_create(void)
    p->submit_details = submits && !strcmp(submits, "1");
    const char *barriers = getenv("KK_PERF_TRACKING_BARRIERS");
    p->barrier_details = barriers && !strcmp(barriers, "1");
+   const char *gpu = getenv("KK_PERF_TRACKING_GPU_ENCODERS");
+   if (gpu && !strcmp(gpu, "1")) p->gpu_encoders = calloc(1, sizeof(*p->gpu_encoders));
    p->log = stderr;
    const char *path = getenv("KK_PERF_TRACKING_LOG");
    if (path && *path) {
@@ -197,6 +205,7 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
    }
    fprintf(p->log, "],\"encoder_stage_scope\":\"exclusive_nested_recording_wall_ms\"");
    render_flush_locked(p);
+   gpu_encoders_flush_locked(p);
    fprintf(p->log, "}\n");
    fflush(p->log);
    memset(p->stat, 0, sizeof(p->stat));
@@ -760,6 +769,8 @@ kk_perf_destroy(struct kk_perf *p)
    mtl_release(p->metal_compiler);
    if (p->close_log) fclose(p->log);
    pthread_mutex_destroy(&p->mutex);
+   free(p->gpu_encoders);
+   mtl_release(p->gpu_context);
    free(p);
 }
 

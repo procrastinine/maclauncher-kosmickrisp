@@ -535,6 +535,7 @@ kk_interlock_prepare_draw(struct kk_cmd_buffer *cmd, struct kk_ptr parameters,
    }
    p->allocator = mtl_new_command_allocator(dev->mtl_handle);
    p->command = mtl_new_command_buffer(dev->mtl_handle);
+   if (dev->perf && p->command) kk_perf_gpu_attach_command(dev->perf, p->command);
    if (!p->replace || !p->allocator || !p->command) {
       result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
       goto fail;

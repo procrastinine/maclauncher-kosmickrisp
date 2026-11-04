@@ -1,3 +1,4 @@
+#include "mtl_gpu_timing.h"
 /*
  * Copyright 2025 LunarG, Inc.
  * Copyright 2025 Google LLC
@@ -132,7 +133,10 @@ mtl_new_compute_command_encoder(mtl_command_buffer *cmd_buffer)
 {
    KK_MTL_REPLAY_POOL({
       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)cmd_buffer;
-      return [[cmd_buf computeCommandEncoder] retain];
+      void *record = __atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)
+         ? mtl_gpu_timing_encoder_begin(cmd_buffer, false, NULL) : NULL;
+      id encoder = [[cmd_buf computeCommandEncoder] retain];
+      return record ? mtl_gpu_timing_encoder_wrap(record, encoder) : encoder;
    });
 }
 
@@ -319,7 +323,10 @@ mtl_new_render_command_encoder_with_descriptor(
    KK_MTL_REPLAY_POOL({
       id<MTL4CommandBuffer> cmd = (id<MTL4CommandBuffer>)command_buffer;
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
-      return [[cmd renderCommandEncoderWithDescriptor:desc] retain];
+      void *record = __atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)
+         ? mtl_gpu_timing_encoder_begin(command_buffer, true, descriptor) : NULL;
+      id encoder = [[cmd renderCommandEncoderWithDescriptor:desc] retain];
+      return record ? mtl_gpu_timing_encoder_wrap(record, encoder) : encoder;
    });
 }
 

@@ -117,6 +117,32 @@ separated JSON on stderr, or in the file selected by ``KK_PERF_TRACKING_LOG``.
 ``KK_PERF_TRACKING_INTERVAL_MS`` and ``KK_PERF_TRACKING_INTERVAL_FRAMES``
 select the reporting intervals; their defaults are 1000 ms and 60 frames.
 
+With tracking enabled, ``KK_PERF_TRACKING_GPU_ENCODERS=1`` adds GPU encoder
+boundary timestamps using Metal 4 counter heaps. Synchronous CPU resolution
+runs in the existing submission feedback path after GPU completion. Render,
+compute, virtual Mesh, internal meta and blit work is identified; opaque
+MetalFX and other temporal scene callbacks are reported as named groups.
+No timestamp heap or samples are created when the option is unset. Ordinary
+draw and pipeline-bind calls retain their native encoder receiver.
+
+Each interval reports the twenty largest ``gpu_encoders`` groups by total
+GPU milliseconds, with source hashes, draw/dispatch/blit counts, target extent,
+and sample count, total, mean and maximum milliseconds. ``gpu_pipelines``
+accumulates inclusive encoder time for each source hash across passes and
+reports the twenty largest totals. A mixed encoder's duration belongs to its
+whole workload; membership totals are not independently measured shader times
+and must not be summed across hashes. Encoder spans can overlap on the GPU.
+Missing/failed samples, bounded-table overflow, truncated hash sets and unknown
+pipeline/extent metadata are reported explicitly. Concurrent reuse of a sampled
+command buffer makes its overlapping samples unavailable rather than assigning
+ambiguous timestamps to a submission. Tracking retains up to 4,096 encoder
+records per command buffer and 1,024 distinct interval aggregation keys.
+
+``MESA_KK_DEBUG=msl`` identifies generated and final native-library inputs with
+``KK_MSL`` headers containing their BLAKE3 hash and source byte length. The same
+hashes appear in GPU records, including generated sibling and internal meta
+sources. MetalFX's private shader source is unavailable and has no invented hash.
+
 With tracking enabled, ``KK_PERF_TRACKING_COMPILES=1`` adds individual shader
 compile callback records and generated MSL source sizes and BLAKE3 hashes.
 Each source record carries its enclosing callback ID and shader stage. ID zero

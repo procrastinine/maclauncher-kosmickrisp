@@ -1477,8 +1477,13 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    ralloc_steal(NULL, (void *)entrypoint_name);
    data->entrypoint_name = (char *)entrypoint_name;
 
-   if (KK_DEBUG(MSL))
-      mesa_logi("%s\n", data->code);
+   if (KK_DEBUG(MSL)) {
+      blake3_hash hash; char hex[BLAKE3_HEX_LEN];
+      _mesa_blake3_compute(data->code, strlen(data->code), hash);
+      _mesa_blake3_format(hex, hash);
+      mesa_logi("// KK_MSL blake3=%s stage=%u bytes=%zu\n%s\n", hex,
+                nir->info.stage, strlen(data->code), data->code);
+   }
 
    ralloc_free(nir);
 }

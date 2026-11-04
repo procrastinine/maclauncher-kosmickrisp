@@ -1,3 +1,4 @@
+#include "kosmickrisp/bridge/mtl_gpu_timing.h"
 /*
  * Copyright 2025 LunarG, Inc.
  * Copyright 2025 Google LLC
@@ -50,6 +51,8 @@ kk_build_precompiled_shader(struct kk_device *dev, const uint32_t *bin,
    shader->pipeline = KK_PERF_CALL(dev, KK_PERF_METAL_PIPELINE, mtl_new_compute_pipeline_state(
       dev->mtl_compiler_handle, function,
       max_threads));
+   if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
+      mtl_gpu_timing_pipeline_kind(shader->pipeline, "meta");
    mtl_release(function);
    mtl_release(library);
 

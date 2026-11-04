@@ -1,3 +1,4 @@
+#include "mtl_gpu_timing.h"
 /* SPDX-License-Identifier: MIT */
 #include "mtl_interlock_continuation.h"
 #import <Foundation/Foundation.h>
@@ -213,11 +214,15 @@ mtl_interlock_run_segment_commands(struct mtl_interlock_context *c,
    /* One starter, one capture-feedback and one listener reference. */
    atomic_init(&p->references, 3);
    atomic_init(&p->error, 0);
+   NSArray *encoder_samples = __atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)
+      ? mtl_gpu_timing_snapshot(commands, command_count) : nil;
    [options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+      if (encoder_samples) mtl_gpu_timing_resolve(encoder_samples, feedback.error == nil);
       if (feedback.error)
          mtl_interlock_fail(p, (int)feedback.error.code);
       mtl_interlock_packet_release(p); /* actual capture completion */
    }];
+   [encoder_samples release];
    if (p->segment.retain)
       p->segment.retain(p->segment.data);
    c->next_capture = p->capture_value;

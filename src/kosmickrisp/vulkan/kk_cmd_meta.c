@@ -1,3 +1,4 @@
+#include "kosmickrisp/bridge/mtl_gpu_timing.h"
 /*
  * Copyright 2024 Valve Corporation
  * Copyright 2024 Alyssa Rosenzweig
@@ -99,6 +100,8 @@ static void
 kk_meta_begin(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
               VkPipelineBindPoint bind_point, const char *debug_label)
 {
+   if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
+      mtl_gpu_timing_meta(cmd->metal.cmd_buf, true);
    struct kk_descriptor_state *desc = kk_get_descriptors_state(cmd, bind_point);
 
    if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {

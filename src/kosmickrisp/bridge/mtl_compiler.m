@@ -1,3 +1,7 @@
+#include "kk_debug.h"
+#include "util/log.h"
+#include "util/mesa-blake3.h"
+#include "mtl_gpu_timing.h"
 /*
  * Copyright 2025 LunarG, Inc.
  * Copyright 2025 Google LLC
@@ -358,6 +362,11 @@ mtl_library_descriptor(const char *src, enum mtl_language_version msl_version,
                        enum mtl_math_mode math_mode,
                        enum mtl_math_floating_point_functions math_fp_fns)
 {
+   if (KK_DEBUG(MSL)) {
+      blake3_hash hash; char hex[BLAKE3_HEX_LEN];
+      _mesa_blake3_compute(src, strlen(src), hash); _mesa_blake3_format(hex, hash);
+      mesa_logi("// KK_MSL blake3=%s stage=native_library bytes=%zu\n%s\n", hex, strlen(src), src);
+   }
    MTLCompileOptions *opts = [[MTLCompileOptions new] autorelease];
    opts.languageVersion = (MTLLanguageVersion)msl_version;
    opts.mathMode = (MTLMathMode)math_mode;
@@ -387,6 +396,8 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
       if (lib == nil)
          fprintf(stderr, "Failed to create MTLLibrary: %s\n",
                  error.localizedDescription.UTF8String ?: "Unknown Metal error");
+      if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
+         mtl_gpu_timing_library(lib, src);
       return lib;
    }
 }
@@ -419,6 +430,12 @@ kk_library_work_execute(void *data)
 {
    struct kk_library_work *work = data;
    work->result = kk_graphics_library(work->compiler, work->descriptor, work->vertex, false);
+   if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)) {
+      NSString *source = work->descriptor.source;
+      if (debug_msl_prefix && [source hasPrefix:debug_msl_prefix])
+         source = [source substringFromIndex:debug_msl_prefix.length];
+      mtl_gpu_timing_library(work->result, source.UTF8String);
+   }
 }
 
 static void
@@ -611,6 +628,8 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
          fprintf(stderr, "Failed to create MTLComputePipelineState: %s\n", [error.localizedDescription UTF8String]);
       }
 
+      if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
+         mtl_gpu_timing_pipeline(pipeline, desc, false);
       return pipeline;
    }
 }

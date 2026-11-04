@@ -1,3 +1,4 @@
+#include "kosmickrisp/bridge/mtl_gpu_timing.h"
 /* SPDX-License-Identifier: MIT */
 #include "kk_scene.h"
 #include "kk_scene_lifetime.h"
@@ -209,6 +210,8 @@ static void scene_execute(VkCommandBuffer handle, void *data)
    encoding.commandQueue = cmd->scene_queue->mtl_handle;
    encoding.flightStorage = f; encoding.retainFlight = flight_ref;
    encoding.releaseFlight = flight_unref;
+   void *gpu_scene = __atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)
+      ? mtl_gpu_timing_external_begin(cmd->metal.cmd_buf, (r->operation.frame.method == RS_TEMPORAL_METALFX || r->operation.frame.method == RS_TEMPORAL_METALFX_DENOISED) ? "metalfx_scene" : "temporal_scene", r->operation.frame.outputWidth, r->operation.frame.outputHeight) : NULL;
    @try {
       int accepted = r->operation.callbacks.encode(r->operation.callbacks.storage,
                                                    &encoding.base, &f->result);
@@ -219,6 +222,7 @@ static void scene_execute(VkCommandBuffer handle, void *data)
    } @catch (NSException *exception) {
       (void)exception; f->result.status = RS_TEMPORAL_FAILED; f->result.encoded = 0;
    }
+   if (gpu_scene) mtl_gpu_timing_external_end(gpu_scene);
    mtl_compute_encoder *barrier = cs_get_compute(cmd);
    mtl_barrier_after_queue_stages(barrier, MTL_STAGE_ALL, MTL_STAGE_ALL);
    /* Callback-owned encoders must already be ended. The next ordinary driver

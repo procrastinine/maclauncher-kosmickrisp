@@ -119,7 +119,9 @@ kk_cmd_pool_get_cmd_buf(struct kk_cmd_pool *pool)
                                mtl_command_buffer *);
 
    struct kk_device *dev = kk_cmd_pool_device(pool);
-   return mtl_new_command_buffer(dev->mtl_handle);
+   mtl_command_buffer *command = mtl_new_command_buffer(dev->mtl_handle);
+   if (dev->perf && command) kk_perf_gpu_attach_command(dev->perf, command);
+   return command;
 }
 
 void
