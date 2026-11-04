@@ -529,5 +529,21 @@
     "performance": false,
     "performance_reason": "DXVK 3.1.1 and vkd3d-proton 3.1 do not require this allocation extension for D3D shader models, feature levels or device creation; vkd3d-proton retains its resource-clearing path.",
     "off_consequence": "D3D shader-model, feature-level and translator device-creation support remain; explicit Vulkan zero-initialized allocation requests and ZERO_INITIALIZED image layout are unavailable."
+  },
+  {
+    "name": "sliced_3d_views",
+    "description": "Restricted-depth storage views of native 3D textures.",
+    "cost_class": "native texture / shader address adaptation",
+    "cost_note": "Selected 3D storage operations load slice bounds and adjust or reject Z coordinates; image-size queries replace the depth result. The native texture operation is retained. Sparse descriptors can add query-record loads. Runtime timing is unmeasured.",
+    "extensions": [
+      "VK_EXT_image_sliced_view_of_3d"
+    ],
+    "features": [
+      "imageSlicedViewOf3D"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "Preserve restricted-depth D3D Texture3D UAV semantics: the pinned vkd3d-proton fallback uses the full depth and is not equivalent, so disabling is not established safe for the required D3D view contract.",
+    "off_consequence": "D3D Texture3D FirstWSlice/WSize UAV semantics are lost; vkd3d-proton reports an unhandled depth view and uses the full depth while its reported SM/FL and device creation remain unchanged."
   }
 ]
