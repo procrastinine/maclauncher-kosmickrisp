@@ -48,12 +48,19 @@ kk_rt_box_intersects(nir_builder *b, nir_def *address, const struct kk_rt_ray_tr
    nir_def *origin = nir_load_deref(b, args->vars.origin);
    nir_def *dir = nir_load_deref(b, args->vars.dir);
    nir_def *inv = nir_load_deref(b, args->vars.inv_dir);
-   inv = nir_bcsel(b, nir_feq_imm(b, dir, 0), nir_imm_float(b, FLT_MAX), inv);
    nir_def *min = kk_rt_load(b, address, offsetof(struct kk_as_node, min), 3, 32);
    nir_def *max = kk_rt_load(b, address, offsetof(struct kk_as_node, max), 3, 32);
    nir_def *a = nir_fmul(b, nir_fsub(b, min, origin), inv);
    nir_def *z = nir_fmul(b, nir_fsub(b, max, origin), inv);
-   nir_def *near = nir_fmin(b, a, z), *far = nir_fmax(b, a, z);
+   /* A zero direction component leaves its slab unbounded when the origin
+    * lies within it, boundary included, and empty otherwise. This keeps rays
+    * along a shared triangle edge inside both neighbours' boxes. */
+   nir_def *axis = nir_feq_imm(b, dir, 0);
+   nir_def *inside = nir_iand(b, nir_fge(b, origin, min), nir_fge(b, max, origin));
+   nir_def *inf = nir_imm_vec3(b, FLT_MAX, FLT_MAX, FLT_MAX);
+   nir_def *ninf = nir_imm_vec3(b, -FLT_MAX, -FLT_MAX, -FLT_MAX);
+   nir_def *near = nir_bcsel(b, axis, nir_bcsel(b, inside, ninf, inf), nir_fmin(b, a, z));
+   nir_def *far = nir_bcsel(b, axis, nir_bcsel(b, inside, inf, ninf), nir_fmax(b, a, z));
    nir_def *near_t = nir_fmax(b, nir_channel(b, near, 0),
                                nir_fmax(b, nir_channel(b, near, 1), nir_channel(b, near, 2)));
    nir_def *far_t = nir_fmin(b, nir_channel(b, far, 0),
