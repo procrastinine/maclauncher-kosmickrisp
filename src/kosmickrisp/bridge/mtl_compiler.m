@@ -14,9 +14,10 @@
 #include <Metal/MTL4SpecializedFunctionDescriptor.h>
 #include <Metal/MTL4RenderPipeline.h>
 #include <Metal/MTLDevice.h>
-#include <Metal/MTL4CompilerTask.h>
 #include <dispatch/dispatch.h>
 #include <string.h>
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
 
 #include "mtl_pipeline_archive.h"
 #include "mtl_function_constants.h"
@@ -84,7 +85,7 @@ mtl_compiler_finish_cache(mtl_compiler *compiler)
 
 @interface KKCompileQueue : NSOperationQueue {
 @public
-   unsigned foreground, urgent;
+   unsigned foreground, urgent, background_tasks;
 }
 @end
 @implementation KKCompileQueue
@@ -93,7 +94,117 @@ mtl_compiler_finish_cache(mtl_compiler *compiler)
 static char kk_compile_queue_association, kk_task_queue_association;
 static unsigned kk_background_pending;
 static _Thread_local bool kk_background_thread;
+static _Thread_local NSOperation *kk_current_operation;
 static pthread_mutex_t kk_compile_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t kk_compile_queue_changed = PTHREAD_COND_INITIALIZER;
+
+/* Cancelled queue objects may finish their Foundation bookkeeping after the
+ * Vulkan payload is retired. Pin this callback image only on first KK-worker
+ * use, so loader dlclose cannot unload those methods. No Metal callback exists. */
+static bool
+kk_pin_worker_image(void)
+{
+   static dispatch_once_t once;
+   static bool ready;
+   dispatch_once(&once, ^{
+      Dl_info image;
+      if (!dladdr((const void *)kk_pin_worker_image, &image)) return;
+      if (image.dli_fbase == (const void *)_dyld_get_image_header(0)) ready = true;
+      else ready = dlopen(image.dli_fname, RTLD_NOW | RTLD_NOLOAD | RTLD_NODELETE) != NULL;
+   });
+   return ready;
+}
+
+
+/* KK owns the worker and calls Metal synchronously. Never hand compile work to
+ * Metal completion handlers inside a Wine process. Foundation owns only the
+ * operation state; cancellation retires an unentered C payload exactly once. */
+@interface KKCompileOperation : NSOperation {
+@public
+   void *data;
+   void (*execute)(void *), (*failed)(void *, const char *), (*cleanup)(void *);
+   KKCompileQueue *ownerQueue;
+   pthread_mutex_t state;
+   bool callback_entered, payload_claimed, payload_retired, frontend;
+}
+- (void)retirePayload:(BOOL)onlyQueued;
+- (BOOL)payloadRetired;
+@end
+@implementation KKCompileOperation
+- (id)init
+{
+   self = [super init];
+   if (self && pthread_mutex_init(&state, NULL)) { [super dealloc]; return nil; }
+   return self;
+}
+- (BOOL)payloadRetired { return __atomic_load_n(&payload_retired, __ATOMIC_ACQUIRE); }
+- (void)retirePayload:(BOOL)onlyQueued
+{
+   pthread_mutex_lock(&state);
+   if (payload_claimed || (onlyQueued && callback_entered)) {
+      pthread_mutex_unlock(&state);
+      return;
+   }
+   payload_claimed = true;
+   void *payload = data;
+   void (*finish_payload)(void *) = cleanup;
+   data = NULL; execute = NULL; failed = NULL; cleanup = NULL;
+   pthread_mutex_unlock(&state);
+   if (frontend) {
+      pthread_mutex_lock(&kk_compile_queue_lock);
+      assert(ownerQueue->urgent);
+      --ownerQueue->urgent;
+      if (ownerQueue->foreground && !ownerQueue->urgent) ownerQueue.suspended = YES;
+      pthread_cond_broadcast(&kk_compile_queue_changed);
+      pthread_mutex_unlock(&kk_compile_queue_lock);
+   } else {
+      pthread_mutex_lock(&kk_compile_queue_lock);
+      assert(ownerQueue->background_tasks);
+      --ownerQueue->background_tasks;
+      pthread_mutex_unlock(&kk_compile_queue_lock);
+      __atomic_sub_fetch(&kk_background_pending, 1, __ATOMIC_RELEASE);
+   }
+   finish_payload(payload);
+   __atomic_store_n(&payload_retired, true, __ATOMIC_RELEASE);
+}
+- (void)cancel
+{
+   [super cancel];
+   [self retirePayload:YES];
+   pthread_mutex_lock(&kk_compile_queue_lock);
+   pthread_cond_broadcast(&kk_compile_queue_changed);
+   pthread_mutex_unlock(&kk_compile_queue_lock);
+}
+- (void)main
+{
+   @autoreleasepool {
+      pthread_mutex_lock(&kk_compile_queue_lock);
+      while (!frontend && ownerQueue->foreground && !ownerQueue->urgent && !self.cancelled)
+         pthread_cond_wait(&kk_compile_queue_changed, &kk_compile_queue_lock);
+      pthread_mutex_unlock(&kk_compile_queue_lock);
+      pthread_mutex_lock(&state);
+      bool retired = payload_claimed;
+      if (!retired) callback_entered = true;
+      pthread_mutex_unlock(&state);
+      if (retired) return;
+      kk_background_thread = true;
+      kk_current_operation = self;
+      @try { if (!self.cancelled) execute(data); }
+      @catch (NSException *exception) { failed(data, exception.reason.UTF8String); }
+      @finally {
+         kk_current_operation = nil;
+         kk_background_thread = false;
+         [self retirePayload:NO];
+      }
+   }
+}
+- (void)dealloc
+{
+   [ownerQueue release];
+   pthread_mutex_destroy(&state);
+   [super dealloc];
+}
+@end
 
 /* A zero pending count avoids Objective-C lookup, locks and queue changes on
  * ordinary synchronous compiles. Background callers never pause their queue. */
@@ -120,6 +231,7 @@ mtl_compiler_foreground_end(void *token)
    pthread_mutex_lock(&kk_compile_queue_lock);
    assert(queue->foreground);
    if (!--queue->foreground) queue.suspended = NO;
+   pthread_cond_broadcast(&kk_compile_queue_changed);
    pthread_mutex_unlock(&kk_compile_queue_lock);
 }
 
@@ -134,61 +246,76 @@ kk_foreground_cleanup(void **token)
 
 /* Native miss scheduling only: cached deserialization stays on its original
  * synchronous path. Never retain caller create-info or feedback pointers. */
+static void *
+kk_compiler_submit(mtl_compiler *compiler, void *data,
+   void (*execute)(void *), void (*failed)(void *, const char *),
+   void (*cleanup)(void *), bool frontend)
+{
+   @autoreleasepool {
+      pthread_mutex_lock(&kk_compile_queue_lock);
+      KKCompileQueue *queue = objc_getAssociatedObject((id)compiler, &kk_compile_queue_association);
+      if (!queue) {
+         if (!kk_pin_worker_image()) { pthread_mutex_unlock(&kk_compile_queue_lock); return NULL; }
+         queue = [[KKCompileQueue alloc] init];
+         if (queue) {
+            NSUInteger cores = MIN((NSUInteger)8, [NSProcessInfo processInfo].activeProcessorCount);
+            queue.maxConcurrentOperationCount = cores > 1 ? cores - 1 : 1;
+            queue.qualityOfService = NSQualityOfServiceUtility;
+            queue.name = @"KosmicKrisp compiler";
+            objc_setAssociatedObject((id)compiler, &kk_compile_queue_association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [queue release];
+         }
+      }
+      /* A pair never queues behind unrelated jobs. Its caller can compile both
+       * stages synchronously when this same bounded queue is already occupied. */
+      if (!queue || (frontend && (queue->background_tasks || queue.operationCount >= queue.maxConcurrentOperationCount))) {
+         pthread_mutex_unlock(&kk_compile_queue_lock);
+         return NULL;
+      }
+      KKCompileOperation *operation = [KKCompileOperation new];
+      if (!operation) { pthread_mutex_unlock(&kk_compile_queue_lock); return NULL; }
+      operation->data = data;
+      operation->execute = execute;
+      operation->failed = failed;
+      operation->cleanup = cleanup;
+      operation->ownerQueue = [queue retain];
+      operation->frontend = frontend;
+      operation.qualityOfService = frontend ? NSQualityOfServiceUserInitiated : NSQualityOfServiceUtility;
+      if (frontend) {
+         operation.queuePriority = NSOperationQueuePriorityVeryHigh;
+         ++queue->urgent;
+      } else {
+         ++queue->background_tasks;
+         __atomic_add_fetch(&kk_background_pending, 1, __ATOMIC_RELEASE);
+      }
+      objc_setAssociatedObject(operation, &kk_task_queue_association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      [queue addOperation:operation];
+      if (frontend) queue.suspended = NO;
+      pthread_mutex_unlock(&kk_compile_queue_lock);
+      return operation;
+   }
+}
+
 void *
 mtl_compiler_submit(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),
    void (*cleanup)(void *))
 {
-   @autoreleasepool {
-      /* Queue availability is independent of disk-cache availability. This
-       * lock covers lookup/publication only, never a native compile or wait;
-       * do not synchronize on Metal's compiler object/internal monitor. */
-      pthread_mutex_lock(&kk_compile_queue_lock);
-      KKCompileQueue *queue = objc_getAssociatedObject((id)compiler,
-         &kk_compile_queue_association);
-      if (!queue) {
-         queue = [KKCompileQueue new];
-         NSUInteger cores = MIN((NSUInteger)8, [NSProcessInfo processInfo].activeProcessorCount);
-         queue.maxConcurrentOperationCount = cores > 1 ? cores - 1 : 1;
-         queue.qualityOfService = NSQualityOfServiceUtility;
-         queue.name = @"kosmickrisp.compute";
-         if (queue) {
-            objc_setAssociatedObject((id)compiler, &kk_compile_queue_association,
-                                      queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            [queue release];
-         }
-      }
-      pthread_mutex_unlock(&kk_compile_queue_lock);
-      if (!queue) return NULL;
-      /* The device owner drains its jobs before compiler-table release.
-       * Do not hide a compiler retain in the operation: workaround11 must
-       * still retire the final native compiler before publishing a new one. */
-      NSBlockOperation *operation = [[NSBlockOperation blockOperationWithBlock:^{
-         @autoreleasepool {
-            kk_background_thread = true;
-            @try { execute(data); }
-            @catch (NSException *exception) { failed(data, exception.reason.UTF8String); }
-            @finally { kk_background_thread = false; }
-         }
-      }] retain];
-      if (!operation) return NULL;
-      operation.qualityOfService = NSQualityOfServiceUtility;
-      operation.completionBlock = ^{ @autoreleasepool {
-         cleanup(data);
-         __atomic_sub_fetch(&kk_background_pending, 1, __ATOMIC_RELEASE);
-      } };
-      objc_setAssociatedObject(operation, &kk_task_queue_association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-      __atomic_add_fetch(&kk_background_pending, 1, __ATOMIC_RELEASE);
-      [queue addOperation:operation];
-      return operation;
-   }
+   return kk_compiler_submit(compiler, data, execute, failed, cleanup, false);
+}
+
+void
+mtl_compiler_task_cancel(void *task)
+{
+   [(NSOperation *)task cancel];
 }
 
 void
 mtl_compiler_task_wait(void *task)
 {
    if (!task) return;
-   NSOperation *operation = (NSOperation *)task;
+   KKCompileOperation *operation = (KKCompileOperation *)task;
+   if (operation.payloadRetired) return;
    if (!operation.finished) {
       /* Wait only for this pipeline. Promote a queued first-use request over
        * unrelated cold misses; running native jobs remain machine-bounded. */
@@ -200,6 +327,7 @@ mtl_compiler_task_wait(void *task)
          /* A selected first-use task is foreground work. It must not wait for
           * an unrelated caller compile just because admission is suspended. */
          queue.suspended = NO;
+         pthread_cond_broadcast(&kk_compile_queue_changed);
          pthread_mutex_unlock(&kk_compile_queue_lock);
       }
       [operation waitUntilFinished];
@@ -207,6 +335,7 @@ mtl_compiler_task_wait(void *task)
          pthread_mutex_lock(&kk_compile_queue_lock);
          --queue->urgent;
          if (queue->foreground && !queue->urgent) queue.suspended = YES;
+         pthread_cond_broadcast(&kk_compile_queue_changed);
          pthread_mutex_unlock(&kk_compile_queue_lock);
       }
    }
@@ -262,73 +391,50 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
    }
 }
 
+/* Historical bridge name: scheduling is asynchronous only at the KK queue.
+ * The Metal call itself MUST be synchronous in Wine on either CPU. */
 mtl_library *
 mtl_new_library_async_wait(mtl_compiler *compiler, const char *src,
    enum mtl_language_version version, enum mtl_math_mode mode,
    enum mtl_math_floating_point_functions fp)
 {
-   @autoreleasepool {
-      MTL4LibraryDescriptor *desc = mtl_library_descriptor(src, version, mode, fp);
-      dispatch_group_t completion = dispatch_group_create();
-      if (!completion) return NULL;
-      __block id<MTLLibrary> result = nil;
-      dispatch_group_enter(completion);
-      id<MTL4CompilerTask> task = nil;
-      @try {
-         task = [(id<MTL4Compiler>)compiler newLibraryWithDescriptor:desc
-         completionHandler:^(id<MTLLibrary> library, NSError *error) {
-            result = [library retain];
-            if (!library)
-               fprintf(stderr, "Failed to create MTLLibrary: %s\n",
-                  error.localizedDescription.UTF8String ?: "Unknown Metal error");
-            dispatch_group_leave(completion);
-         }];
-         dispatch_group_wait(completion, DISPATCH_TIME_FOREVER);
-      } @catch (NSException *exception) {
-         [result release];
-         @throw;
-      } @finally {
-         [task release];
-         dispatch_release(completion);
-      }
-      return (mtl_library *)result;
+   if (kk_current_operation.cancelled) return NULL;
+   mtl_library *library = mtl_new_library(compiler, src, version, mode, fp);
+   if (kk_current_operation.cancelled) {
+      [(id)library release];
+      return NULL;
    }
+   return library;
 }
 
-struct mtl_library_pair {
-   id<MTL4Compiler> compiler;
-   dispatch_group_t completion;
-   id<MTL4CompilerTask> tasks[2];
-   mtl_library *libraries[2];
-   enum mtl_math_mode math_mode;
-   enum mtl_math_floating_point_functions math_fp_fns;
+struct kk_library_work {
+   mtl_compiler *compiler;
+   MTL4LibraryDescriptor *descriptor;
+   mtl_library *result;
 };
 
 static void
-mtl_library_pair_submit(struct mtl_library_pair *pair, unsigned index,
-                        const struct mtl_library_source *source)
+kk_library_work_execute(void *data)
 {
-   MTL4LibraryDescriptor *desc = mtl_library_descriptor(
-      source->code, source->language_version, pair->math_mode, pair->math_fp_fns);
-   KKPipelineArchive *cache = index == 0
-      ? kk_compiler_archive((mtl_compiler *)pair->compiler) : nil;
-   id<MTLLibrary> cached = kk_cached_vertex_library(cache, desc);
-   if (cached) {
-      pair->libraries[index] = (mtl_library *)cached;
-      return;
-   }
-   dispatch_group_enter(pair->completion);
-   pair->tasks[index] = [pair->compiler newLibraryWithDescriptor:desc
-      completionHandler:^(id<MTLLibrary> library, NSError *error) {
-         @autoreleasepool {
-            pair->libraries[index] = (mtl_library *)[library retain];
-            if (library) kk_remember_vertex_library(cache, desc, library);
-            if (!library)
-               fprintf(stderr, "Failed to create MTLLibrary: %s\n",
-                  error.localizedDescription.UTF8String ?: "Unknown Metal error");
-         }
-         dispatch_group_leave(pair->completion);
-      }];
+   struct kk_library_work *work = data;
+   NSError *error = nil;
+   work->result = [(id<MTL4Compiler>)work->compiler newLibraryWithDescriptor:work->descriptor error:&error];
+   if (!work->result)
+      fprintf(stderr, "Failed to create MTLLibrary: %s\n",
+              error.localizedDescription.UTF8String ?: "Unknown Metal error");
+}
+
+static void
+kk_library_work_failed(void *data, const char *reason)
+{
+   (void)data;
+   fprintf(stderr, "Metal library compilation exception: %s\n", reason ?: "Unknown Metal exception");
+}
+
+static void
+kk_library_work_cleanup(void *data)
+{
+   (void)data; /* The pair's stack remains alive until task_wait returns. */
 }
 
 bool
@@ -340,24 +446,35 @@ mtl_new_library_pair(mtl_compiler *compiler,
 {
    @autoreleasepool {
       KK_FOREGROUND_SCOPE(compiler);
-      struct mtl_library_pair pair = {
-         .compiler = (id<MTL4Compiler>)compiler,
-         .completion = dispatch_group_create(),
-         .math_mode = math_mode, .math_fp_fns = math_fp_fns,
-      };
       libraries[0] = libraries[1] = NULL;
-      if (!pair.completion) return false;
-      for (unsigned i = 0; i < 2; ++i)
-         mtl_library_pair_submit(&pair, i, &sources[i]);
-      dispatch_group_wait(pair.completion, DISPATCH_TIME_FOREVER);
-      bool success = pair.libraries[0] && pair.libraries[1];
-      for (unsigned i = 0; i < 2; ++i) {
-         if (success) libraries[i] = pair.libraries[i];
-         else [(id)pair.libraries[i] release];
-         [pair.tasks[i] release];
+      struct kk_library_work work[2] = {
+         {compiler, mtl_library_descriptor(sources[0].code, sources[0].language_version, math_mode, math_fp_fns), NULL},
+         {compiler, mtl_library_descriptor(sources[1].code, sources[1].language_version, math_mode, math_fp_fns), NULL},
+      };
+      KKPipelineArchive *cache = kk_compiler_archive(compiler);
+      work[0].result = kk_cached_vertex_library(cache, work[0].descriptor);
+      bool cached_vertex = work[0].result != NULL;
+      void *task = NULL;
+      @try {
+         if (!cached_vertex && !kk_background_thread)
+            task = kk_compiler_submit(compiler, &work[0], kk_library_work_execute,
+               kk_library_work_failed, kk_library_work_cleanup, true);
+         if (!cached_vertex && !task) kk_library_work_execute(&work[0]);
+         kk_library_work_execute(&work[1]);
+      } @catch (NSException *exception) {
+         kk_library_work_failed(NULL, exception.reason.UTF8String);
+      } @finally {
+         mtl_compiler_task_wait(task);
+         [(id)task release];
       }
-      dispatch_release(pair.completion);
-      return success;
+      if (!cached_vertex && work[0].result)
+         kk_remember_vertex_library(cache, work[0].descriptor, (id<MTLLibrary>)work[0].result);
+      bool ready = work[0].result && work[1].result;
+      for (unsigned i = 0; i < 2; ++i) {
+         if (ready) libraries[i] = work[i].result;
+         else [(id)work[i].result release];
+      }
+      return ready;
    }
 }
 
@@ -482,13 +599,18 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
       desc.computeFunctionDescriptor = prepared;
       desc.maxTotalThreadsPerThreadgroup = max_total_threads_per_threadgroup;
 
-      NSError *error;
+      if (kk_current_operation.cancelled) return NULL;
+      NSError *error = nil;
       id<MTLComputePipelineState> pipeline = kk_archive_compute(compiler, desc);
       if (!pipeline) {
          pipeline = MTL_COMPILER_PIPELINE_CALL(compiler,
             [comp newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
       }
 
+      if (kk_current_operation.cancelled) {
+         [pipeline release];
+         return NULL;
+      }
       if (pipeline == nil) {
          fprintf(stderr, "Failed to create MTLComputePipelineState: %s\n", [error.localizedDescription UTF8String]);
       }

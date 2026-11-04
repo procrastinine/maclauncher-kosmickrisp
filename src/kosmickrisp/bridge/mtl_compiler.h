@@ -71,12 +71,13 @@ void mtl_compiler_cache_record_pipeline(mtl_compiler *compiler);
 #endif
 
 /* Native compute jobs use the same compiler cache and a bounded, lazy queue.
- * Caller owns the task and drains it before releasing the compiler. Cleanup
- * runs after the operation is finished. */
+ * Caller owns the task. Cleanup retires its C payload after synchronous Metal
+ * work finishes, or immediately when a queued task is cancelled. */
 void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),
    void (*cleanup)(void *));
 void mtl_compiler_task_wait(void *task);
+void mtl_compiler_task_cancel(void *task);
 void *mtl_compiler_foreground_begin(mtl_compiler *compiler);
 void mtl_compiler_foreground_end(void *token);
 void mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,

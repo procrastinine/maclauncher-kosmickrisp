@@ -615,9 +615,9 @@ kk_perf_compile_end(struct kk_perf_compile_scope *scope, bool binary, int result
    pthread_mutex_lock(&p->mutex);
    fprintf(p->log, "{\"kk_compile\":1,\"device\":\"%p\",\"id\":%"PRIu64
            ",\"request_id\":%"PRIu64",\"thread\":%"PRIu64",\"input_count\":%u,\"stage_mask\":%u,"
-           "\"origin\":\"%s\",\"asynchronous\":%s,\"parent_id\":%"PRIu64",\"result\":%d,\"start_ms\":%.6f,\"wall_ms\":%.6f,"
+           "\"origin\":\"%s\",\"asynchronous\":%s,\"cancelled\":%s,\"parent_id\":%"PRIu64",\"result\":%d,\"start_ms\":%.6f,\"wall_ms\":%.6f,"
            "\"cpu_spans\":\"nested_caller_thread_wall_ms\",\"metrics\":{",
-           (void *)p, scope->id, scope->request_id, scope->thread_id, scope->input_count, scope->stage_mask, binary ? "deserialize" : "compile", scope->asynchronous ? "true" : "false", scope->parent_id, result,
+           (void *)p, scope->id, scope->request_id, scope->thread_id, scope->input_count, scope->stage_mask, binary ? "deserialize" : "compile", scope->asynchronous ? "true" : "false", scope->cancelled ? "true" : "false", scope->parent_id, result,
            (scope->start-p->created)/1e6, (end-scope->start)/1e6);
    for (unsigned i = 0; i < KK_PERF_METRIC_COUNT; i++)
       fprintf(p->log, "%s\"%s\":{\"count\":%"PRIu64",\"total_ms\":%.6f}",

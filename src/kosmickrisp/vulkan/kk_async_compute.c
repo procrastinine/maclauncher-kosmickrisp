@@ -17,14 +17,15 @@ struct kk_async_compute_owner {
    pthread_mutex_t mutex;
    pthread_cond_t drained;
    unsigned active;
-   struct kk_async_compute *retired;
+   struct kk_async_compute *retired, *jobs;
+   bool stopping;
 };
 
 struct kk_async_compute {
    pthread_mutex_t mutex;
-   struct kk_async_compute *next;
+   struct kk_async_compute *next, *active_next;
    unsigned refs;
-   bool ready, reported;
+   bool ready, reported, cancel_requested, cancel_sent;
    VkResult result;
    struct kk_device *dev;
    struct kk_shader *shader;
@@ -51,12 +52,20 @@ static void
 job_result(struct kk_async_compute *job, VkResult result)
 {
    pthread_mutex_lock(&job->mutex);
+   if (p_atomic_read(&job->cancel_requested)) {
+      /* Metal has no safe cancellation API in Wine. Finish the synchronous
+       * native call, then discard its result instead of publishing or caching. */
+      mtl_release(job->shader->pipeline.cs);
+      job->shader->pipeline.cs = NULL;
+      result = VK_ERROR_DEVICE_LOST;
+   }
    job->result = result;
    /* Release publication covers the native handle and all function metadata. */
    p_atomic_set(&job->ready, true);
    struct vk_pipeline_cache_object *object = job->cache_object;
    pthread_mutex_unlock(&job->mutex);
    if (job->dev->perf) {
+      job->scope.cancelled = p_atomic_read(&job->cancel_requested);
       kk_perf_compile_end(&job->scope, false, result);
       kk_perf_compiler(job->dev->perf, -1);
       kk_perf_async_compute(job->dev->perf, 0, -1);
@@ -77,6 +86,14 @@ static void
 job_execute(void *data)
 {
    struct kk_async_compute *job = data;
+   if (p_atomic_read(&job->cancel_requested)) {
+      pthread_mutex_lock(&job->mutex);
+      job->result = VK_ERROR_DEVICE_LOST;
+      p_atomic_set(&job->ready, true);
+      pthread_mutex_unlock(&job->mutex);
+      if (job->dev->perf) kk_perf_async_compute(job->dev->perf, -1, 0);
+      return;
+   }
    if (job->dev->perf) {
       job->start = kk_perf_now();
       kk_perf_async_compute(job->dev->perf, -1, 1);
@@ -110,7 +127,18 @@ job_cleanup(void *data)
 {
    struct kk_async_compute *job = data;
    struct kk_async_compute_owner *owner = job->owner;
+   if (!p_atomic_read(&job->ready)) {
+      /* A queued NSOperation cancelled before execution still runs cleanup. */
+      pthread_mutex_lock(&job->mutex);
+      job->result = VK_ERROR_DEVICE_LOST;
+      p_atomic_set(&job->ready, true);
+      pthread_mutex_unlock(&job->mutex);
+      if (job->dev->perf) kk_perf_async_compute(job->dev->perf, -1, 0);
+   }
    pthread_mutex_lock(&owner->mutex);
+   struct kk_async_compute **link = &owner->jobs;
+   while (*link != job) { assert(*link); link = &(*link)->active_next; }
+   *link = job->active_next;
    job->next = owner->retired;
    p_atomic_set(&owner->retired, job);
    --owner->active;
@@ -164,7 +192,10 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
    job->dev = dev; job->shader = shader; job->owner = owner; job->compile = compile;
    if (dev->perf) kk_perf_compile_parent(dev->perf, &job->request_id, &job->parent_id);
    pthread_mutex_lock(&owner->mutex);
+   assert(!owner->stopping);
    ++owner->active;
+   job->active_next = owner->jobs;
+   owner->jobs = job;
    pthread_mutex_unlock(&owner->mutex);
    shader->pipeline.compute.pending = job;
    if (dev->perf) kk_perf_async_compute(dev->perf, 1, 0);
@@ -177,6 +208,9 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
    if (dev->perf) kk_perf_async_compute(dev->perf, -1, 0);
    pthread_mutex_lock(&owner->mutex);
    --owner->active;
+   struct kk_async_compute **link = &owner->jobs;
+   while (*link != job) { assert(*link); link = &(*link)->active_next; }
+   *link = job->active_next;
    pthread_cond_broadcast(&owner->drained);
    pthread_mutex_unlock(&owner->mutex);
    job_unref(job);
@@ -203,6 +237,7 @@ join_shader(struct kk_shader *shader, const char *reason)
    struct kk_async_compute *job = shader->pipeline.compute.pending;
    if (!job) return VK_SUCCESS;
    job_wait(job, reason, false);
+   if (p_atomic_read(&job->cancel_requested)) return VK_ERROR_DEVICE_LOST;
    if (job->result == VK_SUCCESS) return VK_SUCCESS;
    if (p_atomic_cmpxchg(&job->reported, false, true))
       return VK_ERROR_DEVICE_LOST;
@@ -261,6 +296,25 @@ kk_async_compute_device_finish(struct kk_device *dev)
 {
    struct kk_async_compute_owner *owner = dev->async_compute;
    if (!owner) return;
+   pthread_mutex_lock(&owner->mutex);
+   owner->stopping = true;
+   for (struct kk_async_compute *job = owner->jobs; job; job = job->active_next)
+      if (!p_atomic_read(&job->ready)) p_atomic_set(&job->cancel_requested, true);
+   pthread_mutex_unlock(&owner->mutex);
+   for (;;) {
+      pthread_mutex_lock(&owner->mutex);
+      struct kk_async_compute *job = owner->jobs;
+      while (job && (job->cancel_sent || p_atomic_read(&job->ready))) job = job->active_next;
+      if (job) {
+         job->cancel_sent = true;
+         p_atomic_inc(&job->refs);
+      }
+      pthread_mutex_unlock(&owner->mutex);
+      if (!job) break;
+      /* No owner lock across cancel: Foundation may publish completion now. */
+      mtl_compiler_task_cancel(job->task);
+      job_unref(job);
+   }
    pthread_mutex_lock(&owner->mutex);
    while (owner->active) pthread_cond_wait(&owner->drained, &owner->mutex);
    pthread_mutex_unlock(&owner->mutex);
