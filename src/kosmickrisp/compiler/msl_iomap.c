@@ -173,11 +173,14 @@ const char *depth_layout_arg[8] = {
 
 /* Generate the struct definition for the vertex shader return value */
 static void
-vs_output_block(nir_shader *shader, struct nir_to_msl_ctx *ctx)
+vs_output_block(nir_shader *shader, struct nir_to_msl_ctx *ctx,
+                const char *name, bool point_size)
 {
-   P(ctx, "struct %s {\n", VERTEX_OUTPUT_TYPE);
+   P(ctx, "struct %s {\n", name);
    ctx->indentlevel++;
    u_foreach_bit64(location, shader->info.outputs_written) {
+      if (!point_size && location == VARYING_SLOT_PSIZ)
+         continue;
       struct io_slot_info info = ctx->outputs_info[location];
       bool scalarized = VARYING_SLOT_INFO[location].scalarized;
       const char *type = alu_type_to_string(info.type);
@@ -414,6 +417,14 @@ msl_nir_gather_io_info(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
       assert(io.num_slots == 1u && "We don't support arrays");
 
       unsigned location = nir_src_as_uint(intrin->src[0u]) + io.location;
+      if (ctx->compiler->raster_vertex_inputs &&
+          ctx->compiler->shader->info.stage == MESA_SHADER_VERTEX &&
+          (location < VERT_ATTRIB_GENERIC0 || location > (VERT_ATTRIB_GENERIC0 + 31) ||
+           !(ctx->compiler->raster_vertex_inputs &
+             BITFIELD_BIT(location - VERT_ATTRIB_GENERIC0)))) {
+         msl_fail(ctx->compiler, "split vertex interface omits an attribute");
+         break;
+      }
       ctx->input[location].type = nir_intrinsic_dest_type(intrin);
       ctx->input[location].interpolation = INTERP_MODE_FLAT;
       ctx->input[location].num_components =
@@ -481,6 +492,22 @@ msl_gather_io_info(struct nir_to_msl_ctx *ctx,
    };
    nir_shader_intrinsics_pass(ctx->shader, msl_nir_gather_io_info,
                               nir_metadata_all, &gather_ctx);
+   if (ctx->independent_interface) {
+      /* No producer/consumer pair is available to shrink both sides together.
+       * Keep semantic locations and declaration widths stable independently;
+       * emitted stores retain their masks and the output block starts at zero.
+       * Builtins and fragment outputs retain their original native types. */
+      struct io_slot_info *varyings =
+         ctx->shader->info.stage == MESA_SHADER_VERTEX ? info_array_output :
+         ctx->shader->info.stage == MESA_SHADER_FRAGMENT ? info_array_input : NULL;
+      if (varyings) {
+         for (unsigned location = VARYING_SLOT_VAR0;
+              location <= VARYING_SLOT_VAR31; ++location) {
+            if (varyings[location].num_components)
+               varyings[location].num_components = 4;
+         }
+      }
+   }
    if (ctx->per_vertex_inputs) {
       /* A vertex_value<T> input must have exactly its producer's T. Late
        * scalarization/shrinking may change either stage's instructions, but
@@ -496,13 +523,31 @@ msl_gather_io_info(struct nir_to_msl_ctx *ctx,
    }
 }
 
+/* This is an internal value type, never a Metal stage_in layout. Formats,
+ * normalization and divisors belong to the separately compiled fetch helper. */
+static void
+vertex_input_block(struct nir_to_msl_ctx *ctx)
+{
+   P(ctx, "struct VertexIn {\n");
+   ctx->indentlevel++;
+   u_foreach_bit(attribute, ctx->raster_vertex_inputs)
+      P_IND(ctx, "uint4 attr_%u;\n", attribute);
+   ctx->indentlevel--;
+   P(ctx, "};\n");
+}
+
 /* Generate all the struct definitions needed for shader I/O */
 void
 msl_emit_io_blocks(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 {
    switch (ctx->shader->info.stage) {
    case MESA_SHADER_VERTEX:
-      vs_output_block(shader, ctx);
+      if (ctx->raster_vertex_inputs)
+         vertex_input_block(ctx);
+      if (!ctx->raster_vertex_fetch)
+         vs_output_block(shader, ctx, VERTEX_OUTPUT_TYPE, true);
+      if (ctx->raster_vertex_topology_wrapper)
+         vs_output_block(shader, ctx, "VertexRasterOut", ctx->raster_vertex_point_size);
       break;
    case MESA_SHADER_FRAGMENT:
       fs_input_block(shader, ctx);
@@ -541,11 +586,33 @@ msl_emit_io_blocks(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 }
 
 void
+msl_emit_vertex_raster_copy(struct nir_to_msl_ctx *ctx)
+{
+   P_IND(ctx, "VertexRasterOut out = {};\n");
+   u_foreach_bit64(location, ctx->shader->info.outputs_written) {
+      if (!ctx->raster_vertex_point_size && location == VARYING_SLOT_PSIZ)
+         continue;
+      unsigned components = VARYING_SLOT_INFO[location].scalarized ?
+         ctx->outputs_info[location].num_components : 1;
+      for (unsigned c = 0; c < components; ++c) {
+         P_IND(ctx, "out.");
+         varying_slot_name(ctx, location, c);
+         P(ctx, " = value.");
+         varying_slot_name(ctx, location, c);
+         P(ctx, ";\n");
+      }
+   }
+   for (unsigned i = 0; i < ctx->shader->info.clip_distance_array_size; ++i)
+      P_IND(ctx, "out.gl_ClipDistance[%u] = value.gl_ClipDistance[%u];\n", i, i);
+   P_IND(ctx, "return out;\n");
+}
+
+void
 msl_emit_output_var(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 {
    switch (shader->info.stage) {
    case MESA_SHADER_VERTEX:
-      P_IND(ctx, "%s out = {};\n", VERTEX_OUTPUT_TYPE);
+      P_IND(ctx, "%s out = {};\n", ctx->raster_vertex_fetch ? "VertexIn" : VERTEX_OUTPUT_TYPE);
       break;
    case MESA_SHADER_FRAGMENT:
       P_IND(ctx, "%s out = {};\n", FRAGMENT_OUTPUT_TYPE);
@@ -585,6 +652,11 @@ msl_output_name(struct nir_to_msl_ctx *ctx, unsigned location,
    }
    switch (ctx->shader->info.stage) {
    case MESA_SHADER_VERTEX:
+      if (ctx->raster_vertex_fetch) {
+         assert(location >= VERT_ATTRIB_GENERIC0 && location <= (VERT_ATTRIB_GENERIC0 + 31));
+         P(ctx, "out.attr_%u", location - VERT_ATTRIB_GENERIC0);
+         return;
+      }
       P(ctx, load_from_input ? "in." : "out.");
       FALLTHROUGH;
    case MESA_SHADER_MESH:
@@ -604,6 +676,11 @@ msl_input_name(struct nir_to_msl_ctx *ctx, unsigned location,
 {
    P(ctx, "in.");
    switch (ctx->shader->info.stage) {
+   case MESA_SHADER_VERTEX:
+      assert(ctx->raster_vertex_inputs && location >= VERT_ATTRIB_GENERIC0 &&
+             location <= (VERT_ATTRIB_GENERIC0 + 31));
+      P(ctx, "attr_%u", location - VERT_ATTRIB_GENERIC0);
+      break;
    case MESA_SHADER_FRAGMENT:
       varying_slot_name(ctx, location, component);
       break;
@@ -615,6 +692,8 @@ msl_input_name(struct nir_to_msl_ctx *ctx, unsigned location,
 uint32_t
 msl_input_num_components(struct nir_to_msl_ctx *ctx, uint32_t location)
 {
+   if (ctx->raster_vertex_inputs && ctx->shader->info.stage == MESA_SHADER_VERTEX)
+      return 4;
    if (ctx->shader->info.stage == MESA_SHADER_FRAGMENT &&
        VARYING_SLOT_INFO[location].scalarized)
       return 1;
@@ -625,6 +704,8 @@ msl_input_num_components(struct nir_to_msl_ctx *ctx, uint32_t location)
 uint32_t
 msl_output_num_components(struct nir_to_msl_ctx *ctx, uint32_t location)
 {
+   if (ctx->raster_vertex_fetch)
+      return 4;
    if ((ctx->shader->info.stage == MESA_SHADER_VERTEX ||
         ctx->shader->info.stage == MESA_SHADER_MESH) &&
        VARYING_SLOT_INFO[location].scalarized)

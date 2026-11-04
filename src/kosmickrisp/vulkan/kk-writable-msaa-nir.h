@@ -229,6 +229,14 @@ kk_lower_msaa_fetch(nir_builder *b, nir_tex_instr *tex, nir_def *texture,
       return false;
 
    nir_deref_instr *deref = nir_src_as_deref(nir_src_for_ssa(texture));
+   /* Input-attachment descriptors always name the native MSAA image, even
+    * when storage uses separate sample planes. Their views are synchronized
+    * before the subpass; they never publish the auxiliary sample table.
+    * Keep these reads on the ordinary native path instead of introducing
+    * storage-image selection into a pixel-frequency input-attachment loop. */
+   if (glsl_get_sampler_dim(deref->type) == GLSL_SAMPLER_DIM_SUBPASS_MS)
+      return false;
+
    nir_def *table = load_resource_deref_desc(b, 1, 64, deref,
       offsetof(struct kk_sampled_image_descriptor, aux_resource_id), ctx);
    nir_push_if(b, nir_ine_imm(b, table, 0));

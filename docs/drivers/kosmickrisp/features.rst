@@ -778,9 +778,18 @@ Feature table
      - —
      - Always
      - —
+   * - ``VK_EXT_graphics_pipeline_library``, ``VK_KHR_pipeline_library``
+     - Native stage bodies and final Metal render pipeline assembly for
+       ordinary one-sample vertex/color fragment paths. Coupled state and
+       other stage chains use retained canonical sources with the complete
+       compiler. Independent interpolation is provided; fast linking is false.
+     - Apple7 through Apple11; no fast-link threshold is declared.
+     - ``graphics_pipeline_library``
+     - On
+     - Translator graphics pipeline library paths are unavailable.
    * - ``VK_KHR_acceleration_structure``, ``VK_KHR_ray_tracing_pipeline``,
        ``VK_KHR_ray_query``, ``VK_KHR_ray_tracing_maintenance1``,
-       ``VK_KHR_pipeline_library``, ``VK_EXT_pipeline_library_group_handles``
+       ``VK_EXT_pipeline_library_group_handles``
      - Emulated: acceleration structures are built and traversed in compute,
        and ray-tracing pipelines run as continuation dispatches. Metal ray
        tracing is not used. Shader group handles derive from the group's

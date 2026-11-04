@@ -143,6 +143,11 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
                 enum mtl_language_version msl_version,
                 enum mtl_math_mode math_mode,
                 enum mtl_math_floating_point_functions math_fp_fns);
+/* Compiles an IR module whose unresolved calls are supplied at PSO link time.
+ * Its cache identity includes this compile mode. The returned library is owned. */
+mtl_library *mtl_new_linkable_library(mtl_compiler *compiler, const char *src,
+   enum mtl_language_version version, enum mtl_math_mode mode,
+   enum mtl_math_floating_point_functions fp);
 /* Used only on the bounded native compute workers. */
 mtl_library *mtl_new_library_async_wait(mtl_compiler *compiler, const char *src,
    enum mtl_language_version version, enum mtl_math_mode mode,
@@ -206,6 +211,11 @@ void mtl_render_pipeline_descriptor_set_vertex_shader(
 
 void mtl_render_pipeline_descriptor_set_fragment_shader(
    mtl_render_pipeline_descriptor *descriptor, mtl_function_descriptor *shader);
+
+/* Copies/retains native IR dependencies on the selected raster stage. */
+void mtl_render_pipeline_descriptor_set_private_functions(
+   mtl_render_pipeline_descriptor *descriptor, bool vertex, uint32_t count,
+   mtl_function_descriptor *const *functions);
 
 void mtl_render_pipeline_descriptor_set_input_primitive_topology(
    mtl_render_pipeline_descriptor *descriptor,

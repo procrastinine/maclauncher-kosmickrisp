@@ -95,11 +95,15 @@ kk_emulation_apply(const char *value, unsigned apple_family,
       ++token_index;
       cursor = *end ? end + 1 : end;
    }
+   bool active[KK_EMULATION_COUNT];
    for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i) {
       bool native = kk_emulation_native_from[i] &&
                     kk_emulation_native_from[i] <= apple_family;
-      if (!enabled[i] && !native)
-         kk_emulation_disable(i, extensions, features, properties);
+      active[i] = enabled[i] || native;
+   }
+   for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i) {
+      if (!active[i])
+         kk_emulation_disable(i, active, extensions, features, properties);
    }
    for (unsigned i = 0; i < VK_DEVICE_EXTENSION_COUNT; ++i) {
       if (hidden[i]) {

@@ -570,3 +570,36 @@ These workarounds can be found in:
    :maxdepth: 1
 
    kosmickrisp/workarounds
+
+Shader module identifiers
+-------------------------
+
+``VK_EXT_shader_module_identifier`` identifies SPIR-V modules with Mesa's
+BLAKE3 algorithm. Module handles and inline module create information produce
+the same identifier. Pipeline creation with identifiers uses existing pipeline
+cache entries; a cache miss returns ``VK_PIPELINE_COMPILE_REQUIRED`` when
+``VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT`` is set.
+Identifiers do not alter shader compilation or draw commands.
+
+Graphics pipeline libraries
+--------------------------
+
+``VK_EXT_graphics_pipeline_library`` provides all four library parts,
+independent pipeline layouts and independent interpolation decorations.
+The ``graphics_pipeline_library`` registry entry selects this interface on
+Apple7 through Apple11 in performance and conformance modes.
+
+Ordinary one-sample vertex and color fragment libraries compile separate
+Metal shader bodies. Final assembly reuses those bodies and creates the
+vertex fetch helper and render pipeline state. Coupled raster state,
+other graphics stage chains and link-time optimization use retained
+canonical shader sources with the complete pipeline compiler. Pipeline
+caches retain final executable combinations independently of their source
+libraries. Original shader modules, layouts and library handles can be
+destroyed after their consumers are created.
+
+``graphicsPipelineLibraryIndependentInterpolationDecoration`` is true.
+``graphicsPipelineLibraryFastLinking`` is false: final assembly of a new
+combination still invokes Metal's render pipeline backend. Libraries can
+move stage compilation ahead of drawing, while final render pipeline
+creation can still compile native code.

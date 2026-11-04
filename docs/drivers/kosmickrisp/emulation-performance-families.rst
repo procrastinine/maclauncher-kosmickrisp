@@ -17,6 +17,13 @@
      - On
      - On
      - On Apple7-11: only explicitly requested preservation emits guards; ordinary zeros and normal arithmetic use native operations, true or possibly flushed subnormals use cold repair, and comparisons use native predicates unless an operand is subnormal.
+   * - ``graphics_pipeline_library``
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: independent native bodies for ordinary one-sample vertex/color fragment paths; coupled state uses canonical compilation. Native render pipeline backend compilation remains at final assembly; FastLinking is false.
    * - ``denorm_flush``
      - On
      - On

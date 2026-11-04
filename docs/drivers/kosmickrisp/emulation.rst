@@ -21,6 +21,15 @@
      - vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.
      - Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.
      - ``performance,+denorm_preserve``
+   * - ``graphics_pipeline_library``
+     - Vertex input, pre-rasterization, fragment shader and fragment output libraries with independent layouts and interpolation decorations.
+       Controls: ``VK_EXT_graphics_pipeline_library``, ``VK_KHR_pipeline_library``, ``graphicsPipelineLibrary``, ``graphicsPipelineLibraryFastLinking``, ``graphicsPipelineLibraryIndependentInterpolationDecoration``.
+     - native stage compilation / pipeline assembly. Ordinary one-sample vertex and color fragment libraries compile separate Metal bodies. Final assembly reuses these functions and compiles a vertex fetch helper. Coupled raster state, other stage chains and link-time optimization use retained canonical shader sources and the complete compiler. A new combination still runs the Metal render pipeline backend; fast linking is not reported.
+     - No Apple family
+     - On
+     - Libraries move eligible stage compilation ahead of final pipeline creation.
+     - Graphics pipelines use complete pipeline creation; translator graphics library paths are unavailable.
+     - ``performance,+graphics_pipeline_library``
    * - ``denorm_flush``
      - Flush subnormal results to zero in requested floating-point modes.
        Controls: ``shaderDenormFlushToZeroFloat16``, ``shaderDenormFlushToZeroFloat32``, ``shaderDenormFlushToZeroFloat64``.

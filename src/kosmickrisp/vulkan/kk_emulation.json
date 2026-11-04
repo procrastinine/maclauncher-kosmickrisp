@@ -25,6 +25,41 @@
     "family_cost_note": "On Apple7-11: only explicitly requested preservation emits guards; ordinary zeros and normal arithmetic use native operations, true or possibly flushed subnormals use cold repair, and comparisons use native predicates unless an operand is subnormal."
   },
   {
+    "name": "graphics_pipeline_library",
+    "description": "Vertex input, pre-rasterization, fragment shader and fragment output libraries with independent layouts and interpolation decorations.",
+    "cost_class": "native stage compilation / pipeline assembly",
+    "cost_note": "Ordinary one-sample vertex and color fragment libraries compile separate Metal bodies. Final assembly reuses these functions and compiles a vertex fetch helper. Coupled raster state, other stage chains and link-time optimization use retained canonical shader sources and the complete compiler. A new combination still runs the Metal render pipeline backend; fast linking is not reported.",
+    "extensions": [
+      "VK_EXT_graphics_pipeline_library",
+      "VK_KHR_pipeline_library"
+    ],
+    "extension_consumers": {
+      "VK_KHR_pipeline_library": [
+        "VK_EXT_graphics_pipeline_library",
+        "VK_KHR_ray_tracing_pipeline"
+      ]
+    },
+    "features": [
+      "graphicsPipelineLibrary"
+    ],
+    "properties": [
+      "graphicsPipelineLibraryFastLinking",
+      "graphicsPipelineLibraryIndependentInterpolationDecoration"
+    ],
+    "performance": true,
+    "performance_reason": "Libraries move eligible stage compilation ahead of final pipeline creation.",
+    "off_consequence": "Graphics pipelines use complete pipeline creation; translator graphics library paths are unavailable.",
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: independent native bodies for ordinary one-sample vertex/color fragment paths; coupled state uses canonical compilation. Native render pipeline backend compilation remains at final assembly; FastLinking is false."
+  },
+  {
     "name": "denorm_flush",
     "description": "Flush subnormal results to zero in requested floating-point modes.",
     "cost_class": "native arithmetic / ALU fixups / cold software repair",

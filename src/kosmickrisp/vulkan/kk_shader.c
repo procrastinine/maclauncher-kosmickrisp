@@ -218,8 +218,9 @@ kk_populate_fs_key(struct kk_fs_key *key,
 
    /* Required since we [de]serialize blend, and render target swizzle for
     * non-native formats */
-   memcpy(key->color_formats, state->rp->color_attachment_formats,
-          sizeof(key->color_formats));
+   if (state->rp)
+      memcpy(key->color_formats, state->rp->color_attachment_formats,
+             sizeof(key->color_formats));
 
    if (has_static_depth_stencil_state(state))
       key->ds = *(state->ds);
@@ -242,8 +243,9 @@ kk_populate_fs_key(struct kk_fs_key *key,
       (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_ALPHA_TO_COVERAGE_ENABLE) << 2);
 
    /* Depth writes are removed unless there's an actual attachment */
-   key->has_depth = state->rp->depth_attachment_format != VK_FORMAT_UNDEFINED;
-   key->has_stencil =
+   key->has_depth = state->rp &&
+      state->rp->depth_attachment_format != VK_FORMAT_UNDEFINED;
+   key->has_stencil = state->rp &&
       state->rp->stencil_attachment_format != VK_FORMAT_UNDEFINED;
 
    /* Values that modify if a forced depth is present or not */
@@ -334,8 +336,24 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       kk_populate_fs_key(&key, state);
       _mesa_blake3_update(&blake3_ctx, &key, sizeof(key));
 
-      _mesa_blake3_update(&blake3_ctx, &state->mv->view_mask,
-                          sizeof(state->mv->view_mask));
+      const uint32_t view_mask = state->mv ? state->mv->view_mask : 0;
+      _mesa_blake3_update(&blake3_ctx, &view_mask, sizeof(view_mask));
+   }
+
+   /* An absent library substate is not an explicit zero-valued substate.
+    * Tag only incomplete shader partitions; complete pipeline keys keep
+    * their existing byte stream, including ordinary Mesh without VI/IA. */
+   const bool partial_vertex = (stages & VK_SHADER_STAGE_VERTEX_BIT) &&
+      state && !state->ia &&
+      !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_IA_PRIMITIVE_TOPOLOGY);
+   const bool partial_fragment = (stages & VK_SHADER_STAGE_FRAGMENT_BIT) &&
+      state && (!state->rp || !state->mv || !state->rs);
+   if (partial_vertex || partial_fragment) {
+      const uint32_t presence[] = {0x47504c31u,
+         !!state->vi | (!!state->ia << 1) | (!!state->rs << 2) |
+         (!!state->rp << 3) | (!!state->mv << 4) | (!!state->ms << 5) |
+         (!!state->ds << 6) | (!!state->cb << 7)};
+      _mesa_blake3_update(&blake3_ctx, presence, sizeof(presence));
    }
 
    /* Mesh index order follows a static last-vertex provoking mode. Other
@@ -786,6 +804,19 @@ lower_subpass_dim(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
 #include "kk_interlock_shader.h"
 
 static void
+kk_finish_fs_invocation_workarounds(struct kk_device *dev, nir_shader *nir)
+{
+   struct kk_physical_device *pdev = kk_device_physical(dev);
+   /* KK_WORKAROUND_5 */
+   if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(5)))
+      NIR_PASS(_, nir, msl_nir_fake_guard_for_discards);
+   /* KK_WORKAROUND_4 */
+   if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(4))) {
+      NIR_PASS(_, nir, nir_lower_helper_writes, true);
+   }
+}
+
+static void
 kk_lower_fs(struct kk_device *dev, nir_shader *nir,
             const struct vk_graphics_pipeline_state *state, bool depth_bounds)
 {
@@ -894,13 +925,7 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
          NIR_PASS(_, nir, msl_disable_triangle_merge);
    }
 
-   /* KK_WORKAROUND_5 */
-   if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(5)))
-      NIR_PASS(_, nir, msl_nir_fake_guard_for_discards);
-   /* KK_WORKAROUND_4 */
-   if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(4))) {
-      NIR_PASS(_, nir, nir_lower_helper_writes, true);
-   }
+   kk_finish_fs_invocation_workarounds(dev, nir);
 }
 
 static bool
@@ -1361,15 +1386,17 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
 
       /* Run before nir_lower_input_attachments() below, which rewrites the
        * subpass loads it looks for. */
-      if (kk_fs_needs_forced_depth_write(nir, state))
-         NIR_PASS(_, nir, msl_ensure_depth_write);
+      if (state->rp) {
+         if (kk_fs_needs_forced_depth_write(nir, state))
+            NIR_PASS(_, nir, msl_ensure_depth_write);
 
-      msl_nir_lower_input_attachments(nir, state->ial, state->cal,
-         state->rp, depth_bounds ||
-            (dev->vk.enabled_features.fragmentShaderPixelInterlock &&
-             kk_interlock_multisample_pipeline(state) && kk_interlock_pixel_shader(nir)),
-         state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT,
-         depth_bounds);
+         msl_nir_lower_input_attachments(nir, state->ial, state->cal,
+            state->rp, depth_bounds ||
+               (dev->vk.enabled_features.fragmentShaderPixelInterlock &&
+                kk_interlock_multisample_pipeline(state) && kk_interlock_pixel_shader(nir)),
+            state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT,
+            depth_bounds);
+      }
    }
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT &&
@@ -1465,7 +1492,10 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
       bool is_point =
          nir->info.stage == MESA_SHADER_TESS_EVAL
             ? nir->info.tess.point_mode
-            : state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+            /* Without IA, preserve point size for the eventual topology.
+             * Native rasterization ignores this output for non-point draws. */
+            : !state->ia ||
+              state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
       kk_lower_hw_vs(nir, state, is_point);
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, msl_nir_fs_io_types);
@@ -1499,6 +1529,20 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
 
 static const struct vk_shader_ops kk_shader_ops;
 
+static void kk_gpl_shader_finish(struct kk_device *dev, struct kk_shader *shader,
+                                 const VkAllocationCallbacks *alloc);
+static bool kk_gpl_shader_serialize(const struct kk_shader *shader, struct blob *blob);
+static VkResult kk_gpl_shader_deserialize(struct kk_device *dev, struct kk_shader *shader,
+   struct blob_reader *blob, const VkAllocationCallbacks *alloc);
+static VkResult kk_compile_graphics_library_shaders(struct vk_device *device, uint32_t count,
+   struct vk_shader_compile_info *infos, const struct vk_graphics_pipeline_state *state,
+   const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out);
+
+static bool kk_try_link_graphics_libraries(struct vk_device *device, uint32_t count,
+   struct vk_shader_compile_info *infos, const struct vk_graphics_pipeline_state *state,
+   const struct vk_features *features, const VkAllocationCallbacks *alloc,
+   struct vk_shader **out, VkResult *result);
+
 static void kk_interlock_shader_finish(struct kk_interlock_shader *);
 void kk_interlock_pipeline_finish(struct kk_interlock_pipeline *);
 
@@ -1527,6 +1571,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
 {
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
+   kk_gpl_shader_finish(dev, shader, pAllocator);
    if (shader->info.stage == MESA_SHADER_COMPUTE && shader->pipeline.compute.pending)
       kk_async_compute_shader_finish(shader);
    if (shader->vk.stage == MESA_SHADER_VERTEX && shader->gs_mesh)
@@ -1787,6 +1832,7 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    translate_options.disabled_workarounds = pdev->settings.disabled_workarounds;
    translate_options.native_sampler_lod_bias = pdev->info.gpu_apple_family >= 10;
    translate_options.native_query_texture_lod = pdev->info.supports_query_texture_lod;
+   translate_options.independent_interface |= opts && opts->independent_interface;
    translate_options.per_vertex_inputs = opts ? opts->native_per_vertex : NULL;
    translate_options.native_atomic64_minmax = pdev->info.gpu_apple_family >= 8;
    struct kk_mesh_msl_options mesh_options;
@@ -1814,7 +1860,7 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
           * to coverage with unused attachments. */
          translate_options.rts_component_count[i] = 4;
       }
-      for (uint32_t i = 0u; i < state->rp->color_attachment_count; ++i) {
+      for (uint32_t i = 0u; state->rp && i < state->rp->color_attachment_count; ++i) {
          uint8_t logical_index = kk_get_logical_color_att_index(state, i);
          if (logical_index == MESA_VK_ATTACHMENT_UNUSED) {
             continue;
@@ -1839,7 +1885,10 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    data->uses_pipeline_statistics = translate_options.uses_pipeline_statistics;
    data->uses_sampler_emulation = translate_options.uses_sampler_emulation;
    data->requires_sampler_emulation = translate_options.requires_sampler_emulation;
-   const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
+   const char *entrypoint_name = (translate_options.raster_module == MSL_RASTER_BODY ||
+      translate_options.raster_module == MSL_RASTER_VERTEX_FETCH)
+      ? ralloc_strdup(nir, translate_options.raster_body_name)
+      : nir_shader_get_entrypoint(nir)->function->name;
 
    /* We need to steal so it doesn't get destroyed with the nir. Needs to happen
     * after nir_to_msl since that's where we rename the entrypoint.
@@ -1956,7 +2005,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    shader->info.interlock_envelope = pixel_envelope;
    shader->info.depth_bounds_emulation = opts->depth_bounds;
    shader->info.poly_layer_replay = opts->poly_layer_replay;
-   if (stage == MESA_SHADER_FRAGMENT)
+   if (stage == MESA_SHADER_FRAGMENT && state->rs)
       shader->info.fs.line_geometry_stipple = kk_line_geometry_stipple(nir, state);
    if (stage == MESA_SHADER_FRAGMENT) {
       shader->info.conservative_full_coverage =
@@ -2015,7 +2064,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       }
    }
 
-   if (stage == MESA_SHADER_FRAGMENT) kk_line_fragment(nir, false, state);
+   if (stage == MESA_SHADER_FRAGMENT && state->rs)
+      kk_line_fragment(nir, false, state);
 
    unsigned num_cull_distances =
       prev_stage ? prev_stage->info.num_cull_distances : 0;
@@ -2033,7 +2083,10 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    if (stage == MESA_SHADER_VERTEX) {
       /* VBO lowering needs to go here otherwise, the linking step removes all
        * inputs since we read vertex attributes from UBOs. */
-      kk_lower_vs_vbo(nir, state, robustness);
+      /* A split body receives canonical attribute bits from its linked fetch
+       * module. It must not bake this pipeline's VI state into those loads. */
+      if (!(opts && opts->msl_custom && opts->msl_custom->raster_vertex_inputs))
+         kk_lower_vs_vbo(nir, state, robustness);
       if (nir->info.next_stage != MESA_SHADER_FRAGMENT) {
          /* TODO_KOSMICKRISP: Poly lowering breaks with vectorized I/O less than
           * 32-bit, which we support. Lower vertex outputs to scalar. */
@@ -2758,6 +2811,8 @@ gather_graphics_pipeline_create_info(
           "state, vertex and fragment shaders are a must");
    struct kk_shader *vs = shaders[shaders[0]->info.stage == MESA_SHADER_TASK ? 1 : 0];
    struct kk_shader_info *info = &vs->info;
+   /* A shared pre-raster body did not know the final VI state. */
+   info->vs.dynamic_vi = !kk_vi_is_static(state);
 
    /* Render pass data */
    const struct vk_render_pass_state *rp = state->rp;
@@ -3017,12 +3072,109 @@ kk_compile_graphics_prerender(struct kk_device *device, struct kk_shader *vs,
    return VK_SUCCESS;
 }
 
+/* A library owns its function descriptor independently of a render PSO.
+ * The descriptor retains its library, source identity and base constants. */
+static VkResult
+kk_compile_graphics_module(struct kk_device *device,
+   const struct msl_compile_data *data, bool linkable,
+   mtl_function_descriptor **function)
+{
+   struct kk_physical_device *pdev = kk_device_physical(device);
+   *function = NULL;
+   mtl_library *library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY,
+      (linkable ? mtl_new_linkable_library : mtl_new_library)(
+         device->mtl_compiler_handle, data->code,
+         kk_msl_language_version(data, pdev->info.msl_version),
+         MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
+   if (!library)
+      return VK_ERROR_INVALID_SHADER_NV;
+   VkResult result = kk_msl_function_sampler_base(device, data, library,
+      data->entrypoint_name, function);
+   mtl_release(library);
+   return result;
+}
+
+VkResult
+kk_compile_graphics_stage(struct kk_device *device,
+   const struct msl_compile_data *data, mtl_function_descriptor **function)
+{
+   return kk_compile_graphics_module(device, data, false, function);
+}
+
+/* Borrow immutable compiled stage descriptors; this step creates the native
+ * render PSO and never translates NIR or compiles an MSL library. Metal may
+ * still run its PSO backend for a new pair or attachment configuration. */
+VkResult
+kk_link_graphics_stages_with_libraries(struct kk_device *device, struct kk_shader *vs,
+   const struct msl_compile_data *vs_data, const struct msl_compile_data *fs_data,
+   mtl_function_descriptor *vertex_function,
+   mtl_function_descriptor *fragment_function, unsigned polygon,
+   const struct kk_graphics_link_dependencies *dependencies)
+{
+   assert(vertex_function && fragment_function);
+   struct kk_pipeline_handles *pipe = &vs->pipeline;
+   const bool fsr_coarse = polygon == KK_PIPELINE_FSR_COARSE;
+   VkResult result = VK_SUCCESS;
+   mtl_render_pipeline_descriptor *pipeline_descriptor =
+      mtl_new_render_pipeline_descriptor();
+   mtl_render_pipeline_descriptor_set_vertex_shader(pipeline_descriptor,
+                                                    vertex_function);
+   mtl_render_pipeline_descriptor_set_fragment_shader(pipeline_descriptor,
+                                                      fragment_function);
+
+   if (dependencies) {
+      mtl_render_pipeline_descriptor_set_private_functions(pipeline_descriptor,
+         true, dependencies->vertex_count, dependencies->vertex);
+      mtl_render_pipeline_descriptor_set_private_functions(pipeline_descriptor,
+         false, dependencies->fragment_count, dependencies->fragment);
+   }
+
+   /* Layered rendering in Metal requires setting primitive topology class */
+   mtl_render_pipeline_descriptor_set_input_primitive_topology(
+      pipeline_descriptor, polygon == 2 ? MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE :
+         polygon && !fsr_coarse ? vs->info.vs.polygon_topology : vs->info.vs.topology);
+
+   kk_configure_render_pipeline(device, vs, pipe, pipeline_descriptor, polygon);
+
+   uint32_t sampler_stages =
+      (vs_data->uses_sampler_emulation ? MTL_SAMPLER_EMULATION_VERTEX : 0) |
+      (fs_data->uses_sampler_emulation ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
+   uint32_t sampler_required =
+      (vs_data->requires_sampler_emulation ? MTL_SAMPLER_EMULATION_VERTEX : 0) |
+      (fs_data->requires_sampler_emulation ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
+   mtl_render_pipeline_state *render = kk_attachment_compile_pipeline(device, vs,
+      pipeline_descriptor, sampler_stages, sampler_required);
+   if (fsr_coarse) pipe->gfx.fsr_coarse_render = render;
+   else if (polygon == 2) pipe->gfx.conservative_render = render;
+   else if (polygon) pipe->gfx.polygon_render = render;
+   else pipe->gfx.render = render;
+   if (render == NULL)
+      result = VK_ERROR_INVALID_SHADER_NV;
+
+   if (render)
+      result = kk_record_render_descriptor(device, vs, pipeline_descriptor,
+                                          polygon, fs_data->uses_pipeline_statistics,
+                                          sampler_stages, sampler_required);
+   mtl_release(pipeline_descriptor);
+
+   return result;
+}
+
+VkResult
+kk_link_graphics_stages(struct kk_device *device, struct kk_shader *vs,
+   const struct msl_compile_data *vs_data, const struct msl_compile_data *fs_data,
+   mtl_function_descriptor *vertex_function,
+   mtl_function_descriptor *fragment_function, unsigned polygon)
+{
+   return kk_link_graphics_stages_with_libraries(device, vs, vs_data, fs_data,
+      vertex_function, fragment_function, polygon, NULL);
+}
+
 static VkResult
 kk_compile_graphics_pipeline_native_body(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
 {
    struct kk_physical_device *pdev = kk_device_physical(device);
    VkResult result = VK_SUCCESS;
-   struct kk_pipeline_handles *pipe = &vs->pipeline;
    mesa_shader_stage vs_stage = MESA_SHADER_VERTEX;
    /* A complete native pair does not consume the optional compute siblings. */
    if (!polygon && !vs->lazy_polygon) {
@@ -3068,45 +3220,12 @@ kk_compile_graphics_pipeline_native_body(struct kk_device *device, struct kk_sha
       return result;
    }
 
-   mtl_render_pipeline_descriptor *pipeline_descriptor =
-      mtl_new_render_pipeline_descriptor();
-   mtl_render_pipeline_descriptor_set_vertex_shader(pipeline_descriptor,
-                                                    vertex_function);
-   mtl_render_pipeline_descriptor_set_fragment_shader(pipeline_descriptor,
-                                                      fragment_function);
-
-   /* Layered rendering in Metal requires setting primitive topology class */
-   mtl_render_pipeline_descriptor_set_input_primitive_topology(
-      pipeline_descriptor, polygon == 2 ? MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE :
-         polygon && !fsr_coarse ? vs->info.vs.polygon_topology : vs->info.vs.topology);
-
-   kk_configure_render_pipeline(device, vs, pipe, pipeline_descriptor, polygon);
-
-   uint32_t sampler_stages =
-      (vs_data->uses_sampler_emulation ? MTL_SAMPLER_EMULATION_VERTEX : 0) |
-      (fs_data->uses_sampler_emulation ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
-   uint32_t sampler_required =
-      (vs_data->requires_sampler_emulation ? MTL_SAMPLER_EMULATION_VERTEX : 0) |
-      (fs_data->requires_sampler_emulation ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
-   mtl_render_pipeline_state *render = kk_attachment_compile_pipeline(device, vs,
-      pipeline_descriptor, sampler_stages, sampler_required);
-   if (fsr_coarse) pipe->gfx.fsr_coarse_render = render;
-   else if (polygon == 2) pipe->gfx.conservative_render = render;
-   else if (polygon) pipe->gfx.polygon_render = render;
-   else pipe->gfx.render = render;
-   if (render == NULL)
-      result = VK_ERROR_INVALID_SHADER_NV;
-
-   if (render)
-      result = kk_record_render_descriptor(device, vs, pipeline_descriptor,
-                                          polygon, fs_data->uses_pipeline_statistics,
-                                          sampler_stages, sampler_required);
-   mtl_release(pipeline_descriptor);
+   result = kk_link_graphics_stages(device, vs, vs_data, fs_data,
+      vertex_function, fragment_function, polygon);
    mtl_release(fragment_function);
    mtl_release(fragment_library);
    mtl_release(vertex_function);
    mtl_release(vertex_library);
-
    return result;
 }
 
@@ -3412,6 +3531,466 @@ kk_finish_fragment_nir(struct kk_device *dev, nir_shader *fs,
 {
    KK_PERF_VOID(dev, KK_PERF_NIR,
       kk_finish_fragment_nir_untracked(dev, fs, state, info, features, depth_bounds));
+}
+
+void
+kk_native_raster_stage_finish(struct kk_device *dev,
+   struct kk_native_raster_stage *stage, const VkAllocationCallbacks *alloc)
+{
+   mtl_release(stage->function);
+   if (stage->shader)
+      kk_shader_destroy(&dev->vk, stage->shader, alloc);
+   memset(stage, 0, sizeof(*stage));
+}
+
+VkResult
+kk_compile_unlinked_native_stage(struct kk_device *dev,
+   const struct vk_shader_compile_info *info,
+   const struct vk_graphics_pipeline_state *state,
+   const struct vk_features *enabled, const VkAllocationCallbacks *alloc,
+   struct kk_native_raster_stage *stage)
+{
+   memset(stage, 0, sizeof(*stage));
+   nir_shader *nir = info->nir;
+   const bool vertex = info->stage == MESA_SHADER_VERTEX;
+   /* Coupled producer/fragment routes keep their original joint compiler.
+    * This primitive never guesses a missing library substate or discards
+    * source merely because a native stage cannot yet be compiled alone. */
+   const uint8_t bias = kk_depth_bias_control_flags(enabled->depthBiasControl,
+      enabled->leastRepresentableValueForceUnormRepresentation ||
+         enabled->floatRepresentation, state);
+   bool native = state && state->ia && state->rs && state->mv && state->rp &&
+      vk_render_pass_state_has_attachment_info(state->rp) &&
+      (state->vi || BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_VI)) &&
+      (vertex || (info->stage == MESA_SHADER_FRAGMENT && state->ms && state->cb)) &&
+      !(state->shader_stages & ~(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)) &&
+      !(info->flags & (VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT |
+                       VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT)) &&
+      !nir->xfb_info && !nir->info.clip_distance_array_size &&
+      !nir->info.cull_distance_array_size && !state->mv->view_mask &&
+      !kk_polygon_regular_possible(state, bias) && !kk_conservative_possible(state) &&
+      !kk_depth_bounds_pipeline(dev, state) &&
+      (!vertex || !(nir->info.outputs_written &
+         (VARYING_BIT_LAYER | VARYING_BIT_PRIMITIVE_SHADING_RATE))) &&
+      !((enabled->deviceGeneratedCommands || enabled->drawIndirectCount) &&
+        kk_dgc_shader_needs_replay(nir));
+   if (native && state->fsr)
+      native = state->fsr->fragment_size.width <= 1 &&
+         state->fsr->fragment_size.height <= 1 &&
+         !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_FSR) &&
+         !(state->pipeline_flags &
+            VK_PIPELINE_CREATE_2_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR);
+   if (native && !vertex) {
+      native = !nir->info.fs.pixel_interlock_ordered &&
+         !nir->info.fs.pixel_interlock_unordered &&
+         !nir->info.fs.sample_interlock_ordered &&
+         !nir->info.fs.sample_interlock_unordered &&
+         !BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FULLY_COVERED) &&
+         !(kk_barycentric_input_flags(nir) &
+            (KK_BARYCENTRIC_INPUT_COORD | KK_BARYCENTRIC_INPUT_PER_VERTEX));
+   }
+   if (!native) {
+      ralloc_free(nir);
+      return VK_PIPELINE_COMPILE_REQUIRED;
+   }
+
+   if (vertex)
+      nir->info.next_stage = MESA_SHADER_FRAGMENT;
+   kk_feature_key features = kk_make_feature_key(enabled);
+   struct kk_physical_device *pdev = kk_device_physical(dev);
+   msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
+   kk_lower_nir(dev, nir, false, info->robustness, info->set_layout_count,
+      info->set_layouts, state, features, info, NULL, false, false, false);
+   if (!vertex)
+      kk_finish_fragment_nir(dev, nir, state, info, features, false);
+
+   const struct kk_compile_options options = {
+      .independent_interface = true,
+      .pipeline_statistics = features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS),
+      .geometry_reports = features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS),
+   };
+   VkResult result = kk_compile_shader(dev, nir, NULL, info->robustness, state,
+      &options, alloc, &stage->shader);
+   if (result != VK_SUCCESS)
+      return result;
+   for (uint32_t i = 0; i < info->push_constant_range_count; ++i) {
+      const VkPushConstantRange *range = &info->push_constant_ranges[i];
+      if (range->stageFlags & mesa_to_vk_shader_stage(info->stage))
+         stage->shader->info.push_size = MAX2(stage->shader->info.push_size,
+            range->offset + range->size);
+   }
+   result = kk_shader_embedded_samplers_init(dev, stage->shader,
+      info->embedded_sampler_count, info->embedded_samplers);
+   if (result == VK_SUCCESS)
+      result = kk_compile_graphics_stage(dev,
+         &stage->shader->msl_data[info->stage], &stage->function);
+   if (result != VK_SUCCESS)
+      kk_native_raster_stage_finish(dev, stage, alloc);
+   return result;
+}
+
+void
+kk_native_fragment_body_finish(struct kk_device *dev,
+   struct kk_native_fragment_body *body, const VkAllocationCallbacks *alloc)
+{
+   mtl_release(body->entry);
+   ralloc_free(body->wrapper.code);
+   ralloc_free(body->wrapper.entrypoint_name);
+   kk_native_raster_stage_finish(dev, &body->body, alloc);
+   memset(body, 0, sizeof(*body));
+}
+
+VkResult
+kk_compile_fragment_body(struct kk_device *dev,
+   const struct vk_shader_compile_info *info,
+   const struct vk_graphics_pipeline_state *state,
+   const struct vk_features *enabled, const VkAllocationCallbacks *alloc,
+   struct kk_native_fragment_body *body)
+{
+   memset(body, 0, sizeof(*body));
+   nir_shader *nir = info->nir;
+   const uint64_t colors = BITFIELD64_MASK(MAX_DRAW_BUFFERS) << FRAG_RESULT_DATA0;
+   bool native = info->stage == MESA_SHADER_FRAGMENT && state && state->ms &&
+      state->mv && !state->mv->view_mask &&
+      state->ms->rasterization_samples == 1 && !state->ms->sample_shading_enable &&
+      !(state->shader_stages & ~VK_SHADER_STAGE_FRAGMENT_BIT) &&
+      !nir->info.outputs_read && !(nir->info.outputs_written & ~colors) &&
+      !nir->info.fs.pixel_interlock_ordered && !nir->info.fs.pixel_interlock_unordered &&
+      !nir->info.fs.sample_interlock_ordered && !nir->info.fs.sample_interlock_unordered &&
+      !nir->info.clip_distance_array_size && !nir->info.cull_distance_array_size &&
+      !BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FULLY_COVERED) &&
+      !BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_POINT_COORD) &&
+      !(kk_barycentric_input_flags(nir) &
+         (KK_BARYCENTRIC_INPUT_COORD | KK_BARYCENTRIC_INPUT_PER_VERTEX)) &&
+      !(info->flags & (VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT |
+                       VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT));
+   if (native) {
+      nir_foreach_function_impl(impl, nir) {
+         nir_foreach_block(block, impl) {
+            nir_foreach_instr(instr, block) {
+               if (instr->type == nir_instr_type_intrinsic) {
+                  nir_intrinsic_op op = nir_instr_as_intrinsic(instr)->intrinsic;
+                  if (op == nir_intrinsic_image_deref_input_attachment_load ||
+                      op == nir_intrinsic_image_deref_depth_input_attachment_load ||
+                      op == nir_intrinsic_image_deref_stencil_input_attachment_load)
+                     native = false;
+               }
+               if (instr->type == nir_instr_type_tex) {
+                  nir_tex_instr *tex = nir_instr_as_tex(instr);
+                  if (tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS ||
+                      tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS_MS)
+                     native = false;
+               }
+            }
+         }
+      }
+   }
+   if (!native) {
+      ralloc_free(nir);
+      return VK_PIPELINE_COMPILE_REQUIRED;
+   }
+   struct vk_graphics_pipeline_state fragment = *state;
+   fragment.vi = NULL;
+   fragment.ia = NULL;
+   fragment.rs = NULL;
+   fragment.rp = NULL;
+   fragment.cb = NULL;
+   fragment.cal = NULL;
+   fragment.ial = NULL;
+   fragment.fsr = NULL;
+   state = &fragment;
+   kk_feature_key features = kk_make_feature_key(enabled);
+   msl_preprocess_nir_workarounds(nir, kk_device_physical(dev)->settings.disabled_workarounds);
+   kk_lower_nir(dev, nir, false, info->robustness, info->set_layout_count,
+      info->set_layouts, state, features, info, NULL, false, false, true);
+   if (features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS))
+      NIR_PASS(_, nir, kk_nir_statistics_fs);
+   /* FO owns blend/logic operations, output formats and coverage controls.
+    * This path retains source for a coupled final link when they need NIR. */
+   /* One sample is owned/known here, so the ordinary multi-sample Metal
+    * derivative limitation does not apply. Keep the same quad and discard
+    * workarounds as the joint compiler, before final resource lowering. */
+   if ((nir->info.fs.needs_full_quad_helper_invocations ||
+        nir->info.fs.needs_coarse_quad_helper_invocations) &&
+       !(kk_device_physical(dev)->settings.disabled_workarounds & BITFIELD64_BIT(19)))
+      NIR_PASS(_, nir, msl_disable_triangle_merge);
+   kk_finish_fs_invocation_workarounds(dev, nir);
+   kk_finish_nir(dev, nir, info->robustness, info->set_layout_count,
+      info->set_layouts, features, info->flags);
+   nir_opts(nir, NULL);
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+   nir_shader *wrapper_nir = nir_shader_clone(NULL, nir);
+   if (!wrapper_nir) {
+      ralloc_free(nir);
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+   struct nir_to_msl_options module = {
+      .raster_module = MSL_RASTER_BODY,
+      .raster_body_name = "kk_gpl_fragment_body",
+   };
+   const struct kk_compile_options options = {
+      .independent_interface = true,
+      .pipeline_statistics = features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS),
+      .msl_custom = &module,
+   };
+   VkResult result = kk_compile_shader(dev, nir, NULL, info->robustness, state,
+                                       &options, alloc, &body->body.shader);
+   if (result != VK_SUCCESS) {
+      ralloc_free(wrapper_nir);
+      goto fail;
+   }
+   module.raster_module = MSL_RASTER_WRAPPER;
+   struct kk_shader *wrapper_shader = NULL;
+   result = kk_compile_shader(dev, wrapper_nir, NULL, info->robustness, state,
+                              &options, alloc, &wrapper_shader);
+   if (result != VK_SUCCESS)
+      goto fail;
+   body->wrapper = wrapper_shader->msl_data[MESA_SHADER_FRAGMENT];
+   memset(&wrapper_shader->msl_data[MESA_SHADER_FRAGMENT], 0, sizeof(body->wrapper));
+   kk_shader_destroy(&dev->vk, wrapper_shader, alloc);
+   for (uint32_t i = 0; i < info->push_constant_range_count; ++i) {
+      const VkPushConstantRange *range = &info->push_constant_ranges[i];
+      if (range->stageFlags & VK_SHADER_STAGE_FRAGMENT_BIT)
+         body->body.shader->info.push_size = MAX2(body->body.shader->info.push_size,
+                                                 range->offset + range->size);
+   }
+   result = kk_shader_embedded_samplers_init(dev, body->body.shader,
+      info->embedded_sampler_count, info->embedded_samplers);
+   if (result == VK_SUCCESS)
+      result = kk_compile_graphics_stage(dev,
+         &body->body.shader->msl_data[MESA_SHADER_FRAGMENT], &body->body.function);
+   if (result == VK_SUCCESS)
+      result = kk_compile_graphics_module(dev, &body->wrapper, true, &body->entry);
+   if (result == VK_SUCCESS)
+      return VK_SUCCESS;
+fail:
+   kk_native_fragment_body_finish(dev, body, alloc);
+   return result;
+}
+
+void
+kk_native_vertex_fetch_finish(struct kk_native_vertex_fetch *fetch)
+{
+   mtl_release(fetch->function);
+   ralloc_free(fetch->data.code);
+   ralloc_free(fetch->data.entrypoint_name);
+   memset(fetch, 0, sizeof(*fetch));
+}
+
+static VkResult
+kk_compile_vertex_fetch_module(struct kk_device *dev,
+   const struct vk_graphics_pipeline_state *state, uint32_t attributes,
+   const struct vk_pipeline_robustness_state *robustness, bool types_known,
+   uint32_t integer_attributes, struct kk_native_vertex_fetch *fetch)
+{
+   memset(fetch, 0, sizeof(*fetch));
+   bool is_static = kk_vi_is_static(state);
+   if (!attributes || (!is_static && !types_known) ||
+       (is_static && (attributes & ~state->vi->attributes_valid)))
+      return VK_PIPELINE_COMPILE_REQUIRED;
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_VERTEX,
+      &kk_nir_options, "kk_gpl_vertex_fetch");
+   b.shader->info.io_lowered = true;
+   b.shader->info.next_stage = MESA_SHADER_FRAGMENT;
+   u_foreach_bit(attribute, attributes) {
+      nir_alu_type type = (integer_attributes & BITFIELD_BIT(attribute)) ?
+         nir_type_uint32 : nir_type_float32;
+      if (is_static) {
+         enum pipe_format format = vk_format_to_pipe_format(state->vi->attributes[attribute].format);
+         if (!kk_vbo_supports_format(format)) {
+            ralloc_free(b.shader);
+            return VK_PIPELINE_COMPILE_REQUIRED;
+         }
+         type = util_format_is_pure_sint(format) ? nir_type_int32 :
+            util_format_is_pure_uint(format) ? nir_type_uint32 : nir_type_float32;
+      }
+      nir_io_semantics io = {.location = VERT_ATTRIB_GENERIC0 + attribute, .num_slots = 1};
+      nir_def *value = nir_load_input(&b, 4, 32, nir_imm_int(&b, 0),
+         .dest_type = type, .io_semantics = io);
+      nir_store_output(&b, value, nir_imm_int(&b, 0), .src_type = nir_type_uint32,
+         .write_mask = 15, .io_semantics = io);
+   }
+   nir_shader_gather_info(b.shader, nir_shader_get_entrypoint(b.shader));
+   kk_lower_vs_vbo(b.shader, state, robustness);
+   NIR_PASS(_, b.shader, msl_nir_lower_instance_id);
+   const struct nir_to_msl_options module = {
+      .raster_module = MSL_RASTER_VERTEX_FETCH,
+      .raster_body_name = "kk_gpl_vertex_fetch",
+      .raster_vertex_inputs = attributes,
+   };
+   const struct kk_compile_options options = {.msl_custom = &module};
+   kk_compile_msl_options(dev, b.shader, state, &fetch->data, &options, NULL, NULL);
+   VkResult result = kk_compile_graphics_stage(dev, &fetch->data, &fetch->function);
+   if (result != VK_SUCCESS)
+      kk_native_vertex_fetch_finish(fetch);
+   return result;
+}
+
+VkResult
+kk_compile_vertex_fetch(struct kk_device *dev,
+   const struct vk_graphics_pipeline_state *state, uint32_t attributes,
+   const struct vk_pipeline_robustness_state *robustness,
+   struct kk_native_vertex_fetch *fetch)
+{
+   return kk_compile_vertex_fetch_module(dev, state, attributes, robustness, false, 0, fetch);
+}
+
+VkResult
+kk_compile_dynamic_vertex_fetch(struct kk_device *dev,
+   const struct vk_graphics_pipeline_state *state, uint32_t attributes,
+   uint32_t integer_attributes, const struct vk_pipeline_robustness_state *robustness,
+   struct kk_native_vertex_fetch *fetch)
+{
+   return kk_compile_vertex_fetch_module(dev, state, attributes, robustness, true,
+                                          integer_attributes, fetch);
+}
+
+void
+kk_native_preraster_body_finish(struct kk_device *dev,
+   struct kk_native_preraster_body *body, const VkAllocationCallbacks *alloc)
+{
+   for (unsigned i = 0; i < ARRAY_SIZE(body->entry); ++i) {
+      mtl_release(body->entry[i]);
+      ralloc_free(body->wrapper[i].code);
+      ralloc_free(body->wrapper[i].entrypoint_name);
+   }
+   kk_native_raster_stage_finish(dev, &body->body, alloc);
+   memset(body, 0, sizeof(*body));
+}
+
+VkResult
+kk_compile_preraster_body(struct kk_device *dev,
+   const struct vk_shader_compile_info *info,
+   const struct vk_graphics_pipeline_state *state,
+   const struct vk_features *enabled, const VkAllocationCallbacks *alloc,
+   struct kk_native_preraster_body *body)
+{
+   memset(body, 0, sizeof(*body));
+   nir_shader *nir = info->nir;
+   /* Coupled routes use retained canonical sources when all states and stages
+    * are available. A library cannot infer the missing consumer or topology. */
+   bool native = info->stage == MESA_SHADER_VERTEX && state && state->rs &&
+      state->mv && !(state->shader_stages & ~VK_SHADER_STAGE_VERTEX_BIT) &&
+      !state->mv->view_mask && !nir->xfb_info &&
+      !nir->info.clip_distance_array_size && !nir->info.cull_distance_array_size &&
+      !(nir->info.outputs_written &
+         (VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT | VARYING_BIT_PRIMITIVE_SHADING_RATE)) &&
+      state->rs->polygon_mode == VK_POLYGON_MODE_FILL &&
+      !kk_conservative_possible(state) &&
+      !kk_depth_bias_control_flags(enabled->depthBiasControl,
+         enabled->leastRepresentableValueForceUnormRepresentation ||
+            enabled->floatRepresentation, state) &&
+      !(info->flags & (VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT |
+                       VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT)) &&
+      !((enabled->deviceGeneratedCommands || enabled->drawIndirectCount) &&
+        kk_dgc_shader_needs_replay(nir));
+   if (!native) {
+      ralloc_free(nir);
+      return VK_PIPELINE_COMPILE_REQUIRED;
+   }
+   /* This constructor owns pre-raster state even when its caller has already
+    * assembled more parts. Entries must remain reusable for either topology. */
+   struct vk_graphics_pipeline_state preraster = *state;
+   preraster.vi = NULL;
+   preraster.ia = NULL;
+   preraster.rp = NULL;
+   preraster.ms = NULL;
+   preraster.ds = NULL;
+   preraster.cb = NULL;
+   preraster.cal = NULL;
+   preraster.ial = NULL;
+   state = &preraster;
+   nir->info.next_stage = MESA_SHADER_FRAGMENT;
+   msl_preprocess_nir_workarounds(nir, kk_device_physical(dev)->settings.disabled_workarounds);
+   kk_feature_key features = kk_make_feature_key(enabled);
+   kk_lower_nir(dev, nir, false, info->robustness, info->set_layout_count,
+      info->set_layouts, state, features, info, NULL, false, false, false);
+   nir_shader_intrinsics_pass(nir, gather_vs_inputs, nir_metadata_all,
+                              &body->attribute_mask);
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type == nir_instr_type_intrinsic) {
+               nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+               if (intr->intrinsic == nir_intrinsic_load_input &&
+                   (nir_alu_type_get_base_type(nir_intrinsic_dest_type(intr)) == nir_type_int ||
+                    nir_alu_type_get_base_type(nir_intrinsic_dest_type(intr)) == nir_type_uint)) {
+                  unsigned location = nir_intrinsic_io_semantics(intr).location +
+                     nir_src_as_uint(intr->src[0]);
+                  body->integer_attributes |= BITFIELD_BIT(location - VERT_ATTRIB_GENERIC0);
+               }
+               if (intr->intrinsic == nir_intrinsic_load_input && intr->def.bit_size != 32) {
+                  ralloc_free(nir);
+                  memset(body, 0, sizeof(*body));
+                  return VK_PIPELINE_COMPILE_REQUIRED;
+               }
+            }
+         }
+      }
+   }
+   nir_shader *wrapper_nir[2] = {
+      nir_shader_clone(NULL, nir), nir_shader_clone(NULL, nir),
+   };
+   if (!wrapper_nir[0] || !wrapper_nir[1]) {
+      ralloc_free(nir);
+      ralloc_free(wrapper_nir[0]);
+      ralloc_free(wrapper_nir[1]);
+      memset(body, 0, sizeof(*body));
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+   struct nir_to_msl_options module = {
+      .raster_module = MSL_RASTER_BODY,
+      .raster_body_name = "kk_gpl_vertex_body",
+      .raster_vertex_inputs = body->attribute_mask,
+      .raster_vertex_fetch_name = "kk_gpl_vertex_fetch",
+   };
+   const struct kk_compile_options options = {
+      .independent_interface = true,
+      .pipeline_statistics = features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS),
+      .geometry_reports = features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS),
+      .msl_custom = &module,
+   };
+   VkResult result = kk_compile_shader(dev, nir, NULL, info->robustness, state,
+                                       &options, alloc, &body->body.shader);
+   if (result != VK_SUCCESS) {
+      ralloc_free(wrapper_nir[0]);
+      ralloc_free(wrapper_nir[1]);
+      goto fail;
+   }
+   module.raster_module = MSL_RASTER_WRAPPER;
+   module.raster_vertex_topology_wrapper = true;
+   for (unsigned i = 0; i < ARRAY_SIZE(wrapper_nir); ++i) {
+      module.raster_vertex_point_size = i != 0;
+      struct kk_shader *wrapper_shader = NULL;
+      result = kk_compile_shader(dev, wrapper_nir[i], NULL, info->robustness, state,
+                                 &options, alloc, &wrapper_shader);
+      if (result != VK_SUCCESS) {
+         for (unsigned j = i + 1; j < ARRAY_SIZE(wrapper_nir); ++j)
+            ralloc_free(wrapper_nir[j]);
+         goto fail;
+      }
+      body->wrapper[i] = wrapper_shader->msl_data[MESA_SHADER_VERTEX];
+      memset(&wrapper_shader->msl_data[MESA_SHADER_VERTEX], 0, sizeof(body->wrapper[i]));
+      kk_shader_destroy(&dev->vk, wrapper_shader, alloc);
+   }
+   for (uint32_t i = 0; i < info->push_constant_range_count; ++i) {
+      const VkPushConstantRange *range = &info->push_constant_ranges[i];
+      if (range->stageFlags & VK_SHADER_STAGE_VERTEX_BIT)
+         body->body.shader->info.push_size = MAX2(body->body.shader->info.push_size,
+                                                 range->offset + range->size);
+   }
+   result = kk_shader_embedded_samplers_init(dev, body->body.shader,
+      info->embedded_sampler_count, info->embedded_samplers);
+   if (result == VK_SUCCESS)
+      result = kk_compile_graphics_stage(dev,
+         &body->body.shader->msl_data[MESA_SHADER_VERTEX], &body->body.function);
+   for (unsigned i = 0; result == VK_SUCCESS && i < ARRAY_SIZE(body->entry); ++i)
+      result = kk_compile_graphics_module(dev, &body->wrapper[i], true, &body->entry[i]);
+   if (result == VK_SUCCESS)
+      return VK_SUCCESS;
+fail:
+   kk_native_preraster_body_finish(dev, body, alloc);
+   return result;
 }
 
 static VkResult
@@ -4119,6 +4698,8 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
    if (!kk_shader_cache_write_bindings(shader, blob))
       return false;
    blob_write_bytes(blob, &shader->info, sizeof(shader->info));
+   if (shader->info.gpl_kind == KK_GPL_LIBRARY_SOURCE)
+      return !blob->out_of_memory;
    if (kk_shader_stage_has_mesh_info(shader->info.stage))
       blob_write_bytes(blob, &shader->mesh->info, sizeof(shader->mesh->info));
    kk_msl_serialize(&shader->msl_data[shader->info.stage], blob);
@@ -4152,6 +4733,8 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
       if (shader->gs_mesh && !kk_shader_serialize_native(vk_dev, &shader->gs_mesh->vk, blob))
          return false;
    }
+   if (shader->info.gpl_kind != KK_GPL_NONE && !kk_gpl_shader_serialize(shader, blob))
+      return false;
    return !blob->out_of_memory;
 }
 
@@ -4197,6 +4780,8 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
    return VK_SUCCESS;
 }
 
+#include "kk_gpl_pipeline.h"
+
 static VkResult
 kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader *blob,
                       uint32_t binary_version,
@@ -4211,8 +4796,21 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
       return result;
    struct kk_shader_info info;
    blob_copy_bytes(blob, &info, sizeof(info));
+   if ((unsigned)info.stage >= MESA_ALL_SHADER_STAGES ||
+       info.gpl_kind > KK_GPL_EXECUTABLE ||
+       (internal_mesh && info.gpl_kind != KK_GPL_NONE) ||
+       (info.gpl_kind == KK_GPL_LIBRARY_PRERASTER && info.stage != MESA_SHADER_VERTEX) ||
+       (info.gpl_kind == KK_GPL_LIBRARY_FRAGMENT && info.stage != MESA_SHADER_FRAGMENT) ||
+       (info.gpl_kind == KK_GPL_EXECUTABLE &&
+        (info.stage != MESA_SHADER_VERTEX ||
+         info.vs.additional_stages_bits != BITFIELD_BIT(MESA_SHADER_FRAGMENT))) ||
+       (info.gpl_kind == KK_GPL_LIBRARY_SOURCE &&
+        !(mesa_to_vk_shader_stage(info.stage) &
+          (VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT))))
+      return vk_error(dev, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
    struct kk_mesh_shader_info mesh_info;
-   if (!blob->overrun && kk_shader_stage_has_mesh_info(info.stage))
+   if (!blob->overrun && info.gpl_kind != KK_GPL_LIBRARY_SOURCE &&
+       kk_shader_stage_has_mesh_info(info.stage))
       blob_copy_bytes(blob, &mesh_info, sizeof(mesh_info));
    if (blob->overrun ||
        (internal_mesh &&
@@ -4234,12 +4832,16 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
     * must already know the actual stage owning that partial source. */
    shader->info = info;
    kk_shader_init_mesh_state(shader, info.stage);
-   if (shader->mesh)
+   if (shader->mesh && info.gpl_kind != KK_GPL_LIBRARY_SOURCE)
       shader->mesh->info = mesh_info;
 
    result = kk_shader_cache_restore_bindings(dev, shader, &bindings);
    if (result != VK_SUCCESS)
       goto fail;
+   if (info.gpl_kind == KK_GPL_LIBRARY_SOURCE) {
+      *shader_out = &shader->vk;
+      return VK_SUCCESS;
+   }
    result = kk_msl_deserialize(blob, &shader->msl_data[info.stage]);
    if (result != VK_SUCCESS)
       goto fail;
@@ -4300,6 +4902,13 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
    }
 
    kk_shader_sampler_info(shader);
+   if (info.gpl_kind != KK_GPL_NONE) {
+      result = kk_gpl_shader_deserialize(dev, shader, blob, pAllocator);
+      if (result != VK_SUCCESS)
+         goto fail;
+      *shader_out = &shader->vk;
+      return VK_SUCCESS;
+   }
    if (info.stage == MESA_SHADER_COMPUTE) {
       uint32_t local_size_threads = shader->info.cs.local_size.x *
                                     shader->info.cs.local_size.y *
@@ -4566,6 +5175,8 @@ static const struct vk_shader_ops kk_shader_ops = {
 };
 
 const struct vk_device_shader_ops kk_device_shader_ops = {
+   .retain_graphics_library_sources = true,
+   .graphics_library_requires_final_link = true,
    .link_rt_pipeline = kk_rt_pipeline_realize,
    .write_rt_shader_group = kk_rt_write_group,
    .cmd_set_rt_state = kk_rt_set_state,

@@ -32,99 +32,138 @@ get_entrypoint_name(nir_shader *shader)
    return nir_shader_get_entrypoint(shader)->function->name;
 }
 
-static const char *sysval_table[SYSTEM_VALUE_MAX] = {
-   [SYSTEM_VALUE_SUBGROUP_SIZE] =
-      "uint gl_SubGroupSize [[threads_per_simdgroup]]",
-   [SYSTEM_VALUE_SUBGROUP_INVOCATION] =
-      "uint gl_SubGroupInvocation [[thread_index_in_simdgroup]]",
-   [SYSTEM_VALUE_NUM_SUBGROUPS] =
-      "uint gl_NumSubGroups [[simdgroups_per_threadgroup]]",
-   [SYSTEM_VALUE_SUBGROUP_ID] =
-      "uint gl_SubGroupID [[simdgroup_index_in_threadgroup]]",
-   [SYSTEM_VALUE_WORKGROUP_ID] =
-      "uint3 gl_WorkGroupID [[threadgroup_position_in_grid]]",
-   [SYSTEM_VALUE_LOCAL_INVOCATION_ID] =
-      "uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]]",
-   [SYSTEM_VALUE_GLOBAL_INVOCATION_ID] =
-      "uint3 gl_GlobalInvocationID [[thread_position_in_grid]]",
-   [SYSTEM_VALUE_NUM_WORKGROUPS] =
-      "uint3 gl_NumWorkGroups [[threadgroups_per_grid]]",
-   [SYSTEM_VALUE_LOCAL_INVOCATION_INDEX] =
-      "uint gl_LocalInvocationIndex [[thread_index_in_threadgroup]]",
-   [SYSTEM_VALUE_VERTEX_ID] = "uint gl_VertexID [[vertex_id]]",
-   [SYSTEM_VALUE_INSTANCE_ID] = "uint gl_InstanceID [[instance_id]]",
-   [SYSTEM_VALUE_BASE_INSTANCE] = "uint gl_BaseInstance [[base_instance]]",
-   [SYSTEM_VALUE_FRAG_COORD] = "float4 gl_FragCoord [[position]]",
-   [SYSTEM_VALUE_POINT_COORD] = "float2 gl_PointCoord [[point_coord]]",
-   [SYSTEM_VALUE_FRONT_FACE] = "bool gl_FrontFacing [[front_facing]]",
-   [SYSTEM_VALUE_LAYER_ID] = "uint gl_Layer [[render_target_array_index]]",
-   [SYSTEM_VALUE_SAMPLE_ID] = "uint gl_SampleID [[sample_id]]",
-   [SYSTEM_VALUE_SAMPLE_MASK_IN] = "uint gl_SampleMask [[sample_mask]]",
-   [SYSTEM_VALUE_PRIMITIVE_ID] = "uint gl_PrimitiveID [[primitive_id]]",
-   [SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD] =
-      "float3 gl_BaryCoord [[barycentric_coord, center_perspective]]",
-   [SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD] =
-      "float3 gl_BaryCoordNoPersp [[barycentric_coord, center_no_perspective]]",
-   [SYSTEM_VALUE_AMPLIFICATION_ID_KK] =
-      "uint mtl_AmplificationID [[amplification_id]]",
-   [SYSTEM_VALUE_FIRST_VERTEX] = "uint gl_FirstVertex [[base_vertex]]",
+struct msl_parameter { const char *declaration, *argument, *semantic; };
+static const struct msl_parameter sysval_table[SYSTEM_VALUE_MAX] = {
+   [SYSTEM_VALUE_SUBGROUP_SIZE] = {"uint gl_SubGroupSize", "gl_SubGroupSize", "threads_per_simdgroup"},
+   [SYSTEM_VALUE_SUBGROUP_INVOCATION] = {"uint gl_SubGroupInvocation", "gl_SubGroupInvocation", "thread_index_in_simdgroup"},
+   [SYSTEM_VALUE_NUM_SUBGROUPS] = {"uint gl_NumSubGroups", "gl_NumSubGroups", "simdgroups_per_threadgroup"},
+   [SYSTEM_VALUE_SUBGROUP_ID] = {"uint gl_SubGroupID", "gl_SubGroupID", "simdgroup_index_in_threadgroup"},
+   [SYSTEM_VALUE_WORKGROUP_ID] = {"uint3 gl_WorkGroupID", "gl_WorkGroupID", "threadgroup_position_in_grid"},
+   [SYSTEM_VALUE_LOCAL_INVOCATION_ID] = {"uint3 gl_LocalInvocationID", "gl_LocalInvocationID", "thread_position_in_threadgroup"},
+   [SYSTEM_VALUE_GLOBAL_INVOCATION_ID] = {"uint3 gl_GlobalInvocationID", "gl_GlobalInvocationID", "thread_position_in_grid"},
+   [SYSTEM_VALUE_NUM_WORKGROUPS] = {"uint3 gl_NumWorkGroups", "gl_NumWorkGroups", "threadgroups_per_grid"},
+   [SYSTEM_VALUE_LOCAL_INVOCATION_INDEX] = {"uint gl_LocalInvocationIndex", "gl_LocalInvocationIndex", "thread_index_in_threadgroup"},
+   [SYSTEM_VALUE_VERTEX_ID] = {"uint gl_VertexID", "gl_VertexID", "vertex_id"},
+   [SYSTEM_VALUE_INSTANCE_ID] = {"uint gl_InstanceID", "gl_InstanceID", "instance_id"},
+   [SYSTEM_VALUE_BASE_INSTANCE] = {"uint gl_BaseInstance", "gl_BaseInstance", "base_instance"},
+   [SYSTEM_VALUE_FRAG_COORD] = {"float4 gl_FragCoord", "gl_FragCoord", "position"},
+   [SYSTEM_VALUE_POINT_COORD] = {"float2 gl_PointCoord", "gl_PointCoord", "point_coord"},
+   [SYSTEM_VALUE_FRONT_FACE] = {"bool gl_FrontFacing", "gl_FrontFacing", "front_facing"},
+   [SYSTEM_VALUE_LAYER_ID] = {"uint gl_Layer", "gl_Layer", "render_target_array_index"},
+   [SYSTEM_VALUE_SAMPLE_ID] = {"uint gl_SampleID", "gl_SampleID", "sample_id"},
+   [SYSTEM_VALUE_SAMPLE_MASK_IN] = {"uint gl_SampleMask", "gl_SampleMask", "sample_mask"},
+   [SYSTEM_VALUE_PRIMITIVE_ID] = {"uint gl_PrimitiveID", "gl_PrimitiveID", "primitive_id"},
+   [SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD] = {"float3 gl_BaryCoord", "gl_BaryCoord", "barycentric_coord, center_perspective"},
+   [SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD] = {"float3 gl_BaryCoordNoPersp", "gl_BaryCoordNoPersp", "barycentric_coord, center_no_perspective"},
+   [SYSTEM_VALUE_AMPLIFICATION_ID_KK] = {"uint mtl_AmplificationID", "mtl_AmplificationID", "amplification_id"},
+   [SYSTEM_VALUE_FIRST_VERTEX] = {"uint gl_FirstVertex", "gl_FirstVertex", "base_vertex"},
 };
-static const char *sysval_sample_mask_in_post_depth_coverage =
-   "uint gl_SampleMask [[sample_mask, post_depth_coverage]]";
+
+enum msl_parameter_mode {
+   MSL_PARAMETER_ENTRY, MSL_PARAMETER_BODY, MSL_PARAMETER_ARGUMENT,
+};
 
 static void
-emit_sysvals(struct nir_to_msl_ctx *ctx, nir_shader *shader)
+emit_parameter(struct nir_to_msl_ctx *ctx, const char *declaration,
+   const char *argument, const char *semantic, enum msl_parameter_mode mode,
+   bool comma)
 {
-   bool is_frag_with_post_depth_coverage =
-      ctx->shader->info.stage == MESA_SHADER_FRAGMENT &&
-      ctx->shader->info.fs.post_depth_coverage;
+   if (mode == MSL_PARAMETER_ARGUMENT) {
+      P_IND(ctx, "%s", argument);
+   } else {
+      P_IND(ctx, "%s", declaration);
+      if (mode == MSL_PARAMETER_ENTRY && semantic)
+         P(ctx, " [[%s]]", semantic);
+   }
+   P(ctx, comma ? ",\n" : "\n");
+}
 
+static void
+emit_buffer_parameter(struct nir_to_msl_ctx *ctx, const char *declaration,
+   const char *argument, uint32_t binding, enum msl_parameter_mode mode, bool comma)
+{
+   char semantic[32];
+   snprintf(semantic, sizeof(semantic), "buffer(%u)", binding);
+   emit_parameter(ctx, declaration, argument, semantic, mode, comma);
+}
+
+static void
+emit_sysvals(struct nir_to_msl_ctx *ctx, nir_shader *shader,
+             enum msl_parameter_mode mode)
+{
+   BITSET_DECLARE(values, SYSTEM_VALUE_MAX);
+   memcpy(values, shader->info.system_values_read, sizeof(values));
+   if (ctx->raster_vertex_fetch)
+      memset(values, 0, sizeof(values));
+   if (ctx->raster_vertex_inputs &&
+       (ctx->raster_vertex_fetch || mode == MSL_PARAMETER_ENTRY)) {
+      BITSET_SET(values, SYSTEM_VALUE_VERTEX_ID);
+      BITSET_SET(values, SYSTEM_VALUE_INSTANCE_ID);
+      BITSET_SET(values, SYSTEM_VALUE_BASE_INSTANCE);
+   }
    unsigned i;
-   BITSET_FOREACH_SET(i, shader->info.system_values_read, SYSTEM_VALUE_MAX) {
+   BITSET_FOREACH_SET(i, values, SYSTEM_VALUE_MAX) {
       if (shader->info.stage == MESA_SHADER_VERTEX &&
-          (i == SYSTEM_VALUE_SUBGROUP_SIZE ||
-           i == SYSTEM_VALUE_SUBGROUP_INVOCATION))
+          (i == SYSTEM_VALUE_SUBGROUP_SIZE || i == SYSTEM_VALUE_SUBGROUP_INVOCATION))
          continue;
-      const char *sysval;
-      if (is_frag_with_post_depth_coverage && i == SYSTEM_VALUE_SAMPLE_MASK_IN)
-         sysval = sysval_sample_mask_in_post_depth_coverage;
-      else
-         sysval = sysval_table[i];
-
-      assert(sysval);
-      P_IND(ctx, "%s,\n", sysval);
+      const struct msl_parameter *parameter = &sysval_table[i];
+      assert(parameter->declaration);
+      const char *semantic = parameter->semantic;
+      if (shader->info.stage == MESA_SHADER_FRAGMENT &&
+          shader->info.fs.post_depth_coverage && i == SYSTEM_VALUE_SAMPLE_MASK_IN)
+         semantic = "sample_mask, post_depth_coverage";
+      emit_parameter(ctx, parameter->declaration, parameter->argument, semantic, mode, true);
    }
 }
 
 #include "msl_interlock_guard.h"
 
 static void
-emit_inputs(struct nir_to_msl_ctx *ctx, nir_shader *shader)
+emit_inputs(struct nir_to_msl_ctx *ctx, nir_shader *shader,
+            enum msl_parameter_mode mode)
 {
-   switch (shader->info.stage) {
-   case MESA_SHADER_FRAGMENT:
-      P_IND(ctx, "FragmentIn in [[stage_in]],\n");
-      break;
-   default:
-      break;
-   }
-   msl_interlock_inputs(ctx);
+   if (shader->info.stage == MESA_SHADER_FRAGMENT)
+      emit_parameter(ctx, "FragmentIn in", "in", "stage_in", mode, true);
+   if (ctx->raster_vertex_inputs && !ctx->raster_vertex_fetch &&
+       mode != MSL_PARAMETER_ENTRY)
+      emit_parameter(ctx, "VertexIn in", "in", NULL, mode, true);
+   if (mode == MSL_PARAMETER_ENTRY)
+      msl_interlock_inputs(ctx);
    if (ctx->uses_poly_layer_selector)
-      P_IND(ctx, "constant uint2 *poly_layer_selector [[buffer(%u)]],\n",
-            KK_ARGUMENT_POLY_LAYER_REPLAY);
-   P_IND(ctx, "constant Buffer &buf0 [[buffer(%u)]],\n", KK_ARGUMENT_ROOT);
-   P_IND(ctx, "constant SamplerTable &sampler_table [[buffer(%u)]]", KK_ARGUMENT_SAMPLERS);
-   if (ctx->uses_per_draw_data) {
-      P(ctx, ",\n");
-      P_IND(ctx, "constant Buffer &per_draw [[buffer(%u)]]\n", KK_ARGUMENT_PER_DRAW);
-   } else {
-      P(ctx, "\n");
-   }
+      emit_buffer_parameter(ctx, "constant uint2 *poly_layer_selector", "poly_layer_selector",
+         KK_ARGUMENT_POLY_LAYER_REPLAY, mode, true);
+   emit_buffer_parameter(ctx, "constant Buffer &buf0", "buf0", KK_ARGUMENT_ROOT, mode, true);
+   emit_buffer_parameter(ctx, "constant SamplerTable &sampler_table", "sampler_table",
+      KK_ARGUMENT_SAMPLERS, mode, ctx->uses_per_draw_data);
+   if (ctx->uses_per_draw_data)
+      emit_buffer_parameter(ctx, "constant Buffer &per_draw", "per_draw", KK_ARGUMENT_PER_DRAW, mode, false);
+}
+
+static void
+emit_vertex_fetch_parameters(struct nir_to_msl_ctx *ctx, nir_shader *shader,
+                             enum msl_parameter_mode mode)
+{
+   /* Fetch code has a fixed root/sampler/sysval ABI. Body-only replay and
+    * per-draw arguments must not leak into this independent helper. */
+   struct nir_to_msl_ctx fetch = {
+      .text = ctx->text,
+      .shader = shader,
+      .indentlevel = ctx->indentlevel + 1,
+      .raster_vertex_inputs = ctx->raster_vertex_inputs,
+      .raster_vertex_fetch = true,
+   };
+   emit_sysvals(&fetch, shader, mode);
+   emit_inputs(&fetch, shader, mode);
 }
 
 static const char *
-output_type(nir_shader *shader)
+output_type(struct nir_to_msl_ctx *ctx, bool entry)
 {
+   nir_shader *shader = ctx->shader;
+   if (entry && ctx->raster_vertex_topology_wrapper)
+      return "VertexRasterOut";
+   if (ctx->raster_vertex_fetch)
+      return "VertexIn";
    switch (shader->info.stage) {
    case MESA_SHADER_VERTEX:
       return "VertexOut";
@@ -1686,12 +1725,21 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       uint32_t component = nir_intrinsic_component(instr);
       uint32_t location = io.location + idx;
 
+      bool raw_vertex = ctx->raster_vertex_inputs &&
+         ctx->shader->info.stage == MESA_SHADER_VERTEX;
+      if (raw_vertex && instr->def.bit_size != 32) {
+         msl_fail(ctx, "unsupported split vertex input width");
+         return;
+      }
+      if (raw_vertex)
+         P(ctx, "as_type<%s>(", msl_type_for_def(ctx->types, &instr->def));
       msl_input_name(ctx, location, component);
       if (instr->num_components < msl_input_num_components(ctx, location)) {
          P(ctx, ".");
          for (unsigned i = 0; i < instr->num_components; i++)
             P(ctx, "%c", "xyzw"[component + i]);
       }
+      if (raw_vertex) P(ctx, ")");
       P(ctx, ";\n");
       break;
    }
@@ -1756,6 +1804,14 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
                P(ctx, "%c", "xyzw"[component + i]);
       }
       P(ctx, " = ");
+      if (ctx->raster_vertex_fetch) {
+         unsigned components = util_bitcount(write_mask);
+         if (components > 1) {
+            P(ctx, "as_type<uint%u>(", components);
+         } else {
+            P(ctx, "as_type<uint>(");
+         }
+      }
       src_to_msl(ctx, &instr->src[0]);
       if (num_components > 1u) {
          P(ctx, ".");
@@ -1763,6 +1819,7 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
             if ((write_mask >> i) & 1)
                P(ctx, "%c", "xyzw"[i]);
       }
+      if (ctx->raster_vertex_fetch) P(ctx, ")");
       P(ctx, ";\n");
       break;
    }
@@ -3306,6 +3363,37 @@ msl_emit_helpers(struct nir_to_msl_ctx *ctx)
 char *
 nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
 {
+   if (options->raster_module != MSL_RASTER_ENTRY &&
+       ((shader->info.stage != MESA_SHADER_VERTEX && shader->info.stage != MESA_SHADER_FRAGMENT) ||
+        !options->raster_body_name || !options->raster_body_name[0] ||
+        msl_interlock_shader(shader)))
+      return ralloc_strdup(options->mem_ctx,
+         "#error \"unsupported independent raster module\"\n");
+
+   if ((options->raster_vertex_inputs || options->raster_module == MSL_RASTER_VERTEX_FETCH) &&
+       (shader->info.stage != MESA_SHADER_VERTEX ||
+        options->raster_module == MSL_RASTER_ENTRY ||
+        !options->raster_vertex_inputs ||
+        (options->raster_module == MSL_RASTER_WRAPPER &&
+         (!options->raster_vertex_fetch_name || !options->raster_vertex_fetch_name[0]))))
+      return ralloc_strdup(options->mem_ctx,
+         "#error \"unsupported split vertex input module\"\n");
+
+   if (options->raster_vertex_inputs) {
+      uint64_t attributes = (uint64_t)options->raster_vertex_inputs << VERT_ATTRIB_GENERIC0;
+      uint64_t used = options->raster_module == MSL_RASTER_VERTEX_FETCH ?
+         shader->info.outputs_written : shader->info.inputs_read;
+      if (used & ~attributes)
+         return ralloc_strdup(options->mem_ctx,
+            "#error \"split vertex interface omits an attribute\"\n");
+   }
+
+   if (options->raster_vertex_topology_wrapper &&
+       (shader->info.stage != MESA_SHADER_VERTEX ||
+        options->raster_module != MSL_RASTER_WRAPPER))
+      return ralloc_strdup(options->mem_ctx,
+         "#error \"unsupported vertex topology wrapper\"\n");
+
    /* Need to rename the entrypoint here since hardcoded shaders used by vk_meta
     * don't go through the preprocess step since we are the ones creating them.
     */
@@ -3328,6 +3416,12 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    ctx.native_sampler_lod_bias = options->native_sampler_lod_bias;
    ctx.native_query_texture_lod = options->native_query_texture_lod;
    ctx.native_atomic64_minmax = options->native_atomic64_minmax;
+   ctx.independent_interface = options->independent_interface;
+   ctx.raster_vertex_inputs = options->raster_vertex_inputs;
+   ctx.raster_vertex_fetch = options->raster_module == MSL_RASTER_VERTEX_FETCH;
+   ctx.raster_vertex_topology_wrapper = options->raster_vertex_topology_wrapper &&
+      options->raster_module == MSL_RASTER_WRAPPER;
+   ctx.raster_vertex_point_size = options->raster_vertex_point_size;
    ctx.per_vertex_inputs = options->per_vertex_inputs;
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    msl_interlock_prepare(shader);
@@ -3390,26 +3484,62 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    msl_emit_constant_data(&ctx, shader);
 
    msl_emit_io_blocks(&ctx, shader);
-   msl_emit_helpers(&ctx);
-   if (ctx.has_sampler_helpers)
+   if (options->raster_module != MSL_RASTER_WRAPPER)
+      msl_emit_helpers(&ctx);
+   if (ctx.has_sampler_helpers && options->raster_module != MSL_RASTER_WRAPPER)
       kk_sample_emit_helpers(&ctx);
-   if (shader->info.stage == MESA_SHADER_FRAGMENT &&
-       shader->info.fs.early_fragment_tests)
-      P(&ctx, "[[early_fragment_tests]]\n");
    if (mesa_shader_stage_is_rt(shader->info.stage)) {
       kk_rt_emit_function(&ctx, impl);
    } else if (shader->info.stage == MESA_SHADER_TASK || shader->info.stage == MESA_SHADER_MESH) {
       kk_mesh_emit_functions(&ctx, impl);
    } else {
-   P(&ctx, "%s %s %s(\n", get_stage_string(shader->info.stage),
-     output_type(shader), get_entrypoint_name(shader));
+   if (options->raster_module == MSL_RASTER_WRAPPER) {
+      if (ctx.raster_vertex_inputs) {
+         P(&ctx, "[[visible]] VertexIn %s(\n", options->raster_vertex_fetch_name);
+         emit_vertex_fetch_parameters(&ctx, shader, MSL_PARAMETER_BODY);
+         P(&ctx, ");\n");
+      }
+      P(&ctx, "[[visible]] %s %s(\n", output_type(&ctx, false), options->raster_body_name);
+      ctx.indentlevel++;
+      emit_sysvals(&ctx, shader, MSL_PARAMETER_BODY);
+      emit_inputs(&ctx, shader, MSL_PARAMETER_BODY);
+      ctx.indentlevel--;
+      P(&ctx, ");\n");
+   }
+   if (options->raster_module != MSL_RASTER_BODY &&
+       shader->info.stage == MESA_SHADER_FRAGMENT && shader->info.fs.early_fragment_tests)
+      P(&ctx, "[[early_fragment_tests]]\n");
+   const bool visible = options->raster_module == MSL_RASTER_BODY || ctx.raster_vertex_fetch;
+   P(&ctx, "%s %s %s(\n",
+     visible ? "[[visible]]" : get_stage_string(shader->info.stage),
+     output_type(&ctx, true), visible ? options->raster_body_name : get_entrypoint_name(shader));
    ctx.indentlevel++;
-   emit_sysvals(&ctx, shader);
-   emit_inputs(&ctx, shader);
+   enum msl_parameter_mode parameter_mode = visible ? MSL_PARAMETER_BODY : MSL_PARAMETER_ENTRY;
+   emit_sysvals(&ctx, shader, parameter_mode);
+   emit_inputs(&ctx, shader, parameter_mode);
    ctx.indentlevel--;
    P(&ctx, ")\n");
    P(&ctx, "{\n");
    ctx.indentlevel++;
+   if (options->raster_module == MSL_RASTER_WRAPPER) {
+      if (ctx.raster_vertex_inputs) {
+         P_IND(&ctx, "VertexIn in = %s(\n", options->raster_vertex_fetch_name);
+         emit_vertex_fetch_parameters(&ctx, shader, MSL_PARAMETER_ARGUMENT);
+         P_IND(&ctx, ");\n");
+      }
+      if (ctx.raster_vertex_topology_wrapper) {
+         P_IND(&ctx, "VertexOut value = %s(\n", options->raster_body_name);
+      } else {
+         P_IND(&ctx, "return %s(\n", options->raster_body_name);
+      }
+      ctx.indentlevel++;
+      emit_sysvals(&ctx, shader, MSL_PARAMETER_ARGUMENT);
+      emit_inputs(&ctx, shader, MSL_PARAMETER_ARGUMENT);
+      ctx.indentlevel--;
+      P_IND(&ctx, ");\n");
+      if (ctx.raster_vertex_topology_wrapper)
+         msl_emit_vertex_raster_copy(&ctx);
+   } else {
    msl_emit_output_var(&ctx, shader);
    emit_local_vars(&ctx, shader);
    msl_helper_locals(&ctx, impl);
@@ -3432,6 +3562,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    ctx.buf0_guard = true;
    msl_emit_impl(&ctx, impl, shader);
    ctx.buf0_guard = false;
+   }
    ctx.indentlevel--;
    P(&ctx, "}\n");
    }

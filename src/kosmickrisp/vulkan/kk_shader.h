@@ -127,7 +127,17 @@ struct kk_mesh_shader_info {
 };
 
 /* Serialized info may change within padding without changing sizeof. */
-#define KK_SHADER_INFO_CACHE_VERSION 6u
+#define KK_SHADER_INFO_CACHE_VERSION 8u
+
+enum kk_gpl_shader_kind {
+   KK_GPL_NONE,
+   KK_GPL_LIBRARY_SOURCE,
+   KK_GPL_LIBRARY_PRERASTER,
+   KK_GPL_LIBRARY_FRAGMENT,
+   KK_GPL_EXECUTABLE,
+};
+
+struct kk_gpl_shader_state;
 
 struct kk_shader_info {
    bool interlock_envelope;
@@ -136,6 +146,7 @@ struct kk_shader_info {
    bool uses_per_draw_data;
    uint8_t uses_sampler_emulation; /* KK_SAMPLER_EMULATION_* domain mask. */
    uint8_t sparse_modes; /* Native code compiled for these residency classes. */
+   uint8_t gpl_kind; /* enum kk_gpl_shader_kind; no native executable for a library. */
    uint8_t framebuffer_read_mask;
    uint32_t push_size;
    bool descriptor_heap;
@@ -316,6 +327,7 @@ struct kk_shader {
    struct vk_shader vk;
    struct kk_interlock_shader *interlock;
    struct kk_interlock_pipeline *interlock_pipeline;
+   struct kk_gpl_shader_state *gpl;
    /* Canonical states may be serialized; these CPU/GPU pointers never are. */
    bool cache_uses_embedded_samplers;
    uint32_t embedded_sampler_count;
@@ -494,6 +506,89 @@ bool kk_nir_lower_image_view_min_lod(nir_shader *nir);
 VkResult kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
                                const VkAllocationCallbacks *alloc,
                                struct kk_shader **shader_out);
+
+/* An unlinked native raster stage owns its compiler metadata, source and
+ * function descriptor. It has no render PSO and is not a Vulkan pipeline. */
+struct kk_native_raster_stage {
+   struct kk_shader *shader;
+   mtl_function_descriptor *function;
+};
+
+/* Consumes info->nir. Requires known state and a native VS/FS interface;
+ * PIPELINE_COMPILE_REQUIRED asks the caller to retain/use its joint source
+ * path instead. The caller retains precompile inputs for that fallback. */
+VkResult kk_compile_unlinked_native_stage(struct kk_device *dev,
+   const struct vk_shader_compile_info *info,
+   const struct vk_graphics_pipeline_state *state,
+   const struct vk_features *features, const VkAllocationCallbacks *alloc,
+   struct kk_native_raster_stage *stage);
+void kk_native_raster_stage_finish(struct kk_device *dev,
+   struct kk_native_raster_stage *stage, const VkAllocationCallbacks *alloc);
+
+/* A pre-raster body and its raster entry own only pre-raster state. VI
+ * fetch functions are linked later; IA, FS and FO state may be absent. */
+struct kk_native_preraster_body {
+   struct kk_native_raster_stage body;
+   struct msl_compile_data wrapper[2]; /* Non-point and point native entries. */
+   mtl_function_descriptor *entry[2];
+   uint32_t attribute_mask;
+   uint32_t integer_attributes;
+};
+VkResult kk_compile_preraster_body(struct kk_device *dev,
+   const struct vk_shader_compile_info *info,
+   const struct vk_graphics_pipeline_state *state,
+   const struct vk_features *features, const VkAllocationCallbacks *alloc,
+   struct kk_native_preraster_body *body);
+void kk_native_preraster_body_finish(struct kk_device *dev,
+   struct kk_native_preraster_body *body, const VkAllocationCallbacks *alloc);
+
+struct kk_native_fragment_body {
+   struct kk_native_raster_stage body;
+   struct msl_compile_data wrapper;
+   mtl_function_descriptor *entry;
+};
+VkResult kk_compile_fragment_body(struct kk_device *dev,
+   const struct vk_shader_compile_info *info,
+   const struct vk_graphics_pipeline_state *state,
+   const struct vk_features *features, const VkAllocationCallbacks *alloc,
+   struct kk_native_fragment_body *body);
+void kk_native_fragment_body_finish(struct kk_device *dev,
+   struct kk_native_fragment_body *body, const VkAllocationCallbacks *alloc);
+
+struct kk_native_vertex_fetch {
+   struct msl_compile_data data;
+   mtl_function_descriptor *function;
+};
+VkResult kk_compile_vertex_fetch(struct kk_device *dev,
+   const struct vk_graphics_pipeline_state *state, uint32_t attributes,
+   const struct vk_pipeline_robustness_state *robustness,
+   struct kk_native_vertex_fetch *fetch);
+VkResult kk_compile_dynamic_vertex_fetch(struct kk_device *dev,
+   const struct vk_graphics_pipeline_state *state, uint32_t attributes,
+   uint32_t integer_attributes, const struct vk_pipeline_robustness_state *robustness,
+   struct kk_native_vertex_fetch *fetch);
+void kk_native_vertex_fetch_finish(struct kk_native_vertex_fetch *fetch);
+
+struct kk_graphics_link_dependencies {
+   uint32_t vertex_count, fragment_count;
+   mtl_function_descriptor *const *vertex;
+   mtl_function_descriptor *const *fragment;
+};
+VkResult kk_link_graphics_stages_with_libraries(struct kk_device *device,
+   struct kk_shader *vs, const struct msl_compile_data *vs_data,
+   const struct msl_compile_data *fs_data,
+   mtl_function_descriptor *vertex_function,
+   mtl_function_descriptor *fragment_function, unsigned polygon,
+   const struct kk_graphics_link_dependencies *dependencies);
+
+/* Stage compilation returns an owned descriptor; final linking borrows both
+ * descriptors and stores the resulting PSO in the executable owner. */
+VkResult kk_compile_graphics_stage(struct kk_device *device,
+   const struct msl_compile_data *data, mtl_function_descriptor **function);
+VkResult kk_link_graphics_stages(struct kk_device *device, struct kk_shader *vs,
+   const struct msl_compile_data *vs_data, const struct msl_compile_data *fs_data,
+   mtl_function_descriptor *vertex_function,
+   mtl_function_descriptor *fragment_function, unsigned polygon);
 
 VkResult kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader);
 VkResult kk_shader_ensure_fsr_coarse(struct kk_device *dev, struct kk_shader *shader);

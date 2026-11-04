@@ -881,10 +881,20 @@ struct vk_pipeline_stage {
 
    struct vk_pipeline_precomp_shader *precomp;
 
+   /* Binding/push metadata belongs to the stage's original library layout,
+    * which need not be provided again by a final independent-sets link. */
+   VkShaderCreateFlagsEXT create_flags;
+   bool has_push_range;
+   VkPushConstantRange push_range;
+
    /* Hash used to lookup the shader */
    blake3_hash shader_key;
 
    struct vk_shader *shader;
+
+   /* Scratch reference while a final group replaces imported library stages.
+    * Published pipelines retain only their compiled stages. */
+   struct vk_shader *link_source;
 };
 
 static void
@@ -1062,6 +1072,8 @@ vk_pipeline_stage_finish(struct vk_device *device,
 
    if (stage->shader)
       vk_shader_unref(device, stage->shader);
+   if (stage->link_source)
+      vk_shader_unref(device, stage->link_source);
 }
 
 static struct vk_pipeline_stage
@@ -1074,6 +1086,8 @@ vk_pipeline_stage_clone(const struct vk_pipeline_stage *in)
 
    if (in->shader)
       out.shader = vk_shader_ref(in->shader);
+   if (in->link_source)
+      out.link_source = vk_shader_ref(in->link_source);
 
    return out;
 }
@@ -1085,6 +1099,7 @@ vk_pipeline_stage_copy_non_shaders(const struct vk_pipeline_stage *in)
 
    out.precomp = NULL;
    out.shader = NULL;
+   out.link_source = NULL;
 
    return out;
 }
@@ -1129,6 +1144,9 @@ struct vk_graphics_pipeline {
 
    uint32_t stage_count;
    struct vk_pipeline_stage stages[MESA_VK_MAX_GRAPHICS_PIPELINE_STAGES];
+   /* Borrowed from stages or the private executable owner. */
+   struct vk_shader *executable_shaders[MESA_VK_MAX_GRAPHICS_PIPELINE_STAGES];
+   void *private_data;
 };
 
 static void
@@ -1138,6 +1156,10 @@ vk_graphics_pipeline_destroy(struct vk_device *device,
 {
    struct vk_graphics_pipeline *gfx_pipeline =
       container_of(pipeline, struct vk_graphics_pipeline, base);
+
+   if (gfx_pipeline->private_data)
+      device->shader_ops->destroy_graphics_pipeline(device,
+         gfx_pipeline->private_data, pAllocator);
 
    for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++)
       vk_pipeline_stage_finish(device, &gfx_pipeline->stages[i]);
@@ -1200,7 +1222,7 @@ vk_graphics_pipeline_cmd_bind(struct vk_command_buffer *cmd_buffer,
       gfx_pipeline = container_of(pipeline, struct vk_graphics_pipeline, base);
 
       for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++) {
-         struct vk_shader *shader = gfx_pipeline->stages[i].shader;
+         struct vk_shader *shader = gfx_pipeline->executable_shaders[i];
          stage_shader[shader->stage] = shader;
       }
    }
@@ -1335,8 +1357,9 @@ vk_get_graphics_pipeline_compile_info(struct vk_graphics_pipeline_compile_info *
       vk_graphics_pipeline_create_flags(pCreateInfo);
 
    info->retain_precomp =
-      (pipeline_flags &
-       VK_PIPELINE_CREATE_2_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT) != 0;
+      (pipeline_flags & VK_PIPELINE_CREATE_2_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT) ||
+      ((pipeline_flags & VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR) &&
+       device->shader_ops->retain_graphics_library_sources);
 
    const VkPipelineBinaryInfoKHR *bin_info =
       vk_find_struct_const(pCreateInfo->pNext,
@@ -1380,7 +1403,12 @@ vk_get_graphics_pipeline_compile_info(struct vk_graphics_pipeline_compile_info *
                continue;
 
             info->stages[lib_stage->stage] = vk_pipeline_stage_clone(lib_stage);
-            info->stages[lib_stage->stage].imported = true;
+            struct vk_pipeline_stage *imported = &info->stages[lib_stage->stage];
+            imported->imported = true;
+            if (device->shader_ops->graphics_library_requires_final_link && imported->shader) {
+               assert(!imported->link_source);
+               imported->link_source = vk_shader_ref(imported->shader);
+            }
             all_stages |= mesa_to_vk_shader_stage(lib_stage->stage);
          }
       }
@@ -1428,8 +1456,14 @@ vk_get_graphics_pipeline_compile_info(struct vk_graphics_pipeline_compile_info *
       if (info->stages[stage].imported)
          continue;
 
+      const VkPushConstantRange *push =
+         get_push_range_for_stage(pipeline_layout, stage);
       info->stages[stage] = (struct vk_pipeline_stage) {
          .stage = stage,
+         .create_flags = vk_pipeline_to_shader_flags(pipeline_flags, stage,
+                                                     pipeline_layout),
+         .has_push_range = push != NULL,
+         .push_range = push ? *push : (VkPushConstantRange) {0},
       };
       all_stages |= stage_info->stage;
 
@@ -1509,6 +1543,11 @@ vk_get_graphics_pipeline_compile_info(struct vk_graphics_pipeline_compile_info *
       !device->disable_lto &&
       (libs_info == NULL ||
        (pipeline_flags & VK_PIPELINE_CREATE_2_LINK_TIME_OPTIMIZATION_BIT_EXT));
+   if (libs_info && !(pipeline_flags & VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR) &&
+       device->shader_ops->graphics_library_requires_final_link) {
+      assert(device->shader_ops->retain_graphics_library_sources);
+      info->optimize = true;
+   }
 }
 
 static void
@@ -1580,6 +1619,26 @@ vk_partition_graphics_pipeline_shaders(
                           sizeof(pipeline_layout->push_ranges[0]) *
                           pipeline_layout->push_range_count);
    }
+   if (device->shader_ops->graphics_library_requires_final_link) {
+      bool imported = false;
+      for (uint32_t i = 0; i < info->stage_count; ++i)
+         imported |= info->stages[i].imported;
+      const bool library = pipeline_flags & VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR;
+      if (library || imported) {
+         const uint32_t domain[3] = {0x47504c32, library,
+            !!(pipeline_flags & VK_PIPELINE_CREATE_2_LINK_TIME_OPTIMIZATION_BIT_EXT)};
+         _mesa_blake3_update(&blake3_ctx, domain, sizeof(domain));
+         for (uint32_t i = 0; i < info->stage_count; ++i) {
+            const struct vk_pipeline_stage *stage = &info->stages[i];
+            _mesa_blake3_update(&blake3_ctx, &stage->stage, sizeof(stage->stage));
+            _mesa_blake3_update(&blake3_ctx, &stage->create_flags, sizeof(stage->create_flags));
+            uint32_t has_push = stage->has_push_range;
+            _mesa_blake3_update(&blake3_ctx, &has_push, sizeof(has_push));
+            if (has_push)
+               _mesa_blake3_update(&blake3_ctx, &stage->push_range, sizeof(stage->push_range));
+         }
+      }
+   }
    blake3_hash layout_blake3;
    _mesa_blake3_final(&blake3_ctx, layout_blake3);
 
@@ -1600,6 +1659,8 @@ vk_partition_graphics_pipeline_shaders(
          VkShaderCreateFlagsEXT shader_flags =
             vk_pipeline_to_shader_flags(pipeline_flags, stage->stage,
                                         pipeline_layout);
+         if (ops->graphics_library_requires_final_link && stage->imported)
+            shader_flags |= stage->create_flags;
          _mesa_blake3_update(&blake3_ctx, &shader_flags, sizeof(shader_flags));
       }
 
@@ -1792,6 +1853,8 @@ vk_graphics_pipeline_compile_shaders(struct vk_device *device,
          VkShaderCreateFlagsEXT shader_flags =
             vk_pipeline_to_shader_flags(pipeline_flags, stage->stage,
                                         pipeline_layout);
+         if (ops->graphics_library_requires_final_link && stage->imported)
+            shader_flags |= stage->create_flags;
 
          if (compile_info->partition[p + 1] - compile_info->partition[p] > 1)
             shader_flags |= VK_SHADER_CREATE_LINK_STAGE_BIT_EXT;
@@ -1832,8 +1895,13 @@ vk_graphics_pipeline_compile_shaders(struct vk_device *device,
 
          const VkPushConstantRange *push_range =
             get_push_range_for_stage(pipeline_layout, stage->stage);
+         if (ops->graphics_library_requires_final_link && stage->imported &&
+             stage->has_push_range)
+            push_range = &stage->push_range;
 
          infos[i] = (struct vk_shader_compile_info) {
+            .graphics_pipeline_flags = pipeline_flags,
+            .library_shader = stage->link_source,
             .stage = stage->stage,
             .flags = shader_flags,
             .next_stage_mask = next_stage,
@@ -1910,7 +1978,7 @@ vk_graphics_pipeline_get_executable_properties(
    if (properties == NULL) {
       *executable_count = 0;
       for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++) {
-         struct vk_shader *shader = gfx_pipeline->stages[i].shader;
+         struct vk_shader *shader = gfx_pipeline->executable_shaders[i];
 
          uint32_t shader_exec_count = 0;
          result = shader->ops->get_executable_properties(device, shader,
@@ -1923,7 +1991,7 @@ vk_graphics_pipeline_get_executable_properties(
       uint32_t arr_len = *executable_count;
       *executable_count = 0;
       for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++) {
-         struct vk_shader *shader = gfx_pipeline->stages[i].shader;
+         struct vk_shader *shader = gfx_pipeline->executable_shaders[i];
 
          uint32_t shader_exec_count = arr_len - *executable_count;
          result = shader->ops->get_executable_properties(device, shader,
@@ -1945,7 +2013,7 @@ vk_graphics_pipeline_executable_shader(struct vk_device *device,
                                        uint32_t *executable_index)
 {
    for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++) {
-      struct vk_shader *shader = gfx_pipeline->stages[i].shader;
+      struct vk_shader *shader = gfx_pipeline->executable_shaders[i];
 
       uint32_t shader_exec_count = 0;
       shader->ops->get_executable_properties(device, shader,
@@ -2018,7 +2086,7 @@ vk_graphics_pipeline_get_shader(struct vk_pipeline *pipeline,
 
    for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++) {
       if (gfx_pipeline->stages[i].stage == stage)
-         return gfx_pipeline->stages[i].shader;
+         return gfx_pipeline->executable_shaders[i];
    }
 
    return NULL;
@@ -2043,6 +2111,80 @@ vk_pipeline_get_dynamic_graphics_state(const struct vk_pipeline *pipeline)
    const struct vk_graphics_pipeline *gfx =
       container_of(pipeline, const struct vk_graphics_pipeline, base);
    return &gfx->linked.dynamic;
+}
+
+VkResult
+vk_graphics_pipeline_get_shader_compile_infos(struct vk_device *device,
+   const struct vk_pipeline *pipeline, uint32_t capacity, uint32_t *count,
+   struct vk_shader_compile_info *infos)
+{
+   *count = 0;
+   if (pipeline->ops != &vk_graphics_pipeline_ops)
+      return VK_PIPELINE_COMPILE_REQUIRED;
+   const struct vk_graphics_pipeline *gfx =
+      container_of(pipeline, const struct vk_graphics_pipeline, base);
+   if (!infos) {
+      *count = gfx->stage_count;
+      return VK_SUCCESS;
+   }
+   if (capacity < gfx->stage_count)
+      return VK_INCOMPLETE;
+   for (uint32_t i = 0; i < gfx->stage_count; ++i) {
+      if (!gfx->stages[i].precomp)
+         return VK_PIPELINE_COMPILE_REQUIRED;
+   }
+
+   struct vk_pipeline_tess_info tess = { ._pad = 0 };
+   for (uint32_t i = 0; i < gfx->stage_count; ++i) {
+      const struct vk_pipeline_stage *stage = &gfx->stages[i];
+      if (stage->stage == MESA_SHADER_TESS_CTRL)
+         tess = stage->precomp->tess;
+   }
+   for (uint32_t i = 0; i < gfx->stage_count; ++i) {
+      const struct vk_pipeline_stage *stage = &gfx->stages[i];
+      if (stage->stage == MESA_SHADER_TESS_EVAL)
+         vk_pipeline_tess_info_merge(&tess, &stage->precomp->tess);
+   }
+   for (uint32_t i = 0; i < gfx->stage_count; ++i) {
+      const struct vk_pipeline_stage *stage = &gfx->stages[i];
+      const struct vk_pipeline_precomp_shader *precomp = stage->precomp;
+      const struct nir_shader_compiler_options *options =
+         device->shader_ops->get_nir_options(device->physical, stage->stage,
+                                             &precomp->rs);
+      nir_shader *nir = vk_pipeline_precomp_shader_get_nir(precomp, options);
+      if (!nir) {
+         for (uint32_t j = 0; j < i; ++j)
+            ralloc_free(infos[j].nir);
+         return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+      }
+      if (stage->stage == MESA_SHADER_TESS_CTRL ||
+          stage->stage == MESA_SHADER_TESS_EVAL)
+         vk_pipeline_replace_nir_tess_info(nir, &tess);
+      VkShaderCreateFlagsEXT flags = stage->create_flags;
+      if (gfx->stage_count > 1)
+         flags |= VK_SHADER_CREATE_LINK_STAGE_BIT_EXT;
+      if ((pipeline->stages & VK_SHADER_STAGE_MESH_BIT_EXT) &&
+          !(pipeline->stages & VK_SHADER_STAGE_TASK_BIT_EXT))
+         flags |= VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
+      infos[i] = (struct vk_shader_compile_info) {
+         .stage = stage->stage,
+         .flags = flags,
+         .next_stage_mask = stage->stage == MESA_SHADER_FRAGMENT ? 0 :
+            i + 1 < gfx->stage_count ?
+               mesa_to_vk_shader_stage(gfx->stages[i + 1].stage) :
+               VK_SHADER_STAGE_FRAGMENT_BIT,
+         .nir = nir,
+         .robustness = &precomp->rs,
+         .set_layout_count = gfx->set_layout_count,
+         .set_layouts = gfx->set_layouts,
+         .embedded_sampler_count = precomp->embedded_sampler_count,
+         .embedded_samplers = precomp->embedded_samplers,
+         .push_constant_range_count = stage->has_push_range,
+         .push_constant_ranges = stage->has_push_range ? &stage->push_range : NULL,
+      };
+   }
+   *count = gfx->stage_count;
+   return VK_SUCCESS;
 }
 
 static VkResult
@@ -2202,11 +2344,35 @@ vk_create_graphics_pipeline(struct vk_device *device,
    for (uint32_t i = 0; i < compile_info.stage_count; i++) {
       pipeline->base.stages |= mesa_to_vk_shader_stage(compile_info.stages[i].stage);
       pipeline->stages[i] = vk_pipeline_stage_clone(&compile_info.stages[i]);
+      if (pipeline->stages[i].link_source) {
+         vk_shader_unref(device, pipeline->stages[i].link_source);
+         pipeline->stages[i].link_source = NULL;
+      }
+      pipeline->executable_shaders[i] = pipeline->stages[i].shader;
    }
 
-   /* Throw away precompiled shaders unless the client explicitly asks us to
-    * keep them.
-    */
+   if (!is_library && device->shader_ops->link_graphics_pipeline) {
+      const struct vk_device_shader_ops *ops = device->shader_ops;
+      assert(ops->get_graphics_pipeline_shader && ops->destroy_graphics_pipeline);
+      result = ops->link_graphics_pipeline(device, &pipeline->base,
+         compile_info.state, pAllocator, &pipeline->private_data);
+      if (result != VK_SUCCESS)
+         goto fail_stages;
+      if (pipeline->private_data) {
+         for (uint32_t i = 0; i < pipeline->stage_count; ++i) {
+            struct vk_shader *shader = ops->get_graphics_pipeline_shader(device,
+               pipeline->private_data, pipeline->stages[i].stage);
+            if (shader) {
+               assert(shader->stage == pipeline->stages[i].stage);
+               pipeline->executable_shaders[i] = shader;
+            }
+         }
+      }
+   }
+
+   /* A backend can need canonical sources for coupled final-link lowering
+    * without asking applications to opt into link-time optimization. Keep the
+    * common precomp references, not a second copy of their serialized NIR. */
    if (!compile_info.retain_precomp) {
       for (uint32_t i = 0; i < compile_info.stage_count; i++) {
          if (pipeline->stages[i].precomp != NULL) {
@@ -2240,7 +2406,11 @@ vk_create_graphics_pipeline(struct vk_device *device,
              VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT)
             cache_hit_count++;
       }
-      if (cache_hit_count > 0 && cache_hit_count == compile_info.stage_count) {
+      /* Cached library stages do not establish an application-cache hit for
+       * a separately realized native executable. Its owner is not serialized
+       * in the application stage cache. Stage feedback remains unchanged. */
+      if (!pipeline->private_data && cache_hit_count > 0 &&
+          cache_hit_count == compile_info.stage_count) {
          pipeline_feedback.flags |=
             VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
       }

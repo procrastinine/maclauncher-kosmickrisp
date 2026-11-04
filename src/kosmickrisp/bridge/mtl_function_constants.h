@@ -111,32 +111,71 @@ kk_prepare_function_constants(MTL4FunctionDescriptor *descriptor, bool *valid)
    return prepared;
 }
 
+/* Optional constants in separately compiled helpers must also be resolved
+ * before Metal lowers the final pipeline. Keep published link inputs immutable. */
+static NSArray *
+kk_prepare_link_functions(NSArray<MTL4FunctionDescriptor *> *functions, bool *valid)
+{
+   NSMutableArray *prepared = [NSMutableArray arrayWithCapacity:functions.count];
+   for (MTL4FunctionDescriptor *function in functions) {
+      MTL4FunctionDescriptor *resolved = kk_prepare_function_constants(function, valid);
+      if (!*valid) return nil;
+      [prepared addObject:resolved];
+   }
+   return prepared;
+}
+
+static MTL4StaticLinkingDescriptor *
+kk_prepare_link_constants(MTL4StaticLinkingDescriptor *original, bool *valid)
+{
+   if (!original.functionDescriptors.count && !original.privateFunctionDescriptors.count &&
+       !original.groups.count) return original;
+   MTL4StaticLinkingDescriptor *copy = [[original copy] autorelease];
+   if (!copy) { *valid = false; return nil; }
+   copy.functionDescriptors = kk_prepare_link_functions(original.functionDescriptors, valid);
+   if (!*valid) return nil;
+   copy.privateFunctionDescriptors = kk_prepare_link_functions(original.privateFunctionDescriptors, valid);
+   if (!*valid) return nil;
+   NSMutableDictionary *groups = [NSMutableDictionary dictionary];
+   for (NSString *key in original.groups) {
+      NSArray *members = kk_prepare_link_functions(original.groups[key], valid);
+      if (!*valid) return nil;
+      groups[key] = members;
+   }
+   copy.groups = groups;
+   return copy;
+}
+
 static MTL4PipelineDescriptor *
 kk_prepare_render_function_constants(MTL4PipelineDescriptor *descriptor)
 {
    bool valid = true;
    MTL4PipelineDescriptor *prepared = descriptor;
-#define KK_PREPARE_STAGE(type, field) do { \
+#define KK_PREPARE_STAGE(type, field, linking) do { \
    MTL4FunctionDescriptor *original = ((type *)descriptor).field; \
    MTL4FunctionDescriptor *function = kk_prepare_function_constants(original, &valid); \
    if (!valid) return nil; \
-   if (function != original) { \
+   MTL4StaticLinkingDescriptor *old_link = ((type *)descriptor).linking; \
+   MTL4StaticLinkingDescriptor *link = kk_prepare_link_constants(old_link, &valid); \
+   if (!valid) return nil; \
+   if (function != original || link != old_link) { \
       if (prepared == descriptor) { \
          prepared = [[descriptor copy] autorelease]; \
          kk_carry_constant_record(prepared, descriptor); \
       } \
       ((type *)prepared).field = function; \
+      ((type *)prepared).linking = link; \
    } \
 } while (0)
    if ([descriptor isKindOfClass:[MTL4RenderPipelineDescriptor class]]) {
-      KK_PREPARE_STAGE(MTL4RenderPipelineDescriptor, vertexFunctionDescriptor);
-      KK_PREPARE_STAGE(MTL4RenderPipelineDescriptor, fragmentFunctionDescriptor);
+      KK_PREPARE_STAGE(MTL4RenderPipelineDescriptor, vertexFunctionDescriptor, vertexStaticLinkingDescriptor);
+      KK_PREPARE_STAGE(MTL4RenderPipelineDescriptor, fragmentFunctionDescriptor, fragmentStaticLinkingDescriptor);
    } else if ([descriptor isKindOfClass:[MTL4MeshRenderPipelineDescriptor class]]) {
-      KK_PREPARE_STAGE(MTL4MeshRenderPipelineDescriptor, objectFunctionDescriptor);
-      KK_PREPARE_STAGE(MTL4MeshRenderPipelineDescriptor, meshFunctionDescriptor);
-      KK_PREPARE_STAGE(MTL4MeshRenderPipelineDescriptor, fragmentFunctionDescriptor);
+      KK_PREPARE_STAGE(MTL4MeshRenderPipelineDescriptor, objectFunctionDescriptor, objectStaticLinkingDescriptor);
+      KK_PREPARE_STAGE(MTL4MeshRenderPipelineDescriptor, meshFunctionDescriptor, meshStaticLinkingDescriptor);
+      KK_PREPARE_STAGE(MTL4MeshRenderPipelineDescriptor, fragmentFunctionDescriptor, fragmentStaticLinkingDescriptor);
    } else if ([descriptor isKindOfClass:[MTL4TileRenderPipelineDescriptor class]]) {
-      KK_PREPARE_STAGE(MTL4TileRenderPipelineDescriptor, tileFunctionDescriptor);
+      KK_PREPARE_STAGE(MTL4TileRenderPipelineDescriptor, tileFunctionDescriptor, staticLinkingDescriptor);
    } else {
       fprintf(stderr, "Cannot validate Metal pipeline descriptor %s\n",
               NSStringFromClass(descriptor.class).UTF8String);

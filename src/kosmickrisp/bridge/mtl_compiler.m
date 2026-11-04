@@ -492,6 +492,22 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
    }
 }
 
+mtl_library *
+mtl_new_linkable_library(mtl_compiler *compiler, const char *src,
+   enum mtl_language_version version, enum mtl_math_mode mode,
+   enum mtl_math_floating_point_functions fp)
+{
+   @autoreleasepool {
+      KK_FOREGROUND_SCOPE(compiler);
+      MTL4LibraryDescriptor *desc = mtl_library_descriptor(src, version, mode, fp);
+      desc.options.allowReferencingUndefinedSymbols = YES;
+      id<MTLLibrary> lib = kk_cached_library(compiler, desc, false, false);
+      if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
+         mtl_gpu_timing_library(lib, src);
+      return lib;
+   }
+}
+
 /* Historical bridge name: scheduling is asynchronous only at the KK queue.
  * The Metal call itself MUST be synchronous in Wine on either CPU. */
 mtl_library *
@@ -629,6 +645,63 @@ mtl_specialize_pipeline_statistics(mtl_function_descriptor *function)
    }
 }
 
+/* Link helpers have their own constant-value snapshots. Propagate a stage
+ * specialization only to functions that actually declare that constant. */
+static NSArray *
+kk_specialized_link_functions(NSArray<MTL4FunctionDescriptor *> *functions,
+                              uint32_t index, bool enabled)
+{
+   NSMutableArray *result = [NSMutableArray arrayWithCapacity:functions.count];
+   for (MTL4FunctionDescriptor *original in functions) {
+      MTL4FunctionDescriptor *raw = original;
+      if ([raw isKindOfClass:[MTL4SpecializedFunctionDescriptor class]])
+         raw = ((MTL4SpecializedFunctionDescriptor *)raw).functionDescriptor;
+      if (!kk_named_library_function(raw)) return nil;
+      MTL4LibraryFunctionDescriptor *source = (id)raw;
+      id<MTLFunction> function = [source.library newFunctionWithName:source.name];
+      if (!function) return nil;
+      bool uses = false;
+      for (MTLFunctionConstant *constant in function.functionConstantsDictionary.allValues)
+         uses |= constant.index == index && constant.type == MTLDataTypeBool;
+      [function release];
+      if (!uses) {
+         [result addObject:original];
+         continue;
+      }
+      MTL4SpecializedFunctionDescriptor *copy = kk_new_function_specialization(original);
+      if (!copy) return nil;
+      kk_set_function_constant(copy, &enabled, MTLDataTypeBool, sizeof(enabled), index);
+      [result addObject:copy];
+      [copy release];
+   }
+   return result;
+}
+
+static bool
+kk_specialize_static_link(MTL4StaticLinkingDescriptor *original, uint32_t index,
+                          bool enabled, MTL4StaticLinkingDescriptor **output)
+{
+   *output = nil;
+   if (!original.functionDescriptors.count && !original.privateFunctionDescriptors.count &&
+       !original.groups.count) return true;
+   NSArray *functions = kk_specialized_link_functions(original.functionDescriptors, index, enabled);
+   NSArray *private_functions = kk_specialized_link_functions(original.privateFunctionDescriptors, index, enabled);
+   if (!functions || !private_functions) return false;
+   NSMutableDictionary *groups = [NSMutableDictionary dictionary];
+   for (NSString *key in original.groups) {
+      NSArray *members = kk_specialized_link_functions(original.groups[key], index, enabled);
+      if (!members) return false;
+      groups[key] = members;
+   }
+   MTL4StaticLinkingDescriptor *copy = [[original copy] autorelease];
+   if (!copy) return false;
+   copy.functionDescriptors = functions;
+   copy.privateFunctionDescriptors = private_functions;
+   copy.groups = groups;
+   *output = copy;
+   return true;
+}
+
 mtl_render_pipeline_descriptor *
 mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
 {
@@ -642,6 +715,12 @@ mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
       copy.fragmentFunctionDescriptor = (MTL4FunctionDescriptor *)fragment;
       kk_record_stage_constants(copy, @"fragmentFunctionDescriptor", (id)fragment, true);
       [(id)fragment release];
+      MTL4StaticLinkingDescriptor *link = nil;
+      if (!kk_specialize_static_link(copy.fragmentStaticLinkingDescriptor,
+             KK_FUNCTION_CONSTANT_PIPELINE_STATISTICS, true, &link)) {
+         [copy release]; return NULL;
+      }
+      if (link) copy.fragmentStaticLinkingDescriptor = link;
       return copy;
    }
 }
@@ -670,7 +749,7 @@ mtl_sampler_emulation_render_descriptor(mtl_render_pipeline_descriptor *descript
       MTL4PipelineDescriptor *copy = [(id)descriptor copy];
       if (!copy) return NULL;
       kk_carry_constant_record(copy, (id)descriptor);
-#define KK_SAMPLER_STAGE(type, field, bit) do { \
+#define KK_SAMPLER_STAGE(type, field, linking, bit) do { \
    if (stages & (bit)) { \
       mtl_function_descriptor *function = mtl_specialize_sampler_emulation( \
          (void *)((type *)copy).field, \
@@ -680,19 +759,25 @@ mtl_sampler_emulation_render_descriptor(mtl_render_pipeline_descriptor *descript
       ((type *)copy).field = (id)function; \
       kk_record_stage_constants(copy, @#field, (id)function, true); \
       [(id)function release]; \
+      MTL4StaticLinkingDescriptor *link = nil; \
+      if (!kk_specialize_static_link(((type *)copy).linking, \
+            KK_FUNCTION_CONSTANT_SAMPLER_EMULATION, (enabled_stages & (bit)) != 0, &link)) { \
+         [copy release]; return NULL; \
+      } \
+      if (link) ((type *)copy).linking = link; \
    } \
 } while (0)
       if ([copy isKindOfClass:[MTL4RenderPipelineDescriptor class]]) {
-         KK_SAMPLER_STAGE(MTL4RenderPipelineDescriptor, vertexFunctionDescriptor,
+         KK_SAMPLER_STAGE(MTL4RenderPipelineDescriptor, vertexFunctionDescriptor, vertexStaticLinkingDescriptor,
                           MTL_SAMPLER_EMULATION_VERTEX);
-         KK_SAMPLER_STAGE(MTL4RenderPipelineDescriptor, fragmentFunctionDescriptor,
+         KK_SAMPLER_STAGE(MTL4RenderPipelineDescriptor, fragmentFunctionDescriptor, fragmentStaticLinkingDescriptor,
                           MTL_SAMPLER_EMULATION_FRAGMENT);
       } else if ([copy isKindOfClass:[MTL4MeshRenderPipelineDescriptor class]]) {
-         KK_SAMPLER_STAGE(MTL4MeshRenderPipelineDescriptor, objectFunctionDescriptor,
+         KK_SAMPLER_STAGE(MTL4MeshRenderPipelineDescriptor, objectFunctionDescriptor, objectStaticLinkingDescriptor,
                           MTL_SAMPLER_EMULATION_OBJECT);
-         KK_SAMPLER_STAGE(MTL4MeshRenderPipelineDescriptor, meshFunctionDescriptor,
+         KK_SAMPLER_STAGE(MTL4MeshRenderPipelineDescriptor, meshFunctionDescriptor, meshStaticLinkingDescriptor,
                           MTL_SAMPLER_EMULATION_MESH);
-         KK_SAMPLER_STAGE(MTL4MeshRenderPipelineDescriptor, fragmentFunctionDescriptor,
+         KK_SAMPLER_STAGE(MTL4MeshRenderPipelineDescriptor, fragmentFunctionDescriptor, fragmentStaticLinkingDescriptor,
                           MTL_SAMPLER_EMULATION_FRAGMENT);
       } else {
          [copy release];
@@ -787,6 +872,22 @@ mtl_render_pipeline_descriptor_set_fragment_shader(mtl_render_pipeline_descripto
       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
       desc.fragmentFunctionDescriptor = (MTL4FunctionDescriptor *)shader;
       kk_record_stage_constants(desc, @"fragmentFunctionDescriptor", (id)shader, false);
+   }
+}
+
+void
+mtl_render_pipeline_descriptor_set_private_functions(
+   mtl_render_pipeline_descriptor *descriptor, bool vertex, uint32_t count,
+   mtl_function_descriptor *const *functions)
+{
+   @autoreleasepool {
+      MTL4RenderPipelineDescriptor *desc = (id)descriptor;
+      NSMutableArray *dependencies = [NSMutableArray arrayWithCapacity:count];
+      for (uint32_t i = 0; i < count; ++i)
+         [dependencies addObject:(id)functions[i]];
+      MTL4StaticLinkingDescriptor *link = vertex ?
+         desc.vertexStaticLinkingDescriptor : desc.fragmentStaticLinkingDescriptor;
+      link.privateFunctionDescriptors = dependencies;
    }
 }
 

@@ -163,6 +163,18 @@ def generate(entries, xml, beta):
             fields[row['extensions'][0]].update(row['features'])
             props[row['extensions'][0]].update(row['properties'])
 
+    owners = defaultdict(list)
+    consumers = {}
+    for i, row in enumerate(entries):
+        for extension in row['extensions']:
+            owners[extension].append(i)
+        for extension, users in row.get('extension_consumers', {}).items():
+            if extension not in row['extensions'] or not users:
+                raise ValueError('Invalid shared extension consumers')
+            if extension in consumers and consumers[extension] != users:
+                raise ValueError('Conflicting shared extension consumers')
+            consumers[extension] = users
+
     out = ['/* SPDX-License-Identifier: MIT */',
            '/* Generated from kk_emulation.json and the Vulkan registry. */',
            '#define KK_EMULATION_COUNT ' + str(len(entries)),
@@ -180,13 +192,17 @@ def generate(entries, xml, beta):
     out += ['};', 'static const unsigned kk_emulation_native_from[] = {']
     out += ['   ' + str(row.get('native_from') or 0) + ',' for row in entries]
     out += ['};', 'static void',
-            'kk_emulation_disable(unsigned index, struct vk_device_extension_table *extensions,',
+            'kk_emulation_disable(unsigned index, const bool *active,',
+            '                     struct vk_device_extension_table *extensions,',
             '                     struct vk_features *features, struct vk_properties *properties)',
             '{', '   switch (index) {']
     for i, row in enumerate(entries):
         out.append('   case ' + str(i) + ':')
         for extension in row['extensions']:
-            out.append('      extensions->' + extension[3:] + ' = false;')
+            others = [j for j in owners[extension] if j != i]
+            if others:
+                out.append('      if (!(' + ' || '.join('active[' + str(j) + ']' for j in others) + '))')
+            out.append(('         ' if others else '      ') + 'extensions->' + extension[3:] + ' = false;')
         for feature in row['features']:
             out.append('      features->' + feature + ' = false;')
         for prop in row['properties']:
@@ -223,6 +239,13 @@ def generate(entries, xml, beta):
         out += ['      if (extensions->' + name[3:] + ' && ' + old + ' && !' + new + ') {',
                 '         extensions->' + name[3:] + ' = false;',
                 '         kk_emulation_hide_extension("' + name + '", features, properties);',
+                '         changed = true;', '      }']
+    for name, users in sorted(consumers.items()):
+        if name not in device_extensions or any(u not in device_extensions for u in users):
+            raise ValueError('Unknown shared extension consumer')
+        condition = ' && '.join('!extensions->' + u[3:] for u in users)
+        out += ['      if (extensions->' + name[3:] + ' && ' + condition + ') {',
+                '         extensions->' + name[3:] + ' = false;',
                 '         changed = true;', '      }']
     out += ['   } while (changed);']
 

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Private implementation; included only by mtl_compiler.m. */
 #include <Metal/MTL4Archive.h>
+#include <Metal/MTL4LinkingDescriptor.h>
 #include <Metal/MTL4MeshRenderPipeline.h>
 #include <Metal/MTL4PipelineDataSetSerializer.h>
 #include <Metal/MTL4SpecializedFunctionDescriptor.h>
@@ -111,9 +112,13 @@ kk_remember_library_hint(id library, MTL4LibraryDescriptor *descriptor)
    NSData *text = [descriptor.source dataUsingEncoding:NSUTF8StringEncoding];
    blake3_hash digest;
    _mesa_blake3_compute(text.bytes, text.length, digest);
-   NSArray *fields = @[[NSData dataWithBytes:digest length:sizeof(digest)],
+   NSMutableArray *fields = [NSMutableArray arrayWithArray:@[
+      [NSData dataWithBytes:digest length:sizeof(digest)],
       @(descriptor.options.languageVersion), @(descriptor.options.mathMode),
-      @(descriptor.options.mathFloatingPointFunctions)];
+      @(descriptor.options.mathFloatingPointFunctions)]];
+   /* Preserve existing identities for ordinary, self-contained libraries. */
+   if (descriptor.options.allowReferencingUndefinedSymbols)
+      [fields addObject:@"allow-undefined-symbols"];
    NSData *key = [NSPropertyListSerialization dataWithPropertyList:fields
       format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
    objc_setAssociatedObject(library, &kk_library_hint_association, key,
@@ -130,6 +135,55 @@ kk_function_hint(MTL4FunctionDescriptor *function)
    MTL4LibraryFunctionDescriptor *source = (id)function;
    NSData *library = objc_getAssociatedObject(source.library, &kk_library_hint_association);
    return library && source.name ? @[library, source.name] : nil;
+}
+
+/* Link dependencies are distinct from the entry functions. In particular,
+ * a wrapper can have the same source while the body it calls changes. Unknown
+ * dependencies disable the advisory lookup; they never alias another body. */
+static id
+kk_linked_function_hint(MTL4FunctionDescriptor *function)
+{
+   id hint = kk_function_hint(function);
+   if (!hint) return nil;
+   NSDictionary *constants = kk_constant_record(function);
+   if ([function isKindOfClass:[MTL4SpecializedFunctionDescriptor class]] &&
+       !constants) return nil;
+   if (!constants.count) return hint;
+   NSMutableArray *entries = [NSMutableArray arrayWithCapacity:constants.count];
+   for (NSString *key in [constants.allKeys sortedArrayUsingSelector:@selector(compare:)])
+      [entries addObject:@[key, constants[key]]];
+   return @[hint, entries];
+}
+
+static id
+kk_linked_functions_hint(NSArray<MTL4FunctionDescriptor *> *functions)
+{
+   NSMutableArray *hints = [NSMutableArray arrayWithCapacity:functions.count];
+   for (MTL4FunctionDescriptor *function in functions) {
+      id hint = kk_linked_function_hint(function);
+      if (!hint) return nil;
+      [hints addObject:hint];
+   }
+   return hints;
+}
+
+static bool
+kk_static_link_hint(NSMutableArray *fields, NSString *stage,
+                    MTL4StaticLinkingDescriptor *link)
+{
+   if (!link.functionDescriptors.count && !link.privateFunctionDescriptors.count &&
+       !link.groups.count) return true;
+   id functions = kk_linked_functions_hint(link.functionDescriptors);
+   id private_functions = kk_linked_functions_hint(link.privateFunctionDescriptors);
+   if (!functions || !private_functions) return false;
+   NSMutableArray *groups = [NSMutableArray arrayWithCapacity:link.groups.count];
+   for (NSString *key in [link.groups.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+      id members = kk_linked_functions_hint(link.groups[key]);
+      if (!members) return false;
+      [groups addObject:@[key, members]];
+   }
+   [fields addObject:@[@"static-link", stage, functions, private_functions, groups]];
+   return true;
 }
 
 static void
@@ -151,6 +205,8 @@ kk_pipeline_hint(MTL4PipelineDescriptor *descriptor)
       if (!function) return nil;
       [fields addObjectsFromArray:@[@"compute", function,
          @(compute.maxTotalThreadsPerThreadgroup)]];
+      if (!kk_static_link_hint(fields, @"compute", compute.staticLinkingDescriptor))
+         return nil;
    } else if ([descriptor isKindOfClass:[MTL4RenderPipelineDescriptor class]]) {
       MTL4RenderPipelineDescriptor *render = (id)descriptor;
       id vertex = kk_function_hint(render.vertexFunctionDescriptor);
@@ -162,6 +218,9 @@ kk_pipeline_hint(MTL4PipelineDescriptor *descriptor)
       /* MTL4 has no depth/stencil-format fields on this descriptor. This
        * advisory key never replaces Metal's complete descriptor verification. */
       kk_color_attachment_hint(fields, render.colorAttachments);
+      if (!kk_static_link_hint(fields, @"vertex", render.vertexStaticLinkingDescriptor) ||
+          !kk_static_link_hint(fields, @"fragment", render.fragmentStaticLinkingDescriptor))
+         return nil;
    } else if ([descriptor isKindOfClass:[MTL4MeshRenderPipelineDescriptor class]]) {
       MTL4MeshRenderPipelineDescriptor *mesh = (id)descriptor;
       id object = kk_function_hint(mesh.objectFunctionDescriptor);
@@ -174,6 +233,10 @@ kk_pipeline_hint(MTL4PipelineDescriptor *descriptor)
          @(mesh.maxTotalThreadgroupsPerMeshGrid), @(mesh.rasterSampleCount),
          @(mesh.rasterizationEnabled), @(mesh.maxVertexAmplificationCount)]];
       kk_color_attachment_hint(fields, mesh.colorAttachments);
+      if (!kk_static_link_hint(fields, @"object", mesh.objectStaticLinkingDescriptor) ||
+          !kk_static_link_hint(fields, @"mesh", mesh.meshStaticLinkingDescriptor) ||
+          !kk_static_link_hint(fields, @"fragment", mesh.fragmentStaticLinkingDescriptor))
+         return nil;
    } else if ([descriptor isKindOfClass:[MTL4TileRenderPipelineDescriptor class]]) {
       MTL4TileRenderPipelineDescriptor *tile = (id)descriptor;
       id function = kk_function_hint(tile.tileFunctionDescriptor);
@@ -182,6 +245,8 @@ kk_pipeline_hint(MTL4PipelineDescriptor *descriptor)
          @(tile.threadgroupSizeMatchesTileSize), @(tile.maxTotalThreadsPerThreadgroup)]];
       for (unsigned i = 0; i < 8; ++i)
          [fields addObject:@(tile.colorAttachments[i].pixelFormat)];
+      if (!kk_static_link_hint(fields, @"tile", tile.staticLinkingDescriptor))
+         return nil;
    } else {
       return nil;
    }
@@ -315,6 +380,7 @@ kk_archive_remove_stale_temporaries(void)
    MTLLanguageVersion language;
    MTLMathMode math;
    MTLMathFloatingPointFunctions floating;
+   bool allow_undefined_symbols;
    NSCondition *changed;
    id<MTLLibrary> library;
    pthread_t background_owner;
@@ -755,6 +821,7 @@ kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vert
             if (candidate->language == desc.options.languageVersion &&
                 candidate->math == desc.options.mathMode &&
                 candidate->floating == desc.options.mathFloatingPointFunctions &&
+                candidate->allow_undefined_symbols == desc.options.allowReferencingUndefinedSymbols &&
                 [candidate->source isEqualToString:desc.source]) {
                entry = [candidate retain];
                if (completed_only) cache->stats.library_requests++;
@@ -788,6 +855,7 @@ kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vert
                   entry->language = desc.options.languageVersion;
                   entry->math = desc.options.mathMode;
                   entry->floating = desc.options.mathFloatingPointFunctions;
+                  entry->allow_undefined_symbols = desc.options.allowReferencingUndefinedSymbols;
                   entry->changed = [NSCondition new];
                   if (qos_class_self() == QOS_CLASS_BACKGROUND) entry->background_owner = pthread_self();
                   if (entry->source && entry->changed && cache->cached_libraries) {

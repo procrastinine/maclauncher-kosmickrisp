@@ -61,6 +61,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_ray_query = true,
       .KHR_ray_tracing_maintenance1 = true,
       .KHR_pipeline_library = true,
+      .EXT_graphics_pipeline_library = true,
       .EXT_pipeline_library_group_handles = true,
       .KHR_opacity_micromap = true,
       .EXT_ray_tracing_invocation_reorder = true,
@@ -135,6 +136,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .EXT_extended_dynamic_state2 = true,
       .EXT_image_robustness = true,
       .EXT_inline_uniform_block = true,
+      .EXT_shader_module_identifier = true,
       .EXT_pipeline_creation_cache_control = true,
       .EXT_pipeline_creation_feedback = true,
       .EXT_private_data = true,
@@ -435,6 +437,8 @@ kk_get_device_features(
       .extendedDynamicState2PatchControlPoints = true,
       .inlineUniformBlock = true,
       .maintenance4 = true,
+      .shaderModuleIdentifier = true,
+      .graphicsPipelineLibrary = true,
       .pipelineCreationCacheControl = true,
       .shaderModuleIdentifier = true,
       .shaderMixedFloatDotProductFloat16AccFloat32 = true,
@@ -1027,7 +1031,7 @@ kk_get_device_properties(
       .minImportedHostPointerAlignment = os_page_size,
 
       /* VK_EXT_graphics_pipeline_library */
-      .graphicsPipelineLibraryFastLinking = true,
+      .graphicsPipelineLibraryFastLinking = false,
       .graphicsPipelineLibraryIndependentInterpolationDecoration = true,
 
       /* VK_KHR_line_rasterization */

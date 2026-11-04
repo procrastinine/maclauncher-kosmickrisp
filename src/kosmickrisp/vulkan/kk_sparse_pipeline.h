@@ -543,6 +543,14 @@ kk_compile_shaders_untracked(struct vk_device *device, uint32_t count,
    struct vk_shader_compile_info *infos, const struct vk_graphics_pipeline_state *graphics,
    const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
+   if (graphics && count &&
+       (infos[0].graphics_pipeline_flags & VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR))
+      return kk_compile_graphics_library_shaders(device, count, infos, graphics, features, alloc, out);
+   if (graphics && count) {
+      VkResult result;
+      if (kk_try_link_graphics_libraries(device, count, infos, graphics, features, alloc, out, &result))
+         return result;
+   }
    if (count && mesa_shader_stage_is_rt(infos[0].stage))
       return kk_compile_shaders_native(device,count,infos,graphics,features,alloc,out,features->sparseResidencyBuffer || features->sparseResidencyImage3D);
    if (kk_depth_bounds_dynamic_enable(container_of(device, struct kk_device, vk), graphics))

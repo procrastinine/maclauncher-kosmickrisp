@@ -35,11 +35,34 @@ struct msl_per_vertex_inputs {
    uint8_t components[32];
 };
 
+enum msl_raster_module {
+   MSL_RASTER_ENTRY,
+   MSL_RASTER_BODY,
+   MSL_RASTER_WRAPPER,
+   MSL_RASTER_VERTEX_FETCH,
+};
+
 struct nir_to_msl_options {
+   /* Body and wrapper use one structured parameter ABI. Native linking must
+    * include the body descriptor in its source/dependency cache identity. */
+   enum msl_raster_module raster_module;
+   const char *raster_body_name;
+   /* Raw uint4 attributes cross the vertex body/fetch boundary. The fetch
+    * module owns API format conversion; body loads reinterpret their bits.
+    * A zero mask preserves the ordinary raster module ABI. */
+   uint32_t raster_vertex_inputs;
+   const char *raster_vertex_fetch_name;
+   /* A body retains point size while thin entries select the native topology
+    * interface. This does not infer IA state at library creation. */
+   bool raster_vertex_topology_wrapper;
+   bool raster_vertex_point_size;
    void *mem_ctx;
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;
    bool native_query_texture_lod;
+   /* Independently compiled native raster stages keep a full vector at each
+    * user location, even when either stage reads/writes fewer components. */
+   bool independent_interface;
    const struct msl_per_vertex_inputs *per_vertex_inputs;
    /* Output: the emitted source uses a Metal 4.1 operation. */
    bool requires_msl41;

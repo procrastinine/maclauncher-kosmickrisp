@@ -51,6 +51,11 @@ struct nir_to_msl_ctx {
    bool native_query_texture_lod;
    /* ulong textures and their min/max atomics (Apple8 macOS and later). */
    bool native_atomic64_minmax;
+   bool independent_interface;
+   uint32_t raster_vertex_inputs;
+   bool raster_vertex_fetch;
+   bool raster_vertex_topology_wrapper;
+   bool raster_vertex_point_size;
    const struct msl_per_vertex_inputs *per_vertex_inputs;
    bool uses_per_draw_data;
    bool has_sampler_helpers;
@@ -133,6 +138,7 @@ void msl_src_as_const(struct nir_to_msl_ctx *ctx, nir_src *src);
 void msl_emit_io_blocks(struct nir_to_msl_ctx *ctx, nir_shader *shader);
 
 void msl_emit_output_var(struct nir_to_msl_ctx *ctx, nir_shader *shader);
+void msl_emit_vertex_raster_copy(struct nir_to_msl_ctx *ctx);
 
 void msl_gather_io_info(struct nir_to_msl_ctx *ctx,
                         struct io_slot_info *info_array_input,

@@ -97,6 +97,11 @@ struct vk_shader_compile_info {
    VkShaderStageFlags next_stage_mask;
    struct nir_shader *nir;
 
+   /* Exact graphics-pipeline creation context (zero for shader objects).
+    * Library inputs are borrowed for this compile, not executable outputs. */
+   VkPipelineCreateFlags2KHR graphics_pipeline_flags;
+   const struct vk_shader *library_shader;
+
    const struct vk_pipeline_robustness_state *robustness;
 
    uint32_t set_layout_count;
@@ -366,6 +371,18 @@ struct vk_device_shader_ops {
                             uint32_t ray_queries,
                             const uint8_t *dynamic_descriptor_offsets);
 
+   /** Keep canonical preprocessed source in graphics library objects even
+    * without RETAIN_LINK_TIME_OPTIMIZATION_INFO. Drivers whose coupled stage
+    * routes need joint lowering at final link use the common source accessor;
+    * no duplicate driver-owned NIR store is needed. */
+   bool retain_graphics_library_sources;
+
+   /** Library stages are compiler inputs rather than complete executables.
+    * Use one cached final partition and pass imported stages to compile.
+    * Library cache keys occupy a separate domain, including libraries with
+    * all four parts. The retained-source contract above is required. */
+   bool graphics_library_requires_final_link;
+
    /** Optional realization of common RT pipelines, including libraries.
     *
     * link and destroy form a checked pair; bind requires link. The callback
@@ -383,6 +400,23 @@ struct vk_device_shader_ops {
     * Successful NULL private data is allowed when bind supports absent state.
     * Libraries retain their existing shaders and group identities on failure.
     */
+   /** Optional per-executable graphics realization, after stage ownership is
+    * established and before precompile inputs are released. Input stages and
+    * their cache objects are immutable. A non-NULL private_data is owned by
+    * this pipeline and released by destroy_graphics_pipeline on every path.
+    * get_graphics_pipeline_shader returns a borrowed executable-stage override
+    * or NULL to keep the original stage. Overrides are resolved once, so binds
+    * do not consult a driver map or rebuild policy. Library objects skip this
+    * operation; serialization retains the original reusable stage objects. */
+   VkResult (*link_graphics_pipeline)(struct vk_device *device,
+      struct vk_pipeline *pipeline,
+      const struct vk_graphics_pipeline_state *state,
+      const VkAllocationCallbacks *allocator, void **private_data);
+   struct vk_shader *(*get_graphics_pipeline_shader)(struct vk_device *device,
+      void *private_data, mesa_shader_stage stage);
+   void (*destroy_graphics_pipeline)(struct vk_device *device,
+      void *private_data, const VkAllocationCallbacks *allocator);
+
    VkResult (*link_rt_pipeline)(struct vk_device *device,
                                 const struct vk_pipeline *pipeline,
                                 const VkAllocationCallbacks *alloc,
