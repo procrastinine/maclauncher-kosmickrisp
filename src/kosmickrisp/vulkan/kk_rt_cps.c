@@ -52,6 +52,30 @@ kk_rt_load_embedded_sampler_table(nir_builder *b)
    return load_field(b,embedded_sampler_table,1,64);
 }
 
+/* Mesa's explicit-IO lowering requires every deref to have the bit size of
+ * its address format. SPIR-V gives these derefs 32 bits, but this splitter
+ * lowers them to 64-bit global addresses. The lowering walks derefs in
+ * reverse, so a 32-bit child would add its offset to its parent at 32 bits
+ * before the parent becomes a 64-bit address. A cast of a non-deref value
+ * already carries that value's size. */
+static void
+widen_derefs(nir_shader *shader, nir_variable_mode modes)
+{
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_deref)
+               continue;
+            nir_deref_instr *deref = nir_instr_as_deref(instr);
+            if (nir_deref_mode_is_in_set(deref, modes) &&
+                (deref->deref_type != nir_deref_type_cast ||
+                 nir_src_is_deref(deref->parent)))
+               deref->def.bit_size = 64;
+         }
+      }
+   }
+}
+
 /* Incoming payload and hit-attribute derefs follow Mesa's explicit-IO route
  * (lvp_ray_tracing_pipeline.c, Copyright2024 Valve Corporation, MIT), using
  * full-width global addresses supplied by the active continuation context. */
@@ -93,8 +117,10 @@ lower_call_data(nir_shader *shader, uint64_t *payload_size, uint64_t *attribute_
          }
       }
    }
-   if (progress)
+   if (progress) {
+      widen_derefs(shader, nir_var_mem_global);
       NIR_PASS(_, shader, nir_lower_explicit_io, nir_var_mem_global, nir_address_format_64bit_global);
+   }
    return progress;
 }
 
@@ -315,6 +341,7 @@ kk_rt_split_shader_mode(nir_shader *shader, void *mem_ctx,
     * explicit frame as common SSA spills, not fresh MSL local arrays. */
    NIR_PASS(_, shader, nir_lower_vars_to_explicit_types,
       nir_var_function_temp | nir_var_shader_temp, glsl_get_natural_size_align_bytes);
+   widen_derefs(shader, nir_var_function_temp | nir_var_shader_temp);
    NIR_PASS(_, shader, nir_lower_explicit_io,
       nir_var_function_temp | nir_var_shader_temp, nir_address_format_64bit_global);
    nir_shader_intrinsics_pass(shader, prepare_call, nir_metadata_none, internal ? parts : NULL);
