@@ -89,6 +89,8 @@ struct kk_physical_device {
    /* Immutable existing namespace; opening the store waits for actual use. */
    blake3_hash disk_cache_digest;
    util_once_flag disk_cache_once;
+   /* Metal archive namespace: content-keyed, independent of the driver build. */
+   blake3_hash archive_cache_digest;
 };
 
 static inline uint32_t

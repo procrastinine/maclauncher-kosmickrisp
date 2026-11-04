@@ -47,6 +47,12 @@ mtl_device_get_registry_id(mtl_device *dev)
    return 0u;
 }
 
+void
+mtl_device_get_compiler_identity(mtl_device *dev, char buffer[256])
+{
+   buffer[0] = '\0';
+}
+
 bool
 mtl_device_supports_bc_texture_compression(mtl_device *dev)
 {

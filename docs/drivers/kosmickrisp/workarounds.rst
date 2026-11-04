@@ -185,6 +185,15 @@ capturing Mesh pipelines with per-vertex outputs at the maximum output size on
 Apple8 GPUs, and succeeds without the serializer. On macOS 26 such a pipeline
 creation still fails.
 
+The pipeline archive is stored in the Mesa disk cache under a namespace keyed on
+the device settings that select generated code, not on the driver build. Its
+index entries are digests of the generated MSL, its compile options and the
+pipeline descriptor, and the index identity includes the OS version and the
+Metal framework version. A pipeline whose generated MSL and descriptor are
+unchanged after a driver update is found in the existing archive; a pipeline
+whose MSL or descriptor changed, or any pipeline after an OS or Metal update, is
+compiled again.
+
 | Log:
 | 2026-05-28: Workaround implemented
 | 2026-08-10: Resolved in macOS 27 beta 5

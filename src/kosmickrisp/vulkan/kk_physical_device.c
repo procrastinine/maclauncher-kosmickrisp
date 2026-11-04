@@ -27,6 +27,7 @@
 #include "kosmickrisp/compiler/nir_to_msl.h"
 
 #include "util/disk_cache.h"
+#include "kk_compiler_cache.h"
 #include "util/mesa-blake3.h"
 #include "git_sha1.h"
 
@@ -1259,14 +1260,7 @@ struct disk_cache *
 kk_create_disk_cache(const blake3_hash driver_digest,
                      uint32_t apple_family, uint64_t disabled_workarounds)
 {
-#ifdef ENABLE_SHADER_CACHE
-   char renderer[32], timestamp[BLAKE3_HEX_LEN];
-   snprintf(renderer, sizeof(renderer), "kosmickrisp_apple_%u", apple_family);
-   _mesa_blake3_format(timestamp, driver_digest);
-   return disk_cache_create(renderer, timestamp, disabled_workarounds);
-#else
-   return NULL;
-#endif
+   return kk_open_disk_cache(driver_digest, apple_family, disabled_workarounds);
 }
 
 static void
@@ -1291,11 +1285,10 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
 {
    struct kk_instance *instance = kk_physical_device_instance(pdev);
 
+   /* Settings that select different generated code, shared by the per-build
+    * pipeline cache and the content-keyed Metal archive. */
    blake3_hasher blake3_ctx;
    _mesa_blake3_init(&blake3_ctx);
-
-   _mesa_blake3_update(&blake3_ctx, instance->driver_build_sha,
-                       sizeof(instance->driver_build_sha));
 
    /* Devices in the same family may differ in LOD-query support. Keep
     * serialized shaders and disk entries in the matching compiler domain. */
@@ -1317,6 +1310,14 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
       _mesa_blake3_update(&blake3_ctx, diagnostic, sizeof(diagnostic));
    }
 
+   blake3_hash domain;
+   _mesa_blake3_final(&blake3_ctx, domain);
+   kk_archive_cache_digest(domain, pdev->archive_cache_digest);
+
+   _mesa_blake3_init(&blake3_ctx);
+   _mesa_blake3_update(&blake3_ctx, instance->driver_build_sha,
+                       sizeof(instance->driver_build_sha));
+   _mesa_blake3_update(&blake3_ctx, domain, sizeof(domain));
    unsigned char blake3[BLAKE3_KEY_LEN];
    _mesa_blake3_final(&blake3_ctx, blake3);
 

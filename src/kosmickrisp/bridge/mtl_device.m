@@ -114,6 +114,18 @@ mtl_device_get_registry_id(mtl_device *dev)
    }
 }
 
+void
+mtl_device_get_compiler_identity(mtl_device *dev, char buffer[256])
+{
+   @autoreleasepool {
+      NSString *metal = [[NSBundle bundleWithIdentifier:@"com.apple.Metal"]
+         objectForInfoDictionaryKey:@"CFBundleVersion"];
+      NSString *os = [NSProcessInfo processInfo].operatingSystemVersionString;
+      snprintf(buffer, 256, "Metal %s; %s", metal ? metal.UTF8String : "unknown",
+               os ? os.UTF8String : "unknown");
+   }
+}
+
 bool
 mtl_device_supports_query_texture_lod(mtl_device *dev)
 {
