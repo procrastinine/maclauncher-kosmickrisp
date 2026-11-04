@@ -116,20 +116,51 @@ static_assert(sizeof(struct poly_heap) == 4 * 4,
               "struct poly_heap must be 4 words");
 
 #ifdef __OPENCL_VERSION__
-static inline uint
-poly_heap_alloc_offs(global struct poly_heap *heap, uint size_B, uint align_B)
+#define POLY_HEAP_ALLOC_FAILED 0xffffffffu
+
+/* Bytes for count elements of el_B bytes. A count that cannot fit in 32 bits
+ * saturates, so the product fails the heap size check instead of wrapping to a
+ * small allocation that later writes overrun. */
+static inline ulong
+poly_heap_bytes(ulong count, uint el_B)
 {
+   return min(count, (ulong)0xffffffffu) * el_B;
+}
+
+/* Returns POLY_HEAP_ALLOC_FAILED when the request does not fit. */
+static inline uint
+poly_heap_try_alloc_offs(global struct poly_heap *heap, ulong size_B,
+                         uint align_B)
+{
+   /* An exhausted heap stays exhausted: refusing before the atomic keeps the
+    * 32-bit bottom from wrapping and handing out offsets that overlap live
+    * allocations. A request larger than the heap is refused before its size
+    * can wrap the sum. */
+   if (size_B > heap->size || heap->bottom >= heap->size)
+      return POLY_HEAP_ALLOC_FAILED;
+
    /* We need to overallocate in order to leave room to align the allocation
     * regardless of the alignment of the heap bottom */
    uint offs = atomic_fetch_add((volatile atomic_uint *)(&heap->bottom),
-                                size_B + align_B);
+                                (uint)size_B + align_B);
    offs = align(offs, align_B);
 
-   /* Use printf+abort because assert is stripped from release builds. */
-   if (heap->bottom >= heap->size) {
+   return (ulong)offs + size_B > heap->size ? POLY_HEAP_ALLOC_FAILED : offs;
+}
+
+static inline uint
+poly_heap_alloc_offs(global struct poly_heap *heap, ulong size_B, uint align_B)
+{
+   uint offs = poly_heap_try_alloc_offs(heap, size_B, align_B);
+
+   /* Use printf+abort because assert is stripped from release builds. Abort
+    * ends only this invocation, so a caller whose outputs size later
+    * dispatches or draws uses a try allocation and publishes empty work in
+    * its failure branch instead. */
+   if (offs == POLY_HEAP_ALLOC_FAILED) {
       printf(
-         "FATAL: GPU heap overflow, allocating size %u, at offset %u, heap size %u!",
-         size_B, offs, heap->size);
+         "FATAL: GPU heap overflow, allocating size %lu, heap size %u!",
+         size_B, heap->size);
 
       abort();
    }
@@ -138,12 +169,27 @@ poly_heap_alloc_offs(global struct poly_heap *heap, uint size_B, uint align_B)
 }
 
 static inline global void *
-poly_heap_alloc(global struct poly_heap *heap, uint size_B, uint align_B)
+poly_heap_alloc(global struct poly_heap *heap, ulong size_B, uint align_B)
 {
    if (size_B == 0)
       return NULL;
 
    return heap->base + poly_heap_alloc_offs(heap, size_B, align_B);
+}
+
+#define POLY_HEAP_PTR_FAILED (~(uint64_t)0)
+
+/* poly_heap_alloc without the abort: POLY_HEAP_PTR_FAILED when the request
+ * does not fit, 0 for an empty request. */
+static inline uint64_t
+poly_heap_try_alloc(global struct poly_heap *heap, ulong size_B, uint align_B)
+{
+   if (size_B == 0)
+      return 0;
+
+   uint offs = poly_heap_try_alloc_offs(heap, size_B, align_B);
+   return offs == POLY_HEAP_ALLOC_FAILED ? POLY_HEAP_PTR_FAILED
+                                         : (uintptr_t)(heap->base + offs);
 }
 
 uint64_t nir_load_ro_sink_address_poly(void);
@@ -638,22 +684,48 @@ poly_gs_setup_indirect_inner(uint64_t index_buffer, uint vertex_count,
          poly_index_buffer_range_el(index_buffer_range_el, first_vertex);
    }
 
-   /* We need to allocate VS and GS count buffers, do so now */
-   uint vertex_buffer_size =
-      poly_tcs_in_size(vertex_count * instance_count, vs_outputs);
+   /* We need to allocate VS and GS count buffers, do so now. Sizes are
+    * computed in 64 bits so a large draw fails instead of wrapping.
+    */
+   const ulong vertices = (ulong)vertex_count * instance_count;
+   const ulong input_primitives =
+      (ulong)u_decomposed_prims_for_vertices(prim, vertex_count) *
+      instance_count;
 
+   uint64_t count_buffer = 0;
    if (is_prefix_summing) {
-      p->count_buffer = poly_heap_alloc(
-         heap, p->input_primitives * p->count_buffer_stride, 16);
+      count_buffer = poly_heap_try_alloc(
+         heap, poly_heap_bytes(input_primitives, p->count_buffer_stride), 16);
    }
 
-   vp->output_buffer = (uintptr_t)poly_heap_alloc(heap, vertex_buffer_size, 16);
+   uint64_t output_buffer = poly_heap_try_alloc(
+      heap, poly_heap_bytes(vertices, util_bitcount64(vs_outputs) * 16), 16);
 
+   uint index_offset = 0;
+   if (shape == POLY_GS_SHAPE_DYNAMIC_INDEXED) {
+      index_offset = poly_heap_try_alloc_offs(
+         heap, poly_heap_bytes(input_primitives, max_indices * 4), 16);
+   }
+
+   /* The parameters are reused memory that sizes the VS and GS dispatches and
+    * the rasterization draw: on overflow, run and draw nothing rather than
+    * write through missing buffers.
+    */
+   if (count_buffer == POLY_HEAP_PTR_FAILED ||
+       output_buffer == POLY_HEAP_PTR_FAILED ||
+       index_offset == POLY_HEAP_ALLOC_FAILED) {
+      poly_vertex_params_set_draw(vp, 0, 0);
+      poly_geometry_params_set_draw(p, prim, shape, max_indices, 0, 0);
+      return;
+   }
+
+   if (is_prefix_summing)
+      p->count_buffer = (global uint *)count_buffer;
+
+   vp->output_buffer = output_buffer;
    vp->outputs = vs_outputs;
 
    if (shape == POLY_GS_SHAPE_DYNAMIC_INDEXED) {
-      const uint32_t index_offset =
-         poly_heap_alloc_offs(heap, p->draw.index_count * 4, 16);
       p->draw.first_index = index_offset / 4;
       p->output_index_buffer = (global uint *)(heap->base + index_offset);
    }

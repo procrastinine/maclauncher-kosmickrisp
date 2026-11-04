@@ -26,16 +26,22 @@ libkk_prefix_sum_tess(global struct poly_tess_params *p)
 
    /* The last element of an inclusive prefix sum is the total sum */
    uint total = p->nr_patches > 0 ? p->counts[p->nr_patches - 1] : 0;
+   global uint32_t *desc = p->out_draws;
 
    /* Allocate 4-byte indices */
    uint32_t elsize_B = sizeof(uint32_t);
-   uint32_t size_B = total * elsize_B;
-   uint alloc_B = poly_heap_alloc_offs(p->heap, size_B, 16);
+   uint alloc_B = poly_heap_try_alloc_offs(p->heap, (ulong)total * elsize_B, 16);
+
+   /* The draw buffer is reused pool memory: on overflow, draw nothing. */
+   if (alloc_B == POLY_HEAP_ALLOC_FAILED) {
+      desc[0] = 0;
+      desc[1] = 0;
+      return;
+   }
+
    p->index_buffer = (global uint32_t *)(((uintptr_t)p->heap->base) + alloc_B);
 
    /* ...and now we can generate the API indexed draw */
-   global uint32_t *desc = p->out_draws;
-
    desc[0] = total;              /* count */
    desc[1] = 1;                  /* instance_count */
    desc[2] = alloc_B / elsize_B; /* start */

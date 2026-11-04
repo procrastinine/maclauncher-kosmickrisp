@@ -149,9 +149,14 @@ libkk_unroll_restart(uint64_t index_buffer, global struct poly_heap *heap,
    global uint *strip_starts = NULL;
    if (capture) {
       global struct poly_geometry_capture *p = (global struct poly_geometry_capture *)capture;
-      if (cl_local_id.x == 0)
-         p->restart_strips = (uintptr_t)poly_heap_alloc(heap,
-            u_decomposed_prims_for_vertices(mode, in_draw[0]) * 4, 4);
+      /* On overflow, publish no strip table rather than ending the elected
+       * thread alone; the others read its result after the barrier. */
+      if (cl_local_id.x == 0) {
+         uint offs = poly_heap_try_alloc_offs(heap,
+            poly_heap_bytes(u_decomposed_prims_for_vertices(mode, in_draw[0]), 4), 4);
+         p->restart_strips = offs == POLY_HEAP_ALLOC_FAILED ? 0 :
+            (uintptr_t)(heap->base + offs);
+      }
       barrier(CLK_GLOBAL_MEM_FENCE);
       strip_starts = (global uint *)p->restart_strips;
    }

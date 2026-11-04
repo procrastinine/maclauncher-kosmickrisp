@@ -141,16 +141,22 @@ poly_setup_unroll_for_draw(global struct poly_heap *heap,
     * Restarts only decrease the unrolled index buffer size, so the maximum size
     * is the unrolled size when the input has no restarts.
     */
-   uint max_prims = u_decomposed_prims_for_vertices(mode, in_draw[0]);
-   uint max_verts = max_prims * mesa_vertices_per_prim(mode);
-   uint alloc_size = max_verts * out_index_size_B;
+   ulong max_prims = u_decomposed_prims_for_vertices(mode, in_draw[0]);
+   ulong alloc_size = poly_heap_bytes(max_prims * mesa_vertices_per_prim(mode),
+                                      out_index_size_B);
 
-   /* Allocate unrolled index buffer.
+   /* Allocate unrolled index buffer. On overflow, draw nothing and return
+    * NULL so the whole workgroup leaves together; the elected thread must
+    * not exit alone while the others read its result.
     *
     * TODO: For multidraw, should be atomic. But multidraw+unroll isn't
     * currently wired up in any driver.
     */
-   uint old_heap_bottom_B = poly_heap_alloc_offs(heap, alloc_size, 16);
+   uint old_heap_bottom_B = poly_heap_try_alloc_offs(heap, alloc_size, 16);
+   if (old_heap_bottom_B == POLY_HEAP_ALLOC_FAILED) {
+      out_draw[1] = 0;
+      return NULL;
+   }
 
    /* Setup most of the descriptor. Count will be determined after unroll. */
    uint vertex_offset_idx = in_index_size_B > 0 ? 3 : 2;
@@ -195,6 +201,10 @@ poly_unroll_geometry_strips(global uint32_t *out_draw,
    } else {
       out_ptr = sub_group_broadcast(out_ptr, 0);
    }
+
+   /* The index buffer did not fit; the draw was published empty. */
+   if (!out_ptr)
+      return;
 
    uintptr_t in_ptr = (uintptr_t)(poly_index_buffer(
       index_buffer, index_buffer_range_el, in_draw[2], in_index_size_B));

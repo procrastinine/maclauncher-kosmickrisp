@@ -28,25 +28,41 @@ libkk_tess_setup_indirect(
       *tcs_statistic += in_patches;
    }
 
-   size_t draw_stride = 5 * sizeof(uint32_t);
    unsigned unrolled_patches = in_patches * instance_count;
 
-   uint32_t alloc = 0;
-   uint32_t tcs_out_offs = alloc;
-   alloc += unrolled_patches * p->tcs_stride_el * 4;
+   /* Sizes are computed in 64 bits so a large draw fails instead of wrapping
+    * to a small allocation that the dispatches overrun.
+    */
+   const ulong unrolled = (ulong)in_patches * instance_count;
+   ulong alloc = 0;
+   ulong tcs_out_offs = alloc;
+   alloc += poly_heap_bytes(unrolled, p->tcs_stride_el * 4);
 
-   uint32_t patch_coord_offs = alloc;
-   alloc += unrolled_patches * 4;
+   ulong patch_coord_offs = alloc;
+   alloc += poly_heap_bytes(unrolled, 4);
 
-   uint32_t count_offs = alloc;
-   alloc += unrolled_patches * sizeof(uint32_t);
+   ulong count_offs = alloc;
+   alloc += poly_heap_bytes(unrolled, sizeof(uint32_t));
 
-   uint vb_offs = alloc;
-   uint vb_size = poly_tcs_in_size(count * instance_count, vertex_outputs);
-   alloc += vb_size;
+   ulong vb_offs = alloc;
+   alloc += poly_heap_bytes((ulong)count * instance_count,
+                            util_bitcount64(vertex_outputs) * 16);
 
    /* Allocate all patch calculations in one go */
-   global uchar *blob = poly_heap_alloc(p->heap, alloc, 16);
+   uint64_t blob_addr = poly_heap_try_alloc(p->heap, alloc, 16);
+
+   /* The grids are reused pool memory that sizes the VS, TCS and tessellator
+    * dispatches, and the prefix sum reads nr_patches: on overflow, run
+    * nothing.
+    */
+   if (blob_addr == POLY_HEAP_PTR_FAILED) {
+      p->nr_patches = 0;
+      grids[0] = (struct kk_tess_grid){{0, 0, 0}, {vs_group_size, 1, 1}};
+      grids[1] = (struct kk_tess_grid){{0, 0, 0}, {p->output_patch_size, 1, 1}};
+      grids[2] = (struct kk_tess_grid){{0, 0, 0}, {1, 1, 1}};
+      return;
+   }
+   global uchar *blob = (global uchar *)blob_addr;
 
    p->tcs_buffer = (global float *)(blob + tcs_out_offs);
    p->patches_per_instance = in_patches;
