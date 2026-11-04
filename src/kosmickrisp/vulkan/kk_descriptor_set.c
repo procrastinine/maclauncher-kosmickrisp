@@ -233,8 +233,8 @@ write_buffer_view_desc(struct kk_descriptor_set *set,
    if (bufferView != VK_NULL_HANDLE) {
       VK_FROM_HANDLE(kk_buffer_view, view, bufferView);
 
-      assert(view->mtl_texel_buffer_handle);
-      assert(view->texel_buffer_gpu_id);
+      /* An empty view has no native texture. */
+      assert(view->texel_buffer_gpu_id || view->vk.elements == 0);
 
       desc.image_gpu_resource_id = view->texel_buffer_gpu_id;
       desc.texel_offset = view->texel_offset;

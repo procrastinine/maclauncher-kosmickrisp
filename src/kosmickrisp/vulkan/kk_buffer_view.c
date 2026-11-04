@@ -63,6 +63,13 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
    if (!view)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
+   /* VK_WHOLE_SIZE can leave less than one texel after the offset. The
+    * valid empty view has a null descriptor; Metal rejects width zero. */
+   if (view->vk.elements == 0) {
+      *pBufferView = kk_buffer_view_to_handle(view);
+      return VK_SUCCESS;
+   }
+
    enum pipe_format p_format = vk_format_to_pipe_format(view->vk.format);
    const struct kk_va_format *supported_format = kk_get_va_format(p_format);
 
