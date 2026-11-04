@@ -119,22 +119,32 @@ kk_queue_commit_native(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
    assert(kk_cmd_buffer_has_work(cmd));
    if (cmd->interlock_segments)
       return kk_interlock_commit(queue, cmd, callback, user_data);
-   const uint32_t retained_count = util_dynarray_num_elements(
-      &cmd->submit_drawables, void *);
-   void **drawables = util_dynarray_begin(&cmd->submit_drawables);
+   /* Feedback may reset/recycle cmd before native commit returns. Move the
+    * retained drawables out first; post-commit code must not touch cmd storage. */
+   struct util_dynarray owned_drawables = cmd->submit_drawables;
+   cmd->submit_drawables = UTIL_DYNARRAY_INIT;
+   void *primary_drawable = cmd->drawable;
+   cmd->drawable = NULL;
+   const uint32_t retained_count = util_dynarray_num_elements(&owned_drawables, void *);
+   void **drawables = util_dynarray_begin(&owned_drawables);
    bool primary_retained = false;
    for (uint32_t i = 0; i < retained_count; i++)
-      primary_retained |= drawables[i] == cmd->drawable;
+      primary_retained |= drawables[i] == primary_drawable;
    const uint32_t count = retained_count +
-      (cmd->drawable != NULL && !primary_retained);
+      (primary_drawable != NULL && !primary_retained);
    for (uint32_t i = 0; i < count; i++) {
-      void *drawable = i < retained_count ? drawables[i] : cmd->drawable;
+      void *drawable = i < retained_count ? drawables[i] : primary_drawable;
       KK_PERF_VOID(kk_queue_device(queue), KK_PERF_DRAWABLE_WAIT,
                    mtl_command_queue_wait_for_drawable(queue->mtl_handle,
                                                         drawable));
    }
 
    mtl_commit_options *options = mtl_new_commit_options();
+   if (!options) {
+      cmd->submit_drawables = owned_drawables;
+      cmd->drawable = primary_drawable;
+      return vk_error(kk_queue_device(queue), VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
    struct kk_perf *perf = kk_queue_device(queue)->perf;
    if (unlikely(perf)) {
       if (queue->native_submit == kk_queue_submit_verbose) {
@@ -153,15 +163,14 @@ kk_queue_commit_native(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
    }
    mtl_release(options);
    for (uint32_t i = 0; i < count; i++) {
-      void *drawable = i < retained_count ? drawables[i] : cmd->drawable;
+      void *drawable = i < retained_count ? drawables[i] : primary_drawable;
       mtl_command_queue_signal_drawable(queue->mtl_handle, drawable);
    }
    for (uint32_t i = 0; i < retained_count; i++)
       mtl_release(drawables[i]);
-   util_dynarray_clear(&cmd->submit_drawables);
-   if (cmd->drawable) {
-      mtl_release(cmd->drawable);
-      cmd->drawable = NULL;
+   util_dynarray_fini(&owned_drawables);
+   if (primary_drawable) {
+      mtl_release(primary_drawable);
    }
    return VK_SUCCESS;
 }
