@@ -137,6 +137,33 @@ VkResult kk_sparse_prepare_pipeline(struct kk_device *dev, uint32_t modes);
 bool kk_sparse_submission_begin(struct kk_device *dev);
 void kk_sparse_submission_end(struct kk_device *dev);
 void kk_sparse_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer);
+enum kk_sparse_address_class {
+   KK_SPARSE_ADDRESS_ORDINARY,
+   KK_SPARSE_ADDRESS_SPARSE,
+   KK_SPARSE_ADDRESS_UNKNOWN,
+};
+/* CPU value result, not a descriptor ABI or resource-retention reference.
+ * Binding-only sources are SPARSE with record_index=0 and their real map. */
+struct kk_sparse_address_token {
+   enum kk_sparse_address_class kind;
+   uint32_t record_index;
+   uint64_t address, size;
+   uint64_t source_address, source_size;
+   uint64_t map_address, byte_offset;
+};
+/* Complete live sparse directory; no public-buffer/BO/native-view lookup.
+ * ORDINARY proves no live sparse source intersects the requested range;
+ * ordinary resource usage/liveness are the API caller's valid-use contract.
+ * UNKNOWN leaves *out unchanged. Known results are borrowed under the usual
+ * host synchronization/resource lifetime, not pinned by these value bytes.
+ * Takes only the Sparse mutex; may be called under descriptor_heap_lock. */
+enum kk_sparse_address_class kk_sparse_classify_buffer_address(
+   struct kk_device *dev, uint64_t address, uint64_t size,
+   struct kk_sparse_address_token *out);
+/* Requires a known result for this immediate host-synchronized encoding. */
+struct kk_sparse_view_descriptor kk_sparse_token_view_descriptor(
+   const struct kk_sparse_address_token *token,
+   uint32_t coordinate_stride_B, bool rgb32_scalar);
 /* Borrow the actual selected virtual source; this builder does not retain it.
  * first_byte is buffer-relative. coordinate_stride_B advances one incoming
  * residency coordinate; rgb32_scalar covers three consecutive 4-byte native

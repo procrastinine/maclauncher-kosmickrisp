@@ -54,6 +54,15 @@ struct kk_sparse_record_node {
 struct kk_sparse_range {
    uint64_t start, end, record_address, reserved;
 };
+/* Same CPU directory, now complete for every live sparse virtual buffer.
+ * Only gpu rows with a record address are published to the GPU range table. */
+struct kk_sparse_range_source {
+   struct kk_sparse_range gpu;
+   mtl_buffer *resource;
+   uint64_t map_address;
+   uint32_t record_index;
+};
+static_assert(sizeof(struct kk_sparse_range) == 32, "GPU sparse range ABI");
 struct kk_sparse_range_version {
    mtl_buffer *buffer;
    struct kk_sparse_range_version *next;
@@ -128,7 +137,10 @@ static bool
 kk_sparse_publish_ranges(struct kk_device *dev)
 {
    struct kk_sparse_device_state *state = kk_sparse_state(dev);
-   unsigned count = util_dynarray_num_elements(&state->ranges, struct kk_sparse_range);
+   unsigned count = 0;
+   util_dynarray_foreach(&state->ranges, struct kk_sparse_range_source, source)
+      count += source->gpu.record_address != 0;
+   assert(state->root);
    struct kk_sparse_range_version *version = NULL;
    if (count) {
       version = calloc(1, sizeof(*version));
@@ -138,7 +150,10 @@ kk_sparse_publish_ranges(struct kk_device *dev)
       if (!version->buffer) { free(version); return false; }
       uint64_t *header = mtl_get_contents(version->buffer);
       header[0] = count;
-      memcpy(header + 2, state->ranges.data, state->ranges.size);
+      struct kk_sparse_range *rows = (void *)(header + 2);
+      unsigned i = 0;
+      util_dynarray_foreach(&state->ranges, struct kk_sparse_range_source, source)
+         if (source->gpu.record_address) rows[i++] = source->gpu;
       qsort(header + 2, count, sizeof(struct kk_sparse_range), kk_sparse_range_compare);
       kk_sparse_residency(dev, version->buffer, true);
    }
@@ -159,10 +174,10 @@ kk_sparse_publish_ranges(struct kk_device *dev)
 /* Resource creation is the first possible user. Serialize publication with
  * the existing residency lock so an unused device allocates no sparse state. */
 static VkResult
-kk_sparse_device_ensure(struct kk_device *dev, uint32_t mode)
+kk_sparse_device_ensure(struct kk_device *dev, uint32_t mode, bool address_tracking)
 {
    mode &= kk_sparse_enabled_modes(dev);
-   if (!mode) return VK_SUCCESS;
+   if (!mode && !address_tracking) return VK_SUCCESS;
    bool buffer = mode & KK_SPARSE_BUFFER;
    struct kk_sparse_device_state *state = kk_sparse_state(dev);
    if (state && (!buffer || p_atomic_read(&state->root))) return VK_SUCCESS;
@@ -201,7 +216,7 @@ kk_sparse_prepare_pipeline(struct kk_device *dev, uint32_t modes)
    /* GPU-written heap descriptors and physical pointers can introduce a first
     * sparse buffer after submission. Their native code and stable root must
     * already exist. Texture-only standard3D needs no buffer directory. */
-   return kk_sparse_device_ensure(dev, modes & KK_SPARSE_BUFFER);
+   return kk_sparse_device_ensure(dev, modes & KK_SPARSE_BUFFER, false);
 }
 
 uint32_t
@@ -258,53 +273,71 @@ kk_sparse_device_finish(struct kk_device *dev)
    free(state); p_atomic_set(&dev->sparse, NULL);
 }
 
+/* Complete CPU publication for every successful SPARSE_BINDING buffer.
+ * Only partial-residency sources consume a GPU record/range row. */
 static VkResult
 kk_sparse_buffer_record(struct kk_device *dev, struct kk_buffer *buffer)
 {
    struct kk_sparse_device_state *state = kk_sparse_state(dev);
-   /* Opaque binding alone does not require shader residency metadata. */
-   if (!(buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT) ||
-       !dev->vk.enabled_features.sparseResidencyBuffer) return VK_SUCCESS;
+   const bool partial =
+      (buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT) &&
+      dev->vk.enabled_features.sparseResidencyBuffer;
    assert(state);
    simple_mtx_lock(&state->mutex);
-   if (state->next_record == 0) {
-      simple_mtx_unlock(&state->mutex); return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   uint64_t *record = NULL;
+   uint64_t record_address = 0;
+   if (partial) {
+      if (state->next_record == 0) {
+         simple_mtx_unlock(&state->mutex); return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      }
+      uint32_t index = state->next_record;
+      unsigned hi = index >> 20, middle = (index >> 10) & 1023;
+      struct kk_sparse_record_node *mid = state->children[hi];
+      if (!mid) {
+         mid = calloc(1, sizeof(*mid));
+         if (mid) mid->buffer = mtl_sparse_new_residency_buffer(dev->mtl_handle, 1024 * 8, false);
+         if (!mid || !mid->buffer) { free(mid); goto fail; }
+         state->children[hi] = mid;
+         kk_sparse_residency(dev, mid->buffer, true);
+         uint64_t *root = mtl_get_contents(state->root);
+         root[2 + hi] = mtl_buffer_get_gpu_address(mid->buffer);
+      }
+      struct kk_sparse_record_node *leaf = mid->children[middle];
+      if (!leaf) {
+         leaf = calloc(1, sizeof(*leaf));
+         if (leaf) leaf->buffer = mtl_sparse_new_residency_buffer(dev->mtl_handle, 1024 * 32, false);
+         if (!leaf || !leaf->buffer) { free(leaf); goto fail; }
+         mid->children[middle] = leaf;
+         kk_sparse_residency(dev, leaf->buffer, true);
+         uint64_t *directory = mtl_get_contents(mid->buffer);
+         directory[middle] = mtl_buffer_get_gpu_address(leaf->buffer);
+      }
+      record = (uint64_t *)mtl_get_contents(leaf->buffer) + (index & 1023) * 4;
+      record[0] = buffer->vk.device_address;
+      record[1] = buffer->vk.device_address + buffer->vk.size;
+      record[2] = mtl_buffer_get_gpu_address(buffer->sparse_residency);
+      buffer->sparse_record = index;
+      state->next_record++;
+      record_address = mtl_buffer_get_gpu_address(leaf->buffer) + (index & 1023) * 32;
    }
-   uint32_t index = state->next_record;
-   unsigned hi = index >> 20, middle = (index >> 10) & 1023;
-   struct kk_sparse_record_node *mid = state->children[hi];
-   if (!mid) {
-      mid = calloc(1, sizeof(*mid));
-      if (mid) mid->buffer = mtl_sparse_new_residency_buffer(dev->mtl_handle, 1024 * 8, false);
-      if (!mid || !mid->buffer) { free(mid); goto fail; }
-      state->children[hi] = mid;
-      kk_sparse_residency(dev, mid->buffer, true);
-      uint64_t *root = mtl_get_contents(state->root);
-      root[2 + hi] = mtl_buffer_get_gpu_address(mid->buffer);
+   struct kk_sparse_range_source *source =
+      util_dynarray_grow(&state->ranges, struct kk_sparse_range_source, 1);
+   if (!source) {
+      if (record) record[1] = record[2] = 0;
+      simple_mtx_unlock(&state->mutex);
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
    }
-   struct kk_sparse_record_node *leaf = mid->children[middle];
-   if (!leaf) {
-      leaf = calloc(1, sizeof(*leaf));
-      if (leaf) leaf->buffer = mtl_sparse_new_residency_buffer(dev->mtl_handle, 1024 * 32, false);
-      if (!leaf || !leaf->buffer) { free(leaf); goto fail; }
-      mid->children[middle] = leaf;
-      kk_sparse_residency(dev, leaf->buffer, true);
-      uint64_t *directory = mtl_get_contents(mid->buffer);
-      directory[middle] = mtl_buffer_get_gpu_address(leaf->buffer);
-   }
-   uint64_t *record = (uint64_t *)mtl_get_contents(leaf->buffer) + (index & 1023) * 4;
-   record[0] = buffer->vk.device_address;
-   record[1] = buffer->vk.device_address + buffer->vk.size;
-   record[2] = mtl_buffer_get_gpu_address(buffer->sparse_residency);
-   buffer->sparse_record = index;
-   state->next_record++;
-   struct kk_sparse_range range = {
-      .start = record[0], .end = record[1],
-      .record_address = mtl_buffer_get_gpu_address(leaf->buffer) + (index & 1023) * 32,
+   *source = (struct kk_sparse_range_source){
+      .gpu = {.start = buffer->vk.device_address,
+              .end = buffer->vk.device_address + buffer->vk.size,
+              .record_address = record_address},
+      .resource = buffer->metal.handle,
+      .map_address = partial ? record[2] :
+         mtl_buffer_get_gpu_address(buffer->sparse_residency),
+      .record_index = buffer->sparse_record,
    };
-   util_dynarray_append(&state->ranges, range);
-   if (!kk_sparse_publish_ranges(dev)) {
-      state->ranges.size -= sizeof(range);
+   if (partial && !kk_sparse_publish_ranges(dev)) {
+      state->ranges.size -= sizeof(*source);
       record[1] = record[2] = 0;
       simple_mtx_unlock(&state->mutex);
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -406,7 +439,7 @@ kk_sparse_buffer_init(struct kk_device *dev, struct kk_buffer *buffer)
    if (!kk_device_physical(dev)->info.placement_sparse)
       return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
    VkResult result = kk_sparse_device_ensure(dev,
-      buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT ? KK_SPARSE_BUFFER : 0);
+      buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT ? KK_SPARSE_BUFFER : 0, true);
    if (result != VK_SUCCESS) return result;
    buffer->metal.handle = mtl_new_sparse_buffer(dev->mtl_handle,
       align64(buffer->vk.size, KK_SPARSE_PAGE_SIZE));
@@ -437,37 +470,110 @@ kk_sparse_buffer_init(struct kk_device *dev, struct kk_buffer *buffer)
 void
 kk_sparse_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer)
 {
-   if (buffer->sparse_residency) {
-      if (kk_sparse_state(dev) && buffer->sparse_record) {
-         struct kk_sparse_device_state *state = kk_sparse_state(dev);
-         simple_mtx_lock(&state->mutex);
-         uint32_t index = buffer->sparse_record;
+   struct kk_sparse_device_state *state = kk_sparse_state(dev);
+   if (buffer->sparse_residency && state) {
+      simple_mtx_lock(&state->mutex);
+      uint32_t index = buffer->sparse_record;
+      if (index) {
          struct kk_sparse_record_node *leaf = state->children[index >> 20]->children[(index >> 10) & 1023];
          uint64_t *record = (uint64_t *)mtl_get_contents(leaf->buffer) + (index & 1023) * 4;
-         /* A retired range can still appear in an older snapshot. Clear its
-          * live record so address reuse cannot match a destroyed buffer. */
+         /* Retired GPU snapshots cannot identify a destroyed/reused source. */
          record[1] = record[2] = 0;
-         util_dynarray_foreach(&state->ranges, struct kk_sparse_range, range) {
-            if (range->start != buffer->vk.device_address) continue;
-            struct kk_sparse_range *last = util_dynarray_pop_ptr(&state->ranges, struct kk_sparse_range);
-            if (range != last) *range = *last;
-            break;
-         }
-         /* Destruction cannot fail. If allocating a smaller snapshot fails,
-          * the previous sorted table remains valid with the cleared record. */
-         kk_sparse_publish_ranges(dev);
-         if (state->submissions) {
-            util_dynarray_append(&state->retired_maps, buffer->sparse_residency);
-            buffer->sparse_residency = NULL;
-         }
-         simple_mtx_unlock(&state->mutex);
       }
+      bool removed_gpu_range = false;
+      util_dynarray_foreach(&state->ranges, struct kk_sparse_range_source, source) {
+         if (source->resource != buffer->metal.handle) continue;
+         removed_gpu_range = source->gpu.record_address != 0;
+         struct kk_sparse_range_source *last =
+            util_dynarray_pop_ptr(&state->ranges, struct kk_sparse_range_source);
+         if (source != last) *source = *last;
+         break;
+      }
+      /* Binding-only sources need the CPU directory, not GPU range versions. */
+      if (removed_gpu_range) kk_sparse_publish_ranges(dev);
+      if (index && state->submissions) {
+         util_dynarray_append(&state->retired_maps, buffer->sparse_residency);
+         buffer->sparse_residency = NULL;
+      }
+      simple_mtx_unlock(&state->mutex);
    }
    if (buffer->sparse_residency) {
       kk_sparse_residency(dev, buffer->sparse_residency, false);
       mtl_release(buffer->sparse_residency);
       buffer->sparse_residency = NULL;
    }
+}
+
+enum kk_sparse_address_class
+kk_sparse_classify_buffer_address(struct kk_device *dev, uint64_t address,
+                                 uint64_t size, struct kk_sparse_address_token *out)
+{
+   struct kk_sparse_address_token result = {
+      .kind = KK_SPARSE_ADDRESS_ORDINARY, .address = address, .size = size,
+   };
+   if (!address) {
+      *out = (struct kk_sparse_address_token){.kind = KK_SPARSE_ADDRESS_ORDINARY};
+      return out->kind;
+   }
+   if (!size || size > UINT64_MAX - address) return KK_SPARSE_ADDRESS_UNKNOWN;
+   const uint64_t end = address + size;
+   struct kk_sparse_device_state *state = kk_sparse_state(dev);
+   if (!state) { *out = result; return result.kind; }
+   simple_mtx_lock(&state->mutex);
+   const struct kk_sparse_range_source *selected = NULL;
+   util_dynarray_foreach(&state->ranges, struct kk_sparse_range_source, source) {
+      if (source->gpu.end <= source->gpu.start || !source->resource ||
+          !source->map_address ||
+          (!!source->record_index != !!source->gpu.record_address)) goto unknown;
+      if (source->gpu.end <= address || source->gpu.start >= end) continue;
+      /* An intersecting but not covering source is not ordinary absence. */
+      if (address < source->gpu.start || size > source->gpu.end - address)
+         goto unknown;
+      if (selected && (selected->resource != source->resource ||
+                       selected->gpu.start != source->gpu.start ||
+                       selected->gpu.end != source->gpu.end ||
+                       selected->map_address != source->map_address ||
+                       selected->record_index != source->record_index)) goto unknown;
+      selected = source;
+   }
+   if (selected) {
+      result.kind = KK_SPARSE_ADDRESS_SPARSE;
+      result.record_index = selected->record_index;
+      result.map_address = selected->map_address;
+      result.source_address = selected->gpu.start;
+      result.source_size = selected->gpu.end - selected->gpu.start;
+      result.byte_offset = address - selected->gpu.start;
+   }
+   simple_mtx_unlock(&state->mutex);
+   *out = result;
+   return result.kind;
+unknown:
+   simple_mtx_unlock(&state->mutex);
+   return KK_SPARSE_ADDRESS_UNKNOWN;
+}
+
+static struct kk_sparse_view_descriptor
+kk_sparse_map_descriptor(uint64_t map_address, uint64_t first_byte,
+                         uint32_t coordinate_stride_B, bool rgb32_scalar)
+{
+   assert(coordinate_stride_B && !(coordinate_stride_B & KK_TEXEL_BUFFER_RGB32));
+   assert(!rgb32_scalar || coordinate_stride_B == 4);
+   return (struct kk_sparse_view_descriptor){
+      .residency_address = map_address + first_byte / KK_SPARSE_PAGE_SIZE,
+      .byte_offset = first_byte % KK_SPARSE_PAGE_SIZE,
+      .texel_size = coordinate_stride_B | (rgb32_scalar ? KK_TEXEL_BUFFER_RGB32 : 0),
+   };
+}
+
+struct kk_sparse_view_descriptor
+kk_sparse_token_view_descriptor(const struct kk_sparse_address_token *token,
+                                uint32_t coordinate_stride_B, bool rgb32_scalar)
+{
+   assert(token->kind != KK_SPARSE_ADDRESS_UNKNOWN);
+   if (token->kind == KK_SPARSE_ADDRESS_ORDINARY)
+      return (struct kk_sparse_view_descriptor){0};
+   return kk_sparse_map_descriptor(token->map_address, token->byte_offset,
+                                   coordinate_stride_B, rgb32_scalar);
 }
 
 struct kk_sparse_view_descriptor
@@ -478,14 +584,8 @@ kk_sparse_buffer_range_descriptor(const struct kk_buffer *buffer,
    if (!buffer || !buffer->sparse_residency)
       return (struct kk_sparse_view_descriptor){0};
    assert(first_byte <= buffer->vk.size);
-   assert(coordinate_stride_B && !(coordinate_stride_B & KK_TEXEL_BUFFER_RGB32));
-   assert(!rgb32_scalar || coordinate_stride_B == 4);
-   return (struct kk_sparse_view_descriptor){
-      .residency_address = mtl_buffer_get_gpu_address(buffer->sparse_residency) +
-                           first_byte / KK_SPARSE_PAGE_SIZE,
-      .byte_offset = first_byte % KK_SPARSE_PAGE_SIZE,
-      .texel_size = coordinate_stride_B | (rgb32_scalar ? KK_TEXEL_BUFFER_RGB32 : 0),
-   };
+   return kk_sparse_map_descriptor(mtl_buffer_get_gpu_address(buffer->sparse_residency),
+                                   first_byte, coordinate_stride_B, rgb32_scalar);
 }
 
 struct kk_sparse_view_descriptor
