@@ -351,10 +351,14 @@ Feature table
        Each Metal quad or half quad forms one fragment. One covered lane per
        fragment runs the shader body and its outputs are broadcast to the
        other pixels; the other lanes evaluate neighboring fragments for
-       derivatives. Attachment texels are 8x8. Sample shading, shader depth,
+       derivatives. A multisampled shader that writes memory, which Metal
+       runs once per covered sample, selects one lane across the samples of
+       each fragment and primitive. Attachment texels are 8x8. Sample shading, shader depth,
        stencil and sample mask writes, sample mask reads, interlock, custom
        sample locations, conservative rasterization and a partial static or
-       dynamic sample mask select 1x1. Primitive rates are read from vertex shaders.
+       dynamic sample mask select 1x1. Primitive rates come from the last
+       vertex, tessellation evaluation, geometry or mesh stage; a stage that
+       does not write one provides 1x1.
      - No Apple family.
      - ``fragment_shading_rate``
      - Off

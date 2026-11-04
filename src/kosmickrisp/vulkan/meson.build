@@ -83,8 +83,6 @@ kk_files = [kk_emulation_generated] + files(
   'kk_cmd_draw.c',
   'kk_depth_bounds.c',
   'kk_depth_stencil_state.c',
-  'kk_fragment_shading_rate_command.c',
-  'kk_fragment_shading_rate_resources.c',
   'kk_cmd_meta.c',
   'kk_cmd_pool.h',
   'kk_cmd_pool.c',

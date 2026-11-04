@@ -1246,6 +1246,16 @@ kk_init_heap(const void *data)
    };
 }
 
+static void
+kk_init_fsr_slots(const void *data)
+{
+   struct kk_device *dev = (struct kk_device *)data;
+   if (kk_alloc_bo(dev, &dev->vk.base, KK_FSR_SLOT_BYTES, 16, &dev->fsr_slots) == VK_SUCCESS) {
+      memset(dev->fsr_slots->cpu, 0, dev->fsr_slots->size_B);
+      kk_bo_set_label(dev->fsr_slots, "Fragment shading rate sample slots");
+   }
+}
+
 static struct kk_bo *
 kk_draw_heap(struct kk_cmd_buffer *cmd)
 {
@@ -1894,6 +1904,15 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
         IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH) || IS_SHADER_DIRTY(FRAGMENT))) {
       desc->root.draw.sample_mask = dyn->ms.sample_mask;
       desc->root.draw.alpha_to_coverage = dyn->ms.alpha_to_coverage_enable;
+      desc->root_dirty = true;
+   }
+
+   struct kk_shader *rate_fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+   if (rate_fs && rate_fs->info.fs.fsr_slots) {
+      /* Sample invocations of one fragment find each other by draw. */
+      util_call_once_data(&dev->fsr_slots_once, kk_init_fsr_slots, dev);
+      desc->root.fsr.serial = p_atomic_inc_return(&dev->fsr_serial);
+      desc->root.fsr.slots = dev->fsr_slots ? dev->fsr_slots->gpu : 0;
       desc->root_dirty = true;
    }
 

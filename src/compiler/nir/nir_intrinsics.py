@@ -3363,6 +3363,11 @@ load("per_draw_ptr_kk", [], [], [CAN_ELIMINATE, CAN_REORDER])
 # Device-monotonic sampler-state specialization, resolved before Metal PSO creation.
 intrinsic("load_sampler_emulation_enabled_kk", src_comp=[], dest_comp=1,
           bit_sizes=[1], flags=[CAN_ELIMINATE, CAN_REORDER])
+# Metal [[primitive_id]] of the rasterized primitive in a fragment shader. It
+# becomes load_primitive_id once a geometry or mesh producer's written
+# primitive ID has been forwarded to the fragment shader.
+intrinsic("load_raster_primitive_id_kk", src_comp=[], dest_comp=1,
+          bit_sizes=[32], flags=[CAN_ELIMINATE, CAN_REORDER])
 # Query-active Metal function constant, preserved through captured shaders.
 intrinsic("load_pipeline_statistics_enabled_kk", src_comp=[], dest_comp=1,
           bit_sizes=[1], flags=[CAN_ELIMINATE, CAN_REORDER])

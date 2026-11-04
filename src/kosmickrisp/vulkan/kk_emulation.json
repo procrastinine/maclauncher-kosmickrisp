@@ -538,14 +538,15 @@
     "name": "fragment_shading_rate",
     "description": "Pipeline, primitive and attachment fragment shading rates up to 2x2 pixels.",
     "cost_class": "fragment shader lowering / quad operations",
-    "cost_note": "Metal has no per-draw coarse shading. Each Metal quad or half quad forms one fragment: one lane per fragment runs the application side effects and its outputs are broadcast to the other lanes, while the remaining lanes evaluate the neighboring fragments that derivatives need. Inputs are extrapolated to the fragment centers through quad operations, derivatives and implicit texture levels are recomputed, and the final rate is combined in the shader. Every fragment shader of a pipeline that can select a rate above 1x1 takes this path, including draws whose rate is 1x1, and its root upload includes the full push constant range.",
+    "cost_note": "Metal has no per-draw coarse shading. Each Metal quad or half quad forms one fragment: one lane per fragment runs the application side effects and its outputs are broadcast to the other lanes, while the remaining lanes evaluate the neighboring fragments that derivatives need. Inputs are extrapolated to the fragment centers through quad operations, derivatives and implicit texture levels are recomputed, and the final rate is combined in the shader. Every fragment shader of a pipeline that can select a rate above 1x1 takes this path, including draws whose rate is 1x1, and its root upload includes the full push constant range. Metal runs a multisampled fragment shader that uses device atomics once per covered sample, with the sample invocations of a pixel in one SIMD group; when a multisampled shader on this path writes memory, the lanes holding samples of the same fragment and primitive select one lane, which runs the shader body, and SIMD shuffles broadcast its outputs and discard.",
     "extensions": [
       "VK_KHR_fragment_shading_rate"
     ],
     "features": [
       "pipelineFragmentShadingRate",
       "primitiveFragmentShadingRate",
-      "attachmentFragmentShadingRate"
+      "attachmentFragmentShadingRate",
+      "primitiveFragmentShadingRateMeshShader"
     ],
     "properties": [
       "minFragmentShadingRateAttachmentTexelSize",
@@ -568,7 +569,7 @@
     ],
     "performance": false,
     "performance_reason": "vkd3d-proton enables the dynamic rate on every graphics pipeline with render targets when the extension is reported, which would place every pixel shader on the quad-group path.",
-    "off_consequence": "vkd3d-proton reports variable shading rate tier 0, which keeps Direct3D 12 at feature level 12_1.",
+    "off_consequence": "vkd3d-proton reports variable shading rate tier 0, which keeps Direct3D 12 at feature level 12_1. Multisampled fragment shaders that use device atomics run once per covered sample, as Metal runs them; Vulkan permits these additional invocations outside fragment shading rates.",
     "native_from": null
   },
   {

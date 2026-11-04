@@ -36,7 +36,6 @@
 #include "kk_instance.h"
 #include "kk_physical_device.h"
 #include "kk_shader.h"
-#include "kk_fragment_shading_rate_cache.h"
 #include "kk_interlock_device.h"
 #include "kk_interlock_submit.h"
 
@@ -835,9 +834,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       dev->vk.enabled_extensions.AMD_draw_indirect_count;
 
    dev->dgc_once = (util_once_flag)UTIL_ONCE_FLAG_INIT;
+   dev->fsr_slots_once = (util_once_flag)UTIL_ONCE_FLAG_INIT;
    kk_descriptor_heap_init(dev);
-   result = kk_vrs_device_init(dev);
-   if (result != VK_SUCCESS) goto fail_init;
    result = kk_device_fault_init(dev);
    if (result != VK_SUCCESS) goto fail_init;
    dev->vk.shader_ops = &kk_device_shader_ops;
@@ -975,7 +973,6 @@ fail_compiler:
 fail_init:
    kk_device_fault_finish(dev);
    kk_depth_stencil_cache_finish(dev);
-   kk_vrs_device_finish(dev);
    kk_descriptor_heap_finish(dev);
    kk_perf_destroy(dev->perf);
    kk_sync_device_finish(dev);
@@ -1031,7 +1028,6 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_temporal_finish(dev);
    kk_device_finish_lib(dev);
    kk_interlock_device_finish(dev);
-   kk_vrs_device_finish(dev);
    kk_query_table_finish(dev, &dev->occlusion_queries);
    kk_descriptor_heap_finish(dev);
    kk_destroy_sampler_heap(dev, &dev->samplers);
@@ -1041,6 +1037,8 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    /* Geometry heap */
    if (dev->heap)
       kk_destroy_bo(dev, dev->heap);
+   if (dev->fsr_slots)
+      kk_destroy_bo(dev, dev->fsr_slots);
 
    kk_sparse_device_finish(dev);
 

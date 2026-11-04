@@ -19,7 +19,6 @@
 #include "kk_poly_raster_topology.h"
 
 #include "vk_pipeline_cache.h"
-#include "kk_fragment_shading_rate_cache.h"
 
 #include "vk_shader.h"
 #include "util/u_call_once.h"
@@ -217,6 +216,9 @@ struct kk_shader_info {
          bool line_geometry_stipple;
          bool emulates_per_vertex_inputs;
          bool per_vertex_uses_heap;
+         /* Multisampled shading-rate fragments run once across samples
+          * through per-fragment slots. */
+         bool fsr_slots;
          uint64_t flat_outputs;
          uint64_t noperspective_outputs;
       } fs;
@@ -312,7 +314,6 @@ struct kk_shader {
    /* Immutable vk.stage selects vertex, fragment, compute or Task/Mesh state. */
    union {
       struct kk_shader *gs_mesh; /* Vertex-owned internal Mesh alternative. */
-      struct kk_vrs_source *vrs_source;
       mtl_compute_pipeline_state *dgc_compute;
       struct kk_mesh_shader_state *mesh;
    };

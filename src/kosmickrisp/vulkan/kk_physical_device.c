@@ -311,6 +311,7 @@ kk_get_device_features(
       .taskShader = true,
       .meshShader = true,
       .meshShaderQueries = true,
+      .primitiveFragmentShadingRateMeshShader = true,
       .computeDerivativeGroupLinear = true,
       .computeDerivativeGroupQuads = false,
       .robustBufferAccess = true,

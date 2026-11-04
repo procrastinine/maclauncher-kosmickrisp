@@ -119,7 +119,6 @@ struct kk_device {
    struct kk_heap_border_registry *heap_borders;
    struct kk_buffer *heap_buffers;
 
-   struct kk_vrs_device *vrs;
    util_once_flag dgc_once;
    struct kk_dgc_metal *dgc;
    struct kk_temporal *temporal;
@@ -167,6 +166,10 @@ struct kk_device {
    struct kk_atomic64_state *atomic64_locks;
    struct kk_bo *heap;
    struct kk_bo *interlock_guard;
+   /* Multisampled shading-rate fragment slots, created on first use. */
+   struct kk_bo *fsr_slots;
+   util_once_flag fsr_slots_once;
+   uint32_t fsr_serial;
    struct kk_interlock_registry *interlock_registry;
    util_once_flag heap_init_once;
    struct kk_frame_capture *frame_capture;

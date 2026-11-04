@@ -92,7 +92,10 @@ struct kk_root_descriptor_table {
       uint64_t attachment;
       /* Dynamic pipeline rate in bits 0-3, combiner ops in 4-6 and 8-10. */
       uint32_t state;
-      uint32_t pad;
+      /* Multisampled fragments that write memory: a serial unique to the
+       * draw and the per-fragment slots they run once across samples with. */
+      uint32_t serial;
+      uint64_t slots;
    } fsr;
 };
 

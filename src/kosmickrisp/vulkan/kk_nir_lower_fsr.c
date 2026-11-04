@@ -37,6 +37,11 @@ struct fsr_ctx {
    nir_def *coord;        /* FragCoord at the lane position */
    nir_def *real;         /* this lane runs its fragment, bool */
    nir_def *sel;          /* xor distance to the real lane, u32 */
+   bool sample_group;     /* the shader may run once per covered sample */
+   nir_def *ox, *oy;      /* fragment origin in pixels, u32 */
+   nir_def *lead;         /* real lane of this sample invocation, bool */
+   nir_def *won;          /* this invocation runs the fragment's side effects */
+   nir_def *slot, *tag;   /* fragment slot address (u64, 0 if none) and tag */
    nir_def *rate;         /* final rate, Vulkan encoding */
    nir_def *fx, *fy;      /* fragment width and height, float */
    /* Neighbor displacements for the derivative solve. */
@@ -137,11 +142,13 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
          .base = 0, .component = 0, .dest_type = nir_type_int32,
          .io_semantics = io), 0xf);
       b->shader->info.inputs_read |= VARYING_BIT_PRIMITIVE_SHADING_RATE;
+      if (opts->primitive_rate_per_primitive)
+         b->shader->info.per_primitive_inputs |= VARYING_BIT_PRIMITIVE_SHADING_RATE;
    }
    /* The existing coarse engine's combiners, on pixel extents. */
    nir_def *extent = kk_nir_vrs_combine_extent(b, kk_nir_vrs_decode_extent(b, rate),
                                                kk_nir_vrs_decode_extent(b, primitive), op0);
-   /* Placeholder for the attachment rate; kk_nir_lower_fsr_attachment reads
+   /* Placeholder for the attachment rate; kk_nir_lower_fsr_late reads
     * the attachment after descriptor and texture lowering. */
    nir_def *attachment = opts->attachment_rate ? nir_load_frag_shading_rate(b)
                                                : nir_imm_int(b, 0);
@@ -194,6 +201,8 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
    nir_def *rqy = nir_ushr_imm(b, real_pos, 1);
    nir_def *ox = nir_bcsel(b, wide, nir_iand_imm(b, px, ~1u), px);
    nir_def *oy = nir_bcsel(b, tall, nir_iand_imm(b, py, ~1u), py);
+   ctx->ox = ox;
+   ctx->oy = oy;
    nir_def *half_x = nir_fmul_imm(b, ctx->fx, 0.5);
    nir_def *half_y = nir_fmul_imm(b, ctx->fy, 0.5);
    nir_def *shift_x = nir_i2f32(b, nir_isub(b, ctx->qx, rqx));
@@ -366,6 +375,9 @@ fsr_rewrite(nir_builder *b, struct fsr_ctx *ctx, nir_instr *instr)
                                           nir_load_var(b, ctx->demoted)));
       return true;
    case nir_intrinsic_store_output: {
+      /* Sample invocations exchange all outputs together at the end. */
+      if (ctx->sample_group)
+         return false;
       nir_def *value = fsr_broadcast(b, ctx, intr->src[0].ssa);
       nir_src_rewrite(&intr->src[0], value);
       return true;
@@ -436,6 +448,235 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
    }
 }
 
+/* Metal runs a multisampled fragment shader that writes memory once per
+ * covered sample. Each fragment then has a slot in a device buffer. The first
+ * sample invocation whose real lane claims the slot runs the fragment's side
+ * effects and publishes its outputs and discard state; the real lanes of the
+ * other sample invocations wait for them.
+ *
+ * The tag identifies the draw, the rasterized primitive and the fragment, and
+ * its low byte is the draw serial's. A slot is free when it is zero or holds
+ * the tag of a draw at least two serials older; the slot index is a hash of
+ * the tag, probed linearly. A claim never replaces a slot of the current or
+ * the previous draw, so fragments that share pixels (primitives meeting at an
+ * edge, consecutive draws) keep separate slots. A fragment that finds no free
+ * slot within the probe limit runs on its own, as without the slots. */
+#define FSR_SLOT_READY 4
+#define FSR_SLOT_DISCARD 8
+#define FSR_SLOT_DATA 12
+#define FSR_SLOT_PROBES 16
+#define FSR_SLOT_TRIES (1u << 18)
+
+static unsigned
+fsr_output_words(nir_function_impl *impl)
+{
+   unsigned words = 0;
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic ||
+             !fsr_is_output(nir_instr_as_intrinsic(instr)))
+            continue;
+         nir_def *v = nir_instr_as_intrinsic(instr)->src[0].ssa;
+         words += v->num_components * DIV_ROUND_UP(v->bit_size, 32);
+      }
+   }
+   return words;
+}
+
+static nir_def *
+fsr_slot_read(nir_builder *b, nir_def *addr)
+{
+   return nir_global_atomic(b, 32, addr, nir_imm_int(b, 0), .atomic_op = nir_atomic_op_iadd);
+}
+
+static void
+fsr_slot_write(nir_builder *b, nir_def *addr, nir_def *value)
+{
+   nir_global_atomic(b, 32, addr, value, .atomic_op = nir_atomic_op_xchg);
+}
+
+static void
+fsr_slot_fence(nir_builder *b)
+{
+   nir_barrier(b, .execution_scope = SCOPE_NONE, .memory_scope = SCOPE_DEVICE,
+               .memory_semantics = NIR_MEMORY_ACQ_REL,
+               .memory_modes = nir_var_mem_global);
+}
+
+static void
+fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
+{
+   nir_def *serial = fsr_load_root(b, 1, 32, offsetof(struct kk_root_descriptor_table, fsr.serial));
+   nir_def *slots = fsr_load_root(b, 1, 64, offsetof(struct kk_root_descriptor_table, fsr.slots));
+   nir_def *prim = nir_load_raster_primitive_id_kk(b);
+   nir_def *origin = nir_ior(b, ctx->ox, nir_ishl_imm(b, ctx->oy, 16));
+   nir_def *h = nir_ixor(b, nir_imul_imm(b, serial, 0x9e3779b1u),
+      nir_ixor(b, nir_imul_imm(b, nir_iadd_imm(b, prim, 1), 0x85ebca77u),
+                  nir_imul_imm(b, origin, 0xc2b2ae3du)));
+   h = nir_imul_imm(b, nir_ixor(b, h, nir_ushr_imm(b, h, 15)), 0x2c1b3c6du);
+   h = nir_ixor(b, h, nir_ushr_imm(b, h, 12));
+   nir_def *serial8 = nir_iand_imm(b, serial, 0xff);
+   ctx->tag = nir_ior(b, nir_ior_imm(b, nir_iand_imm(b, h, 0xfffffe00u), 0x100), serial8);
+   const unsigned bits = util_logbase2(KK_FSR_SLOT_BYTES / stride);
+   assert(bits > 0 && bits < 32);
+   nir_def *base = nir_ushr_imm(b, nir_imul_imm(b, nir_ixor(b, h, nir_ushr_imm(b, h, 16)), 0x7feb352du),
+                                32 - bits);
+   nir_def *active = nir_ine_imm(b, slots, 0);
+
+   nir_variable *won = nir_local_variable_create(b->impl, glsl_bool_type(), "kk_fsr_won");
+   nir_variable *slot = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "kk_fsr_slot");
+   nir_variable *probe = nir_local_variable_create(b->impl, glsl_uint_type(), "kk_fsr_probe");
+   nir_variable *tries = nir_local_variable_create(b->impl, glsl_uint_type(), "kk_fsr_tries");
+   nir_store_var(b, won, nir_imm_true(b), 1);
+   nir_store_var(b, slot, nir_imm_int64(b, 0), 1);
+   nir_store_var(b, probe, nir_imm_int(b, 0), 1);
+   nir_store_var(b, tries, nir_imm_int(b, 0), 1);
+   nir_push_if(b, nir_iand(b, ctx->real, active));
+   {
+      nir_push_loop(b);
+      {
+         nir_def *i = nir_load_var(b, probe);
+         nir_def *index = nir_iand_imm(b, nir_iadd(b, base, i), BITFIELD_MASK(bits));
+         nir_def *addr = nir_iadd(b, slots, nir_u2u64(b, nir_imul_imm(b, index, stride)));
+         nir_def *old = fsr_slot_read(b, addr);
+         nir_def *n = nir_iadd_imm(b, nir_load_var(b, tries), 1);
+         nir_store_var(b, tries, n, 1);
+         /* Another sample invocation of this fragment holds the slot. */
+         nir_push_if(b, nir_ieq(b, old, ctx->tag));
+         {
+            nir_store_var(b, won, nir_imm_false(b), 1);
+            nir_store_var(b, slot, addr, 1);
+            nir_jump(b, nir_jump_break);
+         }
+         nir_pop_if(b, NULL);
+         nir_def *age = nir_iand_imm(b, nir_isub(b, serial8, old), 0xff);
+         nir_def *free_slot = nir_ior(b, nir_ieq_imm(b, old, 0),
+            nir_iand(b, nir_uge_imm(b, age, 2), nir_ult_imm(b, age, 128)));
+         nir_push_if(b, free_slot);
+         {
+            nir_def *seen = nir_global_atomic_swap(b, 32, addr, old, ctx->tag,
+                                                   .atomic_op = nir_atomic_op_cmpxchg);
+            nir_push_if(b, nir_ieq(b, seen, old));
+            {
+               nir_store_var(b, slot, addr, 1);
+               nir_jump(b, nir_jump_break);
+            }
+            nir_pop_if(b, NULL);
+            /* Lost the race: examine the same slot again. */
+         }
+         nir_push_else(b, NULL);
+         {
+            nir_store_var(b, probe, nir_iadd_imm(b, i, 1), 1);
+         }
+         nir_pop_if(b, NULL);
+         nir_break_if(b, nir_ior(b, nir_uge_imm(b, nir_load_var(b, probe), FSR_SLOT_PROBES),
+                                 nir_uge_imm(b, n, FSR_SLOT_TRIES)));
+      }
+      nir_pop_loop(b, NULL);
+   }
+   nir_pop_if(b, NULL);
+   ctx->won = nir_load_var(b, won);
+   ctx->slot = nir_load_var(b, slot);
+   ctx->lead = ctx->real;
+   ctx->real = nir_iand(b, ctx->real, ctx->won);
+}
+
+/* At the end of the shader: the winner publishes, the other real lanes take
+ * its outputs and discard state, and quads broadcast as usual. */
+static void
+fsr_exchange(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
+{
+   nir_intrinsic_instr *stores[64];
+   unsigned n = 0;
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr_safe(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic ||
+             !fsr_is_output(nir_instr_as_intrinsic(instr)))
+            continue;
+         assert(n < ARRAY_SIZE(stores));
+         stores[n++] = nir_instr_as_intrinsic(instr);
+         nir_instr_remove(instr);
+      }
+   }
+   b->cursor = nir_after_impl(impl);
+   nir_def *words[64 * 8];
+   unsigned count = 0;
+   for (unsigned i = 0; i < n; ++i) {
+      nir_def *v = stores[i]->src[0].ssa;
+      for (unsigned c = 0; c < v->num_components; ++c) {
+         nir_def *s = nir_channel(b, v, c);
+         if (s->bit_size == 64) {
+            words[count++] = nir_unpack_64_2x32_split_x(b, s);
+            words[count++] = nir_unpack_64_2x32_split_y(b, s);
+         } else {
+            words[count++] = s->bit_size < 32 ? nir_u2u32(b, s) : s;
+         }
+      }
+   }
+   nir_def *demoted = nir_b2i32(b, nir_load_var(b, ctx->demoted));
+   nir_def *active = nir_ine_imm(b, ctx->slot, 0);
+
+   nir_push_if(b, nir_iand(b, ctx->real, active));
+   {
+      for (unsigned k = 0; k < count; ++k)
+         fsr_slot_write(b, nir_iadd_imm(b, ctx->slot, FSR_SLOT_DATA + 4 * k), words[k]);
+      fsr_slot_write(b, nir_iadd_imm(b, ctx->slot, FSR_SLOT_DISCARD), demoted);
+      fsr_slot_fence(b);
+      fsr_slot_write(b, nir_iadd_imm(b, ctx->slot, FSR_SLOT_READY), ctx->tag);
+   }
+   nir_pop_if(b, NULL);
+
+   nir_variable *tries = nir_local_variable_create(impl, glsl_uint_type(), "kk_fsr_wait");
+   nir_variable *ready = nir_local_variable_create(impl, glsl_uint_type(), "kk_fsr_ready");
+   nir_store_var(b, tries, nir_imm_int(b, 0), 1);
+   nir_store_var(b, ready, nir_imm_int(b, 0), 1);
+   nir_if *wait = nir_push_if(b, nir_iand(b, nir_iand(b, ctx->lead, nir_inot(b, ctx->won)), active));
+   nir_def *taken[64 * 8 + 1];
+   {
+      nir_push_loop(b);
+      {
+         nir_def *r = fsr_slot_read(b, nir_iadd_imm(b, ctx->slot, FSR_SLOT_READY));
+         nir_store_var(b, ready, r, 1);
+         nir_def *t = nir_iadd_imm(b, nir_load_var(b, tries), 1);
+         nir_store_var(b, tries, t, 1);
+         nir_break_if(b, nir_ior(b, nir_ieq(b, r, ctx->tag), nir_uge_imm(b, t, FSR_SLOT_TRIES)));
+      }
+      nir_pop_loop(b, NULL);
+      fsr_slot_fence(b);
+      nir_def *got = nir_ieq(b, nir_load_var(b, ready), ctx->tag);
+      for (unsigned k = 0; k < count; ++k)
+         taken[k] = nir_bcsel(b, got,
+            fsr_slot_read(b, nir_iadd_imm(b, ctx->slot, FSR_SLOT_DATA + 4 * k)), words[k]);
+      taken[count] = nir_bcsel(b, got,
+         fsr_slot_read(b, nir_iadd_imm(b, ctx->slot, FSR_SLOT_DISCARD)), demoted);
+   }
+   nir_push_else(b, wait);
+   nir_pop_if(b, wait);
+   for (unsigned k = 0; k < count; ++k)
+      words[k] = nir_if_phi(b, taken[k], words[k]);
+   demoted = nir_if_phi(b, taken[count], demoted);
+
+   unsigned k = 0;
+   for (unsigned i = 0; i < n; ++i) {
+      nir_def *v = stores[i]->src[0].ssa;
+      nir_def *c[NIR_MAX_VEC_COMPONENTS];
+      for (unsigned j = 0; j < v->num_components; ++j) {
+         unsigned bits = v->bit_size;
+         if (bits == 64) {
+            c[j] = nir_pack_64_2x32_split(b, words[k], words[k + 1]);
+            k += 2;
+         } else {
+            c[j] = bits < 32 ? nir_u2uN(b, words[k], bits) : words[k];
+            ++k;
+         }
+      }
+      nir_def *value = fsr_broadcast(b, ctx, nir_vec(b, c, v->num_components));
+      nir_builder_instr_insert(b, &stores[i]->instr);
+      nir_src_rewrite(&stores[i]->src[0], value);
+   }
+   nir_store_var(b, ctx->demoted, nir_ine_imm(b, demoted, 0), 1);
+}
+
 bool
 kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts)
 {
@@ -449,6 +690,20 @@ kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts)
          instr->index = UINT32_MAX;
    }
 
+   /* Metal runs a multisampled fragment shader that writes memory once per
+    * covered sample. */
+   if (opts->multisampled) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type == nir_instr_type_intrinsic &&
+                nir_intrinsic_writes_external_memory(nir_instr_as_intrinsic(instr)))
+               ctx.sample_group = true;
+         }
+      }
+   }
+
+   unsigned stride = ctx.sample_group
+      ? ALIGN_POT(FSR_SLOT_DATA + 4 * fsr_output_words(impl), 16) : 0;
    nir_builder b = nir_builder_at(nir_before_impl(impl));
    ctx.demoted = nir_local_variable_create(impl, glsl_bool_type(), "kk_fsr_demoted");
    nir_store_var(&b, ctx.demoted, nir_imm_false(&b), 1);
@@ -463,6 +718,10 @@ kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts)
    }
    /* Writes of the lanes that are not real become helper writes. */
    nir_lower_helper_writes(nir, true);
+   if (ctx.sample_group) {
+      b.cursor = nir_after_instr(ctx.top_end);
+      fsr_claim(&b, &ctx, stride);
+   }
 
    fsr_lower_inputs(&b, &ctx, impl);
    nir_foreach_block_safe(block, impl) {
@@ -475,6 +734,8 @@ kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts)
       }
    }
 
+   if (ctx.sample_group)
+      fsr_exchange(&b, &ctx, impl);
    /* The real lane's discard decides the fragment. */
    b.cursor = nir_after_impl(impl);
    nir_demote_if(&b, fsr_broadcast(&b, &ctx, nir_load_var(&b, ctx.demoted)));
@@ -490,10 +751,17 @@ kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts)
 
 /* Replaces the attachment placeholder with a read of the shading-rate
  * attachment texel covering the pixel. A 2x2 aligned group never crosses an
- * 8x8 texel, so every lane of a fragment reads the same rate. */
+ * 8x8 texel, so every lane of a fragment reads the same rate. The raster
+ * primitive ID becomes Metal's [[primitive_id]]. */
 static bool
-fsr_attachment_read(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
+fsr_late(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
 {
+   if (intr->intrinsic == nir_intrinsic_load_raster_primitive_id_kk) {
+      b->cursor = nir_before_instr(&intr->instr);
+      nir_def_replace(&intr->def, nir_load_primitive_id(b));
+      BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID);
+      return true;
+   }
    if (intr->intrinsic != nir_intrinsic_load_frag_shading_rate)
       return false;
    b->cursor = nir_before_instr(&intr->instr);
@@ -532,7 +800,37 @@ fsr_attachment_read(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data
 }
 
 bool
-kk_nir_lower_fsr_attachment(nir_shader *nir)
+kk_nir_lower_fsr_late(nir_shader *nir)
 {
-   return nir_shader_intrinsics_pass(nir, fsr_attachment_read, nir_metadata_none, NULL);
+   return nir_shader_intrinsics_pass(nir, fsr_late, nir_metadata_none, NULL);
+}
+
+static bool
+fsr_reads_slots(UNUSED nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
+{
+   /* The draw serial is read only by the slot protocol. */
+   if (intr->intrinsic != nir_intrinsic_load_global_constant)
+      return false;
+   nir_scalar addr = nir_get_scalar(intr->src[0].ssa, 0);
+   if (!nir_scalar_is_alu(addr) || nir_scalar_alu_op(addr) != nir_op_iadd)
+      return false;
+   for (unsigned i = 0; i < 2; ++i) {
+      nir_scalar base = nir_scalar_chase_alu_src(addr, i);
+      nir_scalar offset = nir_scalar_chase_alu_src(addr, !i);
+      if (nir_scalar_is_intrinsic(base) &&
+          nir_scalar_intrinsic_op(base) == nir_intrinsic_load_buffer_ptr_kk &&
+          nir_intrinsic_binding(nir_def_as_intrinsic(base.def)) == KK_ARGUMENT_ROOT &&
+          nir_scalar_is_const(offset) &&
+          nir_scalar_as_uint(offset) == offsetof(struct kk_root_descriptor_table, fsr.serial))
+         return true;
+   }
+   return false;
+}
+
+/* Whether the draw must provide a serial and the fragment slots. */
+bool
+kk_nir_fsr_uses_slots(nir_shader *nir)
+{
+   return nir->info.stage == MESA_SHADER_FRAGMENT &&
+          nir_shader_intrinsics_pass(nir, fsr_reads_slots, nir_metadata_all, NULL);
 }
