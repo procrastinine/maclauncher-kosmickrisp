@@ -61,9 +61,7 @@ static const struct vk_instance_extension_table instance_extensions = {
 #ifdef VK_USE_PLATFORM_METAL_EXT
    .EXT_metal_surface = true,
 #endif
-#ifndef VK_USE_PLATFORM_METAL_EXT
    .EXT_headless_surface = true,
-#endif
    .KHR_device_group_creation = true,
    .KHR_external_fence_capabilities = true,
    .KHR_external_memory_capabilities = true,

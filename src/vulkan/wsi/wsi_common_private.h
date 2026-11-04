@@ -49,7 +49,15 @@ enum wsi_image_type {
    WSI_IMAGE_TYPE_DRM,
    WSI_IMAGE_TYPE_DXGI,
    WSI_IMAGE_TYPE_METAL,
+   WSI_IMAGE_TYPE_HEADLESS,
 };
+
+struct wsi_image_info;
+
+VkResult
+wsi_headless_configure_image(const struct wsi_swapchain *chain,
+                             const VkSwapchainCreateInfoKHR *create,
+                             struct wsi_image_info *info);
 
 struct wsi_base_image_params {
    enum wsi_image_type image_type;

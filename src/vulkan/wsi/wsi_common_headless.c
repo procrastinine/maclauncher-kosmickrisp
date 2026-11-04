@@ -474,6 +474,40 @@ wsi_headless_swapchain_destroy(struct wsi_swapchain *wsi_chain,
 }
 
 static VkResult
+wsi_headless_create_native_mem(const struct wsi_swapchain *chain,
+                                const struct wsi_image_info *info,
+                                struct wsi_image *image)
+{
+   const struct wsi_device *wsi = chain->wsi;
+   VkMemoryRequirements req;
+   wsi->GetImageMemoryRequirements(chain->device, image->image, &req);
+   const VkMemoryDedicatedAllocateInfo dedicated = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+      .image = image->image,
+   };
+   const VkMemoryAllocateInfo allocate = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .pNext = &dedicated,
+      .allocationSize = req.size,
+      .memoryTypeIndex = wsi_select_device_memory_type(wsi, req.memoryTypeBits),
+   };
+   return wsi->AllocateMemory(chain->device, &allocate, &chain->alloc, &image->memory);
+}
+
+VkResult
+wsi_headless_configure_image(const struct wsi_swapchain *chain,
+                             const VkSwapchainCreateInfoKHR *create,
+                             struct wsi_image_info *info)
+{
+   VkResult result = wsi_configure_image(chain, create, 0, info);
+   if (result != VK_SUCCESS)
+      return result;
+   info->image_type = WSI_IMAGE_TYPE_HEADLESS;
+   info->create_mem = wsi_headless_create_native_mem;
+   return VK_SUCCESS;
+}
+
+static VkResult
 wsi_headless_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
                                       VkDevice device,
                                       struct wsi_device *wsi_device,
@@ -522,6 +556,14 @@ wsi_headless_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    struct wsi_base_image_params *image_params = NULL;
    struct wsi_cpu_image_params cpu_params;
    struct wsi_drm_image_params drm_params;
+#ifdef VK_USE_PLATFORM_METAL_EXT
+   struct wsi_base_image_params native_params = {
+      .image_type = WSI_IMAGE_TYPE_HEADLESS,
+   };
+   if (!wsi_device->sw && !wsi_device->supports_modifiers) {
+      image_params = &native_params;
+   } else
+#endif
    if (wsi_device->sw) {
       cpu_params = (struct wsi_cpu_image_params) {
          .base.image_type = WSI_IMAGE_TYPE_CPU,

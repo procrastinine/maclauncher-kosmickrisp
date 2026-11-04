@@ -409,6 +409,8 @@ get_blit_type(const struct wsi_device *wsi,
               VkDevice device)
 {
    switch (params->image_type) {
+   case WSI_IMAGE_TYPE_HEADLESS:
+      return WSI_SWAPCHAIN_NO_BLIT;
    case WSI_IMAGE_TYPE_CPU: {
       const struct wsi_cpu_image_params *cpu_params =
          container_of(params, const struct wsi_cpu_image_params, base);
@@ -460,6 +462,10 @@ configure_image(const struct wsi_swapchain *chain,
    info->color_space = pCreateInfo->imageColorSpace;
 
    switch (params->image_type) {
+#ifndef _WIN32
+   case WSI_IMAGE_TYPE_HEADLESS:
+      return wsi_headless_configure_image(chain, pCreateInfo, info);
+#endif
    case WSI_IMAGE_TYPE_CPU: {
       const struct wsi_cpu_image_params *cpu_params =
          container_of(params, const struct wsi_cpu_image_params, base);
