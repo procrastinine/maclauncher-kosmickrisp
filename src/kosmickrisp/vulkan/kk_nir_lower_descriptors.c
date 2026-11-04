@@ -435,6 +435,7 @@ kk_lower_buffer64(nir_builder *b, nir_intrinsic_instr *intr,
 }
 
 #include "kk_maintenance11.h"
+#include "kk_maintenance11_multiplane.h"
 
 #include "kk-writable-msaa-nir.h"
 
@@ -802,10 +803,12 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
          ? offsetof(struct kk_sampled_image_descriptor, aux_resource_id)
          : offsetof(struct kk_sampled_image_descriptor, image_gpu_resource_id);
 
-      offs = kk_alias_sampled_offset(tex, offs);
       nir_def *resource_addr = load_resource_addr(
          b, 1, 64, nir_src_as_deref(nir_src_for_ssa(texture)),
          image_id_offset_B + offs, ctx);
+      resource_addr = kk_alias_sampled_address(b, tex,
+         nir_src_as_deref(nir_src_for_ssa(texture)), resource_addr,
+         image_plane_offset_B, offs, ctx);
 
       if (tex->is_sparse && tex->op == nir_texop_txf &&
           tex->sampler_dim != GLSL_SAMPLER_DIM_BUF &&

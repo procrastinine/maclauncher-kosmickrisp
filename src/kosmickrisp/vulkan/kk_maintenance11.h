@@ -92,6 +92,10 @@ kk_alias_sampled_descriptor(struct kk_sampled_image_descriptor *desc,
                             const struct kk_image_view *view, uint8_t plane,
                             bool input_attachment)
 {
+   /* Whole multi-plane views retain the primary/plane1/plane2 chain.
+    * An individually selected plane is still an ordinary single-plane view. */
+   if (view->plane_count != 1)
+      return;
    /* Writable MSAA owns aux48/table and aux56/sample-layer metadata. */
    if (kk_alias_has_writable_msaa(view))
       return;
@@ -141,14 +145,6 @@ kk_alias_array_dimension(enum glsl_sampler_dim dim)
           dim == GLSL_SAMPLER_DIM_MS;
 }
 
-static unsigned
-kk_alias_sampled_offset(const nir_tex_instr *tex, unsigned offset)
-{
-   if (tex->is_array && kk_alias_array_dimension(tex->sampler_dim) &&
-       offset == offsetof(struct kk_sampled_image_descriptor, image_gpu_resource_id))
-      return offsetof(struct kk_sampled_image_descriptor, aux_resource_id);
-   return offset;
-}
 
 
 /* Linear Metal 2D-array views support reads/writes but misaddress atomics.

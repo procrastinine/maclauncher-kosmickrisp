@@ -20,6 +20,7 @@
 #include "kk_sampler.h"
 #define KK_MAINTENANCE11_DESCRIPTOR
 #include "kk_maintenance11.h"
+#include "kk_maintenance11_multiplane.h"
 #define KK_SLICED_3D_DESCRIPTOR
 #include "kk_sliced_3d.h"
 
@@ -99,6 +100,7 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
          float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0);
          desc[plane].image_min_lod_fp16 = _mesa_float_to_half(min_lod);
          desc[plane].image_min_lod_uint16 = min_lod;
+         kk_alias_sampled_tag(&desc[plane], view, is_input_attachment);
          kk_writable_msaa_sampled_descriptor(&desc[plane], view,
                                              is_input_attachment);
       }
