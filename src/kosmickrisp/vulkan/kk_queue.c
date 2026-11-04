@@ -269,37 +269,43 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
     * Combining command-buffer summaries avoids rebinding every pipeline on
     * each submission, including unrelated trailing command buffers. */
    rerecord->transient_safe = true;
+   bool has_indirect_mesh = false;
    for (uint32_t i = 0; i < count; i++) {
       struct kk_cmd_buffer *source =
          container_of(commands[i], struct kk_cmd_buffer, vk);
       rerecord->transient_safe &= source->transient_safe;
       rerecord->uses_occlusion_queries |= source->uses_occlusion_queries;
+      has_indirect_mesh |= source->uses_indirect_mesh;
    }
    /* Preserve the source-list classification through End's empty replay IR. */
    rerecord->transient_preflight_done = true;
    for (*consumed = 0; *consumed < count; (*consumed)++) {
-      struct kk_cmd_buffer *source =
-         container_of(commands[*consumed], struct kk_cmd_buffer, vk);
       if (*consumed)
          kk_whole_pass_command_boundary(rerecord);
-      if (source->drawable) {
-         bool retained = false;
-         util_dynarray_foreach(&rerecord->submit_drawables, void *, drawable)
-            retained |= *drawable == source->drawable;
-         if (!retained) {
-            void **drawable = util_dynarray_grow(
-               &rerecord->submit_drawables, void *, 1);
-            if (!drawable) {
-               result = vk_error(queue, VK_ERROR_OUT_OF_HOST_MEMORY);
-               goto release;
+      uint32_t chain = kk_mesh_rendering_chain_length(rerecord,
+         commands + *consumed, count - *consumed, has_indirect_mesh);
+      for (uint32_t j = 0; j < chain; ++j) {
+         struct kk_cmd_buffer *part = container_of(commands[*consumed + j], struct kk_cmd_buffer, vk);
+         rerecord->uses_indirect_mesh |= part->uses_indirect_mesh;
+         if (part->drawable) {
+            bool retained = false;
+            util_dynarray_foreach(&rerecord->submit_drawables, void *, drawable)
+               retained |= *drawable == part->drawable;
+            if (!retained) {
+               void **drawable = util_dynarray_grow(
+                  &rerecord->submit_drawables, void *, 1);
+               if (!drawable) {
+                  result = vk_error(queue, VK_ERROR_OUT_OF_HOST_MEMORY);
+                  goto release;
+               }
+               *drawable = mtl_retain(part->drawable);
             }
-            *drawable = mtl_retain(source->drawable);
          }
       }
-      rerecord->uses_indirect_mesh |= source->uses_indirect_mesh;
       KK_PERF_VOID(dev, KK_PERF_REPLAY,
-         kk_mesh_execute_command_queue(&source->vk.cmd_queue, rerecord_handle,
-                                    &dev->vk.dispatch_table));
+         kk_mesh_execute_command_buffers(commands + *consumed, chain, rerecord_handle,
+                                         &dev->vk.dispatch_table));
+      *consumed += chain - 1;
       if (!rerecord->whole_pass.suspended) {
          (*consumed)++;
          break;

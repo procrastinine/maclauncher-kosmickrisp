@@ -155,10 +155,74 @@ kk_mesh_pass_queue(struct vk_cmd_queue *queue, struct vk_cmd_queue_entry *entrie
 }
 
 static void
+kk_mesh_pass_boundary_execute(VkCommandBuffer handle, void *data)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, handle);
+   kk_whole_pass_command_boundary(cmd);
+}
+
+static bool
+kk_mesh_pass_boundary(const struct vk_cmd_queue_entry *e)
+{
+   return e->type == VK_CMD_DRIVER && e->u.driver.execute == kk_mesh_pass_boundary_execute;
+}
+
+static bool
+kk_mesh_pass_between_scopes(const struct vk_cmd_queue_entry *e)
+{
+   return kk_mesh_pass_state_command(e->type) || kk_mesh_pass_boundary(e) ||
+      e->type == VK_CMD_BEGIN_DEBUG_UTILS_LABEL_EXT ||
+      e->type == VK_CMD_END_DEBUG_UTILS_LABEL_EXT ||
+      e->type == VK_CMD_INSERT_DEBUG_UTILS_LABEL_EXT;
+}
+
+/* A complete logical dynamic scope may contain suspend/resume segments and
+ * primary-command boundaries. No action or synchronization can occur in the
+ * gap. Original rendering parameters and boundary state resets replay intact. */
+static uint32_t
+kk_mesh_pass_scope_end(const struct vk_cmd_queue_entry *entries,
+   uint32_t count, uint32_t begin)
+{
+   const struct vk_cmd_queue_entry *first = &entries[begin];
+   if (first->type != VK_CMD_BEGIN_RENDERING) {
+      for (uint32_t i = begin + 1; i < count; ++i) {
+         if (entries[i].type == VK_CMD_END_RENDER_PASS || entries[i].type == VK_CMD_END_RENDER_PASS2)
+            return i;
+         if (entries[i].type == VK_CMD_BEGIN_RENDERING || entries[i].type == VK_CMD_BEGIN_RENDER_PASS ||
+             entries[i].type == VK_CMD_BEGIN_RENDER_PASS2) return UINT32_MAX;
+      }
+      return UINT32_MAX;
+   }
+   const VkRenderingInfo *info = first->u.begin_rendering.rendering_info;
+   if (info->flags & VK_RENDERING_RESUMING_BIT) return UINT32_MAX;
+   bool active = true;
+   for (uint32_t i = begin + 1; i < count; ++i) {
+      const struct vk_cmd_queue_entry *e = &entries[i];
+      if (e->type == VK_CMD_END_RENDERING || e->type == VK_CMD_END_RENDERING2_KHR) {
+         if (!active) return UINT32_MAX;
+         active = false;
+         if (!(info->flags & VK_RENDERING_SUSPENDING_BIT)) return i;
+      } else if (e->type == VK_CMD_BEGIN_RENDERING) {
+         if (active) return UINT32_MAX;
+         info = e->u.begin_rendering.rendering_info;
+         if (!(info->flags & VK_RENDERING_RESUMING_BIT)) return UINT32_MAX;
+         active = true;
+      } else if (e->type == VK_CMD_BEGIN_RENDER_PASS || e->type == VK_CMD_BEGIN_RENDER_PASS2 ||
+                 e->type == VK_CMD_END_RENDER_PASS || e->type == VK_CMD_END_RENDER_PASS2 ||
+                 (!active && !kk_mesh_pass_between_scopes(e))) {
+         return UINT32_MAX;
+      }
+   }
+   return UINT32_MAX;
+}
+
+static void
 kk_mesh_pass_condition(struct kk_conditional_rendering_state *conditional,
    const struct vk_cmd_queue_entry *e)
 {
-   if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING2_EXT) {
+   if (kk_mesh_pass_boundary(e)) {
+      memset(conditional, 0, sizeof(*conditional));
+   } else if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING2_EXT) {
       const VkConditionalRenderingBeginInfo2EXT *info=e->u.begin_conditional_rendering2_ext.conditional_rendering_begin;
       conditional->address=info->addressRange.address;
       conditional->inverted=!!(info->flags&VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT);
@@ -310,8 +374,8 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
    unsigned queries = 0;
    if (cmd->metal.render) return false;
    if (p->entries[0].type == VK_CMD_BEGIN_RENDERING) {
-      if (p->entries[0].u.begin_rendering.rendering_info->flags &
-          (VK_RENDERING_RESUMING_BIT | VK_RENDERING_SUSPENDING_BIT)) return false;
+      if (kk_mesh_pass_scope_end(p->entries, p->entry_count, 0) != p->entry_count - 1)
+         return false;
    } else {
       const VkRenderPassBeginInfo *begin = p->entries[0].type == VK_CMD_BEGIN_RENDER_PASS2 ?
          p->entries[0].u.begin_render_pass2.render_pass_begin : p->entries[0].u.begin_render_pass.render_pass_begin;
@@ -320,7 +384,9 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
    }
    for (uint32_t i = 1; i + 1 < p->entry_count; ++i) {
       const struct vk_cmd_queue_entry *e = &p->entries[i];
-      if (e->type == VK_CMD_BIND_SHADERS_EXT) {
+      if (kk_mesh_pass_boundary(e)) {
+         mesh = NULL;
+      } else if (e->type == VK_CMD_BIND_SHADERS_EXT) {
          const struct vk_cmd_bind_shaders_ext *b = &e->u.bind_shaders_ext;
          for (uint32_t s = 0; s < b->stage_count; ++s)
             if (b->stages[s] == VK_SHADER_STAGE_MESH_BIT_EXT) mesh = kk_shader_from_handle(b->shaders[s]);
@@ -338,6 +404,9 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
          only_mesh &= !mesh->mesh->info.has_task;
          direct_conditional |= !call.grid && conditional.enabled;
 
+      } else if (kk_mesh_pass_boundary(e) || e->type == VK_CMD_BEGIN_RENDERING ||
+                 e->type == VK_CMD_END_RENDERING || e->type == VK_CMD_END_RENDERING2_KHR) {
+         /* Complete chains were checked before scanning their draws. */
       } else if (e->type == VK_CMD_PIPELINE_BARRIER || e->type == VK_CMD_PIPELINE_BARRIER2 ||
                  e->type == VK_CMD_WAIT_EVENTS || e->type == VK_CMD_WAIT_EVENTS2) {
          if (!kk_mesh_pass_barrier_safe(p, i, conditional)) return false;
@@ -558,7 +627,7 @@ kk_mesh_pass_build_calls(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p, bool
          p->calls[p->call_count++]=call;
       } else {
          kk_mesh_pass_condition(&conditional,e);
-         if (advance && kk_mesh_pass_state_command(e->type)) {
+         if (advance && (kk_mesh_pass_state_command(e->type) || kk_mesh_pass_boundary(e))) {
             struct vk_cmd_queue_entry copy=*e; struct vk_cmd_queue state;
             kk_mesh_pass_queue(&state,&copy,1);
             vk_cmd_queue_execute(&state,kk_cmd_buffer_to_handle(cmd),&kk_cmd_buffer_device(cmd)->vk.dispatch_table);
@@ -738,17 +807,13 @@ kk_mesh_execute_command_queue(struct vk_cmd_queue *source,VkCommandBuffer handle
    for (uint32_t i=0;i<count;++i) {
       if (entries[i].type!=VK_CMD_BEGIN_RENDERING && entries[i].type!=VK_CMD_BEGIN_RENDER_PASS &&
           entries[i].type!=VK_CMD_BEGIN_RENDER_PASS2) continue;
-      uint32_t end=i+1; bool indirect=false;
-      for (;end<count;++end) {
-         enum vk_cmd_type type=entries[end].type;
-         if (type==VK_CMD_BEGIN_RENDERING || type==VK_CMD_BEGIN_RENDER_PASS || type==VK_CMD_BEGIN_RENDER_PASS2) break;
-         if (type==VK_CMD_END_RENDERING || type==VK_CMD_END_RENDERING2_KHR ||
-             type==VK_CMD_END_RENDER_PASS || type==VK_CMD_END_RENDER_PASS2) break;
+      uint32_t end=kk_mesh_pass_scope_end(entries,count,i); bool indirect=false;
+      if (end==UINT32_MAX) continue;
+      for (uint32_t j=i+1;j<end;++j) {
          struct kk_mesh_pass_call call;
-         indirect|=kk_mesh_pass_call_info(&entries[end],&call) && call.grid;
+         indirect|=kk_mesh_pass_call_info(&entries[j],&call) && call.maximum && call.grid;
       }
-      if (!indirect || end==count || entries[end].type==VK_CMD_BEGIN_RENDERING ||
-          entries[end].type==VK_CMD_BEGIN_RENDER_PASS || entries[end].type==VK_CMD_BEGIN_RENDER_PASS2) continue;
+      if (!indirect) continue;
       struct kk_mesh_pass *p=calloc(1,sizeof(*p));
       if (!p) { vk_command_buffer_set_error(&cmd->vk,VK_ERROR_OUT_OF_HOST_MEMORY); break; }
       p->entry_count=end-i+1; p->entries=malloc((size_t)p->entry_count*sizeof(*p->entries));
@@ -763,5 +828,89 @@ kk_mesh_execute_command_queue(struct vk_cmd_queue *source,VkCommandBuffer handle
    struct vk_cmd_queue prepared; kk_mesh_pass_queue(&prepared,entries,count);
    mtl_execute_command_queue(&prepared,handle,dispatch);
    util_dynarray_fini(&flat);
+}
+
+/* Read immutable recording metadata. Ordinary command buffers and submits
+ * without Mesh do not build a temporary flattened stream. */
+static bool
+kk_mesh_pass_rendering_edges(struct kk_cmd_buffer *source, bool *head_resume, bool *tail_suspend)
+{
+   struct util_dynarray flat = UTIL_DYNARRAY_INIT;
+   if (!kk_mesh_pass_flatten(&source->vk.cmd_queue, &flat)) {
+      util_dynarray_fini(&flat);
+      return false;
+   }
+   bool before_action = true, active = false;
+   const VkRenderingInfo *current = NULL;
+   *head_resume = *tail_suspend = false;
+   util_dynarray_foreach(&flat, struct vk_cmd_queue_entry, e) {
+      if (e->type == VK_CMD_BEGIN_RENDERING) {
+         current = e->u.begin_rendering.rendering_info;
+         if (before_action) *head_resume = current->flags & VK_RENDERING_RESUMING_BIT;
+         before_action = false; active = true; *tail_suspend = false;
+      } else if (e->type == VK_CMD_END_RENDERING || e->type == VK_CMD_END_RENDERING2_KHR) {
+         active = false;
+         *tail_suspend = current && (current->flags & VK_RENDERING_SUSPENDING_BIT);
+      } else if (!active && !kk_mesh_pass_between_scopes(e)) {
+         before_action = false; *tail_suspend = false;
+      }
+   }
+   util_dynarray_fini(&flat);
+   return true;
+}
+
+uint32_t
+kk_mesh_rendering_chain_length(struct kk_cmd_buffer *target,
+   struct vk_command_buffer **sources, uint32_t count, bool has_indirect_mesh)
+{
+   struct kk_device *dev = kk_cmd_buffer_device(target);
+   struct kk_cmd_buffer *first = container_of(sources[0], struct kk_cmd_buffer, vk);
+   if (count < 2 || !has_indirect_mesh || !dev->vk.enabled_features.meshShader ||
+       kk_device_physical(dev)->info.gpu_apple_family >= 9 || !first->deferred_render_chain)
+      return 1;
+   bool head, tail;
+   if (!kk_mesh_pass_rendering_edges(first, &head, &tail) || !tail) return 1;
+   uint32_t n = 1;
+   bool mesh = first->uses_indirect_mesh;
+   for (; n < count && tail; ++n) {
+      struct kk_cmd_buffer *source = container_of(sources[n], struct kk_cmd_buffer, vk);
+      bool next_head, next_tail;
+      if (source->scene_native_tail ||
+          !kk_mesh_pass_rendering_edges(source, &next_head, &next_tail) || !next_head) break;
+      tail = next_tail;
+      mesh |= source->uses_indirect_mesh;
+   }
+   return mesh ? n : 1;
+}
+
+void
+kk_mesh_execute_command_buffers(struct vk_command_buffer **sources, uint32_t count,
+   VkCommandBuffer handle, const struct vk_device_dispatch_table *dispatch)
+{
+   if (count == 1) {
+      kk_mesh_execute_command_queue(&sources[0]->cmd_queue, handle, dispatch);
+      return;
+   }
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, handle);
+   struct util_dynarray flat = UTIL_DYNARRAY_INIT;
+   for (uint32_t i = 0; i < count; ++i) {
+      if (i) {
+         struct vk_cmd_queue_entry *boundary = util_dynarray_grow(&flat, struct vk_cmd_queue_entry, 1);
+         if (!boundary) goto fail;
+         memset(boundary, 0, sizeof(*boundary));
+         boundary->type = VK_CMD_DRIVER;
+         boundary->u.driver.execute = kk_mesh_pass_boundary_execute;
+      }
+      if (!kk_mesh_pass_flatten(&sources[i]->cmd_queue, &flat)) goto fail;
+   }
+   struct vk_cmd_queue combined;
+   kk_mesh_pass_queue(&combined, util_dynarray_begin(&flat),
+      util_dynarray_num_elements(&flat, struct vk_cmd_queue_entry));
+   kk_mesh_execute_command_queue(&combined, handle, dispatch);
+   util_dynarray_fini(&flat);
+   return;
+fail:
+   util_dynarray_fini(&flat);
+   vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
 }
 #endif

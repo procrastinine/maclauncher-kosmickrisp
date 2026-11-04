@@ -593,6 +593,9 @@ kk_get_descriptors_state(struct kk_cmd_buffer *cmd,
 void cs_start_render(struct kk_cmd_buffer *cmd);
 mtl_render_encoder *cs_get_render(struct kk_cmd_buffer *cmd);
 void kk_cmd_buffer_apply_view_mask(struct kk_cmd_buffer *cmd);
+uint32_t kk_mesh_rendering_chain_length(struct kk_cmd_buffer *, struct vk_command_buffer **, uint32_t, bool);
+void kk_mesh_execute_command_buffers(struct vk_command_buffer **, uint32_t,
+   VkCommandBuffer, const struct vk_device_dispatch_table *);
 void kk_mesh_execute_command_queue(struct vk_cmd_queue *, VkCommandBuffer,
    const struct vk_device_dispatch_table *);
 mtl_compute_encoder *cs_get_compute(struct kk_cmd_buffer *cmd);
