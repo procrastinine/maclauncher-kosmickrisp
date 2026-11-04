@@ -353,8 +353,8 @@ Feature table
        other pixels; the other lanes evaluate neighboring fragments for
        derivatives. Attachment texels are 8x8. Sample shading, shader depth,
        stencil and sample mask writes, sample mask reads, interlock, custom
-       sample locations, conservative rasterization and a partial pipeline
-       sample mask select 1x1. Primitive rates are read from vertex shaders.
+       sample locations, conservative rasterization and a partial static or
+       dynamic sample mask select 1x1. Primitive rates are read from vertex shaders.
      - No Apple family.
      - ``fragment_shading_rate``
      - Off

@@ -15,11 +15,12 @@ struct kk_fsr_lower_options {
    bool attachment_rate;
    /* A partial dynamic sample mask selects 1x1. */
    bool dynamic_sample_mask;
+   /* Sample mask bits that cover every rasterization sample. */
+   uint8_t full_sample_mask;
 };
 
 bool kk_nir_fsr_supported(nir_shader *nir);
 bool kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts);
-bool kk_nir_lower_fsr_fine(nir_shader *nir);
 bool kk_nir_lower_fsr_attachment(nir_shader *nir);
 
 #endif

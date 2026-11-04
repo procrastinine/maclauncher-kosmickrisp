@@ -22,6 +22,7 @@
 
 #include "kk_cmd_buffer.h"
 #include "kk_private.h"
+#include "kosmickrisp/compiler/kk_fragment_shading_rate.h"
 #include "kosmickrisp/compiler/nir_to_msl.h"
 
 #include "nir_builder.h"
@@ -110,25 +111,6 @@ fsr_load_root(nir_builder *b, unsigned components, unsigned bit_size,
       .align_mul = bit_size / 8, .access = ACCESS_CAN_SPECULATE);
 }
 
-/* Rates as log2 width in bits 2-3 and log2 height in bits 0-1. */
-static nir_def *
-fsr_combine(nir_builder *b, nir_def *a, nir_def *c, nir_def *op)
-{
-   nir_def *aw = nir_ubitfield_extract_imm(b, a, 2, 2);
-   nir_def *ah = nir_iand_imm(b, a, 3);
-   nir_def *cw = nir_ubitfield_extract_imm(b, c, 2, 2);
-   nir_def *ch = nir_iand_imm(b, c, 3);
-   nir_def *w = nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR), cw,
-                nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MIN_KHR), nir_umin(b, aw, cw),
-                nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR), nir_umax(b, aw, cw),
-                nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR), nir_iadd(b, aw, cw), aw))));
-   nir_def *h = nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR), ch,
-                nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MIN_KHR), nir_umin(b, ah, ch),
-                nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR), nir_umax(b, ah, ch),
-                nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR), nir_iadd(b, ah, ch), ah))));
-   return nir_ior(b, nir_ishl_imm(b, w, 2), h);
-}
-
 static void
 fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
 {
@@ -156,20 +138,23 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
          .io_semantics = io), 0xf);
       b->shader->info.inputs_read |= VARYING_BIT_PRIMITIVE_SHADING_RATE;
    }
-   rate = fsr_combine(b, rate, primitive, op0);
+   /* The existing coarse engine's combiners, on pixel extents. */
+   nir_def *extent = kk_nir_vrs_combine_extent(b, kk_nir_vrs_decode_extent(b, rate),
+                                               kk_nir_vrs_decode_extent(b, primitive), op0);
    /* Placeholder for the attachment rate; kk_nir_lower_fsr_attachment reads
     * the attachment after descriptor and texture lowering. */
    nir_def *attachment = opts->attachment_rate ? nir_load_frag_shading_rate(b)
                                                : nir_imm_int(b, 0);
-   rate = fsr_combine(b, rate, attachment, op1);
+   extent = kk_nir_vrs_combine_extent(b, extent, kk_nir_vrs_decode_extent(b, attachment), op1);
    /* Every combination of 1 and 2 pixels is supported: clamp each axis. */
-   nir_def *lw = nir_umin(b, nir_ubitfield_extract_imm(b, rate, 2, 2), nir_imm_int(b, 1));
-   nir_def *lh = nir_umin(b, nir_iand_imm(b, rate, 3), nir_imm_int(b, 1));
+   nir_def *lw = nir_b2i32(b, nir_uge_imm(b, nir_channel(b, extent, 0), 2));
+   nir_def *lh = nir_b2i32(b, nir_uge_imm(b, nir_channel(b, extent, 1), 2));
    if (opts->dynamic_sample_mask) {
       /* A partial sample mask selects 1x1. */
       nir_def *mask = fsr_load_root(b, 1, 8, offsetof(struct kk_root_descriptor_table,
                                                        draw.sample_mask));
-      nir_def *full = nir_ieq_imm(b, nir_u2u32(b, mask), 0xff);
+      nir_def *full = nir_ieq_imm(b, nir_iand_imm(b, nir_u2u32(b, mask), opts->full_sample_mask),
+                                  opts->full_sample_mask);
       lw = nir_bcsel(b, full, lw, nir_imm_int(b, 0));
       lh = nir_bcsel(b, full, lh, nir_imm_int(b, 0));
    }
@@ -414,11 +399,13 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
             nir_intrinsic_instr *new_bary =
                nir_instr_as_intrinsic(nir_instr_clone(b->shader, &bary->instr));
             nir_builder_instr_insert(b, &new_bary->instr);
+            /* The offset is built before the load that reads it. */
+            nir_def *offset = nir_imm_int(b, nir_src_as_uint(intr->src[1]));
             nir_intrinsic_instr *load =
                nir_instr_as_intrinsic(nir_instr_clone(b->shader, &intr->instr));
             nir_builder_instr_insert(b, &load->instr);
             nir_src_rewrite(&load->src[0], &new_bary->def);
-            nir_src_rewrite(&load->src[1], nir_imm_int(b, nir_src_as_uint(intr->src[1])));
+            nir_src_rewrite(&load->src[1], offset);
             nir_def *v = &load->def;
             if (v->bit_size != 32)
                v = nir_f2f32(b, v);
@@ -500,21 +487,6 @@ kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts)
    return true;
 }
 
-static bool
-fsr_fine_rate(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
-{
-   if (intr->intrinsic != nir_intrinsic_load_frag_shading_rate)
-      return false;
-   b->cursor = nir_before_instr(&intr->instr);
-   nir_def_replace(&intr->def, nir_imm_int(b, 0));
-   return true;
-}
-
-bool
-kk_nir_lower_fsr_fine(nir_shader *nir)
-{
-   return nir_shader_intrinsics_pass(nir, fsr_fine_rate, nir_metadata_control_flow, NULL);
-}
 
 /* Replaces the attachment placeholder with a read of the shading-rate
  * attachment texel covering the pixel. A 2x2 aligned group never crosses an

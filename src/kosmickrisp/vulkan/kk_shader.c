@@ -1059,14 +1059,21 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
    if (coarse)
       coarse = kk_nir_fsr_supported(nir);
    if (!coarse) {
-      NIR_PASS(_, nir, kk_nir_lower_fsr_fine);
+      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+      kk_nir_vrs_lower_fine_rate(nir);
       return;
    }
 
    struct kk_fsr_lower_options opts = {
       .dynamic_state = dynamic,
       .attachment_rate = attachment,
+      .full_sample_mask = 0xff,
    };
+   if (state && state->ms && BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK)) {
+      opts.dynamic_sample_mask = true;
+      if (!BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES))
+         opts.full_sample_mask = BITFIELD_MASK(MAX2(state->ms->rasterization_samples, 1));
+   }
    if (!dynamic) {
       const struct vk_fragment_shading_rate_state *fsr = state->fsr;
       opts.static_state = (kk_fsr_log2(fsr->fragment_size.width) << 2) |

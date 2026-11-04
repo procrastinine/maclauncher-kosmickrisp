@@ -124,8 +124,8 @@ clamp_extent(nir_builder *b, nir_def *v)
    return nir_vec2(b, cw, ch);
 }
 
-static nir_def *
-combine_extent(nir_builder *b, nir_def *a, nir_def *c, nir_def *op)
+nir_def *
+kk_nir_vrs_combine_extent(nir_builder *b, nir_def *a, nir_def *c, nir_def *op)
 {
    nir_def *v = nir_imul(b, a, c);
    v = nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR), nir_umax(b, a, c), v);
@@ -134,8 +134,8 @@ combine_extent(nir_builder *b, nir_def *a, nir_def *c, nir_def *op)
    return nir_bcsel(b, nir_ieq_imm(b, op, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR), a, v);
 }
 
-static nir_def *
-decode_extent(nir_builder *b, nir_def *rate)
+nir_def *
+kk_nir_vrs_decode_extent(nir_builder *b, nir_def *rate)
 {
    return nir_vec2(b,
       nir_ishl(b, nir_imm_int(b, 1), nir_iand_imm(b, nir_ushr_imm(b, rate, 2), 3)),
@@ -200,13 +200,13 @@ kk_nir_vrs_combined_extent(nir_builder *b, nir_def *context,
    nir_def *pipeline = clamp_sample_extent(b, nir_vec2(b,
       CTX(b, context, fragment_width, 32), CTX(b, context, fragment_height, 32)), samples);
    nir_def *primitive = clamp_sample_extent(b,
-      decode_extent(b, CTX(b, context, primitive_rate, 32)), samples);
-   nir_def *attachment = clamp_sample_extent(b, decode_extent(b,
+      kk_nir_vrs_decode_extent(b, CTX(b, context, primitive_rate, 32)), samples);
+   nir_def *attachment = clamp_sample_extent(b, kk_nir_vrs_decode_extent(b,
       load_rate_image(b, context, nir_channel(b, absolute_pixel, 0),
          nir_channel(b, absolute_pixel, 1))), samples);
-   nir_def *first = clamp_sample_extent(b, combine_extent(b,
+   nir_def *first = clamp_sample_extent(b, kk_nir_vrs_combine_extent(b,
       pipeline, primitive, CTX(b, context, combiner0, 32)), samples);
-   return clamp_sample_extent(b, combine_extent(b,
+   return clamp_sample_extent(b, kk_nir_vrs_combine_extent(b,
       first, attachment, CTX(b, context, combiner1, 32)), samples);
 }
 
@@ -264,12 +264,12 @@ kk_nir_lower_coarse_fragment(nir_shader *nir)
       nir_imul_imm(&b, nir_ushr_imm(&b, region, 1), 8));
    nir_def *pipeline = clamp_extent(&b, nir_vec2(&b,
       CTX(&b, context, fragment_width, 32), CTX(&b, context, fragment_height, 32)));
-   nir_def *primitive = clamp_extent(&b, decode_extent(&b, CTX(&b, context, primitive_rate, 32)));
-   nir_def *attachment = clamp_extent(&b, decode_extent(&b, load_rate_image(&b, context,
+   nir_def *primitive = clamp_extent(&b, kk_nir_vrs_decode_extent(&b, CTX(&b, context, primitive_rate, 32)));
+   nir_def *attachment = clamp_extent(&b, kk_nir_vrs_decode_extent(&b, load_rate_image(&b, context,
       nir_iadd(&b, rx, CTX(&b, context, origin_x, 32)),
       nir_iadd(&b, ry, CTX(&b, context, origin_y, 32)))));
-   nir_def *extent = clamp_extent(&b, combine_extent(&b,
-      clamp_extent(&b, combine_extent(&b, pipeline, primitive, CTX(&b, context, combiner0, 32))),
+   nir_def *extent = clamp_extent(&b, kk_nir_vrs_combine_extent(&b,
+      clamp_extent(&b, kk_nir_vrs_combine_extent(&b, pipeline, primitive, CTX(&b, context, combiner0, 32))),
       attachment, CTX(&b, context, combiner1, 32)));
    nir_def *fw = nir_channel(&b, extent, 0), *fh = nir_channel(&b, extent, 1);
    nir_def *local = nir_iand_imm(&b, index, 63);
@@ -999,12 +999,12 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
    nir_def *limit = nir_imm_ivec2(&b, 2, 2);
    nir_def *p = nir_umin(&b, nir_vec2(&b, CTX(&b, context, fragment_width, 32),
       CTX(&b, context, fragment_height, 32)), limit);
-   nir_def *prim = nir_umin(&b, decode_extent(&b, CTX(&b, context, primitive_rate, 32)), limit);
-   nir_def *att = nir_umin(&b, decode_extent(&b, load_rate_image(&b, context,
+   nir_def *prim = nir_umin(&b, kk_nir_vrs_decode_extent(&b, CTX(&b, context, primitive_rate, 32)), limit);
+   nir_def *att = nir_umin(&b, kk_nir_vrs_decode_extent(&b, load_rate_image(&b, context,
       nir_iadd(&b, nir_iand_imm(&b, ix, ~1u), origin_x),
       nir_iadd(&b, nir_iand_imm(&b, iy, ~1u), origin_y))), limit);
-   nir_def *extent = nir_umin(&b, combine_extent(&b,
-      nir_umin(&b, combine_extent(&b, p, prim, CTX(&b, context, combiner0, 32)), limit),
+   nir_def *extent = nir_umin(&b, kk_nir_vrs_combine_extent(&b,
+      nir_umin(&b, kk_nir_vrs_combine_extent(&b, p, prim, CTX(&b, context, combiner0, 32)), limit),
       att, CTX(&b, context, combiner1, 32)), limit);
    nir_def *fw = nir_channel(&b, extent, 0), *fh = nir_channel(&b, extent, 1);
    nir_def *samples = nir_umax(&b, CTX(&b, context, reserved, 32), nir_imm_int(&b, 1));
@@ -1430,7 +1430,7 @@ kk_nir_lower_linked_replay_fragment(nir_shader *nir, unsigned samples)
       offsetof(struct kk_vrs_result, rate)), .align_mul = 4);
    nir_def *mask = nir_load_global(&b, 1, 32, nir_iadd_imm(&b, result,
       offsetof(struct kk_vrs_result, mask)), .align_mul = 4);
-   nir_def *extent = decode_extent(&b, rate);
+   nir_def *extent = kk_nir_vrs_decode_extent(&b, rate);
    nir_def *w = nir_channel(&b, extent, 0), *h = nir_channel(&b, extent, 1);
    nir_def *p = nir_iadd(&b, nir_imul(&b, nir_umod(&b, y, h), w), nir_umod(&b, x, w));
    nir_def *bit = nir_isub(&b, nir_iadd_imm(&b, nir_imul(&b, w, h), -1), p);

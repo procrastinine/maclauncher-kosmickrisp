@@ -15,6 +15,10 @@ mtl_render_pipeline_descriptor *kk_vrs_native_pipeline_descriptor(const struct k
  * fetch. absolute_pixel retains the rate image's framebuffer coordinates. */
 nir_def *kk_nir_vrs_combined_extent(struct nir_builder *, nir_def *context,
    nir_def *absolute_pixel, unsigned samples);
+/* Rates use (log2 width << 2) | log2 height; extents are pixel counts. */
+nir_def *kk_nir_vrs_decode_extent(struct nir_builder *, nir_def *rate);
+/* KEEP/REPLACE/MIN/MAX/MUL on extents; MUL is the strict product. */
+nir_def *kk_nir_vrs_combine_extent(struct nir_builder *, nir_def *a, nir_def *c, nir_def *op);
 bool kk_nir_lower_coarse_fragment(nir_shader *nir);
 bool kk_nir_lower_native_coarse_fragment(nir_shader *nir);
 /* Retained clone only: preserve the application frequency before fine
