@@ -561,6 +561,7 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
 }
 
 #include "kk_sampler_minmax.h"
+#include "kk_non_seamless_cube.h"
 #include "kk-sampler-helpers-nir.h"
 
 static bool
@@ -579,6 +580,10 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
    nir_def *plane_ssa = nir_steal_tex_src(tex, nir_tex_src_plane);
    const uint32_t plane =
       plane_ssa ? nir_src_as_uint(nir_src_for_ssa(plane_ssa)) : 0;
+   const nir_deref_instr *texture_deref =
+      nir_src_as_deref(nir_src_for_ssa(texture));
+   const bool cube_face = tex->sampler_dim == GLSL_SAMPLER_DIM_2D &&
+      glsl_get_sampler_dim(glsl_without_array(texture_deref->type)) == GLSL_SAMPLER_DIM_CUBE;
    const uint64_t plane_offset_B =
       plane * sizeof(struct kk_sampled_image_descriptor);
 
@@ -660,8 +665,9 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
    }
 
    {
-      unsigned offs =
-         offsetof(struct kk_sampled_image_descriptor, image_gpu_resource_id);
+      unsigned offs = (cube_face)
+         ? offsetof(struct kk_sampled_image_descriptor, aux_resource_id)
+         : offsetof(struct kk_sampled_image_descriptor, image_gpu_resource_id);
 
       nir_def *resource_addr = load_resource_addr(
          b, 1, 64, nir_src_as_deref(nir_src_for_ssa(texture)),

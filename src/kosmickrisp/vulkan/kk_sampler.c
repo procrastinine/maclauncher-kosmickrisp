@@ -6,6 +6,7 @@
  */
 
 #include "kk_sampler.h"
+#include "kk_descriptor_types.h"
 
 #include "kk_entrypoints.h"
 #include "kk_physical_device.h"
@@ -205,6 +206,12 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
       return result;
    }
    sampler->plane_count = 1;
+   /* The filter metadata uses bits zero and one; bit two carries the
+    * cube-only flag without increasing the sampler allocation. */
+   sampler->filter_bits |=
+      (pCreateInfo->flags & VK_SAMPLER_CREATE_NON_SEAMLESS_CUBE_MAP_BIT_EXT) ?
+         KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE : 0;
+
 
    /* In order to support CONVERSION_SEPARATE_RECONSTRUCTION_FILTER_BIT, we
     * need multiple sampler planes: at minimum we will need one for luminance

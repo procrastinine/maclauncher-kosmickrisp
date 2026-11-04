@@ -30,6 +30,7 @@ enum kk_feature_bit {
    KK_FEAT_PIPELINE_STATISTICS,
    KK_FEAT_SAMPLER_MINMAX,
    KK_FEAT_CONSERVATIVE_RASTER,
+   KK_FEAT_NON_SEAMLESS_CUBE,
    KK_FEAT_COUNT,
 };
 
@@ -212,6 +213,10 @@ kk_buffer_addr_format(VkPipelineRobustnessBufferBehaviorEXT robustness)
 
 bool kk_nir_lower_sampler_helpers(nir_shader *nir, uint32_t set_layout_count,
    struct vk_descriptor_set_layout *const *set_layouts, bool minmax, bool custom);
+
+bool kk_nir_lower_non_seamless_cube(nir_shader *nir,
+      uint32_t set_layout_count,
+      struct vk_descriptor_set_layout *const *set_layouts);
 
 bool kk_nir_lower_sampler_minmax(nir_shader *nir,
       uint32_t set_layout_count,

@@ -79,6 +79,12 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
                view->planes[plane].sampled_gpu_resource_id;
          }
 
+         if (view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE ||
+             view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
+            assert(plane_count == 1 && plane == 0);
+            desc[plane].aux_resource_id =
+               view->planes[plane].cube_face_gpu_resource_id;
+         }
          float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0);
          desc[plane].image_min_lod_fp16 = _mesa_float_to_half(min_lod);
          desc[plane].image_min_lod_uint16 = min_lod;

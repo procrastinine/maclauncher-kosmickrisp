@@ -37,6 +37,15 @@ struct kk_sampled_image_descriptor {
    uint64_t aux_word;
 };
 
+#define KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE BITFIELD_BIT(2)
+static_assert((KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE & 3u) == 0,
+              "cube flag does not overlap the two linear-filter bits");
+static_assert(KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE <= UINT16_MAX,
+              "cube flag fits existing sampler filter metadata");
+static_assert(KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE ==
+              VK_SAMPLER_CREATE_NON_SEAMLESS_CUBE_MAP_BIT_EXT,
+              "sampler cube flag retains its Vulkan bit encoding");
+
 static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_fp16) == 18,
               "image minimum LOD retains its upstream field");
 static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_uint16) == 20,

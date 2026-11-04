@@ -192,6 +192,18 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
                view->planes[view_plane].mtl_handle_sampled);
       }
 
+      if ((view->vk.usage & VK_IMAGE_USAGE_SAMPLED_BIT) &&
+          dev->vk.enabled_features.nonSeamlessCubeMap &&
+          (view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE ||
+           view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY)) {
+         struct kk_view_layout face_layout = view_layout;
+         face_layout.view_type = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+         view->planes[view_plane].mtl_handle_cube_face =
+            mtl_new_texture_view_with(mtl_handle, &face_layout);
+         view->planes[view_plane].cube_face_gpu_resource_id =
+            mtl_texture_get_gpu_resource_id(view->planes[view_plane].mtl_handle_cube_face);
+      }
+
       if (view->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) {
          /* For storage images, we can't have any cubes */
          if (view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE ||
@@ -256,6 +268,8 @@ void
 kk_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
 {
    for (uint8_t plane = 0; plane < view->plane_count; plane++) {
+      if (view->planes[plane].mtl_handle_cube_face)
+         mtl_release(view->planes[plane].mtl_handle_cube_face);
       if (view->planes[plane].mtl_handle_sampled)
          mtl_release(view->planes[plane].mtl_handle_sampled);
 

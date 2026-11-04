@@ -213,6 +213,8 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER);
    if (feats->nullDescriptor)
       key |= BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR);
+   if (feats->nonSeamlessCubeMap)
+      key |= BITFIELD_BIT(KK_FEAT_NON_SEAMLESS_CUBE);
    if (feats->samplerFilterMinmax)
       key |= BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX);
    if (feats->minLod)
@@ -789,6 +791,9 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
 
    /* Common msl texture lowering needs to happen after ycbcr lowering and
     * before descriptor lowering. */
+   if (features & BITFIELD_BIT(KK_FEAT_NON_SEAMLESS_CUBE))
+      NIR_PASS(_, nir, kk_nir_lower_non_seamless_cube, set_layout_count, set_layouts);
+
    NIR_PASS(_, nir, msl_lower_textures, pdev->info.gpu_apple_family < 10);
 
    /* Lower push constants before lower_descriptors */
