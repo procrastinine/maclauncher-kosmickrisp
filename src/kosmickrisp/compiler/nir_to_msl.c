@@ -1099,9 +1099,12 @@ global_access_qualifier(struct nir_to_msl_ctx *ctx,
 #include "kk_atomic_int64.h"
 #include "kk_image_atomic_int64_msl.h"
 
+#include "kk_matrix_tile.h"
+
 static void
 intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
 {
+   if (kk_emit_matrix_tile(ctx, instr)) return;
    if (msl_interlock_intrinsic(ctx, instr))
       return;
    /* These instructions are only used to understand interpolation modes, they
@@ -2283,6 +2286,7 @@ msl_preprocess_nir(struct nir_shader *nir)
    NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries,
             nir_shader_get_entrypoint(nir), nir_var_shader_out);
    NIR_PASS(_, nir, nir_lower_global_vars_to_local);
+   kk_lower_matrix_tile(nir);
    NIR_PASS(_, nir, nir_split_var_copies);
    NIR_PASS(_, nir, nir_split_struct_vars, nir_var_function_temp);
    NIR_PASS(_, nir, nir_split_array_vars, nir_var_function_temp);
@@ -2386,6 +2390,7 @@ msl_optimize_nir(struct nir_shader *nir)
       NIR_PASS(progress, nir, nir_split_struct_vars, nir_var_function_temp);
       NIR_PASS(progress, nir, nir_lower_var_copies);
       NIR_PASS(progress, nir, nir_lower_vars_to_ssa);
+      NIR_PASS(progress, nir, nir_lower_phis_to_scalar, kk_matrix_phi_width, NULL);
       NIR_PASS(progress, nir, nir_opt_undef);
       NIR_PASS(progress, nir, nir_opt_dce);
       NIR_PASS(progress, nir, nir_opt_cse);
@@ -2601,6 +2606,8 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
        shader->info.stage == MESA_SHADER_TESS_CTRL)
       P(&ctx, "#include <metal_compute>\n");
    P(&ctx, "#include <metal_stdlib>\n");
+   if (shader->info.stage == MESA_SHADER_COMPUTE && shader->info.cs.has_cooperative_matrix)
+      P(&ctx, "#include <metal_simdgroup_matrix>\n");
    P(&ctx, "using namespace metal;\n");
    if (kk_uses_atomic64(shader) || kk_uses_image_atomic64(shader))
       P(&ctx, "%s", kk_atomic64_msl);

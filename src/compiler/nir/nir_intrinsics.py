@@ -3355,3 +3355,10 @@ system_value("is_depth_clamp_emulated_kk", 1, bit_sizes=[1])
 system_value("is_viewport_z_transform_emulated_kk", 1, bit_sizes=[1])
 # Loads the viewport Z range for a given viewport index.
 load("viewport_z_range_kk", [1], [], [CAN_ELIMINATE, CAN_REORDER])
+
+# Native Metal 8x8 fragments compose opaque 8x8 and 16x16 matrices.
+intrinsic("load_cmat_kk", src_comp=[1, 1, 1], dest_comp=2, bit_sizes=[8,16,32], indices=[MATRIX_LAYOUT, MEMORY_MODES], flags=[CAN_ELIMINATE])
+intrinsic("store_cmat_kk", src_comp=[1, 2, 1, 1], indices=[MATRIX_LAYOUT, MEMORY_MODES])
+intrinsic("cmat_mma_kk", src_comp=[2, 2, 2], dest_comp=2, bit_sizes=[16,32], flags=[CAN_ELIMINATE])
+
+intrinsic("load_cmat_map_kk", src_comp=[], dest_comp=1, bit_sizes=[64], flags=[CAN_ELIMINATE, CAN_REORDER])

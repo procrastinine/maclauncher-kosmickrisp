@@ -301,6 +301,22 @@ infer_types_from_intrinsic(struct hash_table *types, nir_intrinsic_instr *instr)
       set_type(types, &instr->src[0], TYPE_UINT);
       set_type(types, &instr->src[1], TYPE_UINT);
       break;
+   case nir_intrinsic_load_cmat_kk:
+      set_type(types, &instr->def, instr->def.bit_size == 8 ? TYPE_UINT : TYPE_FLOAT);
+      set_type(types, &instr->src[0], TYPE_UINT);
+      set_type(types, &instr->src[1], TYPE_UINT);
+      set_type(types, &instr->src[2], TYPE_UINT);
+      break;
+   case nir_intrinsic_store_cmat_kk:
+      set_type(types, &instr->src[0], TYPE_UINT);
+      set_type(types, &instr->src[1], instr->src[1].ssa->bit_size == 8 ? TYPE_UINT : TYPE_FLOAT);
+      set_type(types, &instr->src[2], TYPE_UINT);
+      set_type(types, &instr->src[3], TYPE_UINT);
+      break;
+   case nir_intrinsic_cmat_mma_kk:
+      set_type(types, &instr->def, TYPE_FLOAT);
+      for (unsigned i = 0; i < 3; i++) set_type(types, &instr->src[i], TYPE_FLOAT);
+      break;
    case nir_intrinsic_load_global:
    case nir_intrinsic_load_push_constant:
       set_type(types, &instr->def, TYPE_GENERIC_DATA);
