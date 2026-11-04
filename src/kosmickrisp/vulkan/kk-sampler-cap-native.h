@@ -40,11 +40,10 @@ kk_sampler_native_mutex_init(void)
 static mtl_sampler *
 kk_sampler_native_materialize(struct kk_device *dev,
                               struct kk_sampler_native_cache *cache,
-                              const struct mtl_sampler_packed *packed)
+                              const struct mtl_sampler_packed *key)
 {
-   struct mtl_sampler_packed key;
-   kk_sampler_cap_key_normalize(&key, packed);
-   struct hash_entry *entry = _mesa_hash_table_search(cache->states, &key);
+   /* Callers already provide normalized local-cache or canonical keys. */
+   struct hash_entry *entry = _mesa_hash_table_search(cache->states, key);
    if (entry)
       return ((struct kk_sampler_native_state *)entry->data)->handle;
    if (cache->acceleration_closed ||
@@ -53,8 +52,8 @@ kk_sampler_native_materialize(struct kk_device *dev,
    struct kk_sampler_native_state *state = ralloc(cache->states, struct kk_sampler_native_state);
    if (!state)
       return NULL;
-   memcpy(&state->key, &key, sizeof(key));
-   mtl_sampler_descriptor *descriptor = create_sampler_descriptor(dev, &key);
+   memcpy(&state->key, key, sizeof(*key));
+   mtl_sampler_descriptor *descriptor = create_sampler_descriptor(dev, key);
    state->handle = mtl_new_sampler(dev->mtl_handle, descriptor);
    mtl_release(descriptor);
    if (!state->handle) {
@@ -90,22 +89,6 @@ kk_sampler_native_cache_destroy(struct kk_sampler_native_cache *cache)
    mtl_sampler_id_check_destroy(cache->id_check);
    ralloc_free(cache->states);
    free(cache);
-}
-
-static VkResult
-kk_sampler_native_canonical_add(struct kk_device *dev,
-                                struct kk_sampler_native_cache *cache,
-                                const struct mtl_sampler_packed *input)
-{
-   struct mtl_sampler_packed key;
-   kk_sampler_cap_key(&key, input);
-   if (_mesa_hash_table_search(cache->states, &key))
-      return VK_SUCCESS;
-   if (cache->canonical_count >= KK_SAMPLER_CAP_CANONICAL_MAX ||
-       !kk_sampler_native_materialize(dev, cache, &key))
-      return VK_ERROR_OUT_OF_HOST_MEMORY;
-   memcpy(&cache->canonical[cache->canonical_count++], &key, sizeof(key));
-   return VK_SUCCESS;
 }
 
 VkResult
@@ -144,27 +127,13 @@ kk_sampler_cap_native_init(struct kk_device *dev)
    cache->limit = kk_device_physical(dev)->info.max_sampler_count;
    const uint32_t prior_limit = kk_sampler_native_limit;
    kk_sampler_native_limit = MIN2(kk_sampler_native_limit, cache->limit);
-   const enum mtl_sampler_address_mode modes[] = {
-      MTL_SAMPLER_ADDRESS_MODE_REPEAT, MTL_SAMPLER_ADDRESS_MODE_MIRROR_REPEAT,
-      MTL_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, MTL_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER_COLOR,
-      MTL_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
-   };
+   cache->canonical_count = kk_sampler_cap_canonical_keys(cache->canonical);
    VkResult result = VK_SUCCESS;
-   for (unsigned normalized = 0; normalized < 2 && result == VK_SUCCESS; ++normalized)
-   for (unsigned compare = 0; compare < 8 && result == VK_SUCCESS; ++compare)
-   for (unsigned u = 0; u < 5 && result == VK_SUCCESS; ++u)
-   for (unsigned v = 0; v < 5 && result == VK_SUCCESS; ++v)
-   for (unsigned w = 0; w < 5 && result == VK_SUCCESS; ++w)
-   for (unsigned border = 0; border < 3 && result == VK_SUCCESS; ++border) {
-      if (!normalized && (compare != MTL_COMPARE_FUNCTION_ALWAYS ||
-          (u != 2 && u != 3) || (v != 2 && v != 3) || w != 2))
-         continue;
-      const struct mtl_sampler_packed input = {
-         .mode_u = modes[u], .mode_v = modes[v], .mode_w = modes[w],
-         .border_color = border, .compare_func = compare,
-         .normalized_coordinates = normalized,
-      };
-      result = kk_sampler_native_canonical_add(dev, cache, &input);
+   for (uint32_t i = 0; i < cache->canonical_count; ++i) {
+      if (!kk_sampler_native_materialize(dev, cache, &cache->canonical[i])) {
+         result = VK_ERROR_OUT_OF_HOST_MEMORY;
+         break;
+      }
    }
    if (result != VK_SUCCESS) {
       kk_sampler_native_cache_destroy(cache);

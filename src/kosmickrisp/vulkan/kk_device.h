@@ -176,6 +176,8 @@ void kk_device_make_resources_resident(struct kk_device *dev);
 /* Required to create a sampler */
 mtl_sampler *kk_sampler_create(struct kk_device *dev,
                                const struct mtl_sampler_packed *packed);
+/* Requires dev->samplers.lock; never acquires the descriptor heap lock. */
+VkResult kk_sampler_cap_reserve_locked(struct kk_device *dev);
 VkResult kk_sampler_heap_add(struct kk_device *dev,
                              struct mtl_sampler_packed desc,
                              struct kk_rc_sampler **out);

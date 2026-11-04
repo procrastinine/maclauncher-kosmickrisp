@@ -68,8 +68,7 @@ mtl_sampler_id_check_matches(struct mtl_sampler_id_check *check,
       uint64_t after = state.gpuResourceID._impl;
       /* The scratch never executes on GPU and retains no sampled object. */
       [check->encoder setSamplerState:nil atIndex:0];
-      return raw == encoded && after == encoded &&
-             state.gpuResourceID._impl == encoded;
+      return raw == encoded && after == encoded;
    }
 }
 #endif

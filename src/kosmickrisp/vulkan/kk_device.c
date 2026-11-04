@@ -128,9 +128,6 @@ kk_release_compiler(struct kk_device *dev)
 
 DERIVE_HASH_TABLE(mtl_sampler_packed);
 
-static VkResult kk_sampler_cap_reserve(struct kk_device *dev);
-static void kk_destroy_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h);
-
 static VkResult
 kk_init_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h)
 {
@@ -149,12 +146,7 @@ kk_init_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h)
    }
 
    simple_mtx_init(&h->lock, mtx_plain);
-   result = kk_sampler_cap_native_init(dev);
-   if (result == VK_SUCCESS)
-      result = kk_sampler_cap_reserve(dev);
-   if (result != VK_SUCCESS)
-      kk_destroy_sampler_heap(dev, h);
-   return result;
+   return VK_SUCCESS;
 }
 
 static void
@@ -268,17 +260,39 @@ kk_sampler_heap_add_locked(struct kk_device *dev, struct kk_sampler_heap *h,
    return VK_SUCCESS;
 }
 
-static VkResult
-kk_sampler_cap_reserve(struct kk_device *dev)
+VkResult
+kk_sampler_cap_reserve_locked(struct kk_device *dev)
 {
    struct kk_sampler_heap *h = &dev->samplers;
+   if (h->canonical_count)
+      return VK_SUCCESS;
+
+   /* No native state is needed before the first sampler or sampled sparse
+    * view. Reserve the complete tap family before admitting acceleration. */
+   assert(h->ht->entries == 0);
+   VkResult result = kk_sampler_cap_native_init(dev);
+   if (result != VK_SUCCESS)
+      return result;
    const struct mtl_sampler_packed *keys;
    uint32_t count = kk_sampler_cap_native_keys(dev, &keys);
    for (uint32_t i = 0; i < count; ++i) {
       struct kk_rc_sampler *rc;
-      VkResult result = kk_sampler_heap_add_locked(dev, h, keys[i], &rc, true);
-      if (result != VK_SUCCESS)
+      result = kk_sampler_heap_add_locked(dev, h, keys[i], &rc, true);
+      if (result != VK_SUCCESS) {
+         /* Initialization publishes no application handles. Unwind only this
+          * device's references; another device may retain the shared cache. */
+         hash_table_foreach(h->ht, entry) {
+            struct kk_rc_sampler *partial = entry->data;
+            if (partial->index != UINT16_MAX)
+               kk_query_table_remove(dev, &h->table, partial->index);
+            mtl_release(partial->handle);
+            ralloc_free(partial);
+         }
+         _mesa_hash_table_clear(h->ht, NULL);
+         h->indexed_count = 0;
+         kk_sampler_cap_native_finish(dev);
          return result;
+      }
       rc->canonical = true;
    }
    h->canonical_count = count;
@@ -293,7 +307,9 @@ kk_sampler_cap_get_canonical(struct kk_device *dev,
    kk_sampler_cap_key(&key, requested);
    struct kk_sampler_heap *h = &dev->samplers;
    simple_mtx_lock(&h->lock);
-   VkResult result = kk_sampler_cap_fallback_locked(dev, h, &key, out, !native_only);
+   VkResult result = kk_sampler_cap_reserve_locked(dev);
+   if (result == VK_SUCCESS)
+      result = kk_sampler_cap_fallback_locked(dev, h, &key, out, !native_only);
    simple_mtx_unlock(&h->lock);
    return result;
 }
@@ -308,7 +324,9 @@ kk_sampler_heap_add(struct kk_device *dev, struct mtl_sampler_packed desc,
    struct kk_sampler_heap *h = &dev->samplers;
 
    simple_mtx_lock(&h->lock);
-   VkResult result = kk_sampler_heap_add_locked(dev, h, desc, out, true);
+   VkResult result = kk_sampler_cap_reserve_locked(dev);
+   if (result == VK_SUCCESS)
+      result = kk_sampler_heap_add_locked(dev, h, desc, out, true);
    if (result == VK_SUCCESS && kk_sampler_cap_keys_equal(&desc, &(*out)->key)) {
       result = kk_sparse_sampler_added(dev, *out);
       if (result != VK_SUCCESS) kk_sampler_heap_remove_locked(dev, h, *out);
@@ -324,7 +342,9 @@ kk_sampler_native_add(struct kk_device *dev, struct mtl_sampler_packed desc,
 {
    struct kk_sampler_heap *h = &dev->samplers;
    simple_mtx_lock(&h->lock);
-   VkResult result = kk_sampler_heap_add_locked(dev, h, desc, out, false);
+   VkResult result = kk_sampler_cap_reserve_locked(dev);
+   if (result == VK_SUCCESS)
+      result = kk_sampler_heap_add_locked(dev, h, desc, out, false);
    if (result == VK_SUCCESS && kk_sampler_cap_keys_equal(&desc, &(*out)->key)) {
       result = kk_sparse_sampler_added(dev, *out);
       if (result != VK_SUCCESS) kk_sampler_heap_remove_locked(dev, h, *out);

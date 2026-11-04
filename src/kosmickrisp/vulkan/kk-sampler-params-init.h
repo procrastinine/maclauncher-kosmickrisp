@@ -7,7 +7,8 @@
 
 static inline void
 kk_sampler_params_init(struct kk_sampler_params *params,
-                       const VkSamplerCreateInfo *info)
+                       const VkSamplerCreateInfo *info,
+                       VkSamplerReductionMode reduction_mode)
 {
    memset(params, 0, sizeof(*params));
    memcpy(&params->min_lod, &info->minLod, sizeof(float));
@@ -22,13 +23,6 @@ kk_sampler_params_init(struct kk_sampler_params *params,
       params->compare_op = info->compareOp;
    else
       params->compare_op = VK_COMPARE_OP_ALWAYS;
-   params->reduction_mode = VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE;
-   for (const VkBaseInStructure *ext = info->pNext; ext; ext = ext->pNext) {
-      if (ext->sType == VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO) {
-         params->reduction_mode =
-            ((const VkSamplerReductionModeCreateInfo *)ext)->reductionMode;
-         break;
-      }
-   }
+   params->reduction_mode = reduction_mode;
 }
 #endif

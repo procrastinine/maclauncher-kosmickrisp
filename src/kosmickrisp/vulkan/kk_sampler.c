@@ -184,6 +184,10 @@ kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
                           pCreateInfo->borderColor ==
                              VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK);
 
+   /* Custom depth comparison needs point taps and the original relation.
+    * Select them before materializing otherwise unused filtered states. */
+   sampler->is_virtual = custom_border && pCreateInfo->compareEnable;
+
    sampler->reduction_mode = pdev->info.gpu_apple_family < 10
                                   ? sampler->vk.reduction_mode : 0;
    sampler->filter_bits = (pCreateInfo->minFilter == VK_FILTER_LINEAR ? 1 : 0) |
@@ -297,16 +301,6 @@ kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
           params_lock_context == KK_SAMPLER_PARAMS_HEAP_LOCK_HELD);
    result = kk_sampler_cap_finalize(dev, sampler, pCreateInfo,
                                     params_lock_context);
-   /* Native samplers retain logical identity independently of physical RCs.
-    * Finalization has released every native sampler mutex before allocation. */
-   if (result == VK_SUCCESS && sampler->params_gpu_address == 0) {
-      struct kk_sampler_params params;
-      kk_sampler_params_init(&params, pCreateInfo);
-      result = params_lock_context == KK_SAMPLER_PARAMS_HEAP_LOCK_HELD
-         ? kk_sampler_params_alloc_locked(dev, &params,
-                                           &sampler->params_gpu_address)
-         : kk_sampler_params_alloc(dev, &params, &sampler->params_gpu_address);
-   }
    if (result != VK_SUCCESS) {
       kk_DestroySampler(device, kk_sampler_to_handle(sampler), pAllocator);
       return result;

@@ -196,9 +196,10 @@ static VkResult
 kk_sparse_sample_row(struct kk_device *dev, uint32_t base, uint32_t levels, uint64_t *address)
 {
    simple_mtx_lock(&dev->samplers.lock);
+   VkResult result = kk_sampler_cap_reserve_locked(dev);
+   if (result != VK_SUCCESS) goto unlock;
    struct kk_sparse_sample_row *row = dev->sparse_sample_rows;
    for (; row; row = row->next) if (row->base == base && row->levels == levels) break;
-   VkResult result = VK_SUCCESS;
    if (!row) {
       row = calloc(1, sizeof(*row));
       if (!row) { result = VK_ERROR_OUT_OF_HOST_MEMORY; goto unlock; }
