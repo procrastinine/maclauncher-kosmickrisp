@@ -51,6 +51,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
                          struct vk_device_extension_table *ext)
 {
    *ext = (struct vk_device_extension_table){
+      .EXT_shader_long_vector = true,
       /* Vulkan 1.1 */
       .KHR_16bit_storage = true,
       .KHR_bind_memory2 = true,
@@ -249,6 +250,7 @@ kk_get_device_features(
    struct vk_features *features)
 {
    *features = (struct vk_features){
+      .longVector = true,
       /* Vulkan 1.0 */
       .alphaToOne = true,
       .depthBiasClamp = true,
@@ -631,6 +633,7 @@ kk_get_device_properties(
    kk_descriptor_stride_align_for_type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, NULL, &stride, &alignment);
    buffer_stride = MAX2(buffer_stride, stride);
    *properties = (struct vk_properties){
+      .maxVectorComponents = 1024,
       .primitiveOverestimationSize = 1.0f / 256.0f,
       .maxExtraPrimitiveOverestimationSize = 0.0f,
       .extraPrimitiveOverestimationSizeGranularity = 0.0f,

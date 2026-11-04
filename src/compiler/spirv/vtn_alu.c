@@ -5,6 +5,7 @@
 
 #include <math.h>
 #include "vtn_private.h"
+#include "vtn_long_vector.h"
 #include "spirv_info.h"
 
 /*
@@ -457,12 +458,12 @@ fp_math_ctrl_for_type(struct vtn_builder *b, struct vtn_type *type)
 
    /* Some ALU like modf and frexp return a struct of two values. */
    if (glsl_type_is_struct(type->type)) {
-      base_type = glsl_get_base_type(type->type->fields.structure[0].type);
+      base_type = glsl_get_base_type(glsl_without_array(type->type->fields.structure[0].type));
    } else if (glsl_type_is_cmat(type->type)) {
       struct glsl_cmat_description desc = *glsl_get_cmat_description(type->type);
       base_type = desc.element_type;
    } else {
-      base_type = glsl_get_base_type(type->type);
+      base_type = glsl_get_base_type(glsl_without_array(type->type));
    }
 
    unsigned *fp_math_ctrl = vtn_fp_math_ctrl_for_base_type(b, base_type);
@@ -762,26 +763,11 @@ vtn_handle_convert(struct vtn_builder *b, SpvOp opcode,
    return result;
 }
 
-void
-vtn_handle_alu(struct vtn_builder *b, SpvOp opcode,
-               const uint32_t *w, unsigned count)
+static struct vtn_ssa_value *
+vtn_alu_result(struct vtn_builder *b, SpvOp opcode,
+               struct vtn_value *dest_val, const struct glsl_type *dest_type,
+               struct vtn_ssa_value **vtn_src, unsigned num_inputs)
 {
-   struct vtn_value *dest_val = vtn_untyped_value(b, w[2]);
-   const struct glsl_type *dest_type = vtn_get_type(b, w[1])->type;
-
-   vtn_handle_fp_fast_math(b, dest_val, vtn_untyped_value(b, w[3]));
-
-   if (glsl_type_is_cmat(dest_type)) {
-      vtn_handle_cooperative_alu(b, dest_val, dest_type, opcode, w, count);
-      b->nb.fp_math_ctrl = nir_fp_fast_math;
-      return;
-   }
-
-   const unsigned num_inputs = count - 3;
-   struct vtn_ssa_value *vtn_src[4] = { NULL, };
-
-   vtn_collect_ssa_sources(b, &w[3], vtn_src, num_inputs);
-
    const bool mediump_16bit = vtn_alu_op_mediump_16bit(b, opcode, dest_val);
    if (mediump_16bit)
       vtn_downconvert_ssa_sources(b, vtn_src, num_inputs);
@@ -793,9 +779,7 @@ vtn_handle_alu(struct vtn_builder *b, SpvOp opcode,
       if (mediump_16bit)
          dest = vtn_mediump_upconvert_value(b, dest);
 
-      vtn_push_ssa_value(b, w[2], dest);
-      b->nb.fp_math_ctrl = nir_fp_fast_math;
-      return;
+      return dest;
    }
 
    struct vtn_ssa_value *dest = vtn_create_ssa_value(b, dest_type);
@@ -1192,8 +1176,60 @@ vtn_handle_alu(struct vtn_builder *b, SpvOp opcode,
 
    if (mediump_16bit)
       dest = vtn_mediump_upconvert_value(b, dest);
-   vtn_push_ssa_value(b, w[2], dest);
+   return dest;
+}
 
+
+void
+vtn_handle_alu(struct vtn_builder *b, SpvOp opcode,
+               const uint32_t *w, unsigned count)
+{
+   struct vtn_value *dest_val = vtn_untyped_value(b, w[2]);
+   const struct glsl_type *dest_type = vtn_get_type(b, w[1])->type;
+   vtn_handle_fp_fast_math(b, dest_val, vtn_untyped_value(b, w[3]));
+   if (glsl_type_is_cmat(dest_type)) {
+      vtn_handle_cooperative_alu(b, dest_val, dest_type, opcode, w, count);
+   } else {
+      unsigned num_inputs = count - 3;
+      struct vtn_ssa_value *src[4] = {0};
+      vtn_collect_ssa_sources(b, &w[3], src, num_inputs);
+      unsigned length = vtn_long_vector_length(dest_type);
+      for (unsigned i = 0; i < num_inputs; i++)
+         length = MAX2(length, vtn_long_vector_length(src[i]->type));
+      struct vtn_ssa_value *dest;
+      if (!length) {
+         dest = vtn_alu_result(b, opcode, dest_val, dest_type, src, num_inputs);
+      } else if (opcode == SpvOpDot) {
+         dest = vtn_create_ssa_value(b, dest_type);
+         dest->def = vtn_long_vector_dot(b, src[0], src[1]);
+      } else if (opcode == SpvOpAny || opcode == SpvOpAll || opcode == SpvOpDot) {
+         dest = vtn_create_ssa_value(b, dest_type);
+         nir_def *terms[1024];
+         for (unsigned i = 0; i < length; i++)
+            terms[i] = opcode == SpvOpDot ? nir_fmul(&b->nb, src[0]->elems[i]->def, src[1]->elems[i]->def) : src[0]->elems[i]->def;
+         for (unsigned n = length; n > 1; n = DIV_ROUND_UP(n, 2)) {
+            for (unsigned i = 0; i < n / 2; i++) {
+               nir_def *a = terms[2*i], *c = terms[2*i+1];
+               terms[i] = opcode == SpvOpAny ? nir_ior(&b->nb,a,c) : opcode == SpvOpAll ? nir_iand(&b->nb,a,c) : nir_fadd(&b->nb,a,c);
+            }
+            if (n & 1) terms[n/2] = terms[n-1];
+         }
+         dest->def = terms[0];
+      } else {
+         dest = vtn_create_ssa_value(b, dest_type);
+         const struct glsl_type *scalar_type = vtn_long_vector_scalar_type(b, dest_type);
+         const unsigned math_ctrl = b->nb.fp_math_ctrl;
+         for (unsigned i = 0; i < length; i++) {
+            struct vtn_ssa_value *elem[4] = {0};
+            for (unsigned j = 0; j < num_inputs; j++)
+               elem[j] = vtn_long_vector_element(b, src[j], i);
+            b->nb.fp_math_ctrl = math_ctrl;
+            vtn_long_vector_set_element(dest, i,
+               vtn_alu_result(b, opcode, dest_val, scalar_type, elem, num_inputs));
+         }
+      }
+      vtn_push_ssa_value(b, w[2], dest);
+   }
    b->nb.fp_math_ctrl = nir_fp_fast_math;
 }
 
@@ -1222,7 +1258,23 @@ vtn_handle_integer_dot(struct vtn_builder *b, SpvOp opcode,
       vtn_src[i] = vtn_ssa_value(b, w[i + 3]);
       src[i] = vtn_src[i]->def;
 
-      vtn_assert(glsl_type_is_vector_or_scalar(vtn_src[i]->type));
+      vtn_assert(glsl_type_is_vector_or_scalar(vtn_src[i]->type) || glsl_type_is_array(vtn_src[i]->type));
+   }
+   if (glsl_type_is_array(vtn_src[0]->type)) {
+      bool unsigned0 = opcode == SpvOpUDotKHR || opcode == SpvOpUDotAccSatKHR;
+      bool unsigned1 = unsigned0 || opcode == SpvOpSUDotKHR || opcode == SpvOpSUDotAccSatKHR;
+      nir_def *sum = nir_imm_intN_t(&b->nb, 0, dest_size);
+      unsigned length = glsl_get_length(vtn_src[0]->type);
+      vtn_assert(length == glsl_get_length(vtn_src[1]->type));
+      for (unsigned i = 0; i < length; i++) {
+         nir_def *a = vtn_src[0]->elems[i]->def, *c = vtn_src[1]->elems[i]->def;
+         a = unsigned0 ? nir_u2uN(&b->nb, a, dest_size) : nir_i2iN(&b->nb, a, dest_size);
+         c = unsigned1 ? nir_u2uN(&b->nb, c, dest_size) : nir_i2iN(&b->nb, c, dest_size);
+         sum = nir_iadd(&b->nb, sum, nir_imul(&b->nb, a, c));
+      }
+      if (num_inputs == 3) sum = unsigned0 ? nir_uadd_sat(&b->nb, sum, src[2]) : nir_iadd_sat(&b->nb, sum, src[2]);
+      vtn_push_nir_ssa(b, w[2], sum);
+      return;
    }
 
    /* For all of the opcodes *except* SpvOpSUDotKHR and SpvOpSUDotAccSatKHR,
@@ -1495,6 +1547,7 @@ vtn_handle_bitcast(struct vtn_builder *b, const uint32_t *w, unsigned count)
       return;
    }
 
+   if (vtn_long_vector_bitcast(b, w)) return;
    struct nir_def *src = vtn_get_nir_ssa(b, w[3]);
 
    vtn_fail_if(src->num_components * src->bit_size !=

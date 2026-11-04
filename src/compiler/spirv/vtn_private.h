@@ -298,6 +298,7 @@ struct vtn_type {
     * For Workgroup pointers, this is the size of the referenced type.
     */
    unsigned length;
+   bool is_long_vector;
 
    /* for arrays, matrices and pointers, the array stride */
    unsigned stride;

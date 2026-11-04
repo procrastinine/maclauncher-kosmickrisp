@@ -8,6 +8,7 @@
 #include "nir/nir_builtin_builder.h"
 
 #include "vtn_private.h"
+#include "vtn_long_vector.h"
 #include "GLSL.std.450.h"
 
 #ifndef M_PIf
@@ -186,19 +187,13 @@ vtn_nir_alu_op_for_spirv_glsl_opcode(struct vtn_builder *b,
 
 #define NIR_IMM_FP(n, v) (nir_imm_floatN_t(n, v, src[0]->bit_size))
 
-static void
-handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
-                   const uint32_t *w, unsigned count)
+static struct vtn_ssa_value *
+vtn_glsl450_alu_result(struct vtn_builder *b, enum GLSLstd450 entrypoint,
+                      const struct glsl_type *dest_type, struct vtn_value *dest_val,
+                      struct vtn_ssa_value **vtn_src, unsigned num_inputs)
 {
    struct nir_builder *nb = &b->nb;
-   const struct glsl_type *dest_type = vtn_get_type(b, w[1])->type;
-
-   const bool mediump_16bit =
-      vtn_value_needs_mediump_16bit(b, vtn_untyped_value(b, w[2]));
-
-   unsigned num_inputs = count - 5;
-   struct vtn_ssa_value *vtn_src[3] = {0};
-   vtn_collect_ssa_sources(b, &w[5], vtn_src, num_inputs);
+   const bool mediump_16bit = vtn_value_needs_mediump_16bit(b, dest_val);
    if (mediump_16bit)
       vtn_downconvert_ssa_sources(b, vtn_src, num_inputs);
 
@@ -431,6 +426,73 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
    if (mediump_16bit)
       dest = vtn_mediump_upconvert_value(b, dest);
 
+   return dest;
+}
+
+static void
+handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
+                   const uint32_t *w, unsigned count)
+{
+   const struct glsl_type *type = vtn_get_type(b, w[1])->type;
+   struct vtn_value *dest_val = vtn_untyped_value(b, w[2]);
+   unsigned num_inputs = count - 5;
+   struct vtn_ssa_value *src[3] = {0};
+   vtn_collect_ssa_sources(b, &w[5], src, num_inputs);
+   unsigned length = vtn_long_vector_length(type);
+   for (unsigned i = 0; i < num_inputs; i++) length = MAX2(length, vtn_long_vector_length(src[i]->type));
+   if (!length) {
+      vtn_push_ssa_value(b, w[2], vtn_glsl450_alu_result(b, entrypoint, type, dest_val, src, num_inputs));
+      return;
+   }
+   struct vtn_ssa_value *dest = vtn_create_ssa_value(b, type);
+   const struct glsl_type *scalar_type = vtn_long_vector_scalar_type(b, type);
+   nir_def *dot = NULL, *factor = NULL, *k = NULL, *eta = NULL;
+   if (entrypoint == GLSLstd450Distance) {
+      struct vtn_ssa_value *diff = vtn_create_ssa_value(b, src[0]->type);
+      for (unsigned i = 0; i < length; i++)
+         diff->elems[i]->def = nir_fsub(&b->nb, src[0]->elems[i]->def, src[1]->elems[i]->def);
+      dest->def = nir_fsqrt(&b->nb, vtn_long_vector_dot(b, diff, diff));
+      vtn_push_ssa_value(b, w[2], dest);
+      return;
+   }
+   if (entrypoint == GLSLstd450Length || entrypoint == GLSLstd450Normalize) {
+      dot = vtn_long_vector_dot(b, src[0], src[0]);
+      if (entrypoint == GLSLstd450Length) {
+         dest->def = nir_fsqrt(&b->nb, dot);
+         vtn_push_ssa_value(b, w[2], dest);
+         return;
+      }
+      factor = nir_frsq(&b->nb, dot);
+   } else if (entrypoint == GLSLstd450FaceForward) {
+      dot = vtn_long_vector_dot(b, src[2], src[1]);
+      factor = nir_flt(&b->nb, dot, nir_imm_floatN_t(&b->nb, 0, dot->bit_size));
+   } else if (entrypoint == GLSLstd450Reflect) {
+      factor = nir_fmul_imm(&b->nb, vtn_long_vector_dot(b, src[0], src[1]), 2);
+   } else if (entrypoint == GLSLstd450Refract) {
+      dot = vtn_long_vector_dot(b, src[0], src[1]);
+      eta = nir_f2fN(&b->nb, src[2]->def, dot->bit_size);
+      nir_def *one = nir_imm_floatN_t(&b->nb, 1, dot->bit_size);
+      k = nir_a_minus_bc(&b->nb, one, eta, nir_fmul(&b->nb, eta, nir_a_minus_bc(&b->nb, one, dot, dot)));
+      factor = nir_ffma_weak(&b->nb, eta, dot, nir_fsqrt(&b->nb, k));
+   }
+   unsigned math_ctrl = b->nb.fp_math_ctrl;
+   for (unsigned i = 0; i < length; i++) {
+      struct vtn_ssa_value *elem[3] = {0};
+      for (unsigned j = 0; j < num_inputs; j++) elem[j] = vtn_long_vector_element(b, src[j], i);
+      b->nb.fp_math_ctrl = math_ctrl;
+      if (entrypoint == GLSLstd450Normalize)
+         dest->elems[i]->def = nir_fmul(&b->nb, elem[0]->def, factor);
+      else if (entrypoint == GLSLstd450FaceForward)
+         dest->elems[i]->def = nir_bcsel(&b->nb, factor, elem[0]->def, nir_fneg(&b->nb, elem[0]->def));
+      else if (entrypoint == GLSLstd450Reflect)
+         dest->elems[i]->def = nir_a_minus_bc(&b->nb, elem[0]->def, elem[1]->def, factor);
+      else if (entrypoint == GLSLstd450Refract) {
+         nir_def *zero = nir_imm_floatN_t(&b->nb, 0, dot->bit_size);
+         dest->elems[i]->def = nir_bcsel(&b->nb, nir_flt(&b->nb, k, zero), zero,
+            nir_a_minus_bc(&b->nb, nir_fmul(&b->nb, eta, elem[0]->def), factor, elem[1]->def));
+      } else vtn_long_vector_set_element(dest, i,
+         vtn_glsl450_alu_result(b, entrypoint, scalar_type, dest_val, elem, num_inputs));
+   }
    vtn_push_ssa_value(b, w[2], dest);
 }
 
@@ -513,6 +575,33 @@ handle_glsl450_modf_frexp(struct vtn_builder *b, enum GLSLstd450 opcode,
    struct vtn_ssa_value *vtn_src = {0};
    vtn_collect_ssa_sources(b, &w[5], &vtn_src, 1);
 
+   if (glsl_type_is_array(vtn_src->type)) {
+      struct vtn_ssa_value *dest = vtn_create_ssa_value(b, dest_type);
+      bool pointer_result = opcode == GLSLstd450Modf || opcode == GLSLstd450Frexp;
+      struct vtn_pointer *ptr = pointer_result ? vtn_value(b, w[6], vtn_value_type_pointer)->pointer : NULL;
+      struct vtn_ssa_value *whole = ptr ? vtn_create_ssa_value(b, ptr->type->pointed->type) : NULL;
+      for (unsigned i = 0; i < glsl_get_length(vtn_src->type); i++) {
+         nir_def *src = vtn_src->elems[i]->def;
+         nir_def *part, *integer;
+         if (opcode == GLSLstd450Frexp || opcode == GLSLstd450FrexpStruct) {
+            part = nir_frexp_sig(nb, src);
+            const glsl_type *integer_type = ptr ? whole->elems[i]->type : dest->elems[1]->elems[i]->type;
+            integer = nir_i2iN(nb, nir_frexp_exp(nb, src), glsl_get_bit_size(integer_type));
+         } else {
+            nir_def *inf = nir_imm_floatN_t(nb, INFINITY, src->bit_size);
+            nir_def *sign = nir_imm_intN_t(nb, (uint64_t)1 << (src->bit_size-1), src->bit_size);
+            nir_def *signed_zero = nir_iand(nb, src, sign);
+            nir_def *abs = nir_fabs(nb, src);
+            part = nir_bcsel(nb, nir_ieq(nb, abs, inf), signed_zero, nir_ior(nb, signed_zero, nir_ffract(nb, abs)));
+            integer = nir_ior(nb, signed_zero, nir_ffloor(nb, abs));
+         }
+         if (ptr) { dest->elems[i]->def = part; whole->elems[i]->def = integer; }
+         else { dest->elems[0]->elems[i]->def = part; dest->elems[1]->elems[i]->def = integer; }
+      }
+      if (ptr) vtn_variable_store(b, whole, ptr, 0);
+      vtn_push_ssa_value(b, w[2], dest);
+      return;
+   }
    nir_def *src = vtn_src->def;
 
    struct vtn_ssa_value *dest = vtn_create_ssa_value(b, dest_type);

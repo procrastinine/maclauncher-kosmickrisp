@@ -33,6 +33,7 @@
  * suffixes do not exist and 8 comes before 16.
  */
 static const struct spirv_capabilities implemented_capabilities = {
+   .LongVectorEXT = true,
    .AbortKHR = true,
    .Addresses = true,
    .AtomicFloat16AddEXT = true,
@@ -2113,20 +2114,25 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
       break;
    }
 
+   case SpvOpTypeVectorIdEXT:
    case SpvOpTypeVector: {
       struct vtn_type *base = vtn_get_type(b, w[2]);
-      unsigned elems = w[3];
+      unsigned elems = opcode == SpvOpTypeVectorIdEXT ? vtn_constant_uint(b, w[3]) : w[3];
 
       vtn_fail_if(base->base_type != vtn_base_type_scalar,
                   "Base type for OpTypeVector must be a scalar");
-      vtn_fail_if((elems < 2 || elems > 4) && (elems != 8) && (elems != 16),
+      bool long_vector = b->enabled_capabilities.LongVectorEXT && (elems == 1 || elems > 4);
+      vtn_fail_if(long_vector ? (elems == 0 || elems > 1024) :
+                  ((elems < 2 || elems > 4) && (elems != 8) && (elems != 16)),
                   "Invalid component count for OpTypeVector");
 
-      val->type->base_type = vtn_base_type_vector;
-      val->type->type = glsl_vector_type(glsl_get_base_type(base->type), elems);
+      val->type->base_type = long_vector ? vtn_base_type_array : vtn_base_type_vector;
+      val->type->is_long_vector = long_vector;
+      unsigned stride = glsl_type_is_boolean(base->type) ? 4 : glsl_get_bit_size(base->type) / 8;
+      val->type->type = long_vector ? glsl_array_type(base->type, elems, stride) :
+         glsl_vector_type(glsl_get_base_type(base->type), elems);
       val->type->length = elems;
-      val->type->stride = glsl_type_is_boolean(val->type->type)
-         ? 4 : glsl_get_bit_size(base->type) / 8;
+      val->type->stride = stride;
       val->type->array_element = base;
       break;
    }
@@ -4670,12 +4676,16 @@ vtn_composite_extract(struct vtn_builder *b, struct vtn_ssa_value *src,
    return cur;
 }
 
+#include "vtn_long_vector.h"
+
 static void
 vtn_handle_composite(struct vtn_builder *b, SpvOp opcode,
                      const uint32_t *w, unsigned count)
 {
    struct vtn_type *type = vtn_get_type(b, w[1]);
    struct vtn_ssa_value *ssa = vtn_create_ssa_value(b, type->type);
+   if (vtn_long_vector_composite(b, opcode, w, count))
+      return;
 
    switch (opcode) {
    case SpvOpVectorExtractDynamic:
@@ -5750,6 +5760,7 @@ vtn_handle_variable_or_type_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpTypeBool:
    case SpvOpTypeInt:
    case SpvOpTypeFloat:
+   case SpvOpTypeVectorIdEXT:
    case SpvOpTypeVector:
    case SpvOpTypeMatrix:
    case SpvOpTypeImage:
@@ -5857,7 +5868,7 @@ vtn_nir_select(struct vtn_builder *b, struct vtn_ssa_value *src0,
 
       dest->elems = vtn_alloc_array(b, struct vtn_ssa_value *, elems);
       for (unsigned i = 0; i < elems; i++) {
-         dest->elems[i] = vtn_nir_select(b, src0,
+         dest->elems[i] = vtn_nir_select(b, glsl_type_is_array(src0->type) ? src0->elems[i] : src0,
                                          src1->elems[i], src2->elems[i]);
       }
    }
@@ -5882,13 +5893,13 @@ vtn_handle_select(struct vtn_builder *b, SpvOp opcode,
                "Object types must match the result type in OpSelect (%%%u = %%%u ? %%%u : %%%u)", w[2], w[3], w[4], w[5]);
 
    vtn_fail_if((cond_val->type->base_type != vtn_base_type_scalar &&
-                cond_val->type->base_type != vtn_base_type_vector) ||
-               !glsl_type_is_boolean(cond_val->type->type),
+                cond_val->type->base_type != vtn_base_type_vector && !cond_val->type->is_long_vector) ||
+               !glsl_type_is_boolean(glsl_without_array(cond_val->type->type)),
                "OpSelect must have either a vector of booleans or "
                "a boolean as Condition type");
 
-   vtn_fail_if(cond_val->type->base_type == vtn_base_type_vector &&
-               (res_val->type->base_type != vtn_base_type_vector ||
+   vtn_fail_if((cond_val->type->base_type == vtn_base_type_vector || cond_val->type->is_long_vector) &&
+               ((res_val->type->base_type != vtn_base_type_vector && !res_val->type->is_long_vector) ||
                 res_val->type->length != cond_val->type->length),
                "When Condition type in OpSelect is a vector, the Result "
                "type must be a vector of the same length");

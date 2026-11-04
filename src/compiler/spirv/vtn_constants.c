@@ -156,12 +156,194 @@ handle_workgroup_size_decoration_cb(struct vtn_builder *b,
 }
 
 static void
+vtn_eval_spec_alu(struct vtn_builder *b, SpvOp opcode, struct vtn_value *val,
+                  const glsl_type *dst_type, nir_constant *constant,
+                  unsigned num_components, unsigned src_count,
+                  const glsl_type **src_type, nir_constant **src_constant)
+{
+
+      const bool saturate = vtn_has_decoration(b, val, SpvDecorationSaturatedToLargestFloat8NormalConversionEXT);
+
+      const unsigned dst_bit_size =
+         glsl_type_is_nonnative_float(dst_type) ? 32 : glsl_get_bit_size(dst_type);
+
+      nir_op op;
+      bool swap;
+
+      switch (opcode) {
+      case SpvOpConvertFToU:
+      case SpvOpConvertFToS:
+      case SpvOpConvertSToF:
+      case SpvOpConvertUToF:
+      case SpvOpSConvert:
+      case SpvOpFConvert:
+      case SpvOpUConvert: {
+         /* We have a different source type in a conversion. */
+         const unsigned conv_src_bit_size =
+            glsl_type_is_nonnative_float(src_type[0]) ? 32 : glsl_get_bit_size(src_type[0]);
+
+         nir_alu_type src_alu_type = vtn_convert_op_src_type(opcode) | conv_src_bit_size;
+         nir_alu_type dst_alu_type = vtn_convert_op_dst_type(opcode) | dst_bit_size;
+         op = nir_type_conversion_op(src_alu_type, dst_alu_type, nir_rounding_mode_undef);
+         swap = false;
+         break;
+      }
+
+      default: {
+         unsigned extra_fp_math_ctrl;
+         op = vtn_nir_alu_op_for_spirv_opcode(b, opcode, &swap, &extra_fp_math_ctrl);
+
+         /* No SPIR-V opcodes handled through this path should set fast math.
+          * Since it is ignored, assert on it.
+          */
+         assert(!extra_fp_math_ctrl);
+         break;
+      }
+      };
+
+      unsigned resolved_bit_size = dst_bit_size;
+
+      nir_const_value src[3][NIR_MAX_VEC_COMPONENTS];
+
+      for (unsigned i = 0; i < src_count; i++) {
+         /* If this is an unsized source, pull the bit size from the
+          * source; otherwise, we'll use the bit size from the destination.
+          */
+         if (!nir_alu_type_get_type_size(nir_op_infos[op].input_types[i])) {
+            resolved_bit_size = glsl_type_is_nonnative_float(src_type[i]) ?
+               32 : glsl_get_bit_size(src_type[i]);
+         }
+
+         unsigned src_comps = nir_op_infos[op].input_sizes[i] ?
+                              nir_op_infos[op].input_sizes[i] :
+                              num_components;
+
+         unsigned j = swap ? 1 - i : i;
+         for (unsigned c = 0; c < src_comps; c++) {
+            src[j][c] = src_constant[i]->values[c];
+            if (glsl_type_is_bfloat_16(src_type[i]))
+               src[j][c].f32 = _mesa_bfloat16_bits_to_float(src[j][c].u16);
+            else if (glsl_type_is_e4m3fn(src_type[i]))
+               src[j][c].f32 = _mesa_e4m3fn_to_float(src[j][c].u8);
+            else if (glsl_type_is_e5m2(src_type[i]))
+               src[j][c].f32 = _mesa_e5m2_to_float(src[j][c].u8);
+         }
+
+         /* Fix up source to respect NIR expected sizes. */
+         switch (op) {
+         case nir_op_ishl:
+         case nir_op_ishr:
+         case nir_op_ushr: {
+            /* Shift amount in NIR ops must be 32-bit. */
+            vtn_assert(!swap);
+            const unsigned shift_idx = 1;
+            const unsigned shift_bit_size = glsl_get_bit_size(src_type[i]);
+            if (i != shift_idx || shift_bit_size == 32)
+               break;
+            for (unsigned c = 0; c < src_comps; c++) {
+               nir_const_value *shift = &src[shift_idx][c];
+               *shift = nir_const_value_for_uint(
+                     nir_const_value_as_uint(*shift, shift_bit_size), 32);
+            }
+            break;
+         }
+         default:
+            break;
+         }
+      }
+
+      nir_const_value *srcs[3] = {
+         src[0], src[1], src[2],
+      };
+      nir_eval_const_opcode(op, constant->values, NULL,
+                            num_components, resolved_bit_size, srcs,
+                            b->shader->info.float_controls_execution_mode);
+
+      for (int i = 0; i < num_components; i++) {
+         uint16_t conv;
+         if (glsl_type_is_bfloat_16(dst_type)) {
+            conv = _mesa_float_to_bfloat16_bits_rte(constant->values[i].f32);
+         } else if (glsl_type_is_e4m3fn(dst_type)) {
+            if (saturate)
+               conv = _mesa_float_to_e4m3fn_sat(constant->values[i].f32);
+            else
+               conv = _mesa_float_to_e4m3fn(constant->values[i].f32);
+         } else if (glsl_type_is_e5m2(dst_type)) {
+            if (saturate)
+               conv = _mesa_float_to_e5m2_sat(constant->values[i].f32);
+            else
+               conv = _mesa_float_to_e5m2(constant->values[i].f32);
+         } else {
+            continue;
+         }
+
+         constant->values[i] = nir_const_value_for_raw_uint(conv, glsl_get_bit_size(dst_type));
+      }
+
+}
+
+
+static nir_const_value
+vtn_long_const_get(struct vtn_value *val, unsigned i)
+{
+   if (val->value_type == vtn_value_type_undef) return (nir_const_value){0};
+   return val->type->is_long_vector ? val->constant->elements[i]->values[0] : val->constant->values[i];
+}
+
+static bool
+vtn_long_vector_spec_op(struct vtn_builder *b, SpvOp opcode, struct vtn_value *val, const uint32_t *w, unsigned count)
+{
+   if (opcode != SpvOpBitcast && opcode != SpvOpVectorShuffle && opcode != SpvOpSelect) return false;
+   struct vtn_value *src = vtn_untyped_value(b, w[4]);
+   bool is_long = val->type->is_long_vector || src->type->is_long_vector;
+   if (opcode == SpvOpVectorShuffle) is_long |= vtn_untyped_value(b, w[5])->type->is_long_vector;
+   if (!is_long) return false;
+   unsigned length = val->type->is_long_vector ? val->type->length : glsl_get_vector_elements(val->type->type);
+   if (val->type->is_long_vector) {
+      val->constant->num_elements = length;
+      val->constant->elements = ralloc_array(val->constant, nir_constant *, length);
+      for (unsigned i = 0; i < length; i++) val->constant->elements[i] = rzalloc(val->constant, nir_constant);
+   }
+   unsigned src_n = src->type->is_long_vector ? src->type->length : glsl_get_vector_elements(src->type->type);
+   uint8_t bits[8192];
+   unsigned src_bits = glsl_get_bit_size(glsl_without_array(src->type->type));
+   unsigned dst_bits = glsl_get_bit_size(glsl_without_array(val->type->type));
+   if (opcode == SpvOpBitcast) {
+      vtn_assert(src_n * src_bits == length * dst_bits);
+      for (unsigned i = 0; i < src_n; i++) {
+         uint64_t v = nir_const_value_as_uint(vtn_long_const_get(src, i), src_bits);
+         memcpy(bits + i * src_bits / 8, &v, src_bits / 8);
+      }
+   }
+   for (unsigned i = 0; i < length; i++) {
+      nir_const_value value;
+      if (opcode == SpvOpBitcast) {
+         uint64_t v = 0;
+         memcpy(&v, bits + i * dst_bits / 8, dst_bits / 8);
+         value = nir_const_value_for_uint(v, dst_bits);
+      } else if (opcode == SpvOpVectorShuffle) {
+         unsigned index = w[6+i];
+         struct vtn_value *src1 = vtn_untyped_value(b, w[5]);
+         value = index == UINT32_MAX ? (nir_const_value){0} : index < src_n ? vtn_long_const_get(src,index) : vtn_long_const_get(src1,index-src_n);
+      } else {
+         bool cond = vtn_long_const_get(src, src->type->base_type == vtn_base_type_scalar ? 0 : i).b;
+         value = vtn_long_const_get(vtn_untyped_value(b, w[cond ? 5 : 6]), i);
+      }
+      if (val->type->is_long_vector) val->constant->elements[i]->values[0] = value;
+      else val->constant->values[i] = value;
+   }
+   return true;
+}
+
+static void
 vtn_handle_spec_constant_op(struct vtn_builder *b, struct vtn_value *val,
                             const uint32_t *w, unsigned count)
 {
    nir_const_value u32op = nir_const_value_for_uint(w[3], 32);
    vtn_foreach_decoration(b, val, spec_constant_decoration_cb, &u32op);
    SpvOp opcode = u32op.u32;
+
+   if (vtn_long_vector_spec_op(b, opcode, val, w, count)) return;
 
    switch (opcode) {
    case SpvOpBitcast: {
@@ -367,138 +549,30 @@ vtn_handle_spec_constant_op(struct vtn_builder *b, struct vtn_value *val,
    }
 
    default: {
-      const glsl_type *dst_type = val->type->type;
-
-      const bool saturate = vtn_has_decoration(b, val, SpvDecorationSaturatedToLargestFloat8NormalConversionEXT);
-      unsigned num_components = glsl_get_vector_elements(val->type->type);
-
-      vtn_assert(count <= 7);
-
-      const unsigned src_count = count - 4;
+      unsigned src_count = count - 4;
+      vtn_assert(src_count <= 3);
       struct vtn_value *src_val[3] = {0};
-      const glsl_type *src_type[3] = {0};
-
-      for (unsigned i = 0; i < src_count; i++) {
-         src_val[i] = vtn_value(b, w[4 + i], vtn_value_type_constant);
-         src_type[i] = src_val[i]->type->type;
+      for (unsigned i = 0; i < src_count; i++) src_val[i] = vtn_value(b, w[4+i], vtn_value_type_constant);
+      unsigned length = val->type->is_long_vector ? val->type->length : 1;
+      if (val->type->is_long_vector) {
+         val->constant->num_elements = length;
+         val->constant->elements = ralloc_array(val->constant, nir_constant *, length);
       }
-
-      const unsigned dst_bit_size =
-         glsl_type_is_nonnative_float(dst_type) ? 32 : glsl_get_bit_size(dst_type);
-
-      nir_op op;
-      bool swap;
-
-      switch (opcode) {
-      case SpvOpConvertFToU:
-      case SpvOpConvertFToS:
-      case SpvOpConvertSToF:
-      case SpvOpConvertUToF:
-      case SpvOpSConvert:
-      case SpvOpFConvert:
-      case SpvOpUConvert: {
-         /* We have a different source type in a conversion. */
-         const unsigned conv_src_bit_size =
-            glsl_type_is_nonnative_float(src_type[0]) ? 32 : glsl_get_bit_size(src_type[0]);
-
-         nir_alu_type src_alu_type = vtn_convert_op_src_type(opcode) | conv_src_bit_size;
-         nir_alu_type dst_alu_type = vtn_convert_op_dst_type(opcode) | dst_bit_size;
-         op = nir_type_conversion_op(src_alu_type, dst_alu_type, nir_rounding_mode_undef);
-         swap = false;
-         break;
+      for (unsigned c = 0; c < length; c++) {
+         const glsl_type *src_type[3] = {0};
+         nir_constant *src_constant[3] = {0};
+         for (unsigned i = 0; i < src_count; i++) {
+            src_type[i] = src_val[i]->type->is_long_vector ? glsl_get_array_element(src_val[i]->type->type) : src_val[i]->type->type;
+            src_constant[i] = src_val[i]->type->is_long_vector ? src_val[i]->constant->elements[c] : src_val[i]->constant;
+         }
+         nir_constant *dst = val->constant;
+         const glsl_type *dst_type = val->type->type;
+         if (val->type->is_long_vector) {
+            dst = val->constant->elements[c] = rzalloc(val->constant, nir_constant);
+            dst_type = glsl_get_array_element(dst_type);
+         }
+         vtn_eval_spec_alu(b, opcode, val, dst_type, dst, glsl_get_vector_elements(dst_type), src_count, src_type, src_constant);
       }
-
-      default: {
-         unsigned extra_fp_math_ctrl;
-         op = vtn_nir_alu_op_for_spirv_opcode(b, opcode, &swap, &extra_fp_math_ctrl);
-
-         /* No SPIR-V opcodes handled through this path should set fast math.
-          * Since it is ignored, assert on it.
-          */
-         assert(!extra_fp_math_ctrl);
-         break;
-      }
-      };
-
-      unsigned resolved_bit_size = dst_bit_size;
-
-      nir_const_value src[3][NIR_MAX_VEC_COMPONENTS];
-
-      for (unsigned i = 0; i < src_count; i++) {
-         /* If this is an unsized source, pull the bit size from the
-          * source; otherwise, we'll use the bit size from the destination.
-          */
-         if (!nir_alu_type_get_type_size(nir_op_infos[op].input_types[i])) {
-            resolved_bit_size = glsl_type_is_nonnative_float(src_type[i]) ?
-               32 : glsl_get_bit_size(src_type[i]);
-         }
-
-         unsigned src_comps = nir_op_infos[op].input_sizes[i] ?
-                              nir_op_infos[op].input_sizes[i] :
-                              num_components;
-
-         unsigned j = swap ? 1 - i : i;
-         for (unsigned c = 0; c < src_comps; c++) {
-            src[j][c] = src_val[i]->constant->values[c];
-            if (glsl_type_is_bfloat_16(src_type[i]))
-               src[j][c].f32 = _mesa_bfloat16_bits_to_float(src[j][c].u16);
-            else if (glsl_type_is_e4m3fn(src_type[i]))
-               src[j][c].f32 = _mesa_e4m3fn_to_float(src[j][c].u8);
-            else if (glsl_type_is_e5m2(src_type[i]))
-               src[j][c].f32 = _mesa_e5m2_to_float(src[j][c].u8);
-         }
-
-         /* Fix up source to respect NIR expected sizes. */
-         switch (op) {
-         case nir_op_ishl:
-         case nir_op_ishr:
-         case nir_op_ushr: {
-            /* Shift amount in NIR ops must be 32-bit. */
-            vtn_assert(!swap);
-            const unsigned shift_idx = 1;
-            const unsigned shift_bit_size = glsl_get_bit_size(src_type[i]);
-            if (i != shift_idx || shift_bit_size == 32)
-               break;
-            for (unsigned c = 0; c < src_comps; c++) {
-               nir_const_value *shift = &src[shift_idx][c];
-               *shift = nir_const_value_for_uint(
-                     nir_const_value_as_uint(*shift, shift_bit_size), 32);
-            }
-            break;
-         }
-         default:
-            break;
-         }
-      }
-
-      nir_const_value *srcs[3] = {
-         src[0], src[1], src[2],
-      };
-      nir_eval_const_opcode(op, val->constant->values, NULL,
-                            num_components, resolved_bit_size, srcs,
-                            b->shader->info.float_controls_execution_mode);
-
-      for (int i = 0; i < num_components; i++) {
-         uint16_t conv;
-         if (glsl_type_is_bfloat_16(dst_type)) {
-            conv = _mesa_float_to_bfloat16_bits_rte(val->constant->values[i].f32);
-         } else if (glsl_type_is_e4m3fn(dst_type)) {
-            if (saturate)
-               conv = _mesa_float_to_e4m3fn_sat(val->constant->values[i].f32);
-            else
-               conv = _mesa_float_to_e4m3fn(val->constant->values[i].f32);
-         } else if (glsl_type_is_e5m2(dst_type)) {
-            if (saturate)
-               conv = _mesa_float_to_e5m2_sat(val->constant->values[i].f32);
-            else
-               conv = _mesa_float_to_e5m2(val->constant->values[i].f32);
-         } else {
-            continue;
-         }
-
-         val->constant->values[i] = nir_const_value_for_raw_uint(conv, glsl_get_bit_size(dst_type));
-      }
-
       break;
    } /* default */
    }

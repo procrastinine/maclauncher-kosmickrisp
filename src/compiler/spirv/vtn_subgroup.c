@@ -14,6 +14,13 @@ vtn_build_subgroup_instr(struct vtn_builder *b,
                          unsigned const_idx0,
                          unsigned const_idx1)
 {
+   if (glsl_type_is_array(src0->type)) {
+      struct vtn_ssa_value *dst = vtn_create_ssa_value(b, src0->type);
+      for (unsigned i = 0; i < glsl_get_length(src0->type); i++)
+         dst->elems[i] = vtn_build_subgroup_instr(b, nir_op, src0->elems[i],
+            src1 ? src1->elems[i] : NULL, index, const_idx0, const_idx1);
+      return dst;
+   }
    /* Some of the subgroup operations take an index.  SPIR-V allows this to be
     * any integer type.  To make things simpler for drivers, we only support
     * 32-bit indices.
@@ -47,6 +54,23 @@ vtn_build_subgroup_instr(struct vtn_builder *b,
    dst->def = &intrin->def;
 
    return dst;
+}
+
+static nir_def *
+vtn_subgroup_vote(struct vtn_builder *b, nir_intrinsic_op op, struct vtn_ssa_value *src)
+{
+   if (glsl_type_is_array(src->type)) {
+      nir_def *result = nir_imm_true(&b->nb);
+      for (unsigned i = 0; i < glsl_get_length(src->type); i++)
+         result = nir_iand(&b->nb, result, vtn_subgroup_vote(b, op, src->elems[i]));
+      return result;
+   }
+   nir_intrinsic_instr *intrin = nir_intrinsic_instr_create(b->nb.shader, op);
+   if (nir_intrinsic_infos[op].src_components[0] == 0) intrin->num_components = src->def->num_components;
+   intrin->src[0] = nir_src_for_ssa(src->def);
+   nir_def_init(&intrin->instr, &intrin->def, 1, 1);
+   nir_builder_instr_insert(&b->nb, &intrin->instr);
+   return &intrin->def;
 }
 
 void
@@ -187,7 +211,7 @@ vtn_handle_subgroup(struct vtn_builder *b, SpvOp opcode,
          op = nir_intrinsic_vote_ieq;
          break;
       case SpvOpGroupNonUniformAllEqual:
-         switch (glsl_get_base_type(vtn_ssa_value(b, w[4])->type)) {
+         switch (glsl_get_base_type(glsl_without_array(vtn_ssa_value(b, w[4])->type))) {
          case GLSL_TYPE_FLOAT:
          case GLSL_TYPE_FLOAT16:
          case GLSL_TYPE_DOUBLE:
@@ -212,24 +236,10 @@ vtn_handle_subgroup(struct vtn_builder *b, SpvOp opcode,
          UNREACHABLE("Unhandled opcode");
       }
 
-      nir_def *src0;
-      if (opcode == SpvOpGroupNonUniformAll || opcode == SpvOpGroupAll ||
-          opcode == SpvOpGroupNonUniformAny || opcode == SpvOpGroupAny ||
-          opcode == SpvOpGroupNonUniformAllEqual) {
-         src0 = vtn_get_nir_ssa(b, w[4]);
-      } else {
-         src0 = vtn_get_nir_ssa(b, w[3]);
-      }
-      nir_intrinsic_instr *intrin =
-         nir_intrinsic_instr_create(b->nb.shader, op);
-      if (nir_intrinsic_infos[op].src_components[0] == 0)
-         intrin->num_components = src0->num_components;
-      intrin->src[0] = nir_src_for_ssa(src0);
-      nir_def_init_for_type(&intrin->instr, &intrin->def,
-                            dest_type->type);
-      nir_builder_instr_insert(&b->nb, &intrin->instr);
-
-      vtn_push_nir_ssa(b, w[2], &intrin->def);
+      bool scope = opcode == SpvOpGroupNonUniformAll || opcode == SpvOpGroupAll ||
+         opcode == SpvOpGroupNonUniformAny || opcode == SpvOpGroupAny || opcode == SpvOpGroupNonUniformAllEqual;
+      struct vtn_ssa_value *src = vtn_ssa_value(b, w[scope ? 4 : 3]);
+      vtn_push_nir_ssa(b, w[2], vtn_subgroup_vote(b, op, src));
       break;
    }
 
