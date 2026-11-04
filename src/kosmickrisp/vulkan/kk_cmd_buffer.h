@@ -7,6 +7,8 @@
 
 #ifndef KK_CMD_BUFFER_H
 #define KK_CMD_BUFFER_H 1
+#include "gallium/include/pipe/p_defines.h"
+#include "poly/geometry.h"
 
 #include "kk_private.h"
 
@@ -90,6 +92,7 @@ struct kk_per_draw_data {
 
    /* Address of geometry param buffer if a GS is used, else 0 */
    uint64_t geometry_params;
+   uint64_t geometry_statistics[PIPE_STAT_QUERY_COUNT];
 
    /* Whether the last vertex of a primitive is its provoking vertex */
    uint32_t provoking_last;
@@ -147,6 +150,11 @@ struct kk_graphics_state {
    struct kk_rendering_state render;
    struct kk_descriptor_state descriptors;
    struct kk_per_draw_data per_draw_data;
+   struct kk_addr_range xfb[POLY_MAX_SO_BUFFERS];
+   uint64_t xfb_offsets;
+   uint64_t xfb_query[POLY_MAX_VERTEX_STREAMS];
+   uint64_t primitives_query[POLY_MAX_VERTEX_STREAMS];
+   bool xfb_enabled;
 
    mtl_depth_stencil_state *depth_stencil_state;
    mtl_render_pass_descriptor *render_pass_descriptor;

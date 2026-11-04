@@ -37,7 +37,10 @@ kk_reports_per_query(struct kk_query_pool *pool)
    switch (pool->vk.query_type) {
    case VK_QUERY_TYPE_OCCLUSION:
    case VK_QUERY_TYPE_TIMESTAMP:
+   case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT:
       return 1;
+   case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT:
+      return 2;
    default:
       UNREACHABLE("Unsupported query type");
    }
@@ -76,8 +79,8 @@ kk_query_report_addr(struct kk_device *dev, struct kk_query_pool *pool,
    struct kk_bo *bo =
       kk_pool_is_oq(pool) ? dev->occlusion_queries.bo : pool->bo;
 
-   uint32_t index =
-      kk_pool_is_ts(pool) ? query : kk_pool_index_ptr(pool)[query];
+   uint32_t index = kk_pool_is_oq(pool) ? kk_pool_index_ptr(pool)[query]
+                                                : query * kk_reports_per_query(pool);
    return bo->gpu + pool->query_start + (index * sizeof(uint64_t));
 }
 
@@ -96,8 +99,8 @@ kk_query_report_map(struct kk_device *dev, struct kk_query_pool *pool,
       kk_pool_is_oq(pool) ? dev->occlusion_queries.bo : pool->bo;
 
    uint64_t *queries = (uint64_t *)(bo->cpu + pool->query_start);
-   uint32_t index =
-      kk_pool_is_ts(pool) ? query : kk_pool_index_ptr(pool)[query];
+   uint32_t index = kk_pool_is_oq(pool) ? kk_pool_index_ptr(pool)[query]
+                                                : query * kk_reports_per_query(pool);
 
    return (struct kk_query_report *)&queries[index];
 }
@@ -261,7 +264,7 @@ emit_zero_queries(struct kk_cmd_buffer *cmd, struct kk_query_pool *pool,
    struct libkk_reset_query_args info = {
       .availability = kk_pool_is_ts(pool) ? 0u : pool->bo->gpu,
       .results = results_bo->gpu + pool->query_start,
-      .oq_index = kk_pool_is_ts(pool) ? 0u : pool->bo->gpu + pool->index_start,
+      .oq_index = kk_pool_is_oq(pool) ? pool->bo->gpu + pool->index_start : 0u,
 
       .first_query = first_index,
       .reports_per_query = kk_reports_per_query(pool),
@@ -414,12 +417,20 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
    }
 }
 
-VKAPI_ATTR void VKAPI_CALL
-kk_CmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
-                 uint32_t query, VkQueryControlFlags flags)
+static void
+kk_begin_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+               uint32_t query, VkQueryControlFlags flags, uint32_t index)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
+   if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
+      cmd->state.gfx.xfb_query[index] = kk_query_report_addr(kk_cmd_buffer_device(cmd), pool, query);
+      return;
+   }
+   if (pool->vk.query_type == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {
+      cmd->state.gfx.primitives_query[index] = kk_query_report_addr(kk_cmd_buffer_device(cmd), pool, query);
+      return;
+   }
    cmd->state.gfx.occlusion.mode = flags & VK_QUERY_CONTROL_PRECISE_BIT
                                       ? MTL_VISIBILITY_RESULT_MODE_COUNTING
                                       : MTL_VISIBILITY_RESULT_MODE_BOOLEAN;
@@ -428,14 +439,20 @@ kk_CmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
    cmd->state.gfx.occlusion.index = remap_index[query];
 }
 
-VKAPI_ATTR void VKAPI_CALL
-kk_CmdEndQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
-               uint32_t query)
+static void
+kk_end_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+             uint32_t query, uint32_t index)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
-   cmd->state.gfx.occlusion.mode = MTL_VISIBILITY_RESULT_MODE_DISABLED;
-   cmd->state.gfx.dirty |= KK_DIRTY_OCCLUSION;
+   if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
+      cmd->state.gfx.xfb_query[index] = 0;
+   } else if (pool->vk.query_type == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {
+      cmd->state.gfx.primitives_query[index] = 0;
+   } else {
+      cmd->state.gfx.occlusion.mode = MTL_VISIBILITY_RESULT_MODE_DISABLED;
+      cmd->state.gfx.dirty |= KK_DIRTY_OCCLUSION;
+   }
 
    /* Make the query available. The Vulkan spec states:
     * If queries are used while executing a render pass instance that has
@@ -581,7 +598,7 @@ kk_CmdCopyQueryPoolResultsToMemoryKHR(
    struct libkk_copy_queries_args args = {
       .availability = kk_pool_is_ts(pool) ? 0u : pool->bo->gpu,
       .results = results_bo->gpu + pool->query_start,
-      .oq_index = kk_pool_is_ts(pool) ? 0u : pool->bo->gpu + pool->index_start,
+      .oq_index = kk_pool_is_oq(pool) ? pool->bo->gpu + pool->index_start : 0u,
       .dst_addr = pDstRange->address,
       .dst_stride = pDstRange->stride,
       .first_query = firstQuery,
@@ -589,4 +606,28 @@ kk_CmdCopyQueryPoolResultsToMemoryKHR(
       .reports_per_query = kk_reports_per_query(pool),
    };
    libkk_copy_queries_struct(cmd, kk_grid_1d(queryCount), false, args);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+kk_CmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+   uint32_t query, VkQueryControlFlags flags)
+{
+   kk_begin_query(commandBuffer, queryPool, query, flags, 0);
+}
+VKAPI_ATTR void VKAPI_CALL
+kk_CmdEndQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query)
+{
+   kk_end_query(commandBuffer, queryPool, query, 0);
+}
+VKAPI_ATTR void VKAPI_CALL
+kk_CmdBeginQueryIndexedEXT(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+   uint32_t query, VkQueryControlFlags flags, uint32_t index)
+{
+   kk_begin_query(commandBuffer, queryPool, query, flags, index);
+}
+VKAPI_ATTR void VKAPI_CALL
+kk_CmdEndQueryIndexedEXT(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+   uint32_t query, uint32_t index)
+{
+   kk_end_query(commandBuffer, queryPool, query, index);
 }

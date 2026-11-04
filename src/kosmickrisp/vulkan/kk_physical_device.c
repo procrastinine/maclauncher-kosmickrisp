@@ -141,6 +141,8 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .EXT_pipeline_robustness = true,
       .EXT_vertex_attribute_divisor = true,
 
+      .EXT_transform_feedback = true,
+      .EXT_primitives_generated_query = true,
       /* Optional extensions */
       .KHR_calibrated_timestamps = true,
       .KHR_deferred_host_operations = true,
@@ -259,6 +261,11 @@ kk_get_device_features(
       .shaderTessellationAndGeometryPointSize = true,
       .shaderUniformBufferArrayDynamicIndexing = true,
       .tessellationShader = true,
+      .transformFeedback = true,
+      .geometryStreams = false,
+      .primitivesGeneratedQuery = true,
+      .primitivesGeneratedQueryWithRasterizerDiscard = true,
+      .primitivesGeneratedQueryWithNonZeroStreams = false,
       .textureCompressionASTC_LDR = true,
       .textureCompressionBC = true,
       .textureCompressionETC2 = true,
@@ -891,7 +898,7 @@ kk_get_device_properties(
       .maxTransformFeedbackBufferDataStride = 2048,
       .transformFeedbackQueries = true,
       .transformFeedbackStreamsLinesTriangles = false,
-      .transformFeedbackRasterizationStreamSelect = true,
+      .transformFeedbackRasterizationStreamSelect = false,
       .transformFeedbackDraw = true,
 
       /* VK_KHR_vertex_attribute_divisor */

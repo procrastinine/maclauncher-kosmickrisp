@@ -66,6 +66,9 @@ kk_tess_info_merge(struct kk_tess_info a, struct kk_tess_info b)
 struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
+   bool has_geometry;
+   struct poly_gs_info geometry;
+   uint8_t gs_aux_mask;
 
    /* Required for fragment shader cull distance discards. */
    uint8_t num_cull_distances;
@@ -121,6 +124,7 @@ struct kk_shader_info {
 
       struct {
          bool uses_flat_varyings;
+         uint64_t flat_outputs;
       } fs;
 
       struct {
@@ -141,6 +145,7 @@ struct kk_pipeline_handles {
          /* VS, TCS, TES and the GS compute pass at most run before the render
           * pipeline. */
          mtl_compute_pipeline_state *pre_render[4];
+         mtl_compute_pipeline_state *gs_aux[2];
          mtl_depth_stencil_state *ds_handle;
          uint32_t pre_render_count;
       } gfx;
@@ -162,6 +167,7 @@ struct kk_shader {
    /* Compute pass of a GS. Its rasterization VS is in
     * msl_data[MESA_SHADER_GEOMETRY]. */
    struct msl_compile_data gs_main;
+   struct msl_compile_data gs_aux[2];
 };
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,

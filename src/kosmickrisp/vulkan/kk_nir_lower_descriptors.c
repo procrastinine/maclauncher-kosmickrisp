@@ -819,6 +819,17 @@ lower_poly(struct nir_builder *b, nir_intrinsic_instr *intrin, void *data)
       return lower_sysval_to_per_draw(b, intrin, vertex_outputs);
    case nir_intrinsic_load_vertex_param_buffer_poly:
       return lower_sysval_to_per_draw(b, intrin, vertex_params);
+   case nir_intrinsic_ro_to_rw_poly:
+      nir_def_replace(&intrin->def, intrin->src[0].ssa);
+      return true;
+   case nir_intrinsic_load_stat_query_address_poly: {
+      b->cursor = nir_before_instr(&intrin->instr);
+      unsigned offset = kk_per_draw_offset(geometry_statistics) +
+                        nir_intrinsic_base(intrin) * sizeof(uint64_t);
+      nir_def_replace(&intrin->def, load_per_draw(b, 1, 64,
+                         nir_imm_int(b, offset), 8));
+      return true;
+   }
    case nir_intrinsic_load_tess_param_buffer_poly:
       return lower_sysval_to_per_draw(b, intrin, tess_params);
    case nir_intrinsic_load_geometry_param_buffer_poly:

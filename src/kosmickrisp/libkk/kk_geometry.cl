@@ -49,11 +49,35 @@ libkk_gs_setup_indirect(uint64_t index_buffer, constant uint *draw,
                         global struct poly_geometry_params *p,
                         global struct poly_heap *heap, uint64_t vs_outputs,
                         uint32_t index_size_B, uint32_t index_buffer_range_el,
-                        uint32_t prim, uint32_t max_indices,
+                        uint32_t prim, int is_prefix_summing, uint32_t max_indices,
                         enum poly_gs_shape shape)
 {
-   /* Prefix summing only serves transform feedback */
    poly_gs_setup_indirect(index_buffer, draw, vp, p, heap, vs_outputs,
                           index_size_B, index_buffer_range_el, prim,
-                          false /* is_prefix_summing */, max_indices, shape);
+                          is_prefix_summing, max_indices, shape);
+}
+
+KERNEL(1024)
+libkk_prefix_sum_geometry(global struct poly_geometry_params *p)
+{
+   local uint scratch[32];
+   poly_prefix_sum(scratch, p->count_buffer, p->input_primitives,
+      p->count_buffer_stride / 4, cl_group_id.x, 1024);
+}
+
+KERNEL(1)
+libkk_xfb_counter_copy(uint64_t source, uint64_t destination)
+{
+   *(global uint32_t *)destination = source ? *(global uint32_t *)source : 0;
+}
+
+KERNEL(1)
+libkk_xfb_draw(constant uint32_t *counter, global uint32_t *draw,
+              uint32_t instance_count, uint32_t first_instance,
+              uint32_t counter_offset, uint32_t vertex_stride)
+{
+   draw[0] = max((int)*counter - (int)counter_offset, 0) / vertex_stride;
+   draw[1] = instance_count;
+   draw[2] = 0;
+   draw[3] = first_instance;
 }
