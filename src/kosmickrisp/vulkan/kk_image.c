@@ -562,9 +562,9 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
          ycbcr_info ? ycbcr_info->planes[plane].denominator_scales[0] : 1;
       const uint8_t height_scale =
          ycbcr_info ? ycbcr_info->planes[plane].denominator_scales[1] : 1;
-      kk_image_layout_init(dev, &image->vk, vk_format_to_pipe_format(format),
-                           width_scale, height_scale,
-                           &image->planes[plane].layout);
+      kk_image_layout_init(dev, &image->vk,
+         vk_format_to_pipe_format(format), width_scale, height_scale,
+         &image->planes[plane].layout, pCreateInfo->initialLayout);
    }
 
    return VK_SUCCESS;

@@ -6,6 +6,7 @@
  */
 
 #include "kk_physical_device.h"
+#include "kk_zero_init.h"
 
 #include "kk_debug.h"
 #include "kk_entrypoints.h"
@@ -1175,6 +1176,7 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
 
    struct vk_features supported_features;
    kk_get_device_features(pdev, &supported_extensions, &supported_features);
+   kk_zero_init_features(&supported_extensions, &supported_features);
 
    struct vk_properties properties;
    kk_get_device_properties(pdev, instance, &supported_extensions, &properties);

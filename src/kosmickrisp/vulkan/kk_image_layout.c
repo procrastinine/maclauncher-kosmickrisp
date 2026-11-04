@@ -5,6 +5,7 @@
  */
 
 #include "kk_image_layout.h"
+#include "kk_zero_init.h"
 
 #include "kk_debug.h"
 #include "kk_device.h"
@@ -260,7 +261,8 @@ kk_image_layout_calc_offsets(const struct kk_device *dev,
 void
 kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
                      enum pipe_format format, const uint8_t width_scale,
-                     const uint8_t height_scale, struct kk_image_layout *layout)
+                     const uint8_t height_scale, struct kk_image_layout *layout,
+                     VkImageLayout initial_layout)
 {
    const struct kk_physical_device *pdev = kk_device_physical(dev);
    const struct kk_va_format *supported_format = kk_get_va_format(format);
@@ -272,8 +274,10 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
    layout->layers = image->array_layers;
    layout->levels = image->mip_levels;
    layout->linear = image->tiling != VK_IMAGE_TILING_OPTIMAL;
-   layout->optimized_layout = kk_image_layout_can_optimize(
-      pdev, usage, image->tiling, image->create_flags, format);
+   layout->optimized_layout = kk_zero_init_optimized_layout(
+      kk_image_layout_can_optimize(pdev, usage, image->tiling,
+                                    image->create_flags, format),
+      initial_layout);
    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(
       usage, image->create_flags, supported_format->atomic);
    layout->create_flags = image->create_flags;

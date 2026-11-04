@@ -219,6 +219,7 @@ bool kk_image_layout_can_optimize(const struct kk_physical_device *pdev,
 void kk_image_layout_init(const struct kk_device *dev,
                           const struct vk_image *image, enum pipe_format format,
                           const uint8_t width_scale, const uint8_t height_scale,
-                          struct kk_image_layout *layout);
+                          struct kk_image_layout *layout,
+                          VkImageLayout initial_layout);
 
 #endif /* KK_IMAGE_LAYOUT_H */
