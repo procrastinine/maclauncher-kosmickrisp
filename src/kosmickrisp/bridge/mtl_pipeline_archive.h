@@ -937,6 +937,18 @@ kk_archive_bypass_compiler(KKPipelineArchive *cache)
    }
 }
 
+/* macOS 26 has only the capturing compiler (workaround 11), so a failed
+ * capturing call stays failed there. */
+void *
+mtl_compiler_cache_fallback_compiler(void *token)
+{
+   if (!token || token == KK_CAPTURE_BYPASS) return NULL;
+   KKPipelineArchive *cache = token;
+   id<MTL4Compiler> plain = kk_archive_bypass_compiler(cache);
+   if (plain) @synchronized(cache) { cache->stats.native_compiles++; }
+   return plain;
+}
+
 /* Pipeline creation never waits for a serializer snapshot. While a snapshot
  * holds the gate exclusively, the call compiles on a non-capturing compiler
  * and its descriptor is captured after the snapshot. Metal's compiled-binary

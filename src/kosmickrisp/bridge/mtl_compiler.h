@@ -81,6 +81,9 @@ void mtl_compiler_cache_record_descriptor(mtl_compiler *compiler, void *descript
 void *mtl_compiler_cache_begin_pipeline(mtl_compiler *compiler, mtl_compiler **native);
 void mtl_compiler_cache_record_pipeline_descriptor(mtl_compiler *compiler, void *token,
    void *descriptor);
+/* After a descriptor call on the capturing compiler fails, the compiler without
+ * a pipeline data set serializer (macOS 27 and later) for one retry, or NULL. */
+void *mtl_compiler_cache_fallback_compiler(void *token);
 void mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit);
 #ifdef __OBJC__
 #define MTL_COMPILER_PIPELINE_CALL(compiler, expression) ({ \
@@ -93,7 +96,11 @@ void mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit);
    } @finally { mtl_compiler_cache_end(_kk_capture); } \
    _kk_pipeline; \
 })
-/* The expression creates the pipeline with the compiler named by native. */
+/* The expression creates the pipeline with the compiler named by native.
+ * Apple's Mesh compiler can fail only while capturing into the pipeline data
+ * set (per-vertex maximum-output Mesh shaders on Apple8), so a failed capturing
+ * call is repeated once on the compiler without a serializer; that pipeline is
+ * not archived. */
 #define MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, descriptor, native, expression) ({ \
    mtl_compiler *_kk_native_compiler = (mtl_compiler *)(compiler); \
    mtl_compiler *_kk_selected = _kk_native_compiler; \
@@ -102,9 +109,17 @@ void mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit);
    __typeof__(expression) _kk_pipeline = nil; \
    @try { \
       _kk_pipeline = (expression); \
-      if (_kk_pipeline) \
+      if (_kk_pipeline) { \
          mtl_compiler_cache_record_pipeline_descriptor(_kk_native_compiler, _kk_capture, \
                                                        (void *)(descriptor)); \
+      } else { \
+         id<MTL4Compiler> _kk_plain = \
+            (id<MTL4Compiler>)mtl_compiler_cache_fallback_compiler(_kk_capture); \
+         if (_kk_plain) { \
+            native = _kk_plain; \
+            _kk_pipeline = (expression); \
+         } \
+      } \
    } @finally { mtl_compiler_cache_end(_kk_capture); } \
    _kk_pipeline; \
 })

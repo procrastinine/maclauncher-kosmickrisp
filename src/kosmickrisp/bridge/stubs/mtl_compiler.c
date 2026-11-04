@@ -191,6 +191,7 @@ void *mtl_compiler_cache_begin_pipeline(mtl_compiler *compiler, mtl_compiler **n
 }
 void mtl_compiler_cache_record_pipeline_descriptor(mtl_compiler *compiler, void *token,
    void *descriptor) {}
+void *mtl_compiler_cache_fallback_compiler(void *token) { return NULL; }
 void mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit) {}
 
 void *mtl_compiler_submit(mtl_compiler *compiler, void *data,

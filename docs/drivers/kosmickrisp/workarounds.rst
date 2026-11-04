@@ -179,6 +179,12 @@ a pipeline data set serializer. Pipeline creation uses it while a serializer
 snapshot holds the archive exclusively, and the same descriptors are created
 again on the capturing compiler after the snapshot.
 
+A pipeline whose creation fails on the capturing compiler is created once more
+on that second compiler and is not archived. Apple's Mesh compiler fails while
+capturing Mesh pipelines with per-vertex outputs at the maximum output size on
+Apple8 GPUs, and succeeds without the serializer. On macOS 26 such a pipeline
+creation still fails.
+
 | Log:
 | 2026-05-28: Workaround implemented
 | 2026-08-10: Resolved in macOS 27 beta 5
