@@ -14,6 +14,18 @@
 #include <signal.h>
 #include <unistd.h>
 
+static NSDictionary *kk_constant_record(id object);
+static _Thread_local struct mtl_compile_trace kk_compile_trace;
+
+static void
+kk_archive_trace(const char *event, NSData *key, id descriptor)
+{
+   if (kk_compile_trace.event)
+      kk_compile_trace.event(kk_compile_trace.data, event,
+         key.length == 32 ? key.bytes : NULL,
+         descriptor && kk_constant_record(descriptor).count != 0);
+}
+
 static char kk_archive_association, kk_library_hint_association;
 static char kk_constant_hint_association;
 
@@ -782,6 +794,7 @@ kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vert
    [retired release]; /* Native destruction outside cache publication lock. */
    if (!entry && completed_only) return nil;
    if (entry && !owner) {
+      kk_archive_trace("library-hit", nil, nil);
       [entry->changed lock];
       /* The owner publishes completion under this lock, so it is still alive. */
       pthread_override_t raised = __atomic_load_n(&entry->complete, __ATOMIC_ACQUIRE) ? NULL :
@@ -794,6 +807,7 @@ kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vert
       return result;
    }
    id<MTLLibrary> result = nil;
+   kk_archive_trace("library-miss", nil, nil);
    @try {
       NSError *error = nil;
       result = [(id<MTL4Compiler>)compiler newLibraryWithDescriptor:desc error:&error];
@@ -983,7 +997,7 @@ static id<MTLComputePipelineState>
 kk_archive_compute(mtl_compiler *compiler, MTL4ComputePipelineDescriptor *descriptor)
 {
    KKPipelineArchive *cache = kk_compiler_archive(compiler);
-   if (!cache) return nil;
+   if (!cache) { kk_archive_trace("archive-miss", nil, descriptor); return nil; }
    @synchronized(cache) { cache->stats.requests++; }
    NSData *hint = kk_pipeline_hint(descriptor);
    for (KKArchivePiece *piece in [cache candidates:hint]) {
@@ -993,8 +1007,9 @@ kk_archive_compute(mtl_compiler *compiler, MTL4ComputePipelineDescriptor *descri
       @synchronized(cache) { cache->stats.lookups++; }
       NSError *error = nil;
       id<MTLComputePipelineState> state = [archive newComputePipelineStateWithDescriptor:descriptor error:&error];
-      if (state) { [cache recordHit]; return state; }
+      if (state) { [cache recordHit]; kk_archive_trace("archive-hit", hint, descriptor); return state; }
    }
+   kk_archive_trace("archive-miss", hint, descriptor);
    return nil;
 }
 
@@ -1002,7 +1017,7 @@ static id<MTLRenderPipelineState>
 kk_archive_render(mtl_compiler *compiler, MTL4PipelineDescriptor *descriptor)
 {
    KKPipelineArchive *cache = kk_compiler_archive(compiler);
-   if (!cache) return nil;
+   if (!cache) { kk_archive_trace("archive-miss", nil, descriptor); return nil; }
    @synchronized(cache) { cache->stats.requests++; }
    NSData *hint = kk_pipeline_hint(descriptor);
    for (KKArchivePiece *piece in [cache candidates:hint]) {
@@ -1012,8 +1027,9 @@ kk_archive_render(mtl_compiler *compiler, MTL4PipelineDescriptor *descriptor)
       @synchronized(cache) { cache->stats.lookups++; }
       NSError *error = nil;
       id<MTLRenderPipelineState> state = [archive newRenderPipelineStateWithDescriptor:descriptor error:&error];
-      if (state) { [cache recordHit]; return state; }
+      if (state) { [cache recordHit]; kk_archive_trace("archive-hit", hint, descriptor); return state; }
    }
+   kk_archive_trace("archive-miss", hint, descriptor);
    return nil;
 }
 

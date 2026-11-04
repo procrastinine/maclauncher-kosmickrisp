@@ -13,6 +13,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* Optional calling-thread compile attribution. Keys are borrowed 32-byte
+ * search digests; NULL means no key. No native completion callback is used. */
+struct mtl_compile_trace {
+   void (*event)(void *data, const char *event, const uint8_t *key,
+                 bool specialized);
+   void *data;
+};
+struct mtl_compile_trace mtl_compiler_set_trace(struct mtl_compile_trace trace);
+
 /* Bridge enums */
 enum mtl_pixel_format;
 

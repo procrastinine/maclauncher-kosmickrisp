@@ -38,7 +38,8 @@ struct kk_async_compute {
    struct vk_pipeline_cache_object *cache_object;
    struct blob cache_blob;
    struct kk_perf_compile_scope scope;
-   uint64_t request_id, parent_id, start;
+   uint64_t request_id, parent_id, start, build_id;
+   bool bound, used;
 };
 
 static void
@@ -104,6 +105,7 @@ job_execute(void *data)
       kk_perf_compiler(job->dev->perf, 1);
       kk_perf_compile_begin(job->dev->perf, &job->scope);
       job->scope.asynchronous = true;
+      job->scope.build_id = job->build_id;
       job->scope.request_id = job->request_id;
       job->scope.parent_id = job->parent_id;
       job->scope.input_count = 1;
@@ -192,7 +194,11 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
    job->refs = 2; /* shader and queued operation cleanup */
    job->result = VK_NOT_READY;
    job->dev = dev; job->shader = shader; job->owner = owner; job->compile = compile;
-   if (dev->perf) kk_perf_compile_parent(dev->perf, &job->request_id, &job->parent_id);
+   if (dev->perf) {
+      kk_perf_compile_parent(dev->perf, &job->request_id, &job->parent_id);
+      job->build_id = kk_perf_build_queued(dev->perf,
+         shader->msl_data[MESA_SHADER_COMPUTE].code);
+   }
    pthread_mutex_lock(&owner->mutex);
    assert(!owner->stopping);
    ++owner->active;
@@ -207,6 +213,7 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
    /* Queue allocation is best effort; ordinary synchronous compilation remains
     * available with no published pending shader on this failure path. */
    shader->pipeline.compute.pending = NULL;
+   if (job->build_id) kk_perf_build_event(dev->perf, job->build_id, "synchronous-fallback", NULL, 0);
    if (dev->perf) kk_perf_async_compute(dev->perf, -1, 0);
    pthread_mutex_lock(&owner->mutex);
    --owner->active;
@@ -255,7 +262,18 @@ join_shader(struct kk_shader *shader, const char *reason)
 VkResult
 kk_async_compute_join(struct kk_shader *shader)
 {
+   struct kk_async_compute *job = shader ? shader->pipeline.compute.pending : NULL;
+   if (job && job->build_id && !p_atomic_cmpxchg(&job->bound, false, true))
+      kk_perf_build_event(job->dev->perf, job->build_id, "first-bind", NULL, 0);
    return join_shader(shader, "bind");
+}
+
+void
+kk_async_compute_dispatch(struct kk_shader *shader)
+{
+   struct kk_async_compute *job = shader ? shader->pipeline.compute.pending : NULL;
+   if (job && job->build_id && !p_atomic_cmpxchg(&job->used, false, true))
+      kk_perf_build_event(job->dev->perf, job->build_id, "first-dispatch", NULL, 0);
 }
 
 bool
@@ -268,8 +286,12 @@ kk_async_compute_serializable(struct kk_shader *shader)
    bool ready = job->ready;
    if (!ready && !job->cache_object && !job->dev->vk.disable_internal_cache) {
       struct vk_pipeline_cache_object *object = &shader->vk.pipeline.cache_obj;
-      if (object->ops && object->key_data)
+      if (object->ops && object->key_data) {
          job->cache_object = object;
+         if (job->build_id)
+            kk_perf_build_event(job->dev->perf, job->build_id, "cache-key-miss",
+               object->key_data, object->key_size);
+      }
    }
    bool success = ready && job->result == VK_SUCCESS;
    pthread_mutex_unlock(&job->mutex);
@@ -291,6 +313,11 @@ kk_async_compute_shader_finish(struct kk_shader *shader)
       mtl_compiler_task_cancel(job->task);
    }
    job_wait(job, "destroy", true);
+   if (job->build_id)
+      kk_perf_build_event(job->dev->perf, job->build_id,
+         p_atomic_read(&job->cancel_requested) ? "cancelled" :
+         job->result != VK_SUCCESS ? "failed" :
+         p_atomic_read(&job->used) ? "completed-used" : "completed-unused", NULL, 0);
    shader->pipeline.compute.pending = NULL;
    job_unref(job);
 }

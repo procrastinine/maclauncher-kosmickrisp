@@ -53,10 +53,10 @@ struct kk_perf {
    pthread_mutex_t mutex;
    FILE *log;
    void *metal_compiler;
-   bool close_log, compile_details, submit_details, barrier_details;
+   bool close_log, compile_details, submit_details, barrier_details, build_reasons;
    bool device_features_known;
    bool pipeline_statistics_query, writable_msaa, dynamic_rendering;
-   uint64_t compile_sequence, pipeline_sequence, submit_sequence;
+   uint64_t compile_sequence, pipeline_sequence, submit_sequence, build_sequence;
    uint64_t barrier_sequence, render_trace_sequence;
    uint64_t created, interval_start, frames, interval_frames;
    uint64_t frame_interval, time_interval, sequence;
@@ -119,6 +119,8 @@ kk_perf_create(void)
    if (pthread_mutex_init(&p->mutex, NULL)) { free(p); return NULL; }
    const char *details = getenv("KK_PERF_TRACKING_COMPILES");
    p->compile_details = details && *details && strcmp(details, "0") && strcmp(details, "false");
+   const char *reasons = getenv("KK_PERF_TRACKING_BUILD_REASONS");
+   p->build_reasons = p->compile_details && reasons && !strcmp(reasons, "1");
    const char *submits = getenv("KK_PERF_TRACKING_SUBMITS");
    p->submit_details = submits && !strcmp(submits, "1");
    const char *barriers = getenv("KK_PERF_TRACKING_BARRIERS");
@@ -608,6 +610,61 @@ kk_perf_async_join(struct kk_perf *p, uint64_t parent, const char *reason,
    pthread_mutex_unlock(&p->mutex);
 }
 
+static void
+kk_perf_digest(char hex[65], const void *key, size_t size)
+{
+   if (!key || size != 32) { hex[0] = 0; return; }
+   const uint8_t *bytes = key;
+   for (unsigned i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", bytes[i]);
+}
+
+void
+kk_perf_build_event(struct kk_perf *p, uint64_t id, const char *event,
+                    const void *key, size_t size)
+{
+   if (!p || !p->build_reasons || !id) return;
+   char hex[65]; kk_perf_digest(hex, key, size);
+   pthread_mutex_lock(&p->mutex);
+   fprintf(p->log, "{\"kk_build\":1,\"device\":\"%p\",\"build_id\":%"PRIu64
+      ",\"event\":\"%s\",\"key\":\"%s\",\"at_ms\":%.6f}\n",
+      (void *)p, id, event, hex, (kk_perf_now() - p->created) / 1e6);
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+}
+
+uint64_t
+kk_perf_build_queued(struct kk_perf *p, const char *source)
+{
+   if (!p || !p->build_reasons) return 0;
+   blake3_hash key; _mesa_blake3_compute(source, strlen(source), key);
+   pthread_mutex_lock(&p->mutex);
+   uint64_t id = ++p->build_sequence;
+   pthread_mutex_unlock(&p->mutex);
+   kk_perf_build_event(p, id, "queued", key, sizeof(key));
+   return id;
+}
+
+static void
+kk_perf_native_event(void *data, const char *event, const uint8_t *key,
+                     bool specialized)
+{
+   struct kk_perf_compile_scope *scope = data;
+   struct kk_perf *p = scope->perf;
+   pthread_mutex_lock(&p->mutex);
+   scope->archive_hits += !strcmp(event, "archive-hit");
+   scope->archive_misses += !strcmp(event, "archive-miss");
+   scope->library_hits += !strcmp(event, "library-hit");
+   scope->library_misses += !strcmp(event, "library-miss");
+   scope->specialized |= specialized;
+   char hex[65]; kk_perf_digest(hex, key, 32);
+   fprintf(p->log, "{\"kk_compile_native\":1,\"device\":\"%p\",\"id\":%"PRIu64
+      ",\"build_id\":%"PRIu64",\"event\":\"%s\",\"key\":\"%s\",\"specialization\":%s,\"at_ms\":%.6f}\n",
+      (void *)p, scope->id, scope->build_id, event, hex,
+      specialized ? "true" : "false", (kk_perf_now() - p->created) / 1e6);
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+}
+
 void
 kk_perf_compile_begin(struct kk_perf *p, struct kk_perf_compile_scope *scope)
 {
@@ -622,6 +679,9 @@ kk_perf_compile_begin(struct kk_perf *p, struct kk_perf_compile_scope *scope)
    scope->thread_id = kk_perf_thread_id();
    scope->request_id = pipeline_scope && pipeline_scope->perf == p ? pipeline_scope->id : 0;
    compile_scope = scope;
+   if (p->build_reasons)
+      scope->previous_trace = mtl_compiler_set_trace(
+         (struct mtl_compile_trace){kk_perf_native_event, scope});
 }
 
 void
@@ -631,6 +691,7 @@ kk_perf_compile_end(struct kk_perf_compile_scope *scope, bool binary, int result
    if (!p) return;
    uint64_t end = kk_perf_now();
    compile_scope = scope->previous;
+   if (p->build_reasons) mtl_compiler_set_trace(scope->previous_trace);
    pthread_mutex_lock(&p->mutex);
    fprintf(p->log, "{\"kk_compile\":1,\"device\":\"%p\",\"id\":%"PRIu64
            ",\"request_id\":%"PRIu64",\"thread\":%"PRIu64",\"input_count\":%u,\"stage_mask\":%u,"
@@ -641,7 +702,12 @@ kk_perf_compile_end(struct kk_perf_compile_scope *scope, bool binary, int result
    for (unsigned i = 0; i < KK_PERF_METRIC_COUNT; i++)
       fprintf(p->log, "%s\"%s\":{\"count\":%"PRIu64",\"total_ms\":%.6f}",
               i ? "," : "", names[i], scope->count[i], scope->ns[i]/1e6);
-   fprintf(p->log, "}}\n");
+   fprintf(p->log, "},\"build_id\":%"PRIu64",\"build_reasons\":{"
+      "\"cache-key-miss\":%s,\"archive-miss\":%u,\"archive-hit\":%u,"
+      "\"library-miss\":%u,\"library-hit\":%u,\"specialization\":%s,\"cancelled\":%s}}\n",
+      scope->build_id, binary ? "false" : "true", scope->archive_misses,
+      scope->archive_hits, scope->library_misses, scope->library_hits,
+      scope->specialized ? "true" : "false", scope->cancelled ? "true" : "false");
    fflush(p->log);
    pthread_mutex_unlock(&p->mutex);
 }

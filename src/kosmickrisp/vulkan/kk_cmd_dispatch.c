@@ -13,6 +13,7 @@
 #include "kk_entrypoints.h"
 #include "kk_perf.h"
 #include "kk_shader.h"
+#include "kk_async_compute.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 
@@ -21,7 +22,16 @@
 static bool
 kk_flush_compute_state(struct kk_cmd_buffer *cmd)
 {
-   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_STATE, state);
+   /* Same disabled-tracking branch as KK_PERF_ENCODER_SCOPE. Attribute actual
+    * dispatch attempts, rather than declaring every bind to be shader use. */
+   struct kk_perf_encoder_scope state
+      __attribute__((cleanup(kk_perf_encoder_scope_cleanup))) = {
+         .perf = kk_cmd_buffer_device(cmd)->perf,
+      };
+   if (unlikely(state.perf != NULL)) {
+      kk_perf_encoder_scope_begin(&state, KK_PERF_ENCODER_STATE);
+      kk_async_compute_dispatch(cmd->state.shaders[MESA_SHADER_COMPUTE]);
+   }
    mtl_compute_encoder *encoder = cs_get_compute_for_dispatch(cmd);
 
    // Fill Metal argument buffer with descriptor set addresses

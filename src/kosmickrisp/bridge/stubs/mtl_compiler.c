@@ -203,6 +203,12 @@ void *mtl_compiler_task_raise(void *task) { return NULL; }
 void mtl_compiler_task_raise_end(void *raised) {}
 void *mtl_compiler_foreground_begin(mtl_compiler *compiler) { return NULL; }
 void mtl_compiler_foreground_end(void *token) {}
+struct mtl_compile_trace mtl_compiler_set_trace(struct mtl_compile_trace trace)
+{
+   (void)trace;
+   return (struct mtl_compile_trace){0};
+}
+
 void mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,
    size_t key_size, const void *bytes, size_t size) {}
 

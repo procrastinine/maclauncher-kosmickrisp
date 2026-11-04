@@ -26,6 +26,14 @@
 #include "mtl_pipeline_archive.h"
 #include "mtl_function_constants.h"
 
+struct mtl_compile_trace
+mtl_compiler_set_trace(struct mtl_compile_trace trace)
+{
+   struct mtl_compile_trace previous = kk_compile_trace;
+   kk_compile_trace = trace;
+   return previous;
+}
+
 /* Immutable process diagnostic, initialized before compiler publication. */
 static NSString *debug_msl_prefix;
 
@@ -505,13 +513,20 @@ struct kk_library_work {
    MTL4LibraryDescriptor *descriptor;
    mtl_library *result;
    bool vertex;
+   struct mtl_compile_trace trace;
 };
 
 static void
 kk_library_work_execute(void *data)
 {
    struct kk_library_work *work = data;
-   work->result = kk_cached_library(work->compiler, work->descriptor, work->vertex, false);
+   struct mtl_compile_trace previous = {0};
+   if (work->trace.event) previous = mtl_compiler_set_trace(work->trace);
+   @try {
+      work->result = kk_cached_library(work->compiler, work->descriptor, work->vertex, false);
+   } @finally {
+      if (work->trace.event) mtl_compiler_set_trace(previous);
+   }
    if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)) {
       NSString *source = work->descriptor.source;
       if (debug_msl_prefix && [source hasPrefix:debug_msl_prefix])
@@ -549,8 +564,10 @@ mtl_new_library_pair(mtl_compiler *compiler,
       };
       /* Completed hits need no worker or queue admission. Pending requests
        * join only on entry to execute, preserving independent stage overlap. */
-      for (unsigned i = 0; i < 2; ++i)
+      for (unsigned i = 0; i < 2; ++i) {
+         work[i].trace = kk_compile_trace;
          work[i].result = kk_cached_library(compiler, work[i].descriptor, work[i].vertex, true);
+      }
       void *task = NULL;
       @try {
          if (!work[0].result && !kk_background_thread)

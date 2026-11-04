@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "util/macros.h"
+#include "kosmickrisp/bridge/mtl_compiler.h"
 
 struct kk_device;
 struct vk_device;
@@ -45,10 +46,17 @@ struct kk_perf_compile_scope {
    struct kk_perf *perf;
    uint64_t id, start, request_id, thread_id, parent_id;
    bool asynchronous, cancelled;
+   uint64_t build_id;
+   uint32_t archive_hits, archive_misses, library_hits, library_misses;
+   bool specialized;
+   struct mtl_compile_trace previous_trace;
    uint32_t input_count, stage_mask;
    uint64_t ns[KK_PERF_METRIC_COUNT];
    uint64_t count[KK_PERF_METRIC_COUNT];
 };
+uint64_t kk_perf_build_queued(struct kk_perf *, const char *source);
+void kk_perf_build_event(struct kk_perf *, uint64_t build_id, const char *event,
+                         const void *key, size_t key_size);
 void kk_perf_compile_begin(struct kk_perf *, struct kk_perf_compile_scope *);
 void kk_perf_compile_end(struct kk_perf_compile_scope *, bool binary, int result);
 void kk_perf_compile_parent(struct kk_perf *, uint64_t *request, uint64_t *parent);
