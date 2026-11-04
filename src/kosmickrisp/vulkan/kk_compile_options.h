@@ -12,6 +12,7 @@ struct kk_compile_options {
    const struct kk_per_vertex_map *per_vertex_map;
    struct nir_shader *conservative_fs;
    bool independent_interface;
+   bool poly_layer_replay;
    bool mesh_queries;
    uint32_t *mesh_retained_strides;
    uint32_t *mesh_retained_fields;

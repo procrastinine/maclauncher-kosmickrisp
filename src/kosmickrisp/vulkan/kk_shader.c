@@ -214,6 +214,7 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER);
    /* Cache entries with a replay input cannot alias entries without it.
     * This bit changes serialization only; the guard bit is selected on use. */
+   if (feats->shaderOutputLayer) key |= BITFIELD_BIT(KK_FEAT_POLY_LAYER_REPLAY);
    if (feats->sparseResidencyBuffer) key |= BITFIELD_BIT(KK_FEAT_SPARSE_REPLAY);
    if (feats->nullDescriptor)
       key |= BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR);
@@ -1250,6 +1251,7 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
 
 #include "kk_conservative_nir.h"
 #include "kk_polygon_scalar_io.h"
+#include "kk_poly_layer_replay_nir.h"
 
 static VkResult
 kk_compile_shader(struct kk_device *dev, nir_shader *nir,
@@ -1281,6 +1283,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
    shader->info.conservative = kk_conservative_possible(state);
    gather_shader_info(shader, nir, state);
+   shader->info.poly_layer_replay = opts->poly_layer_replay;
    if (stage == MESA_SHADER_FRAGMENT)
       shader->info.fs.line_geometry_stipple = kk_line_geometry_stipple(nir, state);
    if (stage == MESA_SHADER_FRAGMENT) {
@@ -1320,24 +1323,28 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       }
    }
    kk_barycentric_shader_info(shader, per_vertex_map);
-   if (stage == MESA_SHADER_FRAGMENT && kk_polygon_possible(dev, state)) {
+   if (stage == MESA_SHADER_FRAGMENT &&
+       (kk_polygon_possible(dev, state) || opts->poly_layer_replay)) {
       shader->info.fs.noperspective_outputs = kk_polygon_noperspective_outputs(nir);
       nir_shader *point_fs = nir_shader_clone(NULL, nir);
       bool point_line_effects = state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
          state->rs->line.stipple.enable ||
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
+      if (!opts->poly_layer_replay || (prev_stage && prev_stage->info.polygon_point))
       nir_shader_intrinsics_pass(point_fs, kk_polygon_point_coord,
                                  nir_metadata_control_flow, point_line_effects ? (void *)1 : NULL);
       kk_line_fragment(point_fs, true, state);
+      if (opts->poly_layer_replay) kk_poly_layer_lower_fs(point_fs);
       NIR_PASS(_, point_fs, kk_nir_lower_descriptors, robustness, 0, NULL);
       shader->info.polygon_point = true;
-      if (kk_polygon_regular_possible(dev, state))
+      if (kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay)
          kk_compile_msl(pdev, point_fs, state, &shader->polygon[3]);
       else
          ralloc_free(point_fs);
       if (conservative_fs) {
          kk_conservative_lower_fs(conservative_fs, &prev_stage->info.polygon);
+         if (opts->poly_layer_replay) kk_poly_layer_lower_fs(conservative_fs);
          kk_compile_msl(pdev, conservative_fs, state, &shader->polygon[5]);
       }
    }
@@ -1439,7 +1446,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
       nir_shader *count = NULL, *rast = NULL, *pre_gs = NULL;
       nir_shader *capture = NULL, *capture_xfb = NULL;
-      bool polygon = kk_polygon_possible(dev, state) &&
+      bool polygon = (kk_polygon_possible(dev, state) || opts->poly_layer_replay) &&
          (u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_TRIANGLES ||
           u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_LINES);
       NIR_PASS(_, nir, poly_nir_lower_gs_capture, &count, &rast, &pre_gs,
@@ -1452,15 +1459,17 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             state->rs->line.stipple.enable ||
             BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
             BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE));
+         if (opts->poly_layer_replay) kk_poly_layer_lower_vs(point_vs);
          NIR_PASS(_, point_vs, kk_nir_lower_polygon_scalar_outputs);
          NIR_PASS(_, point_vs, msl_nir_vs_io_types);
          NIR_PASS(_, point_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
-         if (kk_polygon_regular_possible(dev, state))
+         if (kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay)
             kk_compile_msl(pdev, point_vs, state, &shader->polygon[2]);
          else
             ralloc_free(point_vs);
          if (shader->info.conservative) {
             nir_shader *conservative_vs = kk_conservative_vertex_shader(nir->options);
+            if (opts->poly_layer_replay) kk_poly_layer_lower_vs(conservative_vs);
             NIR_PASS(_, conservative_vs, msl_nir_vs_io_types);
             NIR_PASS(_, conservative_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
             kk_compile_msl(pdev, conservative_vs, state, &shader->polygon[4]);
@@ -1498,6 +1507,16 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
       /* From here on, nir is the rasterization VS of the GS */
       nir = rast;
+      /* Point output keeps Poly's ordinary cached GS reader and point size. */
+      if (opts->poly_layer_replay && !polygon) {
+         nir_shader *layer_vs = nir_shader_clone(NULL, rast);
+         NIR_PASS(_, layer_vs, nir_lower_global_vars_to_local);
+         kk_poly_layer_lower_vs(layer_vs);
+         kk_lower_hw_vs(layer_vs, state, shader->info.gs.mode == MESA_PRIM_POINTS);
+         msl_nir_lower_clip_cull_distance(layer_vs, 0);
+         NIR_PASS(_, layer_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
+         kk_compile_msl(pdev, layer_vs, state, &shader->polygon[2]);
+      }
 
       /* poly selects the rasterized vertex through shader_temp variables,
        * localize them so msl_optimize_nir turns them into SSA */
@@ -1844,7 +1863,7 @@ gather_graphics_pipeline_create_info(
       if (stage == MESA_SHADER_FRAGMENT)
          info->has_framebuffer_reads = s->info.has_framebuffer_reads;
       info->vs.additional_stages_bits |= BITFIELD_BIT(stage);
-      if (stage == MESA_SHADER_FRAGMENT && info->polygon_point)
+      if (stage == MESA_SHADER_FRAGMENT && (info->polygon_point || info->poly_layer_replay))
          kk_msl_copy(&vs->polygon[3], &s->polygon[3]);
       if (stage == MESA_SHADER_FRAGMENT && info->conservative)
          kk_msl_copy(&vs->polygon[5], &s->polygon[5]);
@@ -1860,7 +1879,7 @@ gather_graphics_pipeline_create_info(
          info->conservative = s->info.conservative;
          if (info->conservative) kk_msl_copy(&vs->polygon[4], &s->polygon[4]);
          info->polygon = s->info.polygon;
-         if (info->polygon_point) {
+         if (info->polygon_point || info->poly_layer_replay) {
             for (unsigned j = 0; j < 3; ++j)
                if (s->polygon[j].code) kk_msl_copy(&vs->polygon[j], &s->polygon[j]);
          }
@@ -2080,8 +2099,9 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
    if (vs->info.stage == MESA_SHADER_MESH)
       return kk_compile_mesh_pipeline(device, vs, false, &vs->pipeline);
    VkResult result = kk_compile_graphics_pipeline_native(device, vs, false);
-   if (result != VK_SUCCESS || !vs->info.polygon_point)
+   if (result != VK_SUCCESS || !(vs->info.polygon_point || vs->info.poly_layer_replay))
       return result == VK_SUCCESS ? kk_dgc_eager_graphics_pipeline(device, vs) : result;
+   if (vs->info.polygon_point) {
    result = kk_compile_compute_pipeline(device, &vs->polygon[0], KK_POLY_WG_SIZE,
                                         &vs->pipeline.gfx.polygon_capture);
    if (result != VK_SUCCESS) return result;
@@ -2089,6 +2109,7 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
       result = kk_compile_compute_pipeline(device, &vs->polygon[1], KK_POLY_WG_SIZE,
                                            &vs->pipeline.gfx.polygon_xfb);
       if (result != VK_SUCCESS) return result;
+   }
    }
    if (vs->polygon[2].code)
       result = kk_compile_graphics_pipeline_native(device, vs, true);
@@ -2186,6 +2207,17 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    nir_shader *nir_shaders[shader_count + 2u];
    struct kk_shader *shaders[shader_count + 2u];
 
+   bool poly_layer_replay = false;
+   mesa_shader_stage layer_producer = MESA_SHADER_NONE;
+   for (uint32_t i = 0; i < shader_count; ++i) {
+      mesa_shader_stage stage = infos[i].stage;
+      if ((stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_TESS_EVAL ||
+           stage == MESA_SHADER_GEOMETRY) &&
+          (layer_producer == MESA_SHADER_NONE || stage > layer_producer)) {
+         layer_producer = stage;
+         poly_layer_replay = infos[i].nir->info.outputs_written & VARYING_BIT_LAYER;
+      }
+   }
    bool force_per_vertex = kk_barycentric_force_per_vertex(
       shader_count, infos, state, enabled_features);
 
@@ -2222,7 +2254,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
 
       /* XFB without an explicit GS gets a Poly passthrough after linking.
        * Keep its producer in compute form before hardware-VS lowering. */
-      emulated_stage |= (nir->xfb_info || kk_polygon_possible(dev, state)) && (nir->info.stage == MESA_SHADER_VERTEX ||
+      emulated_stage |= (nir->xfb_info || kk_polygon_possible(dev, state) || poly_layer_replay) && (nir->info.stage == MESA_SHADER_VERTEX ||
                                          nir->info.stage == MESA_SHADER_TESS_EVAL);
       msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
       uint64_t *embedded = info->embedded_sampler_count ? calloc(info->embedded_sampler_count, sizeof(uint64_t)) : NULL;
@@ -2257,14 +2289,14 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    uint32_t total_shaders = shader_count;
    nir_shader *native_pair[2] = {NULL, NULL};
    bool native_passthrough = !explicit_geometry && !xfb && !tess &&
-      kk_wide_line_possible(state);
+      (kk_wide_line_possible(state) || poly_layer_replay);
    nir_shader *native_vs = NULL, *native_fs = NULL;
    for (unsigned i = 0; i < shader_count; ++i) {
       nir_shader *n = nir_shaders[i];
       if (n->info.stage == MESA_SHADER_VERTEX) native_vs = n;
       if (n->info.stage == MESA_SHADER_FRAGMENT) {
          native_fs = n;
-         if (BITSET_TEST(n->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID))
+         if (!poly_layer_replay && BITSET_TEST(n->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID))
             native_passthrough = false;
       }
    }
@@ -2284,7 +2316,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       nir_opt_varyings_bulk(native_pair, 2, true, UINT32_MAX, UINT32_MAX, nir_opts, NULL);
       nir_opt_varyings_bulk(native_pair, 2, true, UINT32_MAX, UINT32_MAX, nir_opts, NULL);
    }
-   if (!explicit_geometry && (xfb || kk_polygon_possible(dev, state))) {
+   if (!explicit_geometry && (xfb || kk_polygon_possible(dev, state) || poly_layer_replay)) {
       nir_shader *producer = NULL;
       unsigned insert = shader_count;
       for (unsigned i = 0; i < shader_count; ++i) {
@@ -2323,7 +2355,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       nir_builder builder = nir_builder_init_simple_shader(MESA_SHADER_GEOMETRY,
          producer->options, "Poly transform feedback passthrough");
       poly_nir_passthrough_gs(&builder, key);
-      if (kk_polygon_possible(dev, state))
+      if (kk_polygon_possible(dev, state) || poly_layer_replay)
          nir_shader_intrinsics_pass(builder.shader, kk_polygon_passthrough_primitive_id,
                                     nir_metadata_control_flow, NULL);
       ralloc_free(key);
@@ -2390,6 +2422,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    }
 
    const struct kk_compile_options compile_options = {
+      .poly_layer_replay = poly_layer_replay,
       .per_vertex_map = &per_vertex_map,
       .mesh_queries = features & BITFIELD_BIT(KK_FEAT_MESH_QUERIES),
       .conservative_fs = conservative_fs,
@@ -2538,7 +2571,7 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
 
    u_foreach_bit(i, shader->info.gs_aux_mask)
       kk_msl_serialize(&shader->gs_aux[i], blob);
-   if (shader->info.polygon_point) {
+   if (shader->info.polygon_point || shader->info.poly_layer_replay) {
       for (unsigned i = 0; i < ARRAY_SIZE(shader->polygon); ++i) {
          blob_write_uint8(blob, shader->polygon[i].code != NULL);
          if (shader->polygon[i].code) kk_msl_serialize(&shader->polygon[i], blob);
@@ -2615,7 +2648,7 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
       result = kk_msl_deserialize(blob, &shader->gs_aux[i]);
       if (result != VK_SUCCESS) goto fail;
    }
-   if (info.polygon_point) {
+   if (info.polygon_point || info.poly_layer_replay) {
       for (unsigned i = 0; i < ARRAY_SIZE(shader->polygon); ++i) {
          if (!blob_read_uint8(blob)) continue;
          result = kk_msl_deserialize(blob, &shader->polygon[i]);

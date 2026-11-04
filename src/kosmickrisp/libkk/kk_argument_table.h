@@ -11,6 +11,7 @@
 #define KK_ARGUMENT_FS_VFT_WRAPPER   4u
 #define KK_ARGUMENT_MESH_PARAMETERS  5u
 #define KK_ARGUMENT_INTERLOCK_GUARD  6u
+#define KK_ARGUMENT_POLY_LAYER_REPLAY (KK_ARGUMENT_INTERLOCK_GUARD + 1u)
 
 #ifndef __METAL_VERSION__
 #define KK_ARGUMENT_VALUE_STRING_(value) #value
@@ -24,12 +25,14 @@
    "#define KK_ARGUMENT_VS_VFT_WRAPPER " KK_ARGUMENT_VALUE_STRING(KK_ARGUMENT_VS_VFT_WRAPPER) "\n" \
    "#define KK_ARGUMENT_FS_VFT_WRAPPER " KK_ARGUMENT_VALUE_STRING(KK_ARGUMENT_FS_VFT_WRAPPER) "\n" \
    "#define KK_ARGUMENT_MESH_PARAMETERS " KK_ARGUMENT_VALUE_STRING(KK_ARGUMENT_MESH_PARAMETERS) "\n" \
-   "#define KK_ARGUMENT_INTERLOCK_GUARD " KK_ARGUMENT_VALUE_STRING(KK_ARGUMENT_INTERLOCK_GUARD) "\n"
+   "#define KK_ARGUMENT_INTERLOCK_GUARD " KK_ARGUMENT_VALUE_STRING(KK_ARGUMENT_INTERLOCK_GUARD) "\n" \
+   "#define KK_ARGUMENT_POLY_LAYER_REPLAY " KK_ARGUMENT_VALUE_STRING(KK_ARGUMENT_POLY_LAYER_REPLAY) "\n"
 
 struct kk_argument_table_usage {
    unsigned linked_graphics;
    unsigned mesh;
    unsigned interlock_guard;
+   unsigned poly_layer_replay;
 };
 
 /* One capacity rule for ordinary tables and indirect-command descriptors. */
@@ -43,6 +46,8 @@ kk_argument_table_buffer_count(struct kk_argument_table_usage use)
       highest = KK_ARGUMENT_MESH_PARAMETERS;
    if (use.interlock_guard)
       highest = KK_ARGUMENT_INTERLOCK_GUARD;
+   if (use.poly_layer_replay)
+      highest = KK_ARGUMENT_POLY_LAYER_REPLAY;
    return highest + 1u;
 }
 

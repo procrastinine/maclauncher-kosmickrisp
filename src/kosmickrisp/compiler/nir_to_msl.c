@@ -98,6 +98,23 @@ emit_sysvals(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 
 #include "msl_interlock_guard.h"
 
+static bool
+msl_uses_poly_layer_selector(nir_shader *nir)
+{
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic) continue;
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+            if (intr->intrinsic == nir_intrinsic_load_buffer_ptr_kk &&
+                nir_intrinsic_binding(intr) == KK_ARGUMENT_POLY_LAYER_REPLAY)
+               return true;
+         }
+      }
+   }
+   return false;
+}
+
 static void
 emit_inputs(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 {
@@ -109,6 +126,9 @@ emit_inputs(struct nir_to_msl_ctx *ctx, nir_shader *shader)
       break;
    }
    msl_interlock_inputs(ctx);
+   if (msl_uses_poly_layer_selector(shader))
+      P_IND(ctx, "constant uint2 *poly_layer_selector [[buffer(%u)]],\n",
+            KK_ARGUMENT_POLY_LAYER_REPLAY);
    P_IND(ctx, "constant Buffer &buf0 [[buffer(%u)]],\n", KK_ARGUMENT_ROOT);
    P_IND(ctx, "constant SamplerTable &sampler_table [[buffer(%u)]]", KK_ARGUMENT_SAMPLERS);
    if (ctx->uses_per_draw_data) {
@@ -1389,7 +1409,11 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       break;
    }
    case nir_intrinsic_load_buffer_ptr_kk:
-      P(ctx, "(ulong)&buf%d.contents[0];\n", nir_intrinsic_binding(instr));
+      if (nir_intrinsic_binding(instr) == KK_ARGUMENT_POLY_LAYER_REPLAY) {
+         P(ctx, "(ulong)poly_layer_selector;\n");
+      } else {
+         P(ctx, "(ulong)&buf%d.contents[0];\n", nir_intrinsic_binding(instr));
+      }
       break;
    case nir_intrinsic_load_per_draw_ptr_kk:
       P(ctx, "(ulong)&per_draw.contents[0];\n");

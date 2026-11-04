@@ -205,7 +205,10 @@ enum kk_dirty {
    KK_DIRTY_OCCLUSION = BITFIELD_BIT(1),
 };
 
+#include "kk_poly_layer_replay_types.h"
+
 struct kk_graphics_state {
+   struct kk_poly_layer_replay_state layer_replay;
    struct kk_shader *shader;
    uint64_t mesh_primitives_query;
    uint64_t mesh_payloads, mesh_records, mesh_batch, mesh_slices;

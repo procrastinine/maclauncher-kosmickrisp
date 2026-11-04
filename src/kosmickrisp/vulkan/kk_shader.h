@@ -34,6 +34,7 @@ enum kk_feature_bit {
    KK_FEAT_SPARSE_BUFFER,
    KK_FEAT_SPARSE_REPLAY,
    KK_FEAT_MESH_QUERIES,
+   KK_FEAT_POLY_LAYER_REPLAY,
    KK_FEAT_COUNT,
 };
 
@@ -118,6 +119,7 @@ struct kk_shader_info {
    bool api_geometry;
    bool polygon_point;
    bool polygon_native;
+   bool poly_layer_replay;
    bool conservative;
    bool conservative_full_coverage;
    uint64_t conservative_canonical_outputs;

@@ -92,6 +92,7 @@ void *kk_dgc_new_icb(struct kk_device *dev, uint32_t count, bool compute)
       const unsigned buffer_count = kk_argument_table_buffer_count(
          (struct kk_argument_table_usage){
             .linked_graphics = !compute,
+            .poly_layer_replay = !compute,
             .interlock_guard = !compute && dev->interlock_guard != NULL,
          });
       desc.maxVertexBufferBindCount = buffer_count;

@@ -867,6 +867,7 @@ kk_polygon_expansion_active(struct kk_cmd_buffer *cmd)
    const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    const struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
    if (!vs || !vs->info.polygon_point) return false;
+   if (cmd->state.gfx.layer_replay.bind && vs->info.poly_layer_replay) return true;
    bool controlled_bias = dyn->rs.depth_bias.enable &&
       (dyn->rs.depth_bias.exact || dyn->rs.depth_bias.representation !=
          VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
@@ -887,7 +888,8 @@ kk_geometry_shader(struct kk_cmd_buffer *cmd)
 {
    struct kk_shader *gs = cmd->state.shaders[MESA_SHADER_GEOMETRY];
    struct kk_shader *vs = cmd->state.gfx.shader;
-   if (!gs && vs && vs->info.polygon_native && !kk_polygon_expansion_active(cmd))
+   if (!gs && vs && vs->info.polygon_native && !kk_polygon_expansion_active(cmd) &&
+       !(cmd->state.gfx.layer_replay.bind && vs->info.poly_layer_replay))
       return NULL;
    return gs ? gs : vs && vs->info.has_geometry ? vs : NULL;
 }
@@ -1077,7 +1079,8 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
        IS_DIRTY(MS_RASTERIZATION_SAMPLES)) {
       struct kk_shader *vs = cmd->state.gfx.shader;
       mtl_render_pipeline_state *pipeline =
-         kk_attachment_pipeline(cmd, vs, gfx->conservative ? 2 : gfx->polygon_points);
+         kk_attachment_pipeline(cmd, vs, gfx->conservative ? 2 :
+            (gfx->polygon_points || (gfx->layer_replay.bind && vs->info.poly_layer_replay)));
       if (!pipeline)
          return;
       mtl_render_set_pipeline_state(enc, pipeline);
@@ -2255,6 +2258,8 @@ upload_base_instance(struct kk_cmd_buffer *cmd, const struct kk_draw_data *data)
 /* Prepares emulation data for stages like tessellation. It also upload system
  * values not present in Metal such as drawID. gs_restart is set when a GS draw
  * unrolls primitive restart. */
+#include "kk_poly_layer_replay_command.h"
+
 static void
 kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
                         uint32_t draw_id, const struct kk_draw_data *draw,
@@ -2328,6 +2333,7 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
       return;
 
    mtl_set_address(cmd->argument_table, shader_data_gpu.gpu, KK_ARGUMENT_PER_DRAW);
+   if (gfx->layer_replay.bind) gfx->layer_replay.per_draw_address = shader_data_gpu.gpu;
 }
 
 static void
@@ -2809,7 +2815,7 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
          }
          mtl_set_vertex_amplification_count(cs_get_render(cmd), layers, count);
       }
-      kk_dispatch_draw(cmd, draw_data);
+      kk_poly_layer_dispatch_draw(cmd, draw_data);
    }
 }
 
