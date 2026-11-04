@@ -1443,6 +1443,9 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
                                          : MTL_WINDING_CLOCKWISE);
    }
 
+   if (IS_DIRTY(RS_POLYGON_MODE))
+      mtl_set_triangle_fill_lines(enc, dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE);
+
    if (IS_DIRTY(RS_DEPTH_BIAS_FACTORS) || IS_DIRTY(RS_DEPTH_BIAS_ENABLE)) {
       if (dyn->rs.depth_bias.enable)
          mtl_set_depth_bias(enc, dyn->rs.depth_bias.constant_factor,

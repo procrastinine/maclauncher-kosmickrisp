@@ -10,6 +10,7 @@
 #include "mtl_types.h"
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* Common encoder utils */
 void mtl_end_encoding(void *encoder);
@@ -98,6 +99,7 @@ void mtl_set_front_face_winding(mtl_render_encoder *encoder,
                                 enum mtl_winding winding);
 
 void mtl_set_cull_mode(mtl_render_encoder *encoder, enum mtl_cull_mode mode);
+void mtl_set_triangle_fill_lines(mtl_render_encoder *encoder, bool lines);
 
 void mtl_set_visibility_result_mode(mtl_render_encoder *encoder,
                                     enum mtl_visibility_result_mode mode,
