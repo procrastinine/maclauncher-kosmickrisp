@@ -311,3 +311,10 @@
      - On
      - On
      - On Apple7-11: CPU-only stable identifier hashing and existing pipeline-cache lookups; no per-draw or per-sample work.
+   * - ``mixed_float_dot_product``
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: Float32 conversion and two native FMAs for each requested mixed dot product. No packed mixed-precision instruction is assumed. Float16 accumulation, BFloat16 and Float8 variants are not reported.

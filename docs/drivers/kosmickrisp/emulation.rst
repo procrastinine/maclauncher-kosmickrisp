@@ -399,3 +399,12 @@
      - Enables DXVK and vkd3d-proton identifier-based pipeline-cache probes without supplying full shader modules or adding shader and draw work.
      - Identifier-based cache probes are unavailable; translators retain ordinary shader-module pipeline creation.
      - ``performance,+shader_module_identifier``
+   * - ``mixed_float_dot_product``
+     - Two-component Float16 dot products with Float32 accumulation.
+       Controls: ``VK_VALVE_shader_mixed_float_dot_product``, ``shaderMixedFloatDotProductFloat16AccFloat32``.
+     - native conversions and arithmetic. Only mixed Float16 dot-product instructions expand to Float32 conversions and two native fused multiply-add operations. Explicit floating-point preservation modes use the existing arithmetic legalization. Ordinary shaders and draw execution are unchanged.
+     - No Apple family
+     - On
+     - vkd3d-proton selects its mixed dot-product translation for DXIL shaders when Float16-to-Float32 accumulation is available. The route uses native arithmetic without new draw state or shader work outside those instructions.
+     - vkd3d-proton translates mixed Float16 dot products through its ordinary arithmetic fallback.
+     - ``performance,+mixed_float_dot_product``

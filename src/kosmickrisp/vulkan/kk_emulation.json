@@ -1190,5 +1190,30 @@
       11
     ],
     "family_cost_note": "On Apple7-11: CPU-only stable identifier hashing and existing pipeline-cache lookups; no per-draw or per-sample work."
+  },
+  {
+    "name": "mixed_float_dot_product",
+    "description": "Two-component Float16 dot products with Float32 accumulation.",
+    "cost_class": "native conversions and arithmetic",
+    "cost_note": "Only mixed Float16 dot-product instructions expand to Float32 conversions and two native fused multiply-add operations. Explicit floating-point preservation modes use the existing arithmetic legalization. Ordinary shaders and draw execution are unchanged.",
+    "extensions": [
+      "VK_VALVE_shader_mixed_float_dot_product"
+    ],
+    "features": [
+      "shaderMixedFloatDotProductFloat16AccFloat32"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "vkd3d-proton selects its mixed dot-product translation for DXIL shaders when Float16-to-Float32 accumulation is available. The route uses native arithmetic without new draw state or shader work outside those instructions.",
+    "off_consequence": "vkd3d-proton translates mixed Float16 dot products through its ordinary arithmetic fallback.",
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Float32 conversion and two native FMAs for each requested mixed dot product. No packed mixed-precision instruction is assumed. Float16 accumulation, BFloat16 and Float8 variants are not reported."
   }
 ]

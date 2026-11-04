@@ -390,6 +390,7 @@ static const char *alu_fp_math_mode_pragma(struct nir_to_msl_ctx *ctx,
 #include "kk_fp32_preserve.h"
 #include "kk_integer_wrap.h"
 
+#include "kk_mixed_float_dot.h"
 #include "kk_float8.h"
 #include "kk_float8_msl.h"
 
@@ -2874,6 +2875,9 @@ msl_preprocess_nir(struct nir_shader *nir)
    NIR_PASS(_, nir, nir_split_array_vars, nir_var_function_temp);
    NIR_PASS(_, nir, nir_split_per_member_structs);
    NIR_PASS(_, nir, nir_lower_continue_constructs);
+
+   NIR_PASS(_, nir, nir_shader_instructions_pass, kk_lower_mixed_float_dot,
+            nir_metadata_control_flow, NULL);
 
    if (kk_fp32_preserve(nir))
       NIR_PASS(_, nir, nir_shader_instructions_pass, kk_fp32_preserve_prepare, nir_metadata_control_flow, NULL);
