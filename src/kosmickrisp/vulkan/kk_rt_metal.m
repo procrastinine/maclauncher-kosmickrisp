@@ -4,6 +4,23 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Sampler emulation and 64-bit atomic locks specialize function constants
+ * over a library function. The linked function keeps the library function's
+ * name unless the specialization names it. */
+static NSString *
+kk_rt_function_name(MTL4FunctionDescriptor *function)
+{
+   while ([function isKindOfClass:[MTL4SpecializedFunctionDescriptor class]]) {
+      MTL4SpecializedFunctionDescriptor *specialized = (id)function;
+      if (specialized.specializedName.length)
+         return specialized.specializedName;
+      function = specialized.functionDescriptor;
+   }
+   if (![function isKindOfClass:[MTL4LibraryFunctionDescriptor class]])
+      return nil;
+   return ((MTL4LibraryFunctionDescriptor *)function).name;
+}
+
 bool
 kk_rt_link_functions(mtl_compiler *compiler,
                       mtl_function_descriptor *dispatcher,
@@ -20,9 +37,12 @@ kk_rt_link_functions(mtl_compiler *compiler,
       for (uint32_t i = 0; i < function_count; ++i) {
          if (!functions[i])
             return false;
-         MTL4LibraryFunctionDescriptor *function = (MTL4LibraryFunctionDescriptor *)functions[i];
-         if (![names containsObject:function.name]) {
-            [names addObject:function.name];
+         MTL4FunctionDescriptor *function = (MTL4FunctionDescriptor *)functions[i];
+         NSString *name = kk_rt_function_name(function);
+         if (!name.length)
+            return false;
+         if (![names containsObject:name]) {
+            [names addObject:name];
             [linked addObject:function];
          }
       }
@@ -57,8 +77,8 @@ kk_rt_link_functions(mtl_compiler *compiler,
          return false;
       }
       for (uint32_t i = 0; i < function_count; ++i) {
-         MTL4LibraryFunctionDescriptor *function = (MTL4LibraryFunctionDescriptor *)functions[i];
-         id<MTLFunctionHandle> handle = [pipeline functionHandleWithName:function.name];
+         id<MTLFunctionHandle> handle = [pipeline functionHandleWithName:
+            kk_rt_function_name((MTL4FunctionDescriptor *)functions[i])];
          if (!handle) {
             [table release];
             [pipeline release];
