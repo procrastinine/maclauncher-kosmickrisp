@@ -116,8 +116,8 @@
        Controls: ``VK_EXT_vertex_input_dynamic_state``, ``vertexInputDynamicState``.
      - runtime metadata / vertex fetch. Dynamic vertex inputs load format, divisor and stride metadata for consumed attributes and perform format-dependent conversion; static pipelines retain constant attribute specialization. Unused inputs emit no fetch work.
      - No Apple family
-     - Off
-     - DXVK and vkd3d-proton retain static pipeline vertex input without requiring this interface.
+     - On
+     - Static vertex layouts retain constant attribute specialization. Only pipelines requesting dynamic vertex input use runtime fetch metadata and conversion; metadata uploads follow input-state changes.
      - Dynamic vertex-input pipelines must use static vertex layouts instead. D3D shader-model, feature-level and translator device-creation support remain available through static input.
      - ``performance,+dynamic_vertex_input``
    * - ``multiview_geometry_tessellation``

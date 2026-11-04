@@ -88,12 +88,12 @@
      - On
      - On Apple7-11: Dynamic sample mask loads root state and filters coverage; nonconstant alpha-to-coverage computes a dither mask and demotes samples. Constant opaque alpha omits alpha coverage lowering. Rasterization sample count uses native attachment variants.
    * - ``dynamic_vertex_input``
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off Apple7-11: Dynamic vertex inputs load format, divisor and stride metadata for consumed attributes and perform format-dependent conversion; static pipelines retain constant attribute specialization. Unused inputs emit no fetch work.
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: Static pipelines keep constant attribute fetches. Dynamic-layout pipelines use runtime format, divisor and stride metadata; unchanged draws do not upload new input metadata.
    * - ``multiview_geometry_tessellation``
      - On
      - On

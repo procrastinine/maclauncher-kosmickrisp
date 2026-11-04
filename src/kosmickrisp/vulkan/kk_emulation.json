@@ -341,12 +341,18 @@
       "vertexInputDynamicState"
     ],
     "properties": [],
-    "performance": false,
-    "performance_reason": "DXVK and vkd3d-proton retain static pipeline vertex input without requiring this interface.",
+    "performance": true,
+    "performance_reason": "Static vertex layouts retain constant attribute specialization. Only pipelines requesting dynamic vertex input use runtime fetch metadata and conversion; metadata uploads follow input-state changes.",
     "off_consequence": "Dynamic vertex-input pipelines must use static vertex layouts instead. D3D shader-model, feature-level and translator device-creation support remain available through static input.",
     "native_from": null,
-    "performance_families": [],
-    "family_cost_note": "Off Apple7-11: Dynamic vertex inputs load format, divisor and stride metadata for consumed attributes and perform format-dependent conversion; static pipelines retain constant attribute specialization. Unused inputs emit no fetch work."
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Static pipelines keep constant attribute fetches. Dynamic-layout pipelines use runtime format, divisor and stride metadata; unchanged draws do not upload new input metadata."
   },
   {
     "name": "multiview_geometry_tessellation",
