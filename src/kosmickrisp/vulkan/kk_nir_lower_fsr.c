@@ -799,6 +799,27 @@ fsr_slot_fence(nir_builder *b)
                .memory_modes = nir_var_mem_global);
 }
 
+/* A slot's presence/owner state belongs to one view. Partition each epoch
+ * half by ViewIndex so equal primitive/pixel tags from amplified views can
+ * never join the same handshake. Non-multiview keeps the original table. */
+static unsigned
+fsr_slot_view_bits(uint32_t view_mask)
+{
+   return util_logbase2_ceil(MAX2(util_last_bit(view_mask), 1));
+}
+
+static nir_def *
+fsr_slot_partition(nir_builder *b, nir_def *serial, uint32_t view_mask,
+                   unsigned half_bits)
+{
+   nir_def *half = nir_ishl_imm(b, nir_iand_imm(b, serial, 1), half_bits);
+   unsigned view_bits = fsr_slot_view_bits(view_mask);
+   if (!view_bits)
+      return half;
+   return nir_ior(b, half,
+      nir_ishl_imm(b, nir_load_view_index(b), half_bits - view_bits));
+}
+
 static void
 fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
 {
@@ -820,15 +841,16 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
    nir_def *serial8 = nir_iand_imm(b, serial, 0xff);
    ctx->tag = nir_ior(b, nir_ior_imm(b, nir_iand_imm(b, h, 0xfffffe00u), 0x100), serial8);
    /* Even and odd epochs use separate halves of the table. */
-   const unsigned bits = util_logbase2(KK_FSR_SLOT_BYTES / stride) - 1;
-   assert(bits > 0 && bits < 31);
+   const unsigned half_bits = util_logbase2(KK_FSR_SLOT_BYTES / stride) - 1;
+   const unsigned bits = half_bits - fsr_slot_view_bits(ctx->opts->view_mask);
+   assert(bits > 0 && bits <= half_bits && half_bits < 31);
    nir_def *base = nir_ushr_imm(b, nir_imul_imm(b, nir_ixor(b, h, nir_ushr_imm(b, h, 16)), 0x7feb352du),
                                 32 - bits);
    /* An odd stride visits distinct entries in the power-of-two half.
     * Linear clusters could exhaust the short probe window while much of
     * the table was free, triggering unshared per-sample fallback. */
    nir_def *step = nir_ior_imm(b, nir_imul_imm(b, h, 0x9e3779b9u), 1);
-   nir_def *half = nir_ishl_imm(b, nir_iand_imm(b, serial, 1), bits);
+   nir_def *half = fsr_slot_partition(b, serial, ctx->opts->view_mask, half_bits);
    nir_def *active = nir_ine_imm(b, slots, 0);
    nir_def *sid = nir_iand_imm(b, nir_load_sample_id(b), FSR_SLOT_SAMPLES - 1);
    BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_SAMPLE_ID);

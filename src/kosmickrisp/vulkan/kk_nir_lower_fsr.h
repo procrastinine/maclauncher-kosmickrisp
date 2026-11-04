@@ -21,6 +21,8 @@ struct kk_fsr_lower_options {
    bool force_fine;
    /* Rasterization may use more than one sample. */
    bool multisampled;
+   /* Active Vulkan views have independent sample-sharing slots. */
+   uint32_t view_mask;
    /* Sample mask bits that cover every rasterization sample. */
    uint8_t full_sample_mask;
 };

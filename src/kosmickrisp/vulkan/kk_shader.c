@@ -1197,6 +1197,7 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
       .multisampled = !state || (state->ms &&
          (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES) ||
           state->ms->rasterization_samples > 1)),
+      .view_mask = state && state->mv ? state->mv->view_mask : 0,
       .full_sample_mask = 0xff,
       .force_fine = force_fine,
    };
@@ -1218,6 +1219,14 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
       opts.primitive_rate = primitive;
    }
    NIR_PASS(_, nir, kk_nir_lower_fsr, &opts);
+   /* The sample exchange introduces its own ViewIndex after application
+    * multiview lowering. Use the same native/replayed view transport. */
+   if (opts.view_mask) {
+      if (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT)
+         NIR_PASS(_, nir, kk_nir_lower_poly_multiview, true, false);
+      else
+         NIR_PASS(_, nir, kk_nir_lower_fs_multiview, opts.view_mask);
+   }
    return true;
 }
 
