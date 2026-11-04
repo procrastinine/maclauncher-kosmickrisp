@@ -44,7 +44,10 @@ void
 wsi_metal_release_drawable(CAMetalDrawable *drawable_ptr);
 
 uint64_t
-wsi_metal_layer_refresh_duration(const CAMetalLayer *metal_layer);
+wsi_metal_layer_refresh_duration(const CAMetalLayer *metal_layer, void **display_link);
+
+void
+wsi_metal_layer_release_display_link(void *display_link);
 
 void
 wsi_metal_layer_add_presented_handler(CAMetalDrawable *drawable_ptr,
@@ -65,7 +68,10 @@ wsi_metal_layer_blit_and_present(struct wsi_metal_layer_blit_context *context,
    CAMetalDrawable **drawable_ptr, void *buffer,
    uint32_t width, uint32_t height, uint32_t row_pitch, uint64_t target_time);
 void
-wsi_metal_layer_present(CAMetalDrawable **drawable_ptr, uint64_t target_time);
+wsi_metal_layer_present(CAMetalDrawable **drawable_ptr);
+
+void
+wsi_metal_layer_present_at_time(CAMetalDrawable **drawable_ptr, uint64_t target_time);
 
 void
 wsi_metal_layer_make_queue_resident(const CAMetalLayer *metal_layer,

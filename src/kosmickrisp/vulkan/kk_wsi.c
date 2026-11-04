@@ -81,36 +81,37 @@ kk_wsi_cmd_blit_image(VkCommandBuffer vk_cmd, const VkBlitImageInfo2 *blit_info,
     * itself, and that view is where the alpha gets dropped. The value is a
     * property of the swapchain, so it never changes for a given image. */
    src->wsi_opaque_alpha = opaque_alpha;
-
-   VK_FROM_HANDLE(kk_image, dst, blit_info->dstImage);
-   const VkImageBlit2 *region = blit_info->pRegions;
-   if (region->dstOffsets[0].x || region->dstOffsets[0].y ||
-       region->dstOffsets[1].x != dst->vk.extent.width ||
-       region->dstOffsets[1].y != dst->vk.extent.height) {
-      const VkClearColorValue black = {.float32 = {0, 0, 0, opaque_alpha ? 1 : 0}};
-      const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      kk_CmdClearColorImage(vk_cmd, blit_info->dstImage,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
-      const VkImageMemoryBarrier2 barrier = {
-         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
-         .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT,
-         .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-         .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-         .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-         .image = blit_info->dstImage,
-         .subresourceRange = range,
-      };
-      const VkDependencyInfo dependency = {
-         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-         .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier,
-      };
-      kk_CmdPipelineBarrier2(vk_cmd, &dependency);
-   }
    kk_CmdBlitImage2(vk_cmd, blit_info);
+}
+
+static void
+kk_wsi_cmd_blit_image_with_borders(VkCommandBuffer vk_cmd,
+                                   const VkBlitImageInfo2 *blit_info,
+                                   bool opaque_alpha)
+{
+   const VkClearColorValue black = {.float32 = {0, 0, 0, opaque_alpha ? 1 : 0}};
+   const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+   kk_CmdClearColorImage(vk_cmd, blit_info->dstImage,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+   const VkImageMemoryBarrier2 barrier = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+      .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+      .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+      .dstStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT,
+      .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+      .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = blit_info->dstImage,
+      .subresourceRange = range,
+   };
+   const VkDependencyInfo dependency = {
+      .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+      .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier,
+   };
+   kk_CmdPipelineBarrier2(vk_cmd, &dependency);
+   kk_wsi_cmd_blit_image(vk_cmd, blit_info, opaque_alpha);
 }
 
 static void
@@ -121,13 +122,11 @@ kk_encode_drawable_present(VkCommandBuffer vk_cmd, void *drawable)
    cmd->drawable = drawable;
 }
 
-static struct vk_queue *kk_get_blit_queue(VkDevice device);
-
 static void *
-kk_get_mtl4_command_queue(VkDevice device)
+kk_get_mtl4_command_queue(VkQueue vk_queue)
 {
-   struct vk_queue *queue = kk_get_blit_queue(device);
-   return queue ? container_of(queue, struct kk_queue, vk)->mtl_handle : NULL;
+   VK_FROM_HANDLE(vk_queue, queue, vk_queue);
+   return container_of(queue, struct kk_queue, vk)->mtl_handle;
 }
 
 static struct vk_queue *
@@ -138,7 +137,7 @@ kk_get_blit_queue(VkDevice device)
       return NULL;
 
    simple_mtx_lock(&dev->blit_queue_mutex);
-   if (!dev->has_blit_queue) {
+   if (!dev->blit_queue) {
       const float priority = 1.0f;
       const VkDeviceQueueCreateInfo info = {
          .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -146,13 +145,18 @@ kk_get_blit_queue(VkDevice device)
          .queueCount = 1,
          .pQueuePriorities = &priority,
       };
-      VkResult result = kk_queue_init(dev, &dev->blit_queue, &info, 0);
-      if (result == VK_SUCCESS)
-         dev->has_blit_queue = true;
-      else
+      struct kk_queue *queue = vk_zalloc(&dev->vk.alloc, sizeof(*queue), 8,
+                                         VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+      VkResult result = queue ? kk_queue_init(dev, queue, &info, 0) :
+                                VK_ERROR_OUT_OF_HOST_MEMORY;
+      if (result == VK_SUCCESS) {
+         dev->blit_queue = queue;
+      } else {
+         vk_free(&dev->vk.alloc, queue);
          mesa_logw("kk: failed to create the WSI queue");
+      }
    }
-   struct vk_queue *queue = dev->has_blit_queue ? &dev->blit_queue.vk : &dev->queues[0].vk;
+   struct vk_queue *queue = dev->blit_queue ? &dev->blit_queue->vk : &dev->queues[0].vk;
    simple_mtx_unlock(&dev->blit_queue_mutex);
    return queue;
 }
@@ -174,6 +178,7 @@ kk_init_wsi(struct kk_physical_device *pdev)
    wsi->metal.bind_drawable_to_vkimage = kk_bind_drawable_to_vkimage;
    wsi->metal.encode_drawable_present = kk_encode_drawable_present;
    wsi->metal.cmd_blit_image = kk_wsi_cmd_blit_image;
+   wsi->metal.cmd_blit_image_with_borders = kk_wsi_cmd_blit_image_with_borders;
    wsi->metal.get_mtl4_command_queue = kk_get_mtl4_command_queue;
    wsi->get_blit_queue = kk_get_blit_queue;
 

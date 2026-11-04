@@ -507,7 +507,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       goto fail_compiler;
 
    /* The optional set can fail into cleanup that destroys this mutex. */
-   simple_mtx_init(&dev->blit_queue_mutex, mtx_plain);
+   if (dev->vk.enabled_extensions.KHR_swapchain)
+      simple_mtx_init(&dev->blit_queue_mutex, mtx_plain);
    result = kk_interlock_submission_init(dev);
    if (result != VK_SUCCESS)
       goto fail_vab_memory;
@@ -602,7 +603,8 @@ fail_mem_cache:
       kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
 fail_vab_memory:
    kk_interlock_submission_finish(dev);
-   simple_mtx_destroy(&dev->blit_queue_mutex);
+   if (dev->vk.enabled_extensions.KHR_swapchain)
+      simple_mtx_destroy(&dev->blit_queue_mutex);
    if (dev->residency_set.priority_handle) {
       mtl_residency_set_end_residency(dev->residency_set.priority_handle);
       mtl_release(dev->residency_set.priority_handle);
@@ -637,11 +639,13 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    }
 
    /* Drain the private present queue before destroying shared meta state. */
-   if (dev->has_blit_queue) {
-      kk_queue_finish(dev, &dev->blit_queue);
-      dev->has_blit_queue = false;
+   if (dev->blit_queue) {
+      kk_queue_finish(dev, dev->blit_queue);
+      vk_free(&dev->vk.alloc, dev->blit_queue);
+      dev->blit_queue = NULL;
    }
-   simple_mtx_destroy(&dev->blit_queue_mutex);
+   if (dev->vk.enabled_extensions.KHR_swapchain)
+      simple_mtx_destroy(&dev->blit_queue_mutex);
 
    /* Host continuations may still encode using shared meta resources.
     * Join/cancel submit workers and drain their native callbacks first. */

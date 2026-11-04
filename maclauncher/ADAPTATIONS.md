@@ -1280,6 +1280,10 @@ Vulkan contract: `VK_EXT_surface_maintenance1`, `VK_EXT_swapchain_maintenance1`,
 
 Uses the existing GPU present blit for pixel-preserving, aspect-fit and independent-axis scaling with gravity, clipping, borders and live surface resizing. Deliberately scaled extents do not produce extent-only SUBOPTIMAL.
 
+Each image reuses its blit command buffer after the prior submission fence completes. Re-recording binds the newly acquired drawable without allocating a replacement command buffer.
+Scaling geometry and the border-clear recorder are selected when the drawable
+extent changes. Full-extent blits record without a border check or clear barrier.
+
 Limits and reported properties: `VkSurfacePresentScalingCapabilitiesKHR.supportedPresentScaling = ["ONE_TO_ONE", "ASPECT_RATIO_STRETCH", "STRETCH"]`; `VkSurfacePresentScalingCapabilitiesKHR.supportedPresentGravityX = ["MIN", "CENTERED", "MAX"]`; `VkSurfacePresentScalingCapabilitiesKHR.supportedPresentGravityY = ["MIN", "CENTERED", "MAX"]`.
 
 Consumers: DXVK, vkd3d-proton, Wine vkd3d, winevulkan.
@@ -1338,7 +1342,7 @@ Implementation: [kk_physical_device.c](../src/kosmickrisp/vulkan/kk_physical_dev
 
 Vulkan contract: `VK_GOOGLE_display_timing`.
 
-Schedules requested host times through presentAtTime and reports only nonzero drawable presentedTime through the common timing history. CoreVideo reports the attached display nominal refresh duration; callbacks are excluded from swapchain destruction.
+Schedules requested host times through presentAtTime and reports only nonzero drawable presentedTime through the common timing history. Callback state is allocated only for enabled present-wait or timing; untimed presentation shares the same drawable path without feedback processing. CoreVideo refresh queries reuse a display link until the attached display changes. Callbacks are excluded from swapchain destruction.
 
 Scope: untimed drawable presentation, present-wait completion. Device support and operation restrictions are defined by the linked implementation.
 

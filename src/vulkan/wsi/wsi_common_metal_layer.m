@@ -7,6 +7,7 @@
 #include "wsi_common_metal_layer.h"
 
 #include "vk_format.h"
+#include "util/macros.h"
 
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
@@ -295,7 +296,7 @@ wsi_metal_release_drawable(CAMetalDrawable *drawable_ptr)
 
 /* An unattached layer has no known display. Do not invent a refresh rate. */
 uint64_t
-wsi_metal_layer_refresh_duration(const CAMetalLayer *metal_layer)
+wsi_metal_layer_refresh_duration(const CAMetalLayer *metal_layer, void **display_link)
 {
    @autoreleasepool {
       NSScreen *screen = nil;
@@ -310,15 +311,29 @@ wsi_metal_layer_refresh_duration(const CAMetalLayer *metal_layer)
       if (!screen)
          return 0;
       CGDirectDisplayID display = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
-      CVDisplayLinkRef link = NULL;
-      if (CVDisplayLinkCreateWithCGDisplay(display, &link) != kCVReturnSuccess)
-         return 0;
+      CVDisplayLinkRef link = *display_link;
+      if (link && CVDisplayLinkGetCurrentCGDisplay(link) != display) {
+         CVDisplayLinkRelease(link);
+         link = NULL;
+         *display_link = NULL;
+      }
+      if (!link) {
+         if (CVDisplayLinkCreateWithCGDisplay(display, &link) != kCVReturnSuccess)
+            return 0;
+         *display_link = link;
+      }
       CVTime period = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
-      CVDisplayLinkRelease(link);
       if ((period.flags & kCVTimeIsIndefinite) || period.timeValue <= 0 || period.timeScale <= 0)
          return 0;
       return (uint64_t)((double)period.timeValue * 1e9 / period.timeScale);
    }
+}
+
+void
+wsi_metal_layer_release_display_link(void *display_link)
+{
+   if (display_link)
+      CVDisplayLinkRelease(display_link);
 }
 
 void
@@ -403,18 +418,31 @@ wsi_metal_layer_blit_and_present(struct wsi_metal_layer_blit_context *context,
    }
 }
 
-void
-wsi_metal_layer_present(CAMetalDrawable **drawable_ptr, uint64_t target_time)
+static ALWAYS_INLINE void
+wsi_metal_layer_present_common(CAMetalDrawable **drawable_ptr,
+                               uint64_t target_time, bool timed)
 {
    @autoreleasepool {
       id<CAMetalDrawable> drawable = [(id<CAMetalDrawable>)*drawable_ptr autorelease];
-      if (target_time)
+      if (timed && target_time)
          [drawable presentAtTime:(double)target_time * 1e-9];
       else
          [drawable present];
 
       *drawable_ptr = nil;
    }
+}
+
+void
+wsi_metal_layer_present(CAMetalDrawable **drawable_ptr)
+{
+   wsi_metal_layer_present_common(drawable_ptr, 0, false);
+}
+
+void
+wsi_metal_layer_present_at_time(CAMetalDrawable **drawable_ptr, uint64_t target_time)
+{
+   wsi_metal_layer_present_common(drawable_ptr, target_time, true);
 }
 
 void

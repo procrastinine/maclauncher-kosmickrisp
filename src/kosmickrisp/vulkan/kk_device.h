@@ -143,8 +143,7 @@ struct kk_device {
    /* Two queues in family 0 and one in each remaining family. */
    struct kk_queue queues[5];
    simple_mtx_t blit_queue_mutex;
-   bool has_blit_queue;
-   struct kk_queue blit_queue;
+   struct kk_queue *blit_queue;
 
    struct vk_meta_device meta;
 

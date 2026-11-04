@@ -269,10 +269,19 @@ wsi_device_init(struct wsi_device *wsi,
       goto fail;
 #endif
 
+   wsi->force_headless_swapchain =
+      debug_get_bool_option("MESA_VK_WSI_HEADLESS_SWAPCHAIN", false);
 #ifndef VK_USE_PLATFORM_WIN32_KHR
-   result = wsi_headless_init_wsi(wsi, alloc, pdevice);
-   if (result != VK_SUCCESS)
-      goto fail;
+#ifdef VK_USE_PLATFORM_METAL_EXT
+   VK_FROM_HANDLE(vk_physical_device, physical_device, pdevice);
+   if (physical_device->instance->enabled_extensions.EXT_headless_surface ||
+       wsi->force_headless_swapchain)
+#endif
+   {
+      result = wsi_headless_init_wsi(wsi, alloc, pdevice);
+      if (result != VK_SUCCESS)
+         goto fail;
+   }
 #endif
 
    present_mode = os_get_option("MESA_VK_WSI_PRESENT_MODE");
@@ -289,9 +298,6 @@ wsi_device_init(struct wsi_device *wsi,
          fprintf(stderr, "Invalid MESA_VK_WSI_PRESENT_MODE value!\n");
       }
    }
-
-   wsi->force_headless_swapchain =
-      debug_get_bool_option("MESA_VK_WSI_HEADLESS_SWAPCHAIN", false);
 
    if (dri_options) {
       if (driCheckOption(dri_options, "adaptive_sync", DRI_BOOL))
@@ -542,9 +548,12 @@ wsi_swapchain_init(const struct wsi_device *wsi,
       if (!chain->cmd_pools)
          return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-      const VkCommandPoolCreateFlags cmd_pool_flags =
+      VkCommandPoolCreateFlags cmd_pool_flags =
          (pCreateInfo->flags & VK_SWAPCHAIN_CREATE_PROTECTED_BIT_KHR) ?
          VK_COMMAND_POOL_CREATE_PROTECTED_BIT : 0;
+      /* Metal re-records the completed image blit with each new drawable. */
+      if (image_params->image_type == WSI_IMAGE_TYPE_METAL)
+         cmd_pool_flags |= VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
       for (uint32_t i = 0; i < cmd_pools_count; i++) {
          int queue_family_index = i;
 
