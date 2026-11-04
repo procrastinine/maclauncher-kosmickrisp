@@ -86,6 +86,7 @@ The feature table lists each feature's implementation and availability:
    :maxdepth: 1
 
    kosmickrisp/features
+   kosmickrisp/apple-gpu-families
 
 Performance and conformance
 ***************************
@@ -117,8 +118,13 @@ is a comma-separated list of tokens. Whitespace around each token is ignored.
 
 - ``performance`` or ``conformance`` as the first token selects the mode.
   Without either, performance mode applies.
+- ``apple7`` through ``apple11``, or ``mode=7`` through ``mode=11``, add
+  entries with a declared native-family threshold at or below that family to
+  the performance defaults. Later named overrides apply to emulated entries.
 - ``+name`` enables the entry ``name`` and ``-name`` disables it. Tokens apply
-  in order, so the last token for an entry takes effect.
+  in order, so the last token for an emulated entry takes effect. Entries native
+  on the running device remain advertised; diagnostic extension hiding still
+  applies.
 - ``-VK_extension_name`` hides that device extension together with its
   feature and property fields, including their core-version query aliases.
   Extension hiding applies after entry selection.
@@ -133,8 +139,8 @@ Examples:
 - ``conformance,-VK_KHR_ray_query`` enables every entry and hides
   ``VK_KHR_ray_query``.
 
-Disabling an entry removes the extensions, features, properties and format
-features that the entry controls. Disabling an entry can lower the shader
+Disabling an emulated entry removes the extensions, features, properties and
+format features that the entry controls. Disabling an entry can lower the shader
 model, feature level or interfaces available to a translator, as listed in the
 table below. Enabling an entry keeps the support the device otherwise reports
 and adds nothing beyond it; ``+denorm_flush`` leaves FP16 and FP64

@@ -36,12 +36,31 @@ kk_emulation_apply(const char *value, unsigned apple_family,
       while (trimmed > begin && isspace((unsigned char)trimmed[-1])) --trimmed;
       size_t length = trimmed - begin;
       bool known = false;
+      unsigned preset = 0;
+      if (length == 6 && memcmp(begin, "apple", 5) == 0 &&
+          begin[5] >= '7' && begin[5] <= '9')
+         preset = begin[5] - '0';
+      else if (length == 7 && memcmp(begin, "apple1", 6) == 0 &&
+               begin[6] >= '0' && begin[6] <= '1')
+         preset = 10 + begin[6] - '0';
+      else if (length == 6 && memcmp(begin, "mode=", 5) == 0 &&
+               begin[5] >= '7' && begin[5] <= '9')
+         preset = begin[5] - '0';
+      else if (length == 7 && memcmp(begin, "mode=1", 6) == 0 &&
+               begin[6] >= '0' && begin[6] <= '1')
+         preset = 10 + begin[6] - '0';
       if (token_index == 0 &&
           (kk_emulation_token(begin, length, "performance") ||
            kk_emulation_token(begin, length, "conformance"))) {
          bool all = kk_emulation_token(begin, length, "conformance");
          for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i)
             enabled[i] = all || kk_emulation_performance[i];
+         known = true;
+      } else if (preset) {
+         for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i) {
+            if (kk_emulation_native_from[i] && kk_emulation_native_from[i] <= preset)
+               enabled[i] = true;
+         }
          known = true;
       } else if (length > 1 && (*begin == '+' || *begin == '-')) {
          for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i) {
