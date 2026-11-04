@@ -38,6 +38,8 @@ struct nir_to_msl_ctx {
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;
    bool native_query_texture_lod;
+   /* ulong textures and their min/max atomics (Apple8 macOS and later). */
+   bool native_atomic64_minmax;
    const struct msl_per_vertex_inputs *per_vertex_inputs;
    bool uses_per_draw_data;
    bool has_sampler_helpers;

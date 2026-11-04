@@ -323,9 +323,14 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
       (image->create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&
       image->image_type != VK_IMAGE_TYPE_3D &&
       !(usage & VK_IMAGE_USAGE_STORAGE_BIT);
+   /* Below Apple8, R64 images use their RG32Uint backing without texture
+    * atomics, which Metal provides only on R32 formats there. */
+   const bool image64 = format == PIPE_FORMAT_R64_UINT ||
+                        format == PIPE_FORMAT_R64_SINT;
    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(
       usage, requires_format_view,
-      supported_format->atomic && !sparse_2d_without_storage);
+      supported_format->atomic && !sparse_2d_without_storage &&
+      (!image64 || pdev->info.gpu_apple_family >= 8));
    layout->block_texel_view_compatible =
       (image->create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) != 0;
    layout->format.pipe = kk_format_backing(format);

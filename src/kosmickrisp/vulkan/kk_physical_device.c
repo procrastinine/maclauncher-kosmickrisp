@@ -241,7 +241,8 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .EXT_provoking_vertex = true,
       .EXT_robustness2 = true,
       .EXT_sample_locations = true,
-      .EXT_shader_image_atomic_int64 = pdev->info.gpu_apple_family >= 8,
+      /* Apple7 support is the image_atomic64 registry entry. */
+      .EXT_shader_image_atomic_int64 = true,
       .EXT_shader_atomic_float = true,
       .EXT_shader_replicated_composites = true,
       .EXT_shader_subgroup_ballot = true,
@@ -1292,6 +1293,14 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
    const uint32_t query_texture_lod = pdev->info.supports_query_texture_lod;
    _mesa_blake3_update(&blake3_ctx, &query_texture_lod, sizeof(query_texture_lod));
 
+   /* A test family override selects different shader routes. */
+   if (pdev->settings.apple_family_override) {
+      static const char family_override[] = "apple-family-override";
+      _mesa_blake3_update(&blake3_ctx, family_override, sizeof(family_override));
+      _mesa_blake3_update(&blake3_ctx, &pdev->settings.apple_family_override,
+                          sizeof(pdev->settings.apple_family_override));
+   }
+
    /* Keep diagnostic shaders out of default application pipeline caches and
     * shader binaries. Disk/native caches also key the workaround mask. */
    if (pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)) {
@@ -1433,6 +1442,18 @@ kk_parse_environment_options(struct kk_physical_device *pdev)
 
    settings->gpu_capture_enabled =
       debug_get_bool_option("MESA_KK_GPU_CAPTURE", false);
+
+   /* Test selector: run the family-dependent paths of an earlier family.
+    * Runtime Metal capability queries keep the device's own answers. */
+   const int64_t family = debug_get_num_option("MESA_KK_APPLE_FAMILY", 0);
+   if (family >= 7 && family < pdev->info.gpu_apple_family) {
+      settings->apple_family_override = family;
+      pdev->info.gpu_apple_family = family;
+   } else if (family) {
+      fprintf(stderr, "KosmicKrisp: MESA_KK_APPLE_FAMILY=%lld ignored; the "
+              "value must be at least 7 and below the device family %u\n",
+              (long long)family, pdev->info.gpu_apple_family);
+   }
 
    const char *list = debug_get_option("MESA_KK_DISABLE_WORKAROUNDS", "");
    const char *all_workarounds = "all";

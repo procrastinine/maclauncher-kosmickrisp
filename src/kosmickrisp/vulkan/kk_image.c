@@ -58,8 +58,8 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
       return 0;
 
    if (p_format == PIPE_FORMAT_R64_UINT || p_format == PIPE_FORMAT_R64_SINT) {
-      /* Publication requires native ulong texture min/max. */
-      if (pdev->info.gpu_apple_family < 8)
+      /* Native ulong texture min/max from Apple8; image_atomic64 below. */
+      if (!pdev->vk.supported_extensions.EXT_shader_image_atomic_int64)
          return 0;
       return VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
              VK_FORMAT_FEATURE_2_STORAGE_IMAGE_ATOMIC_BIT |

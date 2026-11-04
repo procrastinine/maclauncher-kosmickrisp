@@ -1359,8 +1359,12 @@ msl_emit_texture_type(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
          coherent = ", memory_coherence_device";
          break;
       }
-      P(ctx, "texture%s%s<%s%s%s>", dim, arrayed,
-        tex_type_name(nir_intrinsic_dest_type(instr)), access, coherent);
+      /* Without ulong textures, R64 texels are two 32-bit words. */
+      const nir_alu_type type = nir_intrinsic_dest_type(instr);
+      const char *element =
+         nir_alu_type_get_type_size(type) == 64 && !ctx->native_atomic64_minmax
+            ? "uint" : tex_type_name(type);
+      P(ctx, "texture%s%s<%s%s%s>", dim, arrayed, element, access, coherent);
    } else if (instr->intrinsic == nir_intrinsic_load_depth_texture_kk) {
       P(ctx, "depth%s%s<float>", dim, arrayed);
    }
@@ -3272,6 +3276,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    ctx.disabled_workarounds = options->disabled_workarounds;
    ctx.native_sampler_lod_bias = options->native_sampler_lod_bias;
    ctx.native_query_texture_lod = options->native_query_texture_lod;
+   ctx.native_atomic64_minmax = options->native_atomic64_minmax;
    ctx.per_vertex_inputs = options->per_vertex_inputs;
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    msl_interlock_prepare(shader);
@@ -3317,7 +3322,9 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       P(&ctx, "%s", kk_atomic64_msl);
    }
 
-   if (ctx.uses_image_atomic64) P(&ctx, "%s", kk_image_atomic64_msl);
+   if (ctx.uses_image_atomic64)
+      P(&ctx, "%s", ctx.native_atomic64_minmax ? kk_image_atomic64_msl
+                                               : kk_image_atomic64_words_msl);
    if (fp32_controls_helpers) {
       P(&ctx, "%s", kk_fp32_preserve_msl);
       if (nir_is_denorm_flush_to_zero(shader->info.float_controls_execution_mode, 32))

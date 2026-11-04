@@ -46,7 +46,7 @@ kk_get_buffer_format_features(struct kk_physical_device *pdev,
       return 0;
 
    if (p_format == PIPE_FORMAT_R64_UINT || p_format == PIPE_FORMAT_R64_SINT)
-      return pdev->info.gpu_apple_family < 8 ? 0 :
+      return !pdev->vk.supported_extensions.EXT_shader_image_atomic_int64 ? 0 :
              VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT |
              VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_ATOMIC_BIT |
              VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |

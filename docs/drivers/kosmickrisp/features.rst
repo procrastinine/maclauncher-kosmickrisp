@@ -446,14 +446,16 @@ Feature table
        int64 atomic capability. Ordinary ``shaderInt64`` remains independent.
    * - ``VK_EXT_shader_image_atomic_int64``, 64-bit integer storage images and
        texel buffers
-     - Emulated: each operation takes a hashed lock, and a native unsigned
-       64-bit texture minimum or maximum writes the result. Not advertised
-       below Apple8.
+     - Emulated: each operation takes a hashed lock. On Apple8 and later a
+       native unsigned 64-bit texture minimum or maximum writes the result.
+       On Apple7 the locked operation reads and writes the two 32-bit words
+       of the texel.
      - Apple9 for all 64-bit atomics, Apple8 on macOS for unsigned minimum
-       and maximum; emulated on Apple8 and later.
-     - —
-     - Always
-     - —
+       and maximum; emulated on all families.
+     - ``image_atomic64``
+     - Always on Apple8 and later; Off on Apple7
+     - On Apple7, vkd3d-proton reports sampler feedback tier 0 and no
+       typed-resource 64-bit atomics, so feature level 12_2 is unavailable.
    * - ``VK_EXT_shader_atomic_float``
      - Native: 32-bit float buffer and workgroup atomics. Workgroup atomic add
        requires macOS 27.

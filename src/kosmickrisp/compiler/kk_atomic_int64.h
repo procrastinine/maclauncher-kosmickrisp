@@ -39,11 +39,20 @@ kk_emit_image64(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
       else { P_IND(ctx, "t%d = ", intr->def.index); }
       P(ctx, "as_type<%s>(", msl_type_for_def(ctx->types, &intr->def));
    } else { P_INDENT(ctx); }
+   /* Without ulong textures the RG32Uint texel holds the low and high words. */
+   const bool words = !ctx->native_atomic64_minmax;
    if (!atomic) {
+      if (words && !store) P(ctx, "ulong4(as_type<ulong>(");
       src_to_msl(ctx, &intr->src[0]);
       if (store) {
-         P(ctx, ".write(as_type<ulong4>("); src_to_msl(ctx, &intr->src[3]);
-         P(ctx, "), "); image_coord_swizzle(ctx, intr);
+         if (words) {
+            P(ctx, ".write(uint4(as_type<uint2>(as_type<ulong4>(");
+            src_to_msl(ctx, &intr->src[3]); P(ctx, ").x), 0u, 0u), ");
+         } else {
+            P(ctx, ".write(as_type<ulong4>("); src_to_msl(ctx, &intr->src[3]);
+            P(ctx, "), ");
+         }
+         image_coord_swizzle(ctx, intr);
          if (nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_BUF) {
             P(ctx, ", "); src_to_msl(ctx, &intr->src[4]);
          }
@@ -53,7 +62,7 @@ kk_emit_image64(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
          if (nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_BUF) {
             P(ctx, ", "); src_to_msl(ctx, &intr->src[3]);
          }
-         P(ctx, ").");
+         P(ctx, words ? ").xy), 0ul, 0ul, 1ul)." : ").");
          for (unsigned c = 0; c < intr->def.num_components; c++) P(ctx, "%c", "xyzw"[c]);
          P(ctx, ");\n");
       }

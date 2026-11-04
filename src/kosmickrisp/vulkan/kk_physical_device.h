@@ -60,6 +60,7 @@ struct kk_env_settings {
    bool gpu_capture_enabled;
    const char *gpu_capture_dir;
    uint64_t disabled_workarounds;
+   uint32_t apple_family_override; /* MESA_KK_APPLE_FAMILY, 0 when unset */
 };
 
 struct kk_physical_device {

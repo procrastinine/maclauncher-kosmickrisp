@@ -52,12 +52,18 @@ Metal path where that family provides one:
   rasterization-order color attachment access) do not vary by family.
 - Apple8 and later report 64-bit integer image atomics
   (``VK_EXT_shader_image_atomic_int64``) and storage image and storage texel
-  buffer support for ``R64_UINT`` and ``R64_SINT``, which rely on native 64-bit
-  texture minimum and maximum atomics. Apple7 does not report them.
+  buffer support for ``R64_UINT`` and ``R64_SINT`` in every mode. Each image
+  operation takes a hashed lock and publishes its result with a native 64-bit
+  texture minimum or maximum. On Apple7 the same capabilities are the
+  ``image_atomic64`` emulation entry, which is off in the default performance
+  mode: Apple7 has no 64-bit texture atomics, so each operation reads and
+  writes the two 32-bit words of the texel under the lock.
 - Sparse binding and sparse residency are reported when the device supports
   placement sparse resources with 64 KiB sparse pages. On macOS 26.4 and later
-  this follows Metal's placement sparse query; earlier macOS 26 releases
-  require Apple8 or later.
+  this follows Metal's placement sparse query. Earlier macOS 26 releases
+  require Apple7 or later; Apple's Metal Feature Set Tables list placement
+  sparse buffers and textures for every Apple7 macOS device and for all
+  Apple8 and later GPUs.
 - Apple10 and later:
 
   - report ``depthBounds`` and use Metal depth bounds testing. Earlier
@@ -172,10 +178,13 @@ facilities do not imply that a Vulkan implementation uses them. Programming
 model, operating-system and device capability requirements also apply.
 
 The emulation registry's optional ``native_from`` field identifies the first
-Apple GPU family with a complete native implementation for that entry.
-``null`` means no Apple family provides that native implementation. An absent
+Apple GPU family with a native implementation path for that entry.
+``null`` means no Apple family provides that native path. An absent
 field makes no native-family claim. A grouped entry requires a native path for
-all the behavior it controls before it has a native-family threshold.
+all the behavior it controls before it has a native-family threshold. A native
+path can keep driver work around the Metal feature it relies on: from Apple8,
+``image_atomic64`` keeps its hashed lock and publishes each result with a
+native 64-bit texture minimum or maximum.
 
 On a device at or above an entry's threshold, that entry remains advertised in
 every ``KK_EMULATION`` mode, including with a named disable token. Its native
@@ -209,6 +218,21 @@ a subsequent preset leaves that selection enabled. An out-of-range family
 number produces the ordinary unknown-token warning and is ignored.
 
 .. include:: kosmickrisp/emulation-presets.rst
+
+Family test selector
+====================
+
+``MESA_KK_APPLE_FAMILY=N`` is a test selector. It is read once, when the
+physical device is created. When N is at least 7 and below the family of the
+running GPU, the driver uses family N for every decision it bases on the
+family: native-family thresholds, format support, shader routes and
+workarounds. Metal's runtime capability queries, such as placement sparse
+support, keep the answers of the running GPU, and the GPU itself keeps its own
+behavior. On an Apple8 device, ``MESA_KK_APPLE_FAMILY=7`` selects the Apple7
+route of ``image_atomic64`` and reports that entry as emulated. While the
+selector is active, pipeline caches, shader binaries and the disk cache use a
+separate identity. Any other value prints one line to standard error and is
+ignored. Without the variable the driver is unchanged.
 
 Building
 ********

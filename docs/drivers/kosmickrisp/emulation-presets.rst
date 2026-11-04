@@ -11,13 +11,13 @@
      - No declared thresholds
    * - ``apple8``
      - Apple8
-     - No declared thresholds
+     - ``image_atomic64``
    * - ``apple9``
      - Apple9
-     - No declared thresholds
+     - ``image_atomic64``
    * - ``apple10``
      - Apple10
-     - ``sampler_filter_minmax``, ``depth_bounds``
+     - ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
    * - ``apple11``
      - Apple11
-     - ``sampler_filter_minmax``, ``depth_bounds``
+     - ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``

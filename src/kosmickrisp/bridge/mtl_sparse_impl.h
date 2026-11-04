@@ -64,9 +64,12 @@ mtl_device_supports_placement_sparse(mtl_device *device)
    if (@available(macOS 26.4, *))
       return dev.supportsPlacementSparse &&
          [dev sparseTileSizeInBytesForSparsePageSize:MTLSparsePageSize64] == 65536;
-   /* The capability query was added after placement sparse resources. */
+   /* The capability query was added after placement sparse resources.
+    * Apple's Metal Feature Set Tables list placement sparse buffers and
+    * textures for every Apple7 macOS device and for all Apple8 and later
+    * GPUs. */
    if (@available(macOS 26.0, *))
-      return [dev supportsFamily:MTLGPUFamilyApple8] &&
+      return [dev supportsFamily:MTLGPUFamilyApple7] &&
          [dev sparseTileSizeInBytesForSparsePageSize:MTLSparsePageSize64] == 65536;
    return false;
 }

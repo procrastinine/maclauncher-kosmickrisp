@@ -363,3 +363,12 @@
      - vkd3d-proton enables depthBounds whenever it is reported, which gives every attachment image shader-read usage and runs each pipeline state object that enables the bounds test through the software transaction.
      - On Apple7, Apple8 and Apple9, depthBounds is unavailable; vkd3d-proton reports DepthBoundsTestSupported as false, which limits Direct3D 12 to feature level 12_1, and fails creation of pipeline states that enable the depth bounds test.
      - ``performance,+depth_bounds``
+   * - ``image_atomic64``
+     - 64-bit integer atomics and R64_UINT and R64_SINT storage images and storage texel buffers on Apple7 GPUs.
+       Controls: ``VK_EXT_shader_image_atomic_int64``, ``shaderImageInt64Atomics``.
+     - native Apple8 texture min/max / hashed locks. Image operations take the shared hashed lock keyed by texel coordinates, with CAS retry and two sequential fences. Apple8 and later publish each result with one native unsigned 64-bit texture minimum or maximum. Apple7 reads and writes the two 32-bit words of the RG32Uint texel under the lock and creates R64 images without Metal texture atomics. Texel-buffer operations use the buffer atomic64 transaction. Shaders without 64-bit image operations are unchanged.
+     - Apple8 and later; emulated on earlier supported families
+     - Off
+     - On Apple7 the entry raises only vkd3d-proton sampler feedback to tier 0.9 and typed-resource 64-bit atomics; performance mode reports feature level 12_1 with or without it.
+     - On Apple7, VK_EXT_shader_image_atomic_int64 and the R64_UINT and R64_SINT storage image and storage texel buffer formats are unavailable; vkd3d-proton reports sampler feedback tier 0 and no typed-resource 64-bit atomics, so feature level 12_2 is unavailable.
+     - ``performance,+image_atomic64``
