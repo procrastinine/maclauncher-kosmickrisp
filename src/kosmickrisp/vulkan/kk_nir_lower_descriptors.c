@@ -384,12 +384,59 @@ kk_texel_buffer_coord(nir_builder *b, nir_def *coord, nir_def *metadata)
                                     : nir_vector_insert_imm(b, coord, shifted, 0);
 }
 
+
+/* R64 texel buffers contain byte addresses, not Metal resource IDs. Keep
+ * bounds and aliases in the same address-based path as buffer atomics. */
+static bool
+kk_lower_buffer64(nir_builder *b, nir_intrinsic_instr *intr,
+                   nir_deref_instr *deref, const struct lower_descriptors_ctx *ctx)
+{
+   if (nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_BUF) return false;
+   const bool store = intr->intrinsic == nir_intrinsic_image_deref_store;
+   const bool load = intr->intrinsic == nir_intrinsic_image_deref_load;
+   const bool atomic = intr->intrinsic == nir_intrinsic_image_deref_atomic;
+   const bool swap = intr->intrinsic == nir_intrinsic_image_deref_atomic_swap;
+   if (!(store || load || atomic || swap) ||
+       (store ? intr->src[3].ssa->bit_size : intr->def.bit_size) != 64) return false;
+   nir_def *base = load_resource_deref_desc(b, 1, 64, deref, 0, ctx);
+   nir_def *metadata = load_resource_deref_desc(b, 2, 32, deref,
+      offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
+   nir_def *x = nir_channel(b, intr->src[1].ssa, 0);
+   nir_def *valid = nir_iand(b, nir_ine_imm(b, base, 0),
+      nir_ult(b, x, nir_channel(b, metadata, 1)));
+   nir_def *address = nir_iadd(b, base, nir_imul_imm(b, nir_u2u64(b, x), 8));
+   enum gl_access_qualifier access = nir_intrinsic_access(intr);
+   nir_def *result = NULL;
+   nir_push_if(b, valid);
+   if (store) {
+      nir_store_global(b, nir_channel(b, intr->src[3].ssa, 0), address,
+         .align_mul = 8, .write_mask = 1, .access = access);
+   } else if (load) {
+      nir_def *value = nir_load_global(b, 1, 64, address, .align_mul = 8, .access = access);
+      nir_def *components[4] = {value, nir_imm_int64(b, 0), nir_imm_int64(b, 0), nir_imm_int64(b, 1)};
+      result = nir_vec(b, components, intr->def.num_components);
+   } else if (swap) {
+      result = nir_global_atomic_swap(b, 64, address, intr->src[3].ssa,
+         intr->src[4].ssa, .atomic_op = nir_intrinsic_atomic_op(intr), .access = access);
+   } else {
+      result = nir_global_atomic(b, 64, address, intr->src[3].ssa,
+         .atomic_op = nir_intrinsic_atomic_op(intr), .access = access);
+   }
+   nir_push_else(b, NULL);
+   nir_def *zero = store ? NULL : nir_imm_zero(b, intr->def.num_components, 64);
+   nir_pop_if(b, NULL);
+   if (store) nir_instr_remove(&intr->instr);
+   else nir_def_replace(&intr->def, nir_if_phi(b, result, zero));
+   return true;
+}
+
 static bool
 lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
                    const struct lower_descriptors_ctx *ctx)
 {
    b->cursor = nir_before_instr(&intr->instr);
    nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
+   if (kk_lower_buffer64(b, intr, deref, ctx)) return true;
 
    if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF) {
       nir_def *metadata = load_resource_deref_desc(
@@ -433,7 +480,8 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
       .image_dim = nir_intrinsic_image_dim(intr),
       .image_array = nir_intrinsic_image_array(intr),
       .access = nir_intrinsic_access(intr) | access,
-      .flags = msl_convert_access_flag(access));
+      .flags = nir_alu_type_get_type_size(type) == 64 ? MSL_ACCESS_READ_WRITE :
+               msl_convert_access_flag(access));
 
    if (!var) nir_src_rewrite(&intr->src[0], nir_imm_int(b, 0));
    if (intr->intrinsic == nir_intrinsic_image_deref_levels) {

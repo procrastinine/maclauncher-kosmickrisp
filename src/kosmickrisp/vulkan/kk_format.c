@@ -53,6 +53,8 @@
 #define MTL_FMT_RGB32_FLOAT .bit_widths = 96, .filter = 1, .write = 1
 #define MTL_FMT_RGB32_INT .bit_widths = 96, .write = 1
 
+#define MTL_FMT_IMAGE64 .bit_widths = 64, .write = 1u, .atomic = 1u
+
 // Write, Color, Sparse, Atomic
 #define MTL_FMT_WCSA(width)                                                    \
    .bit_widths = width, .filter = 0u, .write = 1u, .color = 1u, .blend = 0u,   \
@@ -214,6 +216,12 @@ static const struct kk_va_format kk_vf_formats[] = {
    MTL_FMT(B8G8R8A8_SNORM, R8G8B8A8_SNORM, MTL_SWIZZLE_BGRA, MTL_FMT_FS(32), MTL_FMT_TB_NONE, false),
    MTL_FMT(B8G8R8A8_UINT, R8G8B8A8_UINT, MTL_SWIZZLE_BGRA, MTL_FMT_SAMPLE(32), MTL_FMT_TB_NONE, false),
    MTL_FMT(B8G8R8A8_SINT, R8G8B8A8_SINT, MTL_SWIZZLE_BGRA, MTL_FMT_SAMPLE(32), MTL_FMT_TB_NONE, false),
+
+   // Exact R64 storage uses RG32Uint backing and ulong shader elements.
+   MTL_FMT(R64_UINT, R32G32_UINT, MTL_SWIZZLE_IDENTITY,
+      MTL_FMT_IMAGE64, MTL_FMT_TB_NONE, true),
+   MTL_FMT(R64_SINT, R32G32_UINT, MTL_SWIZZLE_IDENTITY,
+      MTL_FMT_IMAGE64, MTL_FMT_TB_NONE, true),
 
    // 64-bit formats
    MTL_FMT_NATIVE(R32G32_UINT, MTL_FMT_WCMS(64), MTL_FMT_TB_WR),

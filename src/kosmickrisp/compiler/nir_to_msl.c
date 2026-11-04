@@ -682,6 +682,9 @@ static const char *
 tex_type_name(nir_alu_type ty)
 {
    switch (ty) {
+   case nir_type_int64:
+   case nir_type_uint64:
+      return "ulong";
    case nir_type_int16:
       return "short";
    case nir_type_int32:
@@ -1094,6 +1097,7 @@ global_access_qualifier(struct nir_to_msl_ctx *ctx,
 }
 
 #include "kk_atomic_int64.h"
+#include "kk_image_atomic_int64_msl.h"
 
 static void
 intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
@@ -1109,6 +1113,7 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
        instr->intrinsic == nir_intrinsic_load_barycentric_at_offset)
       return;
 
+   if (kk_emit_image64(ctx, instr)) return;
    if (kk_emit_atomic64(ctx, instr)) return;
    bool guarded = msl_interlock_side_effect(ctx, instr);
    if (guarded) {
@@ -2597,7 +2602,9 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       P(&ctx, "#include <metal_compute>\n");
    P(&ctx, "#include <metal_stdlib>\n");
    P(&ctx, "using namespace metal;\n");
-   if (kk_uses_atomic64(shader)) P(&ctx, "%s", kk_atomic64_msl);
+   if (kk_uses_atomic64(shader) || kk_uses_image_atomic64(shader))
+      P(&ctx, "%s", kk_atomic64_msl);
+   if (kk_uses_image_atomic64(shader)) P(&ctx, "%s", kk_image_atomic64_msl);
    if (kk_fp32_preserve(shader)) P(&ctx, "%s", kk_fp32_preserve_msl);
 
    msl_emit_constant_data(&ctx, shader);

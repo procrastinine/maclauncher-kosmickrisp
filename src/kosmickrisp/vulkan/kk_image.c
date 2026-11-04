@@ -51,6 +51,18 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
    if (va_format == NULL)
       return 0;
 
+   if (p_format == PIPE_FORMAT_R64_UINT || p_format == PIPE_FORMAT_R64_SINT) {
+      /* Publication requires native ulong texture min/max. */
+      if (pdev->info.gpu_apple_family < 8)
+         return 0;
+      return VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
+             VK_FORMAT_FEATURE_2_STORAGE_IMAGE_ATOMIC_BIT |
+             VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+             VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT |
+             VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
+             VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
+   }
+
    // Textures can at least be sampled
    features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT;
    features |= VK_FORMAT_FEATURE_2_BLIT_SRC_BIT;

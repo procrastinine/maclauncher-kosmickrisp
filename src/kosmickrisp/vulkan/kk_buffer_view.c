@@ -42,6 +42,13 @@ kk_get_buffer_format_features(struct kk_physical_device *pdev,
    if (p_format == PIPE_FORMAT_NONE)
       return 0;
 
+   if (p_format == PIPE_FORMAT_R64_UINT || p_format == PIPE_FORMAT_R64_SINT)
+      return pdev->info.gpu_apple_family < 8 ? 0 :
+             VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT |
+             VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_ATOMIC_BIT |
+             VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+             VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
+
    if (kk_texel_buffer_native_format(p_format) != p_format)
       features |= VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT |
                   VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT |
@@ -89,6 +96,12 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
    }
 
    enum pipe_format p_format = vk_format_to_pipe_format(view->vk.format);
+   if (p_format == PIPE_FORMAT_R64_UINT || p_format == PIPE_FORMAT_R64_SINT) {
+      struct kk_buffer *buffer = container_of(view->vk.buffer, struct kk_buffer, vk);
+      view->texel_buffer_gpu_id = vk_buffer_address(&buffer->vk, view->vk.offset);
+      *pBufferView = kk_buffer_view_to_handle(view);
+      return VK_SUCCESS;
+   }
    enum pipe_format native_format = kk_texel_buffer_native_format(p_format);
    bool rgb32 = native_format != p_format;
    p_format = native_format;

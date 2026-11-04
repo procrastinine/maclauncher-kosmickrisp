@@ -385,7 +385,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_lib;
 
-   if (dev->vk.enabled_features.shaderBufferInt64Atomics ||
+   if (dev->vk.enabled_features.shaderImageInt64Atomics ||
+       dev->vk.enabled_features.shaderBufferInt64Atomics ||
        dev->vk.enabled_features.shaderSharedInt64Atomics) {
       result = kk_alloc_bo(dev, &dev->vk.base, 65536 * sizeof(uint32_t), 64,
                            &dev->atomic64_locks);
