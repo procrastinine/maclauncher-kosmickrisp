@@ -469,6 +469,25 @@ kk_GetPhysicalDeviceImageFormatProperties2(
       }
    }
 
+   /* Metal exposes lossless/default or disabled compression, not an
+    * explicit fixed-rate format. Unsupported fixed-rate hints retain the
+    * default lossless policy, as allowed by the compression-control contract. */
+   const VkImageCompressionControlEXT *compression = vk_find_struct_const(
+      pImageFormatInfo->pNext, IMAGE_COMPRESSION_CONTROL_EXT);
+   bool compression_disabled = compression &&
+      (compression->flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
+   VkImageCompressionPropertiesEXT *compression_props = vk_find_struct(
+      pImageFormatProperties->pNext, IMAGE_COMPRESSION_PROPERTIES_EXT);
+   if (compression_props) {
+      bool optimize = !compression_disabled && kk_image_layout_can_optimize(
+         pdev, all_usage, pImageFormatInfo->tiling, pImageFormatInfo->flags,
+         p_format);
+      compression_props->imageCompressionFlags = optimize
+         ? VK_IMAGE_COMPRESSION_DEFAULT_EXT : VK_IMAGE_COMPRESSION_DISABLED_EXT;
+      compression_props->imageCompressionFixedRateFlags =
+         VK_IMAGE_COMPRESSION_FIXED_RATE_NONE_EXT;
+   }
+
    const unsigned plane_count =
       vk_format_get_plane_count(pImageFormatInfo->format);
 
@@ -547,6 +566,10 @@ kk_GetPhysicalDeviceImageFormatProperties2(
          host_props->optimalDeviceAccess =
             with_host_transfer == without_host_transfer;
          host_props->identicalMemoryLayout = host_props->optimalDeviceAccess;
+         if (compression_disabled) {
+            host_props->optimalDeviceAccess = true;
+            host_props->identicalMemoryLayout = true;
+         }
          break;
       }
       default:
@@ -859,6 +882,15 @@ kk_get_image_subresource_layout(struct kk_device *dev, struct kk_image *image,
       .arrayPitch = plane->layout.layer_stride_B,
       .depthPitch = 1u,
    };
+
+   VkImageCompressionPropertiesEXT *compression_props =
+      vk_find_struct(pLayout->pNext, IMAGE_COMPRESSION_PROPERTIES_EXT);
+   if (compression_props) {
+      compression_props->imageCompressionFlags = plane->layout.optimized_layout
+         ? VK_IMAGE_COMPRESSION_DEFAULT_EXT : VK_IMAGE_COMPRESSION_DISABLED_EXT;
+      compression_props->imageCompressionFixedRateFlags =
+         VK_IMAGE_COMPRESSION_FIXED_RATE_NONE_EXT;
+   }
 
    VkSubresourceHostMemcpySize *memcpy_size =
       vk_find_struct(pLayout, SUBRESOURCE_HOST_MEMCPY_SIZE_EXT);

@@ -279,7 +279,8 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
    layout->optimized_layout = kk_zero_init_optimized_layout(
       kk_image_layout_can_optimize(pdev, usage, image->tiling,
                                     image->create_flags, format),
-      initial_layout);
+      initial_layout) &&
+      !(image->compr_flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(
       usage, image->create_flags, supported_format->atomic);
    layout->create_flags = image->create_flags;
