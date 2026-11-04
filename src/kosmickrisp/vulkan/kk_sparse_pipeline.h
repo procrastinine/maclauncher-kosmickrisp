@@ -231,7 +231,8 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
       }
       modes |= stage_modes;
       *always_modes |= physical_modes;
-      if (infos[i].flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT)
+      if (infos[i].flags & (VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT |
+                            VK_SHADER_CREATE_DESCRIPTOR_BUFFER_BIT_MESA))
          *always_modes |= stage_modes;
    }
    /* The lazy native object represents a linked VS/CS pipeline. Standalone
