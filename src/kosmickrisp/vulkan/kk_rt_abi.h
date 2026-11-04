@@ -45,14 +45,14 @@ struct kk_rt_cps_context {
    float report_t;
    KK_RT_ABI_U32 report_kind;
    KK_RT_ABI_U32 report_accepted;
-   KK_RT_ABI_U32 reserved;
+   KK_RT_ABI_U32 hit_object_lo;
    KK_RT_ABI_U64 acceleration_structure;
    KK_RT_ABI_U32 flags;
    KK_RT_ABI_U32 cull_mask;
    KK_RT_ABI_U32 sbt_offset;
    KK_RT_ABI_U32 sbt_stride;
    KK_RT_ABI_U32 miss_index;
-   KK_RT_ABI_U32 reserved2;
+   KK_RT_ABI_U32 hit_object_hi;
    float origin[3];
    float tmin;
    float direction[3];
@@ -71,7 +71,7 @@ struct kk_rt_cps_context {
    KK_RT_ABI_U32 instance_id;
    KK_RT_ABI_U32 instance_custom_index;
    KK_RT_ABI_U32 hit_kind;
-   KK_RT_ABI_U32 reserved3;
+   KK_RT_ABI_U32 hit_object_mode;
    KK_RT_ABI_U64 embedded_sampler_table;
    KK_RT_ABI_U64 dispatch;
    KK_RT_ABI_U32 query_event;
