@@ -2364,10 +2364,21 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
          src_to_msl(ctx, lod);
          P(ctx, ")");
       }
+      /* Metal has no cube sample() overload that takes both level() and
+       * min_lod_clamp(), so a native cube LOD carries the minimum LOD in its
+       * level, as the sampler helpers do. */
+      bool min_lod_in_level = false;
       if (ddx && (tex->backend_flags & KK_SAMPLE_NATIVE_CUBE_LOD)) {
-         P(ctx, ", level(");
+         min_lod_in_level = min_lod_clamp != NULL;
+         P(ctx, min_lod_in_level ? ", level(max(float(" : ", level(");
          src_to_msl(ctx, nir_tex_get_src(tex, nir_tex_src_backend2));
-         P(ctx, ".x)");
+         if (min_lod_in_level) {
+            P(ctx, ".x), float(");
+            src_to_msl(ctx, min_lod_clamp);
+            P(ctx, ")))");
+         } else {
+            P(ctx, ".x)");
+         }
       } else if (ddx) {
          P(ctx, ", gradient%s(", texture_dim(tex->sampler_dim));
          src_to_msl(ctx, ddx);
@@ -2375,7 +2386,7 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
          src_to_msl(ctx, ddy);
          P(ctx, ")");
       }
-      if (min_lod_clamp) {
+      if (min_lod_clamp && !min_lod_in_level) {
          P(ctx, ", min_lod_clamp(");
          src_to_msl(ctx, min_lod_clamp);
          P(ctx, ")");
