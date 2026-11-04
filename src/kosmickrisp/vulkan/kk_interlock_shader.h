@@ -158,6 +158,20 @@ kk_interlock_trim_native_output(nir_builder *b, nir_intrinsic_instr *intr,
    return true;
 }
 
+/* A Mesh producer that writes no Layer and has no view mask declares no
+ * render_target_array_index, so the capture's Layer read has no rasterized
+ * source. Vulkan defines that Layer as 0, which the retained capture records
+ * as a constant field; read the same constant. */
+static bool
+kk_interlock_constant_layer(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_layer_id)
+      return false;
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def_replace(&intr->def, nir_imm_int(b, *(const uint32_t *)data));
+   return true;
+}
+
 static VkResult
 kk_interlock_compile_fragment(struct kk_device *dev, struct kk_shader *owner,
    nir_shader *original, const struct kk_shader *previous,
@@ -216,6 +230,13 @@ kk_interlock_compile_fragment(struct kk_device *dev, struct kk_shader *owner,
           dev->vk.enabled_features.floatRepresentation, state))
       nir_shader_intrinsics_pass(capture.shader, kk_depth_bounds_mesh_bias,
          nir_metadata_control_flow, NULL);
+   if (mesh) {
+      const struct kk_mesh_retained_field *layer =
+         &previous->mesh->info.retained_fields[KK_MESH_RETAINED_LAYER_FIELD];
+      if (layer->source == KK_MESH_RETAINED_FIELD_CONSTANT)
+         nir_shader_intrinsics_pass(capture.shader, kk_interlock_constant_layer,
+            nir_metadata_control_flow, (void *)&layer->offset);
+   }
    kk_interlock_compile_program(dev, shader, KK_INTERLOCK_CAPTURE,
       capture.shader, state, robustness);
 
