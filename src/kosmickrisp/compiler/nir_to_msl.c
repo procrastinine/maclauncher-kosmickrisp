@@ -414,6 +414,9 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
       alu_funclike(ctx, instr, "isnormal");
       break;
    /* Functions from <metal_math> */
+   case nir_op_fcanonicalize:
+      alu_src_to_msl(ctx, instr, 0);
+      break;
    case nir_op_iabs:
    case nir_op_fabs:
       alu_funclike_precise(ctx, instr, "abs");
@@ -2047,9 +2050,14 @@ jump_instr_to_msl(struct nir_to_msl_ctx *ctx, nir_jump_instr *jump)
    }
 }
 
+#include "kosmickrisp-float-controls.h"
+
 static const char *
 alu_fp_math_mode_pragma(struct nir_to_msl_ctx *ctx, const nir_alu_instr *alu)
 {
+   if (kk_float_control_flush_result(ctx, alu))
+      return "safe";
+
    unsigned fp_math_ctrl = alu->fp_math_ctrl;
 
    /* TODO_KOSMICKRISP Investigate why bcsel do not have inf nan preserve */
@@ -2098,6 +2106,8 @@ instr_to_msl(struct nir_to_msl_ctx *ctx, nir_instr *instr)
       P_IND(ctx, "t%d = ", alu->def.index);
       alu_to_msl(ctx, alu);
       P(ctx, ";\n");
+      if (kk_float_control_flush_result(ctx, alu))
+         kk_float_control_flush_msl(ctx, alu);
       if (math_mode)
          P_IND(ctx, "}\n");
       break;

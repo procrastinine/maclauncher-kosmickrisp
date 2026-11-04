@@ -175,7 +175,7 @@ kk_CreateDescriptorSetLayout(VkDevice device,
 
    uint32_t buffer_size = 0;
    uint32_t max_variable_descriptor_size = 0;
-   uint8_t dynamic_buffer_count = 0;
+   uint32_t dynamic_buffer_count = 0;
    for (uint32_t b = 0; b < num_bindings; b++) {
       /* We stashed the pCreateInfo->pBindings[] index (plus one) in the
        * immutable_samplers pointer.  Check for NULL (empty binding) and then
@@ -386,7 +386,7 @@ kk_GetDescriptorSetLayoutSupport(
    uint64_t non_variable_size = 0;
    uint32_t variable_stride = 0;
    uint32_t variable_count = 0;
-   uint8_t dynamic_buffer_count = 0;
+   uint32_t dynamic_buffer_count = 0;
    bool variable_is_inline_uniform_block = false;
 
    for (uint32_t i = 0; i < pCreateInfo->bindingCount; i++) {

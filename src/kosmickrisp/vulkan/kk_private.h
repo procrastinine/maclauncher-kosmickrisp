@@ -17,7 +17,7 @@
 
 #define KK_MAX_SETS                      32
 #define KK_MAX_PUSH_SIZE                 4096
-#define KK_MAX_DYNAMIC_BUFFERS           64
+#define KK_MAX_DYNAMIC_BUFFERS           128
 #define KK_MAX_RTS                       8
 #define KK_MAX_SAMPLES                   8
 #define KK_MIN_SSBO_ALIGNMENT            16
