@@ -184,7 +184,7 @@ kk_allocate_fd_memory(struct kk_device *dev, const VkMemoryAllocateInfo *info,
    if (pdev->mem_types[info->memoryTypeIndex].propertyFlags &
        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
       bo->cpu = mtl_get_contents(bo->map);
-   kk_device_add_buffer_to_residency_set(dev, bo->map);
+   kk_device_add_bo_to_residency_set(dev, bo);
    mem->bo = bo;
    if (importing)
       close(import->fd);
@@ -391,8 +391,7 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
       result = kk_allocate_fd_memory(dev, pAllocateInfo, fd_info, mem);
       if (result != VK_SUCCESS)
          goto fail_alloc;
-      *pMem = kk_device_memory_to_handle(mem);
-      return VK_SUCCESS;
+      goto set_priority;
    }
 
    simple_mtx_init(&mem->transient_mutex, mtx_plain);
@@ -480,10 +479,13 @@ fail_import:
       }
    }
 
-   const VkMemoryPriorityAllocateInfoEXT *priority_info =
-      vk_find_struct_const(pAllocateInfo->pNext, MEMORY_PRIORITY_ALLOCATE_INFO_EXT);
-   kk_device_memory_set_priority(dev, mem,
-                                 priority_info ? priority_info->priority : 0.5f);
+set_priority:
+   {
+      const VkMemoryPriorityAllocateInfoEXT *priority_info =
+         vk_find_struct_const(pAllocateInfo->pNext, MEMORY_PRIORITY_ALLOCATE_INFO_EXT);
+      kk_device_memory_set_priority(dev, mem,
+                                    priority_info ? priority_info->priority : 0.5f);
+   }
 
    *pMem = kk_device_memory_to_handle(mem);
 
