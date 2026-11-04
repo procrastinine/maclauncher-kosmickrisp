@@ -545,5 +545,21 @@
     "performance": true,
     "performance_reason": "Preserve restricted-depth D3D Texture3D UAV semantics: the pinned vkd3d-proton fallback uses the full depth and is not equivalent, so disabling is not established safe for the required D3D view contract.",
     "off_consequence": "D3D Texture3D FirstWSlice/WSize UAV semantics are lost; vkd3d-proton reports an unhandled depth view and uses the full depth while its reported SM/FL and device creation remain unchanged."
+  },
+  {
+    "name": "maintenance11_views",
+    "description": "Single-layer image dimension alias guarantees.",
+    "cost_class": "native views / typed descriptor selection",
+    "cost_note": "Native Metal plain and array views share the existing backing; selected shader accesses choose the appropriate typed descriptor address. Representative array storage load lowering adds one descriptor load and four pre-optimization ALU operations. Runtime timing is unmeasured.",
+    "extensions": [
+      "VK_KHR_maintenance11"
+    ],
+    "features": [
+      "maintenance11"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "Preserve D3D single-layer dimension reinterpretation: the pinned vkd3d-proton legacy natural-view path has no maintenance11 guarantee or established equivalent native Metal argument-type fallback.",
+    "off_consequence": "D3D single-layer 2D/2D-array descriptor reinterpretation loses its maintenance11 guarantee even though reported SM/FL and device creation are unchanged; DXVK uploads fall back to the graphics queue."
   }
 ]
