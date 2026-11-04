@@ -5,6 +5,7 @@
  */
 
 #include "mtl_argument_table.h"
+#include "mtl_replay_autorelease.h"
 
 #include <Metal/MTL4ArgumentTable.h>
 #include <Metal/MTLDevice.h>
@@ -12,19 +13,19 @@
 mtl_argument_table_descriptor *
 mtl_new_argument_table_descriptor()
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       return [MTL4ArgumentTableDescriptor new];
-   }
+   });
 }
 
 void
 mtl_set_max_buffer_binding_count(mtl_argument_table_descriptor *descriptor,
                                  uint32_t count)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4ArgumentTableDescriptor *desc = (MTL4ArgumentTableDescriptor *)descriptor;
       desc.maxBufferBindCount = count;
-   }
+   });
 }
 
 /* MTLArgumentTable */
@@ -32,18 +33,18 @@ mtl_argument_table *
 mtl_new_argument_table(mtl_device *device,
                        mtl_argument_table_descriptor *descriptor)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       id<MTLDevice> dev = (id<MTLDevice>)device;
       MTL4ArgumentTableDescriptor *desc = (MTL4ArgumentTableDescriptor *)descriptor;
       return [dev newArgumentTableWithDescriptor:desc error:NULL];
-   }
+   });
 }
 
 void
 mtl_set_address(mtl_argument_table *table, uint64_t address, uint32_t binding)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       id<MTL4ArgumentTable> t = (id<MTL4ArgumentTable>)table;
       [t setAddress:address atIndex:binding];
-   }
+   });
 }

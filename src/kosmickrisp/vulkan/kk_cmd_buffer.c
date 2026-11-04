@@ -355,7 +355,7 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
       cmd->transient_safe = kk_whole_pass_transient_safe(kk_cmd_buffer_device(cmd),
                                                          &source, 1);
       if (!cmd->enqueue_commands && !cmd->deferred_render_chain)
-         vk_cmd_queue_execute(&cmd->vk.cmd_queue, commandBuffer,
+         mtl_execute_command_queue(&cmd->vk.cmd_queue, commandBuffer,
                               &kk_cmd_buffer_device(cmd)->vk.dispatch_table);
    }
    end_recording(cmd);

@@ -5,6 +5,7 @@
  */
 
 #include "mtl_render_state.h"
+#include "mtl_replay_autorelease.h"
 
 #include "mtl_format.h"
 
@@ -21,69 +22,69 @@
 mtl_render_pass_descriptor *
 mtl_new_render_pass_descriptor(void)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       return [MTL4RenderPassDescriptor new];
-   }
+   });
 }
 
 mtl_render_pass_attachment_descriptor *
 mtl_render_pass_descriptor_get_color_attachment(
    mtl_render_pass_descriptor *descriptor, uint32_t index)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       return desc.colorAttachments[index];
-   }
+   });
 }
 
 mtl_render_pass_attachment_descriptor *
 mtl_render_pass_descriptor_get_depth_attachment(
    mtl_render_pass_descriptor *descriptor)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       return desc.depthAttachment;
-   }
+   });
 }
 
 mtl_render_pass_attachment_descriptor *
 mtl_render_pass_descriptor_get_stencil_attachment(
    mtl_render_pass_descriptor *descriptor)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       return desc.stencilAttachment;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_texture(
    mtl_render_pass_attachment_descriptor *descriptor, mtl_texture *texture)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
       desc.texture = (id<MTLTexture>)texture;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_level(
    mtl_render_pass_attachment_descriptor *descriptor, uint32_t level)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
       desc.level = level;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_slice(
    mtl_render_pass_attachment_descriptor *descriptor, uint32_t slice)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
       desc.slice = slice;
-   }
+   });
 }
 
 void
@@ -91,10 +92,10 @@ mtl_render_pass_attachment_descriptor_set_load_action(
    mtl_render_pass_attachment_descriptor *descriptor,
    enum mtl_load_action action)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
       desc.loadAction = (MTLLoadAction)action;
-   }
+   });
 }
 
 void
@@ -102,10 +103,10 @@ mtl_render_pass_attachment_descriptor_set_store_action(
    mtl_render_pass_attachment_descriptor *descriptor,
    enum mtl_store_action action)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
       desc.storeAction = (MTLStoreAction)action;
-   }
+   });
 }
 
 void
@@ -113,130 +114,130 @@ mtl_render_pass_attachment_descriptor_set_clear_color(
    mtl_render_pass_attachment_descriptor *descriptor,
    struct mtl_clear_color clear_color)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassColorAttachmentDescriptor *desc = (MTLRenderPassColorAttachmentDescriptor *)descriptor;
       desc.clearColor = MTLClearColorMake(clear_color.red, clear_color.green, clear_color.blue, clear_color.alpha);
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_clear_depth(
    mtl_render_pass_attachment_descriptor *descriptor, double depth)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassDepthAttachmentDescriptor *desc = (MTLRenderPassDepthAttachmentDescriptor *)descriptor;
       desc.clearDepth = depth;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_clear_stencil(mtl_render_pass_attachment_descriptor *descriptor,
                                                         uint32_t stencil)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassStencilAttachmentDescriptor *desc = (MTLRenderPassStencilAttachmentDescriptor *)descriptor;
       desc.clearStencil = stencil;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_depth_resolve_filter(mtl_render_pass_attachment_descriptor *descriptor,
                                                                enum mtl_depth_resolve_filter filter)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassDepthAttachmentDescriptor *desc = (MTLRenderPassDepthAttachmentDescriptor *)descriptor;
       desc.depthResolveFilter = (MTLMultisampleDepthResolveFilter)filter;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_stencil_resolve_filter(mtl_render_pass_attachment_descriptor *descriptor,
                                                                  enum mtl_stencil_resolve_filter filter)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassStencilAttachmentDescriptor *desc = (MTLRenderPassStencilAttachmentDescriptor *)descriptor;
       desc.stencilResolveFilter = (MTLMultisampleStencilResolveFilter)filter;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_resolve_texture(mtl_render_pass_attachment_descriptor *descriptor,
                                                           mtl_texture *resolve_texture)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
       desc.resolveTexture = resolve_texture;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_resolve_level(mtl_render_pass_attachment_descriptor *descriptor,
                                                         uint32_t resolve_level)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
       desc.resolveLevel = resolve_level;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_resolve_slice(mtl_render_pass_attachment_descriptor *descriptor,
                                                         uint32_t resolve_slice)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
       desc.resolveSlice = resolve_slice;
-   }
+   });
 }
 
 void
 mtl_render_pass_attachment_descriptor_set_resolve_depth_plane(mtl_render_pass_attachment_descriptor *descriptor,
                                                               uint32_t resolve_depth_plane)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
       desc.resolveDepthPlane = resolve_depth_plane;
-   }
+   });
 }
 
 void
 mtl_render_pass_descriptor_set_render_target_array_length(mtl_render_pass_descriptor *descriptor,
                                                           uint32_t length)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       desc.renderTargetArrayLength = length;
-   }
+   });
 }
 
 void
 mtl_render_pass_descriptor_set_render_target_width(mtl_render_pass_descriptor *descriptor,
                                                    uint32_t width)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       desc.renderTargetWidth = width;
-   }
+   });
 }
 
 void
 mtl_render_pass_descriptor_set_render_target_height(mtl_render_pass_descriptor *descriptor,
                                                     uint32_t height)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       desc.renderTargetHeight = height;
-   }
+   });
 }
 
 void
 mtl_render_pass_descriptor_set_default_raster_sample_count(mtl_render_pass_descriptor *descriptor,
                                                            uint32_t sample_count)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       desc.defaultRasterSampleCount = sample_count;
-   }
+   });
 }
 
 void
@@ -245,7 +246,7 @@ mtl_render_pass_descriptor_set_sample_positions(
    const struct mtl_sample_position *positions,
    uint32_t count)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       if (count > 0) {
          MTLSamplePosition pos[count];
@@ -256,27 +257,27 @@ mtl_render_pass_descriptor_set_sample_positions(
       } else {
          [desc setSamplePositions:NULL count:count];
       }
-   }
+   });
 }
 
 void
 mtl_render_pass_descriptor_set_visibility_buffer(mtl_render_pass_descriptor *descriptor,
                                                  mtl_buffer *visibility_buffer)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       id<MTLBuffer> buffer = (id<MTLBuffer>)visibility_buffer;
       desc.visibilityResultBuffer = buffer;
-   }
+   });
 }
 
 /* Stencil descriptor */
 mtl_stencil_descriptor *
 mtl_new_stencil_descriptor()
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       return [MTLStencilDescriptor new];
-   }
+   });
 }
 
 /* TODO_KOSMICKRISP Move this to map */
@@ -309,108 +310,108 @@ map_vk_stencil_op_to_mtl_stencil_operation(VkStencilOp op)
 void
 mtl_stencil_descriptor_set_stencil_failure_operation(mtl_stencil_descriptor *descriptor, VkStencilOp op)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
       desc.stencilFailureOperation = map_vk_stencil_op_to_mtl_stencil_operation(op);
-   }
+   });
 }
 
 void
 mtl_stencil_descriptor_set_depth_failure_operation(mtl_stencil_descriptor *descriptor, VkStencilOp op)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
       desc.depthFailureOperation = map_vk_stencil_op_to_mtl_stencil_operation(op);
-   }
+   });
 }
 
 void
 mtl_stencil_descriptor_set_depth_stencil_pass_operation(mtl_stencil_descriptor *descriptor, VkStencilOp op)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
       desc.depthStencilPassOperation = map_vk_stencil_op_to_mtl_stencil_operation(op);
-   }
+   });
 }
 
 void
 mtl_stencil_descriptor_set_stencil_compare_function(mtl_stencil_descriptor *descriptor, VkCompareOp op)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
       desc.stencilCompareFunction = (MTLCompareFunction)vk_compare_op_to_mtl_compare_function(op);
-   }
+   });
 }
 
 void
 mtl_stencil_descriptor_set_read_mask(mtl_stencil_descriptor *descriptor, uint32_t mask)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
       desc.readMask = mask;
-   }
+   });
 }
 
 void
 mtl_stencil_descriptor_set_write_mask(mtl_stencil_descriptor *descriptor, uint32_t mask)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
       desc.writeMask = mask;
-   }
+   });
 }
 
 /* Depth stencil descriptor */
 mtl_depth_stencil_descriptor *
 mtl_new_depth_stencil_descriptor()
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       return [MTLDepthStencilDescriptor new];
-   }
+   });
 }
 
 void
 mtl_depth_stencil_descriptor_set_depth_compare_function(mtl_depth_stencil_descriptor *descriptor, VkCompareOp op)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
       desc.depthCompareFunction = (MTLCompareFunction)vk_compare_op_to_mtl_compare_function(op);
-   }
+   });
 }
 
 void
 mtl_depth_stencil_descriptor_set_depth_write_enabled(mtl_depth_stencil_descriptor *descriptor, bool enable_write)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
       desc.depthWriteEnabled = enable_write;
-   }
+   });
 }
 
 void
 mtl_depth_stencil_descriptor_set_back_face_stencil(mtl_depth_stencil_descriptor *descriptor, mtl_stencil_descriptor *stencil_descriptor)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
       desc.backFaceStencil = (MTLStencilDescriptor *)stencil_descriptor;
-   }
+   });
 }
 
 void
 mtl_depth_stencil_descriptor_set_front_face_stencil(mtl_depth_stencil_descriptor *descriptor, mtl_stencil_descriptor *stencil_descriptor)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
       desc.frontFaceStencil = (MTLStencilDescriptor *)stencil_descriptor;
-   }
+   });
 }
 
 mtl_depth_stencil_state *
 mtl_new_depth_stencil_state(mtl_device *device, mtl_depth_stencil_descriptor *descriptor)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       id<MTLDevice> dev = (id<MTLDevice>)device;
       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
       return [dev newDepthStencilStateWithDescriptor:desc];
-   }
+   });
 }

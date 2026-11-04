@@ -202,7 +202,7 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
             *drawable = mtl_retain(source->drawable);
          }
       }
-      vk_cmd_queue_execute(&source->vk.cmd_queue, rerecord_handle,
+      mtl_execute_command_queue(&source->vk.cmd_queue, rerecord_handle,
                            &dev->vk.dispatch_table);
       if (!rerecord->whole_pass.suspended) {
          (*consumed)++;

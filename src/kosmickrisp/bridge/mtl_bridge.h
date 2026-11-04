@@ -20,6 +20,7 @@
  * */
 
 #include "mtl_types.h"
+#include "mtl_replay_autorelease.h"
 
 #include "mtl_argument_table.h"
 #include "mtl_buffer.h"
