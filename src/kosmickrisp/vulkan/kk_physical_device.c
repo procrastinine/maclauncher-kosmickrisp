@@ -834,7 +834,7 @@ kk_get_device_properties(
       .maxMeshOutputVertices = 256,
       .maxMeshOutputPrimitives = 512,
       .maxMeshOutputLayers = 8,
-      .maxMeshMultiviewViewCount = KK_MAX_MULTIVIEW_VIEW_COUNT,
+      .maxMeshMultiviewViewCount = KK_MAX_MESH_MULTIVIEW_VIEW_COUNT,
       .meshOutputPerVertexGranularity = 1,
       .meshOutputPerPrimitiveGranularity = 1,
       .maxPreferredTaskWorkGroupInvocations = 32,

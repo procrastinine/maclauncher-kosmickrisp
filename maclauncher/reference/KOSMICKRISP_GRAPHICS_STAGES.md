@@ -14,6 +14,6 @@ Geometry and tessellation use the existing Poly compute execution paths. Vertex 
 
 Vertex-only pipelines retain native vertex amplification. Poly multiview draws use one raster amplification per replay. The per-view index occupies an optional tail in the per-draw upload; ordinary draws retain their previous upload sizes and launch count. Graphics cache keys include a nonzero view mask even when the pipeline has no fragment shader.
 
-Pipeline statistics count actual replayed work. Multiview query results and availability follow Vulkan's consecutive-query and summed-result rules. Transform feedback remains available for ordinary draws; Vulkan prohibits active transform feedback inside a multiview render pass. Mesh multiview is not exposed by this adaptation.
+Pipeline statistics count actual replayed work. Multiview query results and availability follow Vulkan's consecutive-query and summed-result rules. Transform feedback remains available for ordinary draws; Vulkan prohibits active transform feedback inside a multiview render pass. Mesh multiview uses the separate Mesh route, which replays each view and supports up to 8 views.
 
 The [subgroup module](../../src/kosmickrisp/) and [Poly multiview module](../../src/kosmickrisp/) use the pinned Mesa source and the existing compiler, draw, descriptor and query paths.

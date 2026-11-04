@@ -37,6 +37,11 @@
    (KK_MAX_PUSH_DESCRIPTORS * KK_MAX_DESCRIPTOR_SIZE)
 #define KK_SSBO_BOUNDS_CHECK_ALIGNMENT 4
 #define KK_MAX_MULTIVIEW_VIEW_COUNT    32
+/* Mesh multiview replays the complete Mesh draw once per view. Eight views
+ * cover D3D12 view instancing (four views) and stay below 32, where
+ * dEQP-VK.mesh_shader.ext.properties.max_view_index builds its view mask as
+ * (1u << count) - 1 and the shift by 32 yields an empty mask. */
+#define KK_MAX_MESH_MULTIVIEW_VIEW_COUNT 8
 #define KK_TEXTURE_BUFFER_WIDTH        (1u << 14)
 #define KK_MAX_OCCLUSION_QUERIES       (32768)
 #define KK_MIN_SAMPLE_LOCATION         (0.0f)

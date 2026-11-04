@@ -461,7 +461,8 @@ sized from the shader declaration. Prefix sums of the actual child grids map
 Mesh groups back to their parent Task group.
 
 Mesh multiview executes each original view with its explicit layer and view
-index, supporting up to 32 views. The feature and limit follow the selected
+index, supporting up to 8 views (``maxMeshMultiviewViewCount``); other
+multiview draws support up to 32 views. The feature and limit follow the selected
 Mesh entry on each family. Attachment clears use explicit layer rectangles
 with a single-view native pipeline.
 
