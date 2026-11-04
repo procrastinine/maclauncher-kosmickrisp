@@ -357,5 +357,24 @@
     "performance": true,
     "performance_reason": "Workgroup initialization is required by translator shader semantics; retain it for DXVK/vkd3d device creation and shader translation. Shaders without requested shared initialization emit no zeroing stores or barriers.",
     "off_consequence": "DXVK/vkd3d device creation fails when required workgroup-zero support is unavailable; the extension and promoted shaderZeroInitializeWorkgroupMemory feature are hidden. Allocation zero initialization and robustness are unchanged."
+  },
+  {
+    "name": "depth_bias_control",
+    "description": "Exact and alternate-representation depth bias after primitive clipping.",
+    "cost_class": "native default / geometry capture and replay",
+    "cost_note": "Default format-dependent bias uses Metal state. Selected exact or alternate representations capture geometry, run shared polygon compute and replay rasterization after clipping. Static disabled/default-bias pipelines retain native shaders; dynamic factors can retain capture/native siblings. Runtime cost is unmeasured.",
+    "extensions": [
+      "VK_EXT_depth_bias_control"
+    ],
+    "features": [
+      "depthBiasControl",
+      "leastRepresentableValueForceUnormRepresentation",
+      "floatRepresentation",
+      "depthBiasExact"
+    ],
+    "properties": [],
+    "performance": false,
+    "performance_reason": "DXVK and vkd3d-proton treat depth-bias control as optional; disabling it does not lower their shader model or feature level or prevent device creation.",
+    "off_consequence": "No D3D shader-model, feature-level or translator-device-creation loss in DXVK or vkd3d-proton; exact and alternate-representation Vulkan depth bias is unavailable and translators retain their default bias path."
   }
 ]
