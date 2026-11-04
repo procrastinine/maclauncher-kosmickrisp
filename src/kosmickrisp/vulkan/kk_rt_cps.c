@@ -358,6 +358,21 @@ kk_rt_split_shader_mode(nir_shader *shader, void *mem_ctx,
    for (uint32_t i = 0; i <= parts->resume_count; ++i) {
       nir_shader *part = i ? parts->resumes[i - 1] : shader;
       parts->scratch_size = MAX2(parts->scratch_size, part->scratch_size);
+      /* Stack packing leaves nir_shader::scratch_size at the last call's
+       * frame, so the frame must also cover every call site's stack size. */
+      nir_foreach_function_impl(impl, part) {
+         nir_foreach_block(block, impl) {
+            nir_foreach_instr(instr, block) {
+               if (instr->type != nir_instr_type_intrinsic)
+                  continue;
+               nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+               if (in->intrinsic == nir_intrinsic_rt_trace_ray ||
+                   in->intrinsic == nir_intrinsic_rt_execute_callable ||
+                   in->intrinsic == nir_intrinsic_rt_resume)
+                  parts->scratch_size = MAX2(parts->scratch_size, nir_intrinsic_stack_size(in));
+            }
+         }
+      }
       nir_shader_intrinsics_pass(part, lower_part, nir_metadata_none, NULL);
       NIR_PASS(_, part, nir_opt_dead_cf);
       nir_validate_shader(part, "Kosmic RT continuation");
