@@ -16,6 +16,7 @@
 #include "kk_instance.h"
 #include "kk_physical_device.h"
 #include "kk_shader.h"
+#include "kk_interlock_device.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/mtl_device.h"
@@ -340,6 +341,10 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_sampler_heap;
 
+   result = kk_interlock_device_init(dev);
+   if (result != VK_SUCCESS)
+      goto fail_lib;
+
    if (dev->vk.enabled_features.shaderBufferInt64Atomics ||
        dev->vk.enabled_features.shaderSharedInt64Atomics) {
       result = kk_alloc_bo(dev, &dev->vk.base, 65536 * sizeof(uint32_t), 64,
@@ -361,6 +366,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
 
    return VK_SUCCESS;
 
+fail_lib:
+   kk_device_finish_lib(dev);
 fail_sampler_heap:
    kk_destroy_sampler_heap(dev, &dev->samplers);
 fail_query_table:
@@ -408,6 +415,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    /* Meta first since it may destroy Vulkan objects */
    kk_device_finish_meta(dev);
    kk_device_finish_lib(dev);
+   kk_interlock_device_finish(dev);
    kk_query_table_finish(dev, &dev->occlusion_queries);
    kk_destroy_sampler_heap(dev, &dev->samplers);
 

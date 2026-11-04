@@ -136,6 +136,8 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
       mtl_set_max_buffer_binding_count(desc, 3u);
       cmd->argument_table = mtl_new_argument_table(dev->mtl_handle, desc);
       mtl_set_address(cmd->argument_table, dev->samplers.table.bo->gpu, 1u);
+      if (dev->interlock_guard)
+         mtl_set_address(cmd->argument_table, dev->interlock_guard->gpu, KK_ARGUMENT_INTERLOCK_GUARD);
       mtl_release(desc);
    }
 

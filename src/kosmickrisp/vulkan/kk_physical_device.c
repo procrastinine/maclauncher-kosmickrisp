@@ -1206,6 +1206,10 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
 
    struct vk_features supported_features;
    kk_get_device_features(pdev, &supported_extensions, &supported_features);
+   if (pdev->info.gpu_apple_family >= 7) {
+      supported_extensions.EXT_fragment_shader_interlock = true;
+      supported_features.fragmentShaderSampleInterlock = true;
+   }
    kk_attachment_device_features(pdev, &supported_extensions, &supported_features);
    kk_zero_init_features(&supported_extensions, &supported_features);
 

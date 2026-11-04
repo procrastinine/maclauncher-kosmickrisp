@@ -108,6 +108,7 @@ struct kk_device {
    /* Geomtry heap */
    struct kk_bo *atomic64_locks;
    struct kk_bo *heap;
+   struct kk_bo *interlock_guard;
    util_once_flag heap_init_once;
 };
 
