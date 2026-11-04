@@ -111,6 +111,7 @@ mtl_compiler_finish_cache(mtl_compiler *compiler)
 @end
 
 static char kk_compile_queue_association, kk_task_queue_association;
+static char kk_predicted_queue_association;
 static unsigned kk_background_pending;
 /* Last start or end of a demand (non-background) Metal compile, from
  * kk_archive_now(). Deferred builds start only after this much quiet:
@@ -154,7 +155,7 @@ kk_pin_worker_image(void)
    pthread_mutex_t state;
    pthread_cond_t retired;
    pthread_t worker;
-   bool callback_entered, payload_claimed, payload_retired, frontend;
+   bool callback_entered, payload_claimed, payload_retired, frontend, predicted;
 }
 - (void)retirePayload:(BOOL)onlyQueued;
 - (BOOL)payloadRetired;
@@ -263,8 +264,9 @@ kk_pin_worker_image(void)
       pthread_mutex_lock(&kk_compile_queue_lock);
       /* A deferred build waits while demand compiles run and until they have
        * been quiet for KK_BACKGROUND_QUIET_NS. A waiter needing a build runs
-       * it itself or marks the queue urgent; cancellation also wakes it. */
-      while (!frontend && !ownerQueue->urgent && !self.cancelled) {
+       * it itself or marks the queue urgent; cancellation also wakes it. A
+       * predicted build starts at once on its own queue. */
+      while (!frontend && !predicted && !ownerQueue->urgent && !self.cancelled) {
          if (ownerQueue->foreground) {
             pthread_cond_wait(&kk_compile_queue_changed, &kk_compile_queue_lock);
             continue;
@@ -340,24 +342,29 @@ kk_foreground_cleanup(void **token)
 
 /* Native miss scheduling only: cached deserialization stays on its original
  * synchronous path. Never retain caller create-info or feedback pointers. */
+/* Predicted builds (pipelines the application bound in an earlier run) use a
+ * second queue of two utility workers that demand compiles never suspend, so
+ * they are ready before their first bind instead of compiling on the binding
+ * thread. */
 static void *
 kk_compiler_submit(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),
-   void (*cleanup)(void *), bool frontend)
+   void (*cleanup)(void *), bool frontend, bool predicted)
 {
    @autoreleasepool {
       pthread_mutex_lock(&kk_compile_queue_lock);
-      KKCompileQueue *queue = objc_getAssociatedObject((id)compiler, &kk_compile_queue_association);
+      void *association = predicted ? &kk_predicted_queue_association : &kk_compile_queue_association;
+      KKCompileQueue *queue = objc_getAssociatedObject((id)compiler, association);
       if (!queue) {
          if (!kk_pin_worker_image()) { pthread_mutex_unlock(&kk_compile_queue_lock); return NULL; }
          queue = [[KKCompileQueue alloc] init];
          if (queue) {
             NSUInteger cores = MIN((NSUInteger)8, [NSProcessInfo processInfo].activeProcessorCount);
-            queue.maxConcurrentOperationCount = cores > 1 ? cores - 1 : 1;
+            queue.maxConcurrentOperationCount = predicted ? MIN((NSUInteger)2, cores) : cores > 1 ? cores - 1 : 1;
             /* A queue's service level is also the floor for its operations. */
-            queue.qualityOfService = NSQualityOfServiceBackground;
-            queue.name = @"KosmicKrisp compiler";
-            objc_setAssociatedObject((id)compiler, &kk_compile_queue_association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            queue.qualityOfService = predicted ? NSQualityOfServiceUtility : NSQualityOfServiceBackground;
+            queue.name = predicted ? @"KosmicKrisp predicted builds" : @"KosmicKrisp compiler";
+            objc_setAssociatedObject((id)compiler, association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [queue release];
          }
       }
@@ -375,9 +382,11 @@ kk_compiler_submit(mtl_compiler *compiler, void *data,
       operation->cleanup = cleanup;
       operation->ownerQueue = [queue retain];
       operation->frontend = frontend;
+      operation->predicted = predicted;
       /* Deferred builds yield the CPU and the compiler service to the
        * application; a waiter runs or raises the one it needs. */
-      operation.qualityOfService = frontend ? NSQualityOfServiceUserInitiated : NSQualityOfServiceBackground;
+      operation.qualityOfService = frontend ? NSQualityOfServiceUserInitiated :
+         predicted ? NSQualityOfServiceUtility : NSQualityOfServiceBackground;
       if (frontend) {
          operation.queuePriority = NSOperationQueuePriorityVeryHigh;
          ++queue->urgent;
@@ -398,7 +407,15 @@ mtl_compiler_submit(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),
    void (*cleanup)(void *))
 {
-   return kk_compiler_submit(compiler, data, execute, failed, cleanup, false);
+   return kk_compiler_submit(compiler, data, execute, failed, cleanup, false, false);
+}
+
+void *
+mtl_compiler_submit_predicted(mtl_compiler *compiler, void *data,
+   void (*execute)(void *), void (*failed)(void *, const char *),
+   void (*cleanup)(void *))
+{
+   return kk_compiler_submit(compiler, data, execute, failed, cleanup, false, true);
 }
 
 void
@@ -602,7 +619,7 @@ mtl_new_library_pair(mtl_compiler *compiler,
       @try {
          if (!work[0].result && !kk_background_thread)
             task = kk_compiler_submit(compiler, &work[0], kk_library_work_execute,
-               kk_library_work_failed, kk_library_work_cleanup, true);
+               kk_library_work_failed, kk_library_work_cleanup, true, false);
          if (!task && !work[0].result) kk_library_work_execute(&work[0]);
          if (!work[1].result) kk_library_work_execute(&work[1]);
       } @catch (NSException *exception) {

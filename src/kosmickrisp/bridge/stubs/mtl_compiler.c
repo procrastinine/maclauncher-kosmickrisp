@@ -197,6 +197,9 @@ void mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit) {}
 void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),
    void (*cleanup)(void *)) { return NULL; }
+void *mtl_compiler_submit_predicted(mtl_compiler *compiler, void *data,
+   void (*execute)(void *), void (*failed)(void *, const char *),
+   void (*cleanup)(void *)) { return NULL; }
 void mtl_compiler_task_wait(void *task) {}
 void mtl_compiler_task_cancel(void *task) {}
 enum mtl_compiler_join mtl_compiler_task_join(void *task) { return MTL_COMPILER_JOIN_NONE; }

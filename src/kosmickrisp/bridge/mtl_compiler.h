@@ -129,6 +129,12 @@ void mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit);
 void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),
    void (*cleanup)(void *));
+/* As mtl_compiler_submit, for a build the application is expected to bind
+ * soon: it starts at once on two utility workers that demand compiles do not
+ * pause. */
+void *mtl_compiler_submit_predicted(mtl_compiler *compiler, void *data,
+   void (*execute)(void *), void (*failed)(void *, const char *),
+   void (*cleanup)(void *));
 void mtl_compiler_task_wait(void *task);
 void mtl_compiler_task_cancel(void *task);
 /* How a wait completed a task: no wait, ran an unentered payload on the

@@ -8,9 +8,25 @@
 #include "vk_common_entrypoints.h"
 #include "vk_pipeline.h"
 #include "util/os_time.h"
+#include "kk_compiler_cache.h"
+#include "util/disk_cache_os.h"
+#include "kk_physical_device.h"
+#define XXH_INLINE_ALL
+#include "util/xxhash.h"
 #include <pthread.h>
 
 _Thread_local bool kk_defer_compute;
+
+/* Deferred builds an application binds are remembered per application in the
+ * Metal archive's disk namespace, by a digest of their MSL. In a later run
+ * those builds are predicted: they start at once on the predicted-build queue
+ * and are usually ready before their first bind, instead of compiling on the
+ * binding thread. A device thread loads the set and stores new first binds;
+ * the bind path only claims a slot and copies the digest. */
+#define KK_BOUND_LIMIT 4096
+#define KK_BOUND_STORE_NS 2000000000ull
+struct kk_bound_id { uint8_t bytes[16]; };
+struct kk_predicted { unsigned count; struct kk_bound_id ids[]; };
 
 struct kk_async_compute_owner {
    pthread_mutex_t mutex;
@@ -18,6 +34,13 @@ struct kk_async_compute_owner {
    unsigned active;
    struct kk_async_compute *retired, *jobs;
    bool stopping;
+   struct kk_device *dev;
+   pthread_t bound_thread;
+   pthread_cond_t bound_wake;
+   bool bound_thread_started, bound_stop;
+   struct kk_predicted *predicted; /* published once by the bound-set thread */
+   unsigned bound_count;           /* first-bind slots claimed */
+   struct { struct kk_bound_id id; unsigned ready; } bound[KK_BOUND_LIMIT];
 };
 
 struct kk_async_compute {
@@ -38,6 +61,8 @@ struct kk_async_compute {
     * copy of the allocation callbacks, is set when the last shader reference
     * goes away first. */
    bool retired, has_allocator;
+   bool has_id, predicted;
+   struct kk_bound_id id;
    void (*destroy)(struct vk_device *, struct kk_shader *, const VkAllocationCallbacks *);
    VkAllocationCallbacks allocator;
 };
@@ -177,6 +202,109 @@ kk_async_compute_drain(struct kk_device *dev)
    }
 }
 
+static int
+bound_id_compare(const void *a, const void *b)
+{
+   return memcmp(a, b, sizeof(struct kk_bound_id));
+}
+
+static void
+job_identify(struct kk_async_compute *job)
+{
+   if (job->has_id) return;
+   const char *code = job->shader->msl_data[MESA_SHADER_COMPUTE].code;
+   if (!code) return;
+   XXH128_hash_t hash = XXH3_128bits(code, strlen(code));
+   memcpy(job->id.bytes, &hash.low64, 8);
+   memcpy(job->id.bytes + 8, &hash.high64, 8);
+   job->has_id = true;
+}
+
+/* First bind of this build, once per build: no lock or wait. */
+static void
+job_record_bind(struct kk_async_compute *job)
+{
+   struct kk_async_compute_owner *owner = job->owner;
+   job_identify(job);
+   if (!job->has_id) return;
+   unsigned slot = p_atomic_inc_return(&owner->bound_count) - 1;
+   if (slot >= KK_BOUND_LIMIT) return;
+   owner->bound[slot].id = job->id;
+   p_atomic_set(&owner->bound[slot].ready, 1);
+}
+
+#ifdef ENABLE_SHADER_CACHE
+/* Stores the loaded set plus every first bind recorded so far; returns how
+ * many recorded slots the stored set covers. */
+static unsigned
+bound_store(struct kk_async_compute_owner *owner, struct disk_cache *disk,
+            const cache_key parent, uint64_t *sequence, unsigned stored)
+{
+   unsigned count = MIN2(p_atomic_read(&owner->bound_count), KK_BOUND_LIMIT);
+   unsigned ready = stored;
+   while (ready < count && p_atomic_read(&owner->bound[ready].ready)) ++ready;
+   if (ready == stored) return stored;
+   const struct kk_predicted *loaded = owner->predicted;
+   unsigned previous = loaded ? loaded->count : 0;
+   struct kk_bound_id *ids = malloc((ready + previous) * sizeof(*ids));
+   if (!ids) return stored;
+   for (unsigned i = 0; i < ready; ++i) ids[i] = owner->bound[i].id;
+   if (previous) memcpy(ids + ready, loaded->ids, previous * sizeof(*ids));
+   unsigned total = ready + previous, unique = 0;
+   qsort(ids, total, sizeof(*ids), bound_id_compare);
+   for (unsigned i = 0; i < total; ++i)
+      if (!unique || bound_id_compare(&ids[unique - 1], &ids[i])) ids[unique++] = ids[i];
+   unique = MIN2(unique, KK_BOUND_LIMIT);
+   kk_compiler_index_store(disk, parent, sequence, ids, unique * sizeof(*ids));
+   free(ids);
+   return ready;
+}
+
+static void *
+bound_thread_main(void *data)
+{
+   struct kk_async_compute_owner *owner = data;
+   struct kk_physical_device *pdev = kk_device_physical(owner->dev);
+   pthread_setname_np("KosmicKrisp bound builds");
+   struct disk_cache *disk = kk_open_disk_cache(pdev->archive_cache_digest,
+      pdev->info.gpu_apple_family, pdev->settings.disabled_workarounds);
+   cache_key parent;
+   uint64_t sequence = 0;
+   if (disk) {
+      static const char tag[] = "KosmicKrisp compute first binds 1";
+      disk_cache_compute_key(disk, tag, sizeof(tag), parent);
+      size_t size = 0;
+      void *blob = kk_compiler_index_load(disk, parent, &sequence, &size);
+      unsigned count = size / sizeof(struct kk_bound_id);
+      struct kk_predicted *loaded = blob && count && count <= KK_BOUND_LIMIT &&
+         size == count * sizeof(struct kk_bound_id) ?
+         malloc(sizeof(*loaded) + size) : NULL;
+      if (loaded) {
+         loaded->count = count;
+         memcpy(loaded->ids, blob, size);
+         qsort(loaded->ids, count, sizeof(loaded->ids[0]), bound_id_compare);
+         p_atomic_set(&owner->predicted, loaded);
+      }
+      free(blob);
+   }
+   unsigned stored = 0;
+   pthread_mutex_lock(&owner->mutex);
+   for (;;) {
+      if (!owner->bound_stop) {
+         struct timespec wait = { KK_BOUND_STORE_NS / 1000000000ull, KK_BOUND_STORE_NS % 1000000000ull };
+         pthread_cond_timedwait_relative_np(&owner->bound_wake, &owner->mutex, &wait);
+      }
+      bool stop = owner->bound_stop;
+      pthread_mutex_unlock(&owner->mutex);
+      if (disk) stored = bound_store(owner, disk, parent, &sequence, stored);
+      if (stop) break;
+      pthread_mutex_lock(&owner->mutex);
+   }
+   if (disk) disk_cache_destroy(disk);
+   return NULL;
+}
+#endif
+
 bool
 kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
                         VkResult (*compile)(struct kk_device *, struct kk_shader *))
@@ -191,8 +319,19 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
             free(owner); owner = NULL;
          } else if (owner && pthread_cond_init(&owner->drained, NULL)) {
             pthread_mutex_destroy(&owner->mutex); free(owner); owner = NULL;
+         } else if (owner && pthread_cond_init(&owner->bound_wake, NULL)) {
+            pthread_cond_destroy(&owner->drained);
+            pthread_mutex_destroy(&owner->mutex); free(owner); owner = NULL;
          }
-         if (owner) p_atomic_set(&dev->async_compute, owner);
+         if (owner) {
+            owner->dev = dev;
+            /* Prediction is best effort; without the thread nothing is predicted. */
+#ifdef ENABLE_SHADER_CACHE
+            owner->bound_thread_started = disk_cache_enabled() &&
+               !pthread_create(&owner->bound_thread, NULL, bound_thread_main, owner);
+#endif
+            p_atomic_set(&dev->async_compute, owner);
+         }
       }
       simple_mtx_unlock(&dev->pipeline_cache_init_mutex);
    }
@@ -215,9 +354,17 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
    owner->jobs = job;
    pthread_mutex_unlock(&owner->mutex);
    shader->pipeline.compute.pending = job;
+   const struct kk_predicted *predicted = p_atomic_read(&owner->predicted);
+   if (predicted) {
+      job_identify(job);
+      job->predicted = job->has_id && bsearch(&job->id, predicted->ids, predicted->count,
+         sizeof(predicted->ids[0]), bound_id_compare);
+      if (job->predicted && job->build_id)
+         kk_perf_build_event(dev->perf, job->build_id, "predicted", NULL, 0);
+   }
    if (dev->perf) kk_perf_async_compute(dev->perf, 1, 0);
-   job->task = mtl_compiler_submit(dev->mtl_compiler_handle, job,
-      job_execute, job_failed, job_cleanup);
+   job->task = (job->predicted ? mtl_compiler_submit_predicted : mtl_compiler_submit)(
+      dev->mtl_compiler_handle, job, job_execute, job_failed, job_cleanup);
    if (job->task) return true;
    /* Queue allocation is best effort; ordinary synchronous compilation remains
     * available with no published pending shader on this failure path. */
@@ -271,8 +418,11 @@ VkResult
 kk_async_compute_join(struct kk_shader *shader)
 {
    struct kk_async_compute *job = shader ? shader->pipeline.compute.pending : NULL;
-   if (job && job->build_id && !p_atomic_cmpxchg(&job->bound, false, true))
-      kk_perf_build_event(job->dev->perf, job->build_id, "first-bind", NULL, 0);
+   if (job && !p_atomic_read(&job->bound) && !p_atomic_cmpxchg(&job->bound, false, true)) {
+      if (job->build_id)
+         kk_perf_build_event(job->dev->perf, job->build_id, "first-bind", NULL, 0);
+      job_record_bind(job);
+   }
    return join_shader(shader, "bind");
 }
 
@@ -389,6 +539,15 @@ kk_async_compute_device_finish(struct kk_device *dev)
    for (unsigned i = 0; i < raised_count; ++i) mtl_compiler_task_raise_end(raised[i]);
    free(raised);
    kk_async_compute_drain(dev);
+   if (owner->bound_thread_started) {
+      pthread_mutex_lock(&owner->mutex);
+      owner->bound_stop = true;
+      pthread_cond_broadcast(&owner->bound_wake);
+      pthread_mutex_unlock(&owner->mutex);
+      pthread_join(owner->bound_thread, NULL);
+   }
+   free(owner->predicted);
+   pthread_cond_destroy(&owner->bound_wake);
    pthread_cond_destroy(&owner->drained);
    pthread_mutex_destroy(&owner->mutex);
    free(owner);
