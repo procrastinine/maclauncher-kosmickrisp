@@ -23,6 +23,7 @@ kk_emulation_apply(const char *value,
                     struct vk_features *features,
                     struct vk_properties *properties)
 {
+   const struct vk_device_extension_table before = *extensions;
    bool enabled[KK_EMULATION_COUNT];
    memcpy(enabled, kk_emulation_performance, sizeof(enabled));
    bool hidden[VK_DEVICE_EXTENSION_COUNT] = {false};
@@ -82,4 +83,7 @@ kk_emulation_apply(const char *value,
                                       features, properties);
       }
    }
+   /* Remove only dependencies broken by this filter; retain the builder's
+    * unrelated support and core-version alternatives. Device creation only. */
+   kk_emulation_dependencies(&before, extensions, features, properties);
 }

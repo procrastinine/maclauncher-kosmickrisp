@@ -267,3 +267,19 @@
      - Conservative rasterization tier 1 is required for D3D12 feature level 12_1; the implementation also supplies higher-tier coverage behavior.
      - D3D12 conservative rasterization is unavailable, preventing feature levels 12_1 and 12_2; DXVK reports no D3D11 conservative-rasterization tier.
      - ``performance,+conservative_rasterization``
+   * - ``msrtss``
+     - Rendering to single-sampled attachments with an implicit multisample color or depth/stencil attachment.
+       Controls: ``VK_EXT_multisampled_render_to_single_sampled``, ``multisampledRenderToSingleSampled``.
+     - native tile resolve / load expansion. Eligible whole-frame color passes use tile storage and native resolve with no expansion shader. LOAD, suspended or split passes retain private multisample backing and expand single-sample contents; unsupported native resolve modes use the shared meta path.
+     - Off
+     - This optional extension has translator fallbacks; LOAD expansion can add a full attachment pass without raising a D3D shader model or feature level.
+     - The extension and its feature are hidden; ANGLE uses its multisample fallback. D3D shader-model and feature-level reporting are unchanged.
+     - ``performance,+msrtss``
+   * - ``writable_msaa``
+     - Storage reads, writes and atomics on multisampled color images.
+       Controls: ``shaderStorageImageMultisample``, ``storageImageSampleCounts``.
+     - sample-plane storage / native attachment conversion. Storage operations select a single-sample plane. Attachment and input-attachment consumers convert exact samples to or from the native multisample image. Sampled multisample shaders retain a table-or-native selection when the feature is enabled; single-sampled shaders are unchanged.
+     - Off
+     - Writable multisample textures are optional in vkd3d-proton and do not raise its base shader model or feature level; disabling them retains native MSAA sampling without sample-plane selection.
+     - D3D12 WriteableMSAATexturesSupported becomes false; vkd3d-proton base shader-model, feature-level and device-creation requirements are unchanged. Ordinary MSAA and multisampled local reads remain available.
+     - ``performance,+writable_msaa``

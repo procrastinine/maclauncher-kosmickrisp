@@ -35,6 +35,55 @@ def documentation(entries):
     return '\n'.join(lines) + '\n'
 
 
+def dependency_expression(expression, extensions, table):
+    """Translate the registry's comma/plus dependency grammar to C."""
+    tokens = re.findall(r'VK_[A-Za-z0-9_]+|[()+,]', expression)
+    if ''.join(tokens) != expression:
+        raise ValueError('Unsupported extension dependency: ' + expression)
+    cursor = 0
+
+    def atom():
+        nonlocal cursor
+        token = tokens[cursor]
+        cursor += 1
+        if token == '(':
+            value = alternatives()
+            if cursor >= len(tokens) or tokens[cursor] != ')':
+                raise ValueError('Unbalanced extension dependency')
+            cursor += 1
+            return value
+        version = re.fullmatch(r'VK_VERSION_(\d+)_(\d+)', token)
+        if version:
+            return '(properties->apiVersion >= VK_MAKE_API_VERSION(0, ' + version[1] + ', ' + version[2] + ', 0))'
+        if token in extensions:
+            return table + '->' + token[3:]
+        if token.startswith('VK_'):
+            # Instance extensions cannot be changed by this device filter.
+            return 'true'
+        raise ValueError('Invalid extension dependency token: ' + token)
+
+    def conjunction():
+        nonlocal cursor
+        values = [atom()]
+        while cursor < len(tokens) and tokens[cursor] == '+':
+            cursor += 1
+            values.append(atom())
+        return '(' + ' && '.join(values) + ')'
+
+    def alternatives():
+        nonlocal cursor
+        values = [conjunction()]
+        while cursor < len(tokens) and tokens[cursor] == ',':
+            cursor += 1
+            values.append(conjunction())
+        return '(' + ' || '.join(values) + ')'
+
+    result = alternatives()
+    if cursor != len(tokens):
+        raise ValueError('Invalid extension dependency: ' + expression)
+    return result
+
+
 def generate(entries, xml, beta):
     _, feature_structs, _ = get_feature_structs_from_xml([xml], beta)
     _, property_structs, _ = get_property_structs_from_xml([xml], 'true' if beta else 'false')
@@ -62,6 +111,11 @@ def generate(entries, xml, beta):
             struct = props_by_type.get(name)
             if struct:
                 props[extension.get('name')].update(p.actual_name for p in struct.properties)
+
+    for row in entries:
+        if len(row['extensions']) == 1:
+            fields[row['extensions'][0]].update(row['features'])
+            props[row['extensions'][0]].update(row['properties'])
 
     out = ['/* SPDX-License-Identifier: MIT */',
            '/* Generated from kk_emulation.json and the Vulkan registry. */',
@@ -100,6 +154,51 @@ def generate(entries, xml, beta):
         for prop in sorted(props[extension]):
             out.append('      memset(&properties->' + prop + ', 0, sizeof(properties->' + prop + '));')
         out += ['      return;', '   }']
+    out += ['}']
+
+    device_extensions = {e.get('name'): e for e in doc.findall('./extensions/extension')
+                         if e.get('type') == 'device' and
+                         'vulkan' in e.get('supported', '').split(',')}
+    out += ['static void',
+            'kk_emulation_dependencies(const struct vk_device_extension_table *before,',
+            '                          struct vk_device_extension_table *extensions,',
+            '                          struct vk_features *features, struct vk_properties *properties)',
+            '{', '   bool changed;', '   do {', '      changed = false;']
+    for name, extension in sorted(device_extensions.items()):
+        depends = extension.get('depends')
+        if not depends:
+            continue
+        old = dependency_expression(depends, device_extensions, 'before')
+        new = dependency_expression(depends, device_extensions, 'extensions')
+        out += ['      if (extensions->' + name[3:] + ' && ' + old + ' && !' + new + ') {',
+                '         extensions->' + name[3:] + ' = false;',
+                '         kk_emulation_hide_extension("' + name + '", features, properties);',
+                '         changed = true;', '      }']
+    out += ['   } while (changed);']
+
+    # EDS3 selectors share one feature struct but their commands depend on
+    # other extensions. Derive those selectors from the XML command names.
+    eds3 = next(s for s in feature_structs
+                if s.c_type == 'VkPhysicalDeviceExtendedDynamicState3FeaturesEXT')
+    eds_fields = set(eds3.features)
+    eds = device_extensions['VK_EXT_extended_dynamic_state3']
+    for require in eds.findall('./require[@depends]'):
+        depends = require.get('depends')
+        if '::' in depends:
+            continue
+        selected = []
+        for command in require.findall('./command'):
+            command_name = command.get('name')
+            stem = re.sub(r'(EXT|KHR|NV)$', '', command_name.removeprefix('vkCmdSet'))
+            feature = 'extendedDynamicState3' + stem
+            if feature in eds_fields:
+                selected.append(feature)
+        if selected:
+            old = dependency_expression(depends, device_extensions, 'before')
+            new = dependency_expression(depends, device_extensions, 'extensions')
+            out.append('   if (' + old + ' && !' + new + ') {')
+            out += ['      features->' + feature + ' = false;' for feature in selected]
+            out.append('   }')
     out += ['}']
     return '\n'.join(out) + '\n'
 
