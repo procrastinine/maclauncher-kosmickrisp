@@ -14,6 +14,9 @@ struct kk_compile_options {
    const struct msl_per_vertex_inputs *native_per_vertex;
    struct nir_shader *conservative_fs;
    bool independent_interface;
+   /* Static last-vertex provoking for a Mesh pipeline whose fragment stage
+    * reads flat inputs and no barycentric coordinates or per-vertex inputs. */
+   bool mesh_provoking_last;
    bool poly_layer_replay;
    bool polygon_capture;
    bool polygon_regular;

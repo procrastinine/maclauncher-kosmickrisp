@@ -304,7 +304,8 @@ kk_make_feature_key(const struct vk_features *feats)
    return key;
 }
 
-/* Dynamic or absent rasterization state keeps the first-vertex order. */
+/* Dynamic or absent rasterization state keeps the first-vertex order.
+ * Fragment barycentric and per-vertex users keep it as well (compile options). */
 static bool
 kk_mesh_static_provoking_last(const struct vk_graphics_pipeline_state *state)
 {
@@ -1746,7 +1747,7 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
          ? offsetof(struct kk_per_draw_data, per_vertex_heap) : 0;
       /* Flat-heap pipelines resolve the provoking vertex from per-draw data. */
       mesh_options.provoking_last = nir->info.stage == MESA_SHADER_MESH &&
-         !mesh_options.flat_heap && kk_mesh_static_provoking_last(state);
+         !mesh_options.flat_heap && opts && opts->mesh_provoking_last;
       translate_options.mesh = &mesh_options;
    }
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
@@ -3428,6 +3429,14 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    if (enabled_features->fragmentShaderBarycentric && shader_count &&
        infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT)
       barycentric_inputs = kk_barycentric_input_flags(infos[shader_count - 1u].nir);
+   /* A Mesh pipeline with a static last-vertex provoking mode rotates its
+    * indices only for flat fragment inputs; barycentric coordinates and
+    * per-vertex inputs need the original corner order. */
+   unsigned mesh_fs_inputs = 0;
+   if (state && (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT) &&
+       kk_mesh_static_provoking_last(state) && shader_count &&
+       infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT)
+      mesh_fs_inputs = kk_barycentric_input_flags(infos[shader_count - 1u].nir);
 
    /* Lower shaders, notably lowering IO. This is a prerequisite for intershader
     * optimization. */
@@ -3779,6 +3788,9 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       .per_vertex_map = &per_vertex_map,
       .native_per_vertex = native_per_vertex && !per_vertex_map.active
          ? &native_inputs : NULL,
+      .mesh_provoking_last = (mesh_fs_inputs & KK_BARYCENTRIC_INPUT_FLAT) &&
+         !(mesh_fs_inputs & (KK_BARYCENTRIC_INPUT_PER_VERTEX |
+                             KK_BARYCENTRIC_INPUT_COORD)),
       .mesh_queries = features & BITFIELD_BIT(KK_FEAT_MESH_QUERIES),
       .pipeline_statistics = features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS),
       .geometry_reports = features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS),
