@@ -1153,14 +1153,17 @@ kk_flush_render_pass(struct kk_cmd_buffer *cmd)
    }
 }
 
-/* A dynamic shading-rate pipeline draws its coarse variant only while the
- * combined rate can exceed 1x1: a pipeline rate above 1x1, or a combiner that
- * applies a primitive rate the vertex stage writes or a bound attachment. */
+/* Select the quad variant for shared multisample effects, or while the
+ * combined rate can exceed 1x1. */
 static unsigned
 kk_fsr_pipeline_kind(const struct kk_cmd_buffer *cmd, const struct kk_shader *vs)
 {
    if (!vs->info.vs.fsr_coarse)
       return KK_PIPELINE_MAIN;
+   /* Slot exchange is required at 1x1 too: samples of one pixel must share
+    * the application's side effects and published outputs. */
+   if (vs->info.vs.fsr_coarse_slots)
+      return KK_PIPELINE_FSR_COARSE;
    const struct vk_fragment_shading_rate_state *fsr = &cmd->vk.dynamic_graphics_state.fsr;
    bool fine = fsr->fragment_size.width <= 1 && fsr->fragment_size.height <= 1;
    fine = kk_fsr_combiner_is_fine(fine, !vs->info.vs.fsr_primitive_rate, fsr->combiner_ops[0]);

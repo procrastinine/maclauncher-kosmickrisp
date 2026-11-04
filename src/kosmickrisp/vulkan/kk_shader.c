@@ -1080,8 +1080,30 @@ kk_fsr_pipeline_can_coarsen(const struct vk_graphics_pipeline_state *state,
    return !fine;
 }
 
-/* Fragment shaders of pipelines that can select a rate above 1x1 run the
- * quad-group lowering. Conditions the reported properties exclude keep 1x1. */
+/* A 1x1 fragment still shares side effects across its covered samples.
+ * Metal executes memory-writing multisampled shaders per sample, so these
+ * shaders need the slot exchange even when coarse pixels are impossible. */
+static bool
+kk_fsr_needs_sample_exchange(nir_shader *nir,
+                             const struct vk_graphics_pipeline_state *state)
+{
+   if (state && (!state->ms ||
+       (state->ms->rasterization_samples <= 1 &&
+        !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES))))
+      return false;
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type == nir_instr_type_intrinsic &&
+             nir_intrinsic_writes_external_memory(nir_instr_as_intrinsic(instr)))
+            return true;
+      }
+   }
+   return false;
+}
+
+/* Quad lowering supplies coarse coordinates or shared multisample effects.
+ * Conditions the reported properties exclude keep the ordinary fine path. */
 static bool
 kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
                  const struct vk_graphics_pipeline_state *state, bool coarse_allowed)
@@ -1094,7 +1116,9 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
                   VK_PIPELINE_CREATE_2_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR));
    /* Every last vertex, tessellation, geometry or mesh stage writes the rate. */
    const bool primitive = f->primitiveFragmentShadingRate;
-   bool coarse = coarse_allowed && kk_fsr_pipeline_can_coarsen(state, primitive, attachment);
+   bool coarse = coarse_allowed &&
+      (kk_fsr_needs_sample_exchange(nir, state) ||
+       kk_fsr_pipeline_can_coarsen(state, primitive, attachment));
    if (coarse && state && state->ms) {
       const struct vk_multisample_state *ms = state->ms;
       uint32_t samples = BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES)
@@ -3472,9 +3496,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    const bool fragment_first = pixel_candidate ||
       (linked_fragment && state && kk_fsr_device(dev));
    bool primitive_rate_output = !state;
-   /* A dynamic shading rate stays 1x1 for most draws. The ordinary vertex and
-    * fragment route keeps its fine fragment shader and adds a coarse variant
-    * that draws select only while the combined rate can exceed 1x1. */
+   /* Ordinary dynamic-rate pipelines keep a fine shader and add a quad
+    * variant for coarse pixels or multisampled shared side effects. */
    const bool fsr_dual = linked_fragment && state && state->fsr && state->rs &&
       kk_fsr_device(dev) && BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_FSR) &&
       shader_count == 2 && infos[0].stage == MESA_SHADER_VERTEX &&
