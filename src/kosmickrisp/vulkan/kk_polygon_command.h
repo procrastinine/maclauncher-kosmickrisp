@@ -81,10 +81,8 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
       libkk_polygon_output(cmd, triangles, true, geometry_params);
    }
    return (struct kk_draw_data){
-      .primitive_type = vs->info.polygon.primitive_vertices == 1 ? MTL_PRIMITIVE_TYPE_POINT :
-         (vs->info.polygon.primitive_vertices == 2 || dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE) &&
-         dyn->rs.line.mode == VK_LINE_RASTERIZATION_MODE_BRESENHAM ?
-         MTL_PRIMITIVE_TYPE_LINE : MTL_PRIMITIVE_TYPE_TRIANGLE,
+      .primitive_type = kk_polygon_raster_primitive(vs->info.polygon.primitive_vertices,
+         dyn->rs.polygon_mode, dyn->rs.line.mode),
       .grid = kk_grid_indirect(capture + offsetof(struct poly_geometry_capture, draw)),
    };
 }

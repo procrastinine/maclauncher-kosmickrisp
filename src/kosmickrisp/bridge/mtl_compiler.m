@@ -206,14 +206,16 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
 
 /* Copy only Metal state; shader functions and pre-raster programs are shared. */
 mtl_render_pipeline_state *
-mtl_new_render_pipeline_for_attachments(mtl_compiler *compiler,
+mtl_new_render_pipeline_for_raster_attachments(mtl_compiler *compiler,
    mtl_render_pipeline_descriptor *descriptor,
    const enum mtl_pixel_format *formats, uint32_t count, uint32_t disabled,
-   uint32_t samples, bool framebuffer_reads)
+   uint32_t samples, bool framebuffer_reads, enum mtl_primitive_topology_class topology)
 {
    @autoreleasepool {
       MTL4RenderPipelineDescriptor *copy = [(MTL4RenderPipelineDescriptor *)descriptor copy];
       copy.rasterSampleCount = samples;
+      if (topology != MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED)
+         copy.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)topology;
       if (framebuffer_reads) {
          MTLFunctionConstantValues *values = [[MTLFunctionConstantValues new] autorelease];
          for (uint32_t i = 0; i < count; ++i) {
@@ -235,6 +237,18 @@ mtl_new_render_pipeline_for_attachments(mtl_compiler *compiler,
       [copy release];
       return pipeline;
    }
+}
+
+/* Existing consumers retain the topology already set on their descriptor. */
+mtl_render_pipeline_state *
+mtl_new_render_pipeline_for_attachments(mtl_compiler *compiler,
+   mtl_render_pipeline_descriptor *descriptor,
+   const enum mtl_pixel_format *formats, uint32_t count, uint32_t disabled,
+   uint32_t samples, bool framebuffer_reads)
+{
+   return mtl_new_render_pipeline_for_raster_attachments(compiler, descriptor,
+      formats, count, disabled, samples, framebuffer_reads,
+      MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED);
 }
 
 void

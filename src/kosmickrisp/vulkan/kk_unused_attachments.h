@@ -20,6 +20,7 @@ struct kk_attachment_variant {
    struct kk_attachment_variant *next;
    enum mtl_pixel_format formats[MAX_DRAW_BUFFERS];
    unsigned kind;
+   enum mtl_primitive_topology_class topology;
    uint32_t samples;
    bool indirect;
    mtl_render_pipeline_state *pipeline;
@@ -28,6 +29,7 @@ struct kk_attachment_variant {
 struct kk_attachment_pipelines {
    simple_mtx_t mutex;
    mtl_render_pipeline_descriptor *descriptor[KK_PIPELINE_KIND_COUNT];
+   enum mtl_primitive_topology_class topology[KK_PIPELINE_KIND_COUNT];
    mtl_depth_stencil_state *depth_stencil[4];
    struct kk_attachment_variant *variants;
 };
@@ -103,7 +105,8 @@ kk_attachment_pipelines_finish(struct kk_shader *shader)
 static mtl_render_pipeline_state *
 kk_attachment_pipeline_for_formats(struct kk_device *device,
    struct kk_shader *shader, unsigned kind, const enum mtl_pixel_format *formats,
-   bool indirect, VkResult *error, uint32_t samples)
+   bool indirect, VkResult *error, uint32_t samples,
+   enum mtl_primitive_topology_class topology)
 {
    mtl_render_pipeline_state *original = kind == KK_PIPELINE_MESH_VIRTUAL
       ? shader->mesh_virtual->gfx.render : kind == KK_PIPELINE_MESH_CAPTURE
@@ -119,13 +122,15 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
       return indirect ? NULL : original;
    }
 
-   if (!indirect && samples == shader->info.vs.sample_count &&
+   if (!indirect && topology == cache->topology[kind] &&
+       samples == shader->info.vs.sample_count &&
        !memcmp(formats, shader->info.vs.rt_formats, sizeof(shader->info.vs.rt_formats)))
       return original;
 
    simple_mtx_lock(&cache->mutex);
    for (struct kk_attachment_variant *v = cache->variants; v; v = v->next) {
       if (v->kind == kind && v->indirect == indirect && v->samples == samples &&
+          v->topology == topology &&
           !memcmp(v->formats, formats, sizeof(shader->info.vs.rt_formats))) {
          simple_mtx_unlock(&cache->mutex);
          return v->pipeline;
@@ -149,15 +154,16 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
          *error = VK_ERROR_OUT_OF_HOST_MEMORY;
          return NULL;
       }
-      variant->pipeline = mtl_new_render_pipeline_for_attachments(
+      variant->pipeline = mtl_new_render_pipeline_for_raster_attachments(
          device->mtl_compiler_handle,
          descriptor, formats, MAX_DRAW_BUFFERS, disabled, samples,
-         shader->info.has_framebuffer_reads);
+         shader->info.has_framebuffer_reads, topology);
       mtl_release(descriptor);
       result = VK_ERROR_INVALID_SHADER_NV;
       if (variant->pipeline) {
          memcpy(variant->formats, formats, sizeof(shader->info.vs.rt_formats));
          variant->kind = kind;
+         variant->topology = topology;
          variant->indirect = indirect;
          variant->samples = samples;
          variant->next = cache->variants;
@@ -183,10 +189,15 @@ kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
          formats[location] = vk_format_to_mtl_pixel_format(render->color_att[i].vk_format);
    }
    uint32_t samples = MAX2(cmd->vk.dynamic_graphics_state.ms.rasterization_samples, 1);
+   enum mtl_primitive_topology_class topology = kind == KK_PIPELINE_CONSERVATIVE ?
+      MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE : kind == KK_PIPELINE_POLYGON && shader->info.polygon_point ?
+      kk_polygon_raster_topology(shader->info.polygon.primitive_vertices,
+         cmd->vk.dynamic_graphics_state.rs.polygon_mode,
+         cmd->vk.dynamic_graphics_state.rs.line.mode) : shader->info.vs.topology;
    VkResult error = VK_SUCCESS;
    mtl_render_pipeline_state *pipeline = kk_attachment_pipeline_for_formats(
       kk_cmd_buffer_device(cmd), shader, kind, formats,
-      cmd->state.gfx.dgc_icb, &error, samples);
+      cmd->state.gfx.dgc_icb, &error, samples, topology);
    if (!pipeline)
       vk_command_buffer_set_error(&cmd->vk, error);
    return pipeline;
@@ -203,7 +214,7 @@ kk_dgc_eager_graphics_pipeline(struct kk_device *device, struct kk_shader *shade
       if (!cache || !cache->descriptor[kind]) continue;
       VkResult error = VK_SUCCESS;
       if (!kk_attachment_pipeline_for_formats(device, shader, kind,
-             shader->info.vs.rt_formats, true, &error, shader->info.vs.sample_count))
+             shader->info.vs.rt_formats, true, &error, shader->info.vs.sample_count, cache->topology[kind]))
          return error;
    }
    return VK_SUCCESS;

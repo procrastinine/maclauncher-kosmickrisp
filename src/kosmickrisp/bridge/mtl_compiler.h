@@ -75,6 +75,11 @@ mtl_render_pipeline_state *mtl_new_render_pipeline_for_attachments(
    const enum mtl_pixel_format *formats, uint32_t count, uint32_t disabled,
    uint32_t samples, bool framebuffer_reads);
 
+mtl_render_pipeline_state *mtl_new_render_pipeline_for_raster_attachments(
+   mtl_compiler *compiler, mtl_render_pipeline_descriptor *descriptor,
+   const enum mtl_pixel_format *formats, uint32_t count, uint32_t disabled,
+   uint32_t samples, bool framebuffer_reads, enum mtl_primitive_topology_class topology);
+
 void mtl_render_pipeline_descriptor_copy_linking(
    mtl_render_pipeline_descriptor *copy, mtl_render_pipeline_descriptor *source);
 

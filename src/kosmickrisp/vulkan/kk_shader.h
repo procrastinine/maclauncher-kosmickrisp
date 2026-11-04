@@ -16,6 +16,7 @@
 #include "kosmickrisp/bridge/mtl_format.h"
 
 #include "poly/nir/poly_nir.h"
+#include "kk_poly_raster_topology.h"
 
 #include "vk_pipeline_cache.h"
 #include "kk_fragment_shading_rate_cache.h"
@@ -154,6 +155,7 @@ struct kk_shader_info {
 
          /* Data needed for serialization. */
          enum mtl_primitive_topology_class topology;
+         enum mtl_primitive_topology_class polygon_topology;
          enum mtl_pixel_format rt_formats[MAX_DRAW_BUFFERS];
          enum mtl_pixel_format d_format;
          enum mtl_pixel_format s_format;

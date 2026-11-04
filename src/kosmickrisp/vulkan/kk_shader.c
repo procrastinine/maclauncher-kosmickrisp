@@ -273,12 +273,23 @@ kk_hash_graphics_state(struct vk_physical_device *device,
                           sizeof(state->mv->view_mask));
 
    const uint32_t feature_key[] = {
-      KK_FEAT_COUNT, kk_make_feature_key(enabled_features),
+      KK_FEAT_COUNT, sizeof(struct kk_shader_info), kk_make_feature_key(enabled_features),
    };
    _mesa_blake3_update(&blake3_ctx, &feature_key, sizeof(feature_key));
    if (kk_conservative_possible(state)) {
       uint32_t conservative = BITFIELD_BIT(KK_FEAT_CONSERVATIVE_RASTER);
       _mesa_blake3_update(&blake3_ctx, &conservative, sizeof(conservative));
+   }
+
+   /* Serialized producer topology is pipeline state, including when the
+    * same shader body is reused by different raster classes. */
+   if (state && state->rs && state->ia) {
+      const uint32_t raster_key[] = {
+         state->ia->primitive_topology, state->rs->polygon_mode, state->rs->line.mode,
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE),
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE),
+      };
+      _mesa_blake3_update(&blake3_ctx, raster_key, sizeof(raster_key));
    }
 
    /* Representation changes whether a Poly raster pipeline is required.
@@ -2062,6 +2073,9 @@ gather_graphics_pipeline_create_info(
 
    info->vs.topology =
       vk_primitive_topology_to_mtl_primitive_topology_class(topology);
+   info->vs.polygon_topology = info->polygon_point ?
+      kk_polygon_raster_topology(info->polygon.primitive_vertices,
+         state->rs->polygon_mode, state->rs->line.mode) : info->vs.topology;
 }
 
 static void
@@ -2105,7 +2119,8 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
    if (!device->vk.enabled_features.dynamicRenderingUnusedAttachments &&
        !device->vk.enabled_features.extendedDynamicState3RasterizationSamples &&
        !device->vk.enabled_features.deviceGeneratedCommands &&
-       !device->vk.enabled_features.drawIndirectCount)
+       !device->vk.enabled_features.drawIndirectCount &&
+       !shader->info.polygon_point && !shader->info.poly_layer_replay)
       return VK_SUCCESS;
    if (!shader->attachment_pipelines) {
       shader->attachment_pipelines = calloc(1, sizeof(*shader->attachment_pipelines));
@@ -2115,8 +2130,12 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
    }
    struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
    simple_mtx_lock(&cache->mutex);
-   if (!cache->descriptor[kind])
+   if (!cache->descriptor[kind]) {
       cache->descriptor[kind] = mtl_retain(descriptor);
+      cache->topology[kind] = kind == KK_PIPELINE_CONSERVATIVE ?
+         MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE : kind == KK_PIPELINE_POLYGON ?
+         shader->info.vs.polygon_topology : shader->info.vs.topology;
+   }
    simple_mtx_unlock(&cache->mutex);
    return VK_SUCCESS;
 }
@@ -2204,7 +2223,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    /* Layered rendering in Metal requires setting primitive topology class */
    mtl_render_pipeline_descriptor_set_input_primitive_topology(
       pipeline_descriptor, polygon == 2 ? MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE :
-         polygon ? MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED : vs->info.vs.topology);
+         polygon ? vs->info.vs.polygon_topology : vs->info.vs.topology);
 
    kk_configure_render_pipeline(device, vs, pipe, pipeline_descriptor, polygon);
 
