@@ -78,5 +78,19 @@
     "performance": false,
     "performance_reason": "Ray-tracing interfaces require explicit selection.",
     "off_consequence": "Vulkan acceleration-structure, ray-query and ray-tracing pipeline interfaces and D3D12 DXR are unavailable; the RTXPT DXR path cannot run."
+  },
+  {
+    "name": "pixel_interlock",
+    "description": "Pixel interlock with cross-sample ordering for multisampled rendering.",
+    "cost_class": "native single-sample / software multisample envelope",
+    "cost_note": "Sample interlock and single-sample pixel interlock use native raster order groups. Multisample pixel interlock captures coverage and inputs, then performs ordered load/replay/store passes in bounded tile and primitive batches with CPU/GPU continuation sequencing and scratch clearing. Cost scales with actual coverage, sample count and batch count; per-use runtime cost is unmeasured.",
+    "extensions": [],
+    "features": [
+      "fragmentShaderPixelInterlock"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "vkd3d-proton requires pixel and sample interlock for ROV support and D3D FL12_1; the multisample envelope is selected only for shaders using pixel interlock with multisampling.",
+    "off_consequence": "Pixel interlock is unavailable, including its native single-sample route; vkd3d-proton loses ROV support and D3D FL12_1. Native sample interlock and ordered color attachment access remain available."
   }
 ]
