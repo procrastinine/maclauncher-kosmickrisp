@@ -4,6 +4,18 @@
 
 #include "util/simple_mtx.h"
 
+/* The retained descriptor stays unspecialized for later format variants. */
+static mtl_render_pipeline_state *
+kk_attachment_compile_pipeline(struct kk_device *device,
+   struct kk_shader *shader, mtl_render_pipeline_descriptor *descriptor)
+{
+   if (!shader->info.has_framebuffer_reads)
+      return mtl_new_render_pipeline(device->mtl_compiler_handle, descriptor);
+   return mtl_new_render_pipeline_for_attachments(device->mtl_compiler_handle,
+      descriptor, shader->info.vs.rt_formats, MAX_DRAW_BUFFERS, 0,
+      shader->info.vs.sample_count, true);
+}
+
 struct kk_attachment_variant {
    struct kk_attachment_variant *next;
    enum mtl_pixel_format formats[MAX_DRAW_BUFFERS];
@@ -134,7 +146,8 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
       }
       variant->pipeline = mtl_new_render_pipeline_for_attachments(
          device->mtl_compiler_handle,
-         descriptor, formats, MAX_DRAW_BUFFERS, disabled, samples);
+         descriptor, formats, MAX_DRAW_BUFFERS, disabled, samples,
+         shader->info.has_framebuffer_reads);
       mtl_release(descriptor);
       result = VK_ERROR_INVALID_SHADER_NV;
       if (variant->pipeline) {

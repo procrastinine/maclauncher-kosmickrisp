@@ -69,6 +69,7 @@ kk_tess_info_merge(struct kk_tess_info a, struct kk_tess_info b)
 struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
+   bool has_framebuffer_reads;
    uint32_t push_size;
    bool descriptor_heap;
    bool dgc_replay;

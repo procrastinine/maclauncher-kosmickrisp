@@ -10,6 +10,7 @@
 #include <Metal/MTL4ComputePipeline.h>
 #include <Metal/MTL4LibraryDescriptor.h>
 #include <Metal/MTL4LibraryFunctionDescriptor.h>
+#include <Metal/MTL4SpecializedFunctionDescriptor.h>
 #include <Metal/MTL4RenderPipeline.h>
 #include <Metal/MTLDevice.h>
 
@@ -208,11 +209,23 @@ mtl_render_pipeline_state *
 mtl_new_render_pipeline_for_attachments(mtl_compiler *compiler,
    mtl_render_pipeline_descriptor *descriptor,
    const enum mtl_pixel_format *formats, uint32_t count, uint32_t disabled,
-   uint32_t samples)
+   uint32_t samples, bool framebuffer_reads)
 {
    @autoreleasepool {
       MTL4RenderPipelineDescriptor *copy = [(MTL4RenderPipelineDescriptor *)descriptor copy];
       copy.rasterSampleCount = samples;
+      if (framebuffer_reads) {
+         MTLFunctionConstantValues *values = [[MTLFunctionConstantValues new] autorelease];
+         for (uint32_t i = 0; i < count; ++i) {
+            bool active = formats[i] != MTL_PIXEL_FORMAT_INVALID;
+            [values setConstantValue:&active type:MTLDataTypeBool atIndex:i];
+         }
+         MTL4SpecializedFunctionDescriptor *fragment =
+            [[MTL4SpecializedFunctionDescriptor new] autorelease];
+         fragment.functionDescriptor = copy.fragmentFunctionDescriptor;
+         fragment.constantValues = values;
+         copy.fragmentFunctionDescriptor = fragment;
+      }
       for (uint32_t i = 0; i < count; ++i) {
          copy.colorAttachments[i].pixelFormat = (MTLPixelFormat)formats[i];
          if (disabled & (1u << i))

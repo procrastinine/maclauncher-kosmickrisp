@@ -268,6 +268,18 @@ fs_input_no_interpolant(struct nir_to_msl_ctx *ctx, uint64_t location)
 static void
 fs_input_block(nir_shader *shader, struct nir_to_msl_ctx *ctx)
 {
+   /* Function constants remove inactive framebuffer inputs from the Metal
+    * interface. Undefined constants preserve the fully active interface. */
+   u_foreach_bit64(location, shader->info.outputs_read) {
+      if (location < FRAG_RESULT_DATA0 || location > FRAG_RESULT_DATA7)
+         continue;
+      unsigned color = location - FRAG_RESULT_DATA0;
+      P(ctx, "constant bool kk_color_enabled_%u [[function_constant(%u)]];\n",
+        color, color);
+      P(ctx, "constant bool kk_color_present_%u = "
+             "is_function_constant_defined(kk_color_enabled_%u) ? "
+             "kk_color_enabled_%u : true;\n", color, color, color);
+   }
    P(ctx, "struct FragmentIn {\n");
    ctx->indentlevel++;
    u_foreach_bit64(location, shader->info.inputs_read) {
@@ -283,8 +295,14 @@ fs_input_block(nir_shader *shader, struct nir_to_msl_ctx *ctx)
       struct io_slot_info info = ctx->outputs_info[location];
       const char *type = alu_type_to_string(info.type);
       const char *vector_suffix = vector_suffixes[info.num_components];
-      P_IND(ctx, "%s%s %s [[%s]];\n", type, vector_suffix,
-            FS_OUTPUT_NAME[location], FS_OUTPUT_SEMANTIC[location]);
+      if (location >= FRAG_RESULT_DATA0 && location <= FRAG_RESULT_DATA7) {
+         P_IND(ctx, "%s%s %s [[%s, function_constant(kk_color_present_%u)]];\n",
+               type, vector_suffix, FS_OUTPUT_NAME[location],
+               FS_OUTPUT_SEMANTIC[location], (unsigned)(location - FRAG_RESULT_DATA0));
+      } else {
+         P_IND(ctx, "%s%s %s [[%s]];\n", type, vector_suffix,
+               FS_OUTPUT_NAME[location], FS_OUTPUT_SEMANTIC[location]);
+      }
    }
 
    ctx->indentlevel--;
@@ -475,8 +493,16 @@ msl_emit_output_var(struct nir_to_msl_ctx *ctx, nir_shader *shader)
       uint64_t actual_io =
          shader->info.outputs_read & shader->info.outputs_written;
       u_foreach_bit64(location, actual_io) {
-         P_IND(ctx, "out.%s = in.%s;\n", FS_OUTPUT_NAME[location],
-               FS_OUTPUT_NAME[location]);
+         if (location >= FRAG_RESULT_DATA0 && location <= FRAG_RESULT_DATA7) {
+            struct io_slot_info info = ctx->outputs_info[location];
+            P_IND(ctx, "out.%s = kk_color_present_%u ? in.%s : %s%s(0);\n",
+                  FS_OUTPUT_NAME[location], (unsigned)(location - FRAG_RESULT_DATA0),
+                  FS_OUTPUT_NAME[location], alu_type_to_string(info.type),
+                  vector_suffixes[info.num_components]);
+         } else {
+            P_IND(ctx, "out.%s = in.%s;\n", FS_OUTPUT_NAME[location],
+                  FS_OUTPUT_NAME[location]);
+         }
       }
       break;
    default:
@@ -488,6 +514,14 @@ void
 msl_output_name(struct nir_to_msl_ctx *ctx, unsigned location,
                 unsigned component, bool load_from_input)
 {
+   if (load_from_input && ctx->shader->info.stage == MESA_SHADER_FRAGMENT &&
+       location >= FRAG_RESULT_DATA0 && location <= FRAG_RESULT_DATA7) {
+      struct io_slot_info info = ctx->outputs_info[location];
+      P(ctx, "(kk_color_present_%u ? in.%s : %s%s(0))",
+        location - FRAG_RESULT_DATA0, FS_OUTPUT_NAME[location],
+        alu_type_to_string(info.type), vector_suffixes[info.num_components]);
+      return;
+   }
    if (load_from_input) {
       P(ctx, "in.");
    } else {

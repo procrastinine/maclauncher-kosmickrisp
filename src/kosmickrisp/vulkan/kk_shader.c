@@ -1103,12 +1103,16 @@ static void
 kk_compile_msl_options(struct kk_physical_device *pdev, nir_shader *nir,
                const struct vk_graphics_pipeline_state *state,
                struct msl_compile_data *data,
-               const struct kk_compile_options *opts)
+               const struct kk_compile_options *opts,
+               bool *has_framebuffer_reads)
 {
    NIR_PASS(_, nir, kk_nir_lower_poly);
 
    msl_optimize_nir(nir);
    modify_nir_info(nir);
+   if (has_framebuffer_reads)
+      *has_framebuffer_reads = nir->info.stage == MESA_SHADER_FRAGMENT &&
+                               nir->info.outputs_read != 0;
 
    struct nir_to_msl_options translate_options = opts && opts->msl_custom
       ? *opts->msl_custom : (struct nir_to_msl_options){0};
@@ -1156,7 +1160,7 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
                const struct vk_graphics_pipeline_state *state,
                struct msl_compile_data *data)
 {
-   kk_compile_msl_options(pdev, nir, state, data, NULL);
+   kk_compile_msl_options(pdev, nir, state, data, NULL, NULL);
 }
 
 #include "kk_polygon_nir.h"
@@ -1377,7 +1381,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       NIR_PASS(_, nir, kk_nir_lower_descriptors, robustness, 0, NULL);
    }
 
-   kk_compile_msl_options(pdev, nir, state, &shader->msl_data[stage], opts);
+   kk_compile_msl_options(pdev, nir, state, &shader->msl_data[stage], opts,
+                          &shader->info.has_framebuffer_reads);
 
    *shader_out = shader;
 
@@ -1690,6 +1695,8 @@ gather_graphics_pipeline_create_info(
       mesa_shader_stage stage = s->info.stage;
       kk_msl_copy(&vs->msl_data[stage], &s->msl_data[stage]);
 
+      if (stage == MESA_SHADER_FRAGMENT)
+         info->has_framebuffer_reads = s->info.has_framebuffer_reads;
       info->vs.additional_stages_bits |= BITFIELD_BIT(stage);
       if (stage == MESA_SHADER_FRAGMENT && info->polygon_point)
          kk_msl_copy(&vs->polygon[3], &s->polygon[3]);
@@ -1859,7 +1866,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    }
 
    mtl_render_pipeline_state *render =
-      mtl_new_render_pipeline(device->mtl_compiler_handle, pipeline_descriptor);
+      kk_attachment_compile_pipeline(device, vs, pipeline_descriptor);
    if (polygon == 2) pipe->gfx.conservative_render = render;
    else if (polygon) pipe->gfx.polygon_render = render;
    else pipe->gfx.render = render;
