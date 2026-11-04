@@ -255,6 +255,12 @@ enum kk_dirty {
 #include "kk_poly_layer_replay_types.h"
 #include "kk_poly_retained_raster_types.h"
 
+/* Canonical immutable native depth/stencil state; no references or bounds. */
+struct kk_depth_stencil_key {
+   uint32_t ops;
+   uint32_t front_read, front_write, back_read, back_write;
+};
+
 struct kk_graphics_state {
    struct kk_poly_layer_replay_state layer_replay;
    struct kk_poly_retained_state poly_retained;
@@ -291,6 +297,7 @@ struct kk_graphics_state {
    bool xfb_enabled;
 
    mtl_depth_stencil_state *depth_stencil_state;
+   struct kk_depth_stencil_key dynamic_ds_key;
    mtl_render_pass_descriptor *render_pass_descriptor;
    bool is_depth_stencil_dynamic;
    bool is_cull_front_and_back;
@@ -564,6 +571,13 @@ mtl_depth_stencil_state *
 kk_compile_depth_stencil_state(struct kk_device *device,
                                const struct vk_depth_stencil_state *ds,
                                bool has_depth, bool has_stencil);
+
+mtl_depth_stencil_state *
+kk_update_dynamic_ds_state(struct kk_device *device,
+                           const struct vk_depth_stencil_state *ds,
+                           bool has_depth, bool has_stencil,
+                           struct kk_depth_stencil_key *previous_key,
+                           mtl_depth_stencil_state *previous_state);
 
 void kk_meta_expand_msrtss(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
                            VkImage dst, VkImageAspectFlags aspects);

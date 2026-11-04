@@ -1095,15 +1095,14 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
         IS_DIRTY(DS_DEPTH_COMPARE_OP) | IS_DIRTY(DS_STENCIL_TEST_ENABLE) |
         IS_DIRTY(DS_STENCIL_OP) | IS_DIRTY(DS_STENCIL_COMPARE_MASK) |
         IS_DIRTY(DS_STENCIL_WRITE_MASK) || (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)))) {
-      kk_cmd_release_dynamic_ds_state(cmd);
-
       struct kk_shader *vs = cmd->state.gfx.shader;
       bool has_depth = gfx->render.depth_att.iview &&
          vs->info.vs.d_format != MTL_PIXEL_FORMAT_INVALID;
       bool has_stencil = gfx->render.stencil_att.iview &&
          vs->info.vs.s_format != MTL_PIXEL_FORMAT_INVALID;
-      gfx->depth_stencil_state = kk_compile_depth_stencil_state(
-         device, &dyn->ds, has_depth, has_stencil);
+      gfx->depth_stencil_state = kk_update_dynamic_ds_state(
+         device, &dyn->ds, has_depth, has_stencil,
+         &gfx->dynamic_ds_key, gfx->depth_stencil_state);
       bind_dynamic_ds = true;
    }
 

@@ -1186,6 +1186,7 @@ kk_cmd_release_dynamic_ds_state(struct kk_cmd_buffer *cmd)
        cmd->state.gfx.depth_stencil_state)
       mtl_release(cmd->state.gfx.depth_stencil_state);
    cmd->state.gfx.depth_stencil_state = NULL;
+   cmd->state.gfx.dynamic_ds_key.ops = UINT32_MAX;
 }
 
 static VkResult

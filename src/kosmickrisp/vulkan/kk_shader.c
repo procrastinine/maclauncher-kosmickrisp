@@ -2051,46 +2051,47 @@ kk_shader_get_statistics_pre_gs(struct kk_device *device, struct kk_shader *shad
 }
 
 static mtl_depth_stencil_state *
-kk_create_ds_state(struct kk_device *device, struct kk_shader_info *info)
+kk_create_ds_state(struct kk_device *device,
+                   const struct kk_depth_stencil_key *key)
 {
    mtl_stencil_descriptor *front = NULL;
    mtl_stencil_descriptor *back = NULL;
    mtl_depth_stencil_descriptor *descriptor =
       mtl_new_depth_stencil_descriptor();
    mtl_depth_stencil_descriptor_set_depth_write_enabled(
-      descriptor, info->vs.has_depth_write);
+      descriptor, (key->ops >> 3) & 1);
    mtl_depth_stencil_descriptor_set_depth_compare_function(
-      descriptor, info->vs.depth_compare_op);
+      descriptor, key->ops & 7);
 
-   if (info->vs.has_stencil_test) {
+   if (key->ops & (1 << 4)) {
       back = mtl_new_stencil_descriptor();
       mtl_stencil_descriptor_set_depth_failure_operation(
-         back, info->vs.stencil_back.depth_fail);
+         back, (key->ops >> 20) & 7);
       mtl_stencil_descriptor_set_stencil_failure_operation(
-         back, info->vs.stencil_back.fail);
+         back, (key->ops >> 17) & 7);
       mtl_stencil_descriptor_set_depth_stencil_pass_operation(
-         back, info->vs.stencil_back.pass);
+         back, (key->ops >> 23) & 7);
       mtl_stencil_descriptor_set_stencil_compare_function(
-         back, info->vs.stencil_back.compare);
+         back, (key->ops >> 26) & 7);
       mtl_stencil_descriptor_set_read_mask(back,
-                                           info->vs.stencil_back.compare_mask);
+                                           key->back_read);
       mtl_stencil_descriptor_set_write_mask(back,
-                                            info->vs.stencil_back.write_mask);
+                                            key->back_write);
       mtl_depth_stencil_descriptor_set_back_face_stencil(descriptor, back);
 
       front = mtl_new_stencil_descriptor();
       mtl_stencil_descriptor_set_depth_failure_operation(
-         front, info->vs.stencil_front.depth_fail);
+         front, (key->ops >> 8) & 7);
       mtl_stencil_descriptor_set_stencil_failure_operation(
-         front, info->vs.stencil_front.fail);
+         front, (key->ops >> 5) & 7);
       mtl_stencil_descriptor_set_depth_stencil_pass_operation(
-         front, info->vs.stencil_front.pass);
+         front, (key->ops >> 11) & 7);
       mtl_stencil_descriptor_set_stencil_compare_function(
-         front, info->vs.stencil_front.compare);
+         front, (key->ops >> 14) & 7);
       mtl_stencil_descriptor_set_read_mask(front,
-                                           info->vs.stencil_front.compare_mask);
+                                           key->front_read);
       mtl_stencil_descriptor_set_write_mask(front,
-                                            info->vs.stencil_front.write_mask);
+                                            key->front_write);
       mtl_depth_stencil_descriptor_set_front_face_stencil(descriptor, front);
    }
 
@@ -2110,32 +2111,27 @@ kk_create_ds_state(struct kk_device *device, struct kk_shader_info *info)
 /* Native depth/stencil objects are immutable. Keep a bounded device cache,
  * shared by pipeline creation and dynamic state, with an independent reference
  * for every caller. Unused stencil fields do not distinguish native states. */
-struct kk_ds_cache_key {
-   uint32_t ops;
-   uint32_t front_read, front_write, back_read, back_write;
-};
-
 struct kk_ds_cache_entry {
-   struct kk_ds_cache_key key;
+   struct kk_depth_stencil_key key;
    mtl_depth_stencil_state *state;
 };
 
 static uint32_t
 kk_ds_key_hash(const void *key)
 {
-   return _mesa_hash_data(key, sizeof(struct kk_ds_cache_key));
+   return _mesa_hash_data(key, sizeof(struct kk_depth_stencil_key));
 }
 
 static bool
 kk_ds_key_equal(const void *a, const void *b)
 {
-   return memcmp(a, b, sizeof(struct kk_ds_cache_key)) == 0;
+   return memcmp(a, b, sizeof(struct kk_depth_stencil_key)) == 0;
 }
 
-static mtl_depth_stencil_state *
-kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
+static struct kk_depth_stencil_key
+kk_ds_key_from_info(const struct kk_shader_info *info)
 {
-   struct kk_ds_cache_key key = {
+   struct kk_depth_stencil_key key = {
       .ops = info->vs.depth_compare_op | (info->vs.has_depth_write << 3) |
              (info->vs.has_stencil_test << 4),
    };
@@ -2154,12 +2150,19 @@ kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
       key.back_write = info->vs.stencil_back.write_mask;
    }
 
+   return key;
+}
+
+static mtl_depth_stencil_state *
+kk_compile_ds_key(struct kk_device *device,
+                  const struct kk_depth_stencil_key *key)
+{
    simple_mtx_lock(&device->depth_stencil_cache_mutex);
    if (!device->depth_stencil_cache)
       device->depth_stencil_cache =
          _mesa_hash_table_create(NULL, kk_ds_key_hash, kk_ds_key_equal);
    struct hash_table *cache = device->depth_stencil_cache;
-   struct hash_entry *found = cache ? _mesa_hash_table_search(cache, &key) : NULL;
+   struct hash_entry *found = cache ? _mesa_hash_table_search(cache, key) : NULL;
    if (found) {
       struct kk_ds_cache_entry *entry = found->data;
       mtl_depth_stencil_state *state = mtl_retain(entry->state);
@@ -2169,11 +2172,11 @@ kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
 
    /* Creation is cheap native state setup, not shader compilation. Holding
     * this cache's mutex prevents duplicate objects on concurrent misses. */
-   mtl_depth_stencil_state *state = kk_create_ds_state(device, info);
+   mtl_depth_stencil_state *state = kk_create_ds_state(device, key);
    if (state && cache && cache->entries < 1024) {
       struct kk_ds_cache_entry *entry = ralloc(cache, struct kk_ds_cache_entry);
       if (entry) {
-         entry->key = key;
+         entry->key = *key;
          entry->state = state;
          if (_mesa_hash_table_insert(cache, &entry->key, entry))
             mtl_retain(state); /* Cache ownership; caller keeps creation ref. */
@@ -2184,6 +2187,13 @@ kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
    /* A full cache or host allocation failure preserves ordinary creation. */
    simple_mtx_unlock(&device->depth_stencil_cache_mutex);
    return state;
+}
+
+static mtl_depth_stencil_state *
+kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
+{
+   struct kk_depth_stencil_key key = kk_ds_key_from_info(info);
+   return kk_compile_ds_key(device, &key);
 }
 
 void
@@ -2231,14 +2241,61 @@ kk_gather_ds_info(const struct vk_depth_stencil_state *ds, bool has_depth,
    }
 }
 
+static struct kk_depth_stencil_key
+kk_ds_key_from_dynamic(const struct vk_depth_stencil_state *ds,
+                       bool has_depth, bool has_stencil)
+{
+   struct kk_depth_stencil_key key = {
+      .ops = has_depth && ds->depth.test_enable
+                ? ds->depth.compare_op | (ds->depth.write_enable << 3)
+                : VK_COMPARE_OP_ALWAYS,
+   };
+   if (has_stencil && ds->stencil.test_enable) {
+      key.ops |= (1 << 4) |
+                 (ds->stencil.front.op.fail << 5) |
+                 (ds->stencil.front.op.depth_fail << 8) |
+                 (ds->stencil.front.op.pass << 11) |
+                 (ds->stencil.front.op.compare << 14) |
+                 (ds->stencil.back.op.fail << 17) |
+                 (ds->stencil.back.op.depth_fail << 20) |
+                 (ds->stencil.back.op.pass << 23) |
+                 (ds->stencil.back.op.compare << 26);
+      key.front_read = ds->stencil.front.compare_mask;
+      key.front_write = ds->stencil.front.write_mask;
+      key.back_read = ds->stencil.back.compare_mask;
+      key.back_write = ds->stencil.back.write_mask;
+   }
+   return key;
+}
+
 mtl_depth_stencil_state *
 kk_compile_depth_stencil_state(struct kk_device *device,
                                const struct vk_depth_stencil_state *ds,
-                               bool has_depth, bool has_stencil)
+                              bool has_depth, bool has_stencil)
 {
-   struct kk_shader_info info = {};
-   kk_gather_ds_info(ds, has_depth, has_stencil, &info);
-   return kk_compile_ds_state(device, &info);
+   struct kk_depth_stencil_key key =
+      kk_ds_key_from_dynamic(ds, has_depth, has_stencil);
+   return kk_compile_ds_key(device, &key);
+}
+
+mtl_depth_stencil_state *
+kk_update_dynamic_ds_state(struct kk_device *device,
+                           const struct vk_depth_stencil_state *ds,
+                           bool has_depth, bool has_stencil,
+                           struct kk_depth_stencil_key *previous_key,
+                           mtl_depth_stencil_state *previous_state)
+{
+   struct kk_depth_stencil_key key =
+      kk_ds_key_from_dynamic(ds, has_depth, has_stencil);
+   /* A new encoder needs the same native bind, not another shared-cache
+    * lookup and reference transfer for the state this command already owns. */
+   if (previous_state && kk_ds_key_equal(previous_key, &key))
+      return previous_state;
+
+   mtl_depth_stencil_state *state = kk_compile_ds_key(device, &key);
+   mtl_release(previous_state);
+   *previous_key = key;
+   return state;
 }
 
 static void

@@ -195,6 +195,8 @@ kk_meta_end(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
       if (cmd->state.gfx.is_depth_stencil_dynamic)
          mtl_release(cmd->state.gfx.depth_stencil_state);
       cmd->state.gfx.depth_stencil_state = save->pipeline.gfx.ds;
+      /* The saved native reference did not use the meta draw's cache key. */
+      cmd->state.gfx.dynamic_ds_key.ops = UINT32_MAX;
       cmd->state.gfx.is_depth_stencil_dynamic =
          save->pipeline.gfx.is_ds_dynamic;
 
