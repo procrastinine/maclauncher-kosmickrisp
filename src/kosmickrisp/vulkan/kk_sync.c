@@ -135,8 +135,27 @@ kk_timeline_wait(struct vk_device *device, struct vk_sync *sync,
                  uint64_t abs_timeout_ns)
 {
    struct kk_device *dev = container_of(device, struct kk_device, vk);
-   return KK_PERF_CALL(dev, KK_PERF_SYNC_WAIT,
-      kk_timeline_wait_impl(device, sync, wait_value, wait_flags, abs_timeout_ns));
+   if (unlikely(dev->perf)) {
+      if (!kk_perf_submit_details(dev->perf)) {
+         const uint64_t start = kk_perf_now();
+         VkResult result = kk_timeline_wait_impl(device, sync, wait_value,
+                                                wait_flags, abs_timeout_ns);
+         kk_perf_add(dev->perf, KK_PERF_SYNC_WAIT, kk_perf_now() - start);
+         return result;
+      }
+      struct kk_sync_timeline *timeline =
+         container_of(sync, struct kk_sync_timeline, base);
+      uint64_t id = kk_perf_sync_trace(dev->perf, "wait_begin", 0, sync,
+         timeline->mtl_handle, wait_value, wait_flags, 0);
+      const uint64_t start = kk_perf_now();
+      VkResult result = kk_timeline_wait_impl(device, sync, wait_value,
+                                             wait_flags, abs_timeout_ns);
+      kk_perf_add(dev->perf, KK_PERF_SYNC_WAIT, kk_perf_now() - start);
+      kk_perf_sync_trace(dev->perf, "wait_return", id, sync,
+         timeline->mtl_handle, wait_value, wait_flags, result);
+      return result;
+   }
+   return kk_timeline_wait_impl(device, sync, wait_value, wait_flags, abs_timeout_ns);
 }
 
 static VKAPI_ATTR VkResult VKAPI_CALL

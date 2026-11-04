@@ -7,6 +7,7 @@
 
 struct kk_device;
 struct vk_device;
+struct vk_queue_submit;
 struct kk_perf;
 struct kk_image;
 struct VkImageCreateInfo;
@@ -58,6 +59,19 @@ uint64_t kk_perf_frame_id(struct kk_perf *);
 void kk_perf_gpu_frame(struct kk_perf *, uint64_t frame, double start,
                        double end, uint32_t command_buffers);
 void kk_perf_gpu(struct kk_perf *, double start, double end, uint32_t count);
+/* Called only by tracking-selected submit dispatch and the existing tracked
+ * commit branch. Queue/command addresses are identities, never dereferenced
+ * after a completion callback may retire their native storage. */
+/* Enabled once at creation by KK_PERF_TRACKING_SUBMITS=1, in addition to
+ * ordinary tracking. Interval metrics do not imply per-boundary tracing. */
+bool kk_perf_submit_details(const struct kk_perf *);
+uint64_t kk_perf_sync_trace(struct kk_perf *, const char *phase, uint64_t id,
+   const void *sync, const void *native, uint64_t value, unsigned flags, int result);
+uint64_t kk_perf_submit_trace(struct kk_perf *, const char *phase, uint64_t id,
+   const void *queue, const struct vk_queue_submit *, int result);
+uint64_t kk_perf_commit_trace(struct kk_perf *, const char *phase, uint64_t id,
+   const void *queue, const void *submit, const void *command,
+   const void *native, uint32_t count, int result);
 void kk_perf_cache_lookup(struct vk_device *, bool hit);
 /* Physical native pass counters are CPU recording observations, not GPU
  * presentation counts. No bridge snapshot is made when tracking is disabled. */

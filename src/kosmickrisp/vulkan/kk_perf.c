@@ -7,6 +7,8 @@
 #include "kk_image.h"
 #include "kosmickrisp/bridge/mtl_texture.h"
 #include "vk_util.h"
+#include "vk_queue.h"
+#include "vk_sync.h"
 #include "kosmickrisp/bridge/mtl_render_state.h"
 #include "util/os_time.h"
 #include "util/mesa-blake3.h"
@@ -40,10 +42,10 @@ struct kk_perf {
    pthread_mutex_t mutex;
    FILE *log;
    void *metal_compiler;
-   bool close_log, compile_details;
+   bool close_log, compile_details, submit_details;
    bool device_features_known;
    bool pipeline_statistics_query, writable_msaa, dynamic_rendering;
-   uint64_t compile_sequence, pipeline_sequence;
+   uint64_t compile_sequence, pipeline_sequence, submit_sequence;
    uint64_t created, interval_start, frames, interval_frames;
    uint64_t frame_interval, time_interval, sequence;
    int64_t pending, submit_pending, compiler_active;
@@ -98,6 +100,8 @@ kk_perf_create(void)
    if (pthread_mutex_init(&p->mutex, NULL)) { free(p); return NULL; }
    const char *details = getenv("KK_PERF_TRACKING_COMPILES");
    p->compile_details = details && *details && strcmp(details, "0") && strcmp(details, "false");
+   const char *submits = getenv("KK_PERF_TRACKING_SUBMITS");
+   p->submit_details = submits && !strcmp(submits, "1");
    p->log = stderr;
    const char *path = getenv("KK_PERF_TRACKING_LOG");
    if (path && *path) {
@@ -112,6 +116,12 @@ kk_perf_create(void)
    /* Acknowledge enabled tracking before any native device-init compile. */
    flush_locked(p, kk_perf_now(), false);
    return p;
+}
+
+bool
+kk_perf_submit_details(const struct kk_perf *p)
+{
+   return p && p->submit_details;
 }
 
 /* Caller holds the diagnostic mutex. Durations are nested CPU-side elapsed
@@ -781,4 +791,64 @@ kk_perf_bind_metal_compiler(struct kk_perf *p, void *compiler)
    p->metal_compiler = compiler ? mtl_retain(compiler) : NULL;
    pthread_mutex_unlock(&p->mutex);
    mtl_release(old);
+}
+
+/* Flush each boundary so an interrupted process retains the last reached
+ * seam. Tracking is opt-in; ordinary submissions never enter these helpers. */
+uint64_t
+kk_perf_submit_trace(struct kk_perf *p, const char *phase, uint64_t id,
+   const void *queue, const struct vk_queue_submit *submit, int result)
+{
+   pthread_mutex_lock(&p->mutex);
+   if (!id) id = ++p->submit_sequence;
+   fprintf(p->log, "{\"kk_submit_trace\":1,\"id\":%"PRIu64
+      ",\"phase\":\"%s\",\"queue\":\"%p\",\"submit\":\"%p\",\"result\":%d"
+      ",\"time_ns\":%"PRIu64",\"commands\":[", id, phase, queue,
+      (const void *)submit, result, kk_perf_now());
+   for (uint32_t i = 0; i < submit->command_buffer_count; i++)
+      fprintf(p->log, "%s\"%p\"", i ? "," : "", (void *)submit->command_buffers[i]);
+   fprintf(p->log, "],\"waits\":[");
+   for (uint32_t i = 0; i < submit->wait_count; i++)
+      fprintf(p->log, "%s{\"sync\":\"%p\",\"value\":%"PRIu64"}",
+         i ? "," : "", (void *)submit->waits[i].sync, submit->waits[i].wait_value);
+   fprintf(p->log, "],\"signals\":[");
+   for (uint32_t i = 0; i < submit->signal_count; i++)
+      fprintf(p->log, "%s{\"sync\":\"%p\",\"value\":%"PRIu64"}",
+         i ? "," : "", (void *)submit->signals[i].sync, submit->signals[i].signal_value);
+   fprintf(p->log, "],\"signals_issued\":%s}\n",
+      !strcmp(phase, "return") && result == VK_SUCCESS ? "true" : "false");
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+   return id;
+}
+
+uint64_t
+kk_perf_commit_trace(struct kk_perf *p, const char *phase, uint64_t id,
+   const void *queue, const void *submit, const void *command,
+   const void *native, uint32_t count, int result)
+{
+   pthread_mutex_lock(&p->mutex);
+   if (!id) id = ++p->submit_sequence;
+   fprintf(p->log, "{\"kk_commit_trace\":1,\"id\":%"PRIu64
+      ",\"phase\":\"%s\",\"queue\":\"%p\",\"submit\":\"%p\",\"command\":\"%p\","
+      "\"native\":\"%p\",\"count\":%u,\"result\":%d,\"time_ns\":%"PRIu64"}\n",
+      id, phase, queue, submit, command, native, count, result, kk_perf_now());
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+   return id;
+}
+
+uint64_t
+kk_perf_sync_trace(struct kk_perf *p, const char *phase, uint64_t id,
+   const void *sync, const void *native, uint64_t value, unsigned flags, int result)
+{
+   pthread_mutex_lock(&p->mutex);
+   if (!id) id = ++p->submit_sequence;
+   fprintf(p->log, "{\"kk_sync_trace\":1,\"id\":%"PRIu64
+      ",\"phase\":\"%s\",\"sync\":\"%p\",\"native\":\"%p\",\"value\":%"PRIu64
+      ",\"flags\":%u,\"result\":%d,\"time_ns\":%"PRIu64"}\n",
+      id, phase, sync, native, value, flags, result, kk_perf_now());
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+   return id;
 }

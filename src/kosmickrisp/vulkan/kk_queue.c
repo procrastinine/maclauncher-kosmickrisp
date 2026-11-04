@@ -105,6 +105,11 @@ kk_queue_gpu_range(void *data, uint64_t frame, double start, double end,
    kk_perf_gpu_frame(data, frame, start, end, count);
 }
 
+static VkResult kk_queue_submit_verbose(struct vk_queue *,
+                                         struct vk_queue_submit *);
+
+#include "kk_queue_trace.h"
+
 static VkResult
 kk_queue_commit_native(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
                 mtl_feedback_handler_callback callback, void *user_data)
@@ -130,17 +135,20 @@ kk_queue_commit_native(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
    mtl_commit_options *options = mtl_new_commit_options();
    struct kk_perf *perf = kk_queue_device(queue)->perf;
    if (unlikely(perf)) {
-      const uint32_t native_count = 1u + util_dynarray_num_elements(
-         &cmd->mesh_command_buffers, mtl_command_buffer *);
-      mtl_commit_options_add_tracked_feedback_handler(
-         options, callback, user_data, kk_queue_gpu_range, perf,
-         kk_perf_frame_id(perf), native_count);
+      if (queue->native_submit == kk_queue_submit_verbose) {
+         kk_queue_commit_tracked(queue, cmd, options, callback, user_data, perf);
+      } else {
+         mtl_commit_options_add_tracked_feedback_handler(
+            options, callback, user_data, kk_queue_gpu_range, perf,
+            kk_perf_frame_id(perf), cmd->native_submit.count);
+         mtl_command_queue_commit(queue->mtl_handle, cmd->native_submit.buffers,
+                                  cmd->native_submit.count, options);
+      }
    } else {
       mtl_commit_options_add_feedback_handler(options, callback, user_data);
+      mtl_command_queue_commit(queue->mtl_handle, cmd->native_submit.buffers,
+                               cmd->native_submit.count, options);
    }
-
-   mtl_command_queue_commit(queue->mtl_handle, cmd->native_submit.buffers,
-                            cmd->native_submit.count, options);
    mtl_release(options);
    for (uint32_t i = 0; i < count; i++) {
       void *drawable = i < retained_count ? drawables[i] : cmd->drawable;
@@ -437,10 +445,27 @@ kk_queue_submit_internal(struct vk_queue *vk_queue, struct vk_queue_submit *subm
 static VkResult
 kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
 {
+   return kk_queue_submit_internal(vk_queue, submit);
+}
+
+static VkResult
+kk_queue_submit_metrics(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+{
    struct kk_queue *queue = container_of(vk_queue, struct kk_queue, vk);
    struct kk_device *dev = kk_queue_device(queue);
    return KK_PERF_CALL(dev, KK_PERF_SUBMIT,
                        kk_queue_submit_internal(vk_queue, submit));
+}
+
+static VkResult
+kk_queue_submit_verbose(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+{
+   struct kk_queue *queue = container_of(vk_queue, struct kk_queue, vk);
+   struct kk_device *dev = kk_queue_device(queue);
+   uint64_t id = kk_perf_submit_trace(dev->perf, "begin", 0, queue, submit, 0);
+   VkResult result = kk_queue_submit_metrics(vk_queue, submit);
+   kk_perf_submit_trace(dev->perf, "return", id, queue, submit, result);
+   return result;
 }
 
 VkResult
@@ -508,7 +533,9 @@ kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
    mtl_command_queue_add_residency_set(queue->mtl_handle,
                                        dev->residency_set.handle);
 
-   queue->native_submit = kk_queue_submit;
+   queue->native_submit = !dev->perf ? kk_queue_submit :
+      kk_perf_submit_details(dev->perf) ? kk_queue_submit_verbose :
+                                        kk_queue_submit_metrics;
    queue->vk.driver_submit = queue->native_submit;
 
    return VK_SUCCESS;
