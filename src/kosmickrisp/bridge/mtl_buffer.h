@@ -21,7 +21,9 @@ void *mtl_get_contents(mtl_buffer *buffer);
 
 /* Zero the complete buffer and wait before exposing the allocation. */
 enum mtl_command_queue_error
-mtl_buffer_zero_sync(mtl_device *device, mtl_buffer *buffer);
+mtl_buffer_zero_sync(mtl_command_queue *queue, mtl_buffer *buffer);
+/* Legacy blit queue, created only on the first private zeroed allocation. */
+mtl_command_queue *mtl_new_zero_fill_queue(mtl_device *device);
 
 /* FD and mapping ownership transfers only on a successful native allocation. */
 mtl_buffer *mtl_new_buffer_with_memory_fd(mtl_device *device, int fd, void *mapping,

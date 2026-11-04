@@ -33,6 +33,7 @@ kk_writable_msaa_meta_copy(struct kk_cmd_buffer *cmd,
    mtl_render_pass_descriptor *descriptor = cmd->state.gfx.render_pass_descriptor;
    const bool need_start = cmd->state.gfx.need_to_start_render_pass;
    const uint32_t write_mask = cmd->writable_msaa_render_writes;
+   const uint32_t draw_writes = cmd->writable_msaa_draw_writes;
    const uint32_t attachment_mask = cmd->writable_msaa_render_attachments;
    const VkShaderStageFlags pipeline_stages = cmd->vk.pipeline_shader_stages;
    struct kk_meta_save save;
@@ -49,6 +50,7 @@ kk_writable_msaa_meta_copy(struct kk_cmd_buffer *cmd,
    cmd->state.gfx.render_pass_descriptor = descriptor;
    cmd->state.gfx.need_to_start_render_pass = need_start;
    cmd->writable_msaa_render_writes = write_mask;
+   cmd->writable_msaa_draw_writes = draw_writes;
    cmd->writable_msaa_render_attachments = attachment_mask;
    cmd->vk.pipeline_shader_stages = pipeline_stages;
    cmd->writable_msaa_meta = false;
@@ -120,6 +122,35 @@ kk_writable_msaa_convert_view(struct kk_cmd_buffer *cmd,
    }
 }
 
+/* Immutable attachment eligibility belongs to rendering setup, not each
+ * physical encoder restart or draw. The caller already checked device support.
+ */
+void
+kk_writable_msaa_init_render(struct kk_cmd_buffer *cmd)
+{
+   struct kk_rendering_state *render = &cmd->state.gfx.render;
+   for (uint32_t i = 0; i < render->color_att_count; i++) {
+      const struct kk_image_view *view = render->color_att[i].iview;
+      if (view && container_of(view->vk.image, struct kk_image, vk)->writable_msaa)
+         render->writable_msaa_attachments |= BITFIELD_BIT(i);
+   }
+   if (cmd->vk.render_pass) {
+      const struct vk_subpass *subpass =
+         &cmd->vk.render_pass->subpasses[cmd->vk.subpass_idx];
+      for (uint32_t i = 0; i < subpass->input_count; i++) {
+         const uint32_t index = subpass->input_attachments[i].attachment;
+         if (index == VK_ATTACHMENT_UNUSED)
+            continue;
+         const struct vk_image_view *view =
+            vk_command_buffer_get_attachment_view(&cmd->vk, index);
+         if (view && container_of(view->image, struct kk_image, vk)->writable_msaa) {
+            render->writable_msaa_inputs = true;
+            break;
+         }
+      }
+   }
+}
+
 void
 kk_writable_msaa_prepare_render(struct kk_cmd_buffer *cmd)
 {
@@ -128,11 +159,8 @@ kk_writable_msaa_prepare_render(struct kk_cmd_buffer *cmd)
    cmd->writable_msaa_render_writes = 0;
    cmd->writable_msaa_render_attachments = 0;
    const struct kk_rendering_state *render = &cmd->state.gfx.render;
-   for (uint32_t i = 0; i < render->color_att_count; i++) {
-      const struct kk_image_view *view = render->color_att[i].iview;
-      if (!view || !container_of(view->vk.image, struct kk_image, vk)->writable_msaa)
-         continue;
-      cmd->writable_msaa_render_attachments |= BITFIELD_BIT(i);
+   cmd->writable_msaa_render_attachments = render->writable_msaa_attachments;
+   u_foreach_bit(i, render->writable_msaa_attachments) {
       kk_writable_msaa_convert_view(cmd, render->color_att[i].iview, false);
       if (!render->writable_msaa_loaded &&
           render->color_att[i].load_op == VK_ATTACHMENT_LOAD_OP_CLEAR)
@@ -145,7 +173,7 @@ kk_writable_msaa_prepare_render(struct kk_cmd_buffer *cmd)
     * Such a view still consumes the native primary representation, including
     * when its layout remains GENERAL across preceding storage writes.
     */
-   if (cmd->vk.render_pass) {
+   if (render->writable_msaa_inputs) {
       const struct vk_subpass *subpass =
          &cmd->vk.render_pass->subpasses[cmd->vk.subpass_idx];
       for (uint32_t i = 0; i < subpass->input_count; i++) {
@@ -180,8 +208,9 @@ kk_writable_msaa_publish_render(struct kk_cmd_buffer *cmd)
 }
 
 void
-kk_writable_msaa_record_draw(struct kk_cmd_buffer *cmd)
+kk_writable_msaa_update_draw(struct kk_cmd_buffer *cmd)
 {
+   cmd->writable_msaa_draw_writes = 0;
    if (cmd->writable_msaa_meta || !cmd->writable_msaa_render_attachments)
       return;
    const struct kk_rendering_state *render = &cmd->state.gfx.render;
@@ -189,16 +218,13 @@ kk_writable_msaa_record_draw(struct kk_cmd_buffer *cmd)
    const struct kk_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
    if (!fs || dyn->rs.rasterizer_discard_enable)
       return;
-   for (uint32_t i = 0; i < render->color_att_count; i++) {
-      const struct kk_image_view *view = render->color_att[i].iview;
-      if (!view || !container_of(view->vk.image, struct kk_image, vk)->writable_msaa)
-         continue;
+   u_foreach_bit(i, render->writable_msaa_attachments) {
       const uint8_t location = render->color_map[i];
       if (location != MESA_VK_ATTACHMENT_UNUSED &&
           (dyn->cb.color_write_enables & BITFIELD_BIT(i)) &&
           dyn->cb.attachments[i].write_mask &&
           (fs->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DATA0 + location)))
-         cmd->writable_msaa_render_writes |= BITFIELD_BIT(i);
+         cmd->writable_msaa_draw_writes |= BITFIELD_BIT(i);
    }
 }
 

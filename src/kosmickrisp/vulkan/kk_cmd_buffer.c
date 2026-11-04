@@ -438,7 +438,9 @@ cs_start_render(struct kk_cmd_buffer *cmd)
 
    /* Ensure no other active encoder, aka compute */
    cs_end(cmd);
-   kk_writable_msaa_prepare_render(cmd);
+   cmd->writable_msaa_draw_writes = 0;
+   if (state->render.writable_msaa_attachments || state->render.writable_msaa_inputs)
+      kk_writable_msaa_prepare_render(cmd);
 
    cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
       cmd->metal.cmd_buf, state->render_pass_descriptor);
@@ -592,7 +594,10 @@ cs_end_internal(struct kk_cmd_buffer *cmd, bool ordered)
       /* The stage map is only valid for the current render encoder */
       util_dynarray_clear(&cmd->ts_stage_map);
       flush_post_render_writes(cmd);
-      kk_writable_msaa_publish_render(cmd);
+      if (cmd->writable_msaa_render_writes)
+         kk_writable_msaa_publish_render(cmd);
+      cmd->writable_msaa_render_attachments = 0;
+      cmd->writable_msaa_draw_writes = 0;
    }
 
    if (cmd->metal.compute) {

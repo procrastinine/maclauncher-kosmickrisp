@@ -96,25 +96,4 @@ kk_writable_msaa_view_finish(struct kk_device *dev, struct kk_image_view *view)
    view->writable_msaa = NULL;
 }
 
-void
-kk_writable_msaa_storage_descriptor(struct kk_storage_image_descriptor *desc,
-                                     const struct kk_image_view *view)
-{
-   if (!view->writable_msaa)
-      return;
-   desc->image_gpu_resource_id = view->writable_msaa->table->gpu;
-   desc->texel_offset = view->vk.image->samples;
-   desc->texel_count = view->vk.layer_count;
-}
-
-void
-kk_writable_msaa_sampled_descriptor(struct kk_sampled_image_descriptor *desc,
-   const struct kk_image_view *view, bool input_attachment)
-{
-   if (!view->writable_msaa || input_attachment)
-      return;
-   desc->aux_resource_id = view->writable_msaa->table->gpu;
-   desc->aux_word = ((uint64_t)view->vk.layer_count << 32) |
-                   (uint32_t)view->vk.image->samples;
-}
 #endif

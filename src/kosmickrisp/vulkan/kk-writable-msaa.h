@@ -4,6 +4,7 @@
 
 #include "kk-writable-msaa-layout.h"
 #include "kk_image.h"
+#include "kk_bo.h"
 #include "kk_image_view.h"
 #include "kk_descriptor_types.h"
 #include "kk_format.h"
@@ -58,15 +59,33 @@ VkResult kk_writable_msaa_image_bind(struct kk_device *dev, struct kk_image *ima
 VkResult kk_writable_msaa_view_init(struct kk_device *dev, struct kk_image_view *view);
 void kk_writable_msaa_view_finish(struct kk_device *dev, struct kk_image_view *view);
 
-void kk_writable_msaa_storage_descriptor(struct kk_storage_image_descriptor *desc,
-                                        const struct kk_image_view *view);
-void kk_writable_msaa_sampled_descriptor(struct kk_sampled_image_descriptor *desc,
-   const struct kk_image_view *view, bool input_attachment);
+static inline void
+kk_writable_msaa_storage_descriptor(struct kk_storage_image_descriptor *desc,
+                                     const struct kk_image_view *view)
+{
+   if (!view->writable_msaa)
+      return;
+   desc->image_gpu_resource_id = view->writable_msaa->table->gpu;
+   desc->texel_offset = view->vk.image->samples;
+   desc->texel_count = view->vk.layer_count;
+}
+
+static inline void
+kk_writable_msaa_sampled_descriptor(struct kk_sampled_image_descriptor *desc,
+   const struct kk_image_view *view, bool input_attachment)
+{
+   if (!view->writable_msaa || input_attachment)
+      return;
+   desc->aux_resource_id = view->writable_msaa->table->gpu;
+   desc->aux_word = ((uint64_t)view->vk.layer_count << 32) |
+                   (uint32_t)view->vk.image->samples;
+}
 
 struct kk_cmd_buffer;
 void kk_writable_msaa_prepare_render(struct kk_cmd_buffer *cmd);
 void kk_writable_msaa_publish_render(struct kk_cmd_buffer *cmd);
-void kk_writable_msaa_record_draw(struct kk_cmd_buffer *cmd);
+void kk_writable_msaa_init_render(struct kk_cmd_buffer *cmd);
+void kk_writable_msaa_update_draw(struct kk_cmd_buffer *cmd);
 bool kk_writable_msaa_copy_image(struct kk_cmd_buffer *cmd,
                                 const VkCopyImageInfo2 *copy);
 

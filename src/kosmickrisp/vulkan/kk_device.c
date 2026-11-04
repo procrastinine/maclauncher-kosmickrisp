@@ -646,6 +646,10 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
       mtl_stop_gpu_capture();
    }
 
+   /* Each private zero fill completed synchronously at allocation. */
+   if (dev->zero_fill_queue)
+      mtl_release(dev->zero_fill_queue);
+
    /* Drain the private present queue before destroying shared meta state. */
    if (dev->blit_queue) {
       kk_queue_finish(dev, dev->blit_queue);

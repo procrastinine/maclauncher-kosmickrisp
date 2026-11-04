@@ -50,12 +50,17 @@ struct kk_image_view {
       /* Used if view has to create its own alias of a specific subresource */
       mtl_texture *mtl_handle_subres;
 
-      mtl_texture *mtl_handle_cube_face;
-      uint64_t cube_face_gpu_resource_id;
-      mtl_texture *mtl_handle_sampled_alias;
-      mtl_texture *mtl_handle_storage_alias;
-      uint64_t sampled_alias_gpu_resource_id;
-      uint64_t storage_alias_gpu_resource_id;
+      /* Cube face views and M11 aliases are disjoint native view types.
+       * Only a single-plane 1D/2D view publishes the M11 member. Both usages
+       * share its identical native view, cache and retirement reference. */
+      union {
+         mtl_texture *mtl_handle_cube_face;
+         mtl_texture *mtl_handle_single_layer_alias;
+      };
+      union {
+         uint64_t cube_face_gpu_resource_id;
+         uint64_t single_layer_alias_gpu_resource_id;
+      };
       uint64_t sampled_gpu_resource_id;
       uint64_t storage_gpu_resource_id;
       uint64_t input_gpu_resource_id;

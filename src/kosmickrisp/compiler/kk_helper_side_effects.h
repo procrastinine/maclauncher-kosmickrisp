@@ -8,7 +8,10 @@
 static bool
 kk_nir_lower_helper_side_effects(nir_shader *nir)
 {
-   if (nir->info.stage != MESA_SHADER_FRAGMENT)
+   /* The final SSA gather includes discards inserted by all late lowerings. */
+   if (nir->info.stage != MESA_SHADER_FRAGMENT || !nir->info.fs.uses_discard ||
+       (!nir->info.writes_memory &&
+        !BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_HELPER_INVOCATION)))
       return false;
 
    bool demotes = false;

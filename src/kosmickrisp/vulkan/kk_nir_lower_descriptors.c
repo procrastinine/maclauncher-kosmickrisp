@@ -28,6 +28,10 @@ struct lower_descriptors_ctx {
    const struct kk_descriptor_set_layout *set_layouts[KK_MAX_SETS];
 
    bool standard_3d;
+   bool image_array_alias;
+   bool array_storage_alias;
+   bool sparse_image_query;
+   bool writable_msaa;
    bool robust_msaa_defaults;
    bool clamp_desc_array_bounds;
    nir_address_format ubo_addr_format;
@@ -479,19 +483,30 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
       offsetof(struct kk_storage_image_descriptor, image_gpu_resource_id);
 
    nir_def *resource_addr = load_resource_addr(b, 1, 64, deref, offs, ctx);
+   nir_def *descriptor_address = resource_addr;
 
    bool sparse_array_dimension = nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_1D ||
                                  nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_2D;
    nir_def *sparse_descriptor = NULL;
-   if (sparse_array_dimension) {
+   const bool array_alias = kk_alias_storage_array_possible(intr, ctx);
+   if (sparse_array_dimension && (ctx->sparse_image_query || array_alias)) {
       sparse_descriptor = load_resource_deref_desc(b, 2, 64, deref,
          offsetof(struct kk_storage_image_descriptor, image_gpu_resource_id), ctx);
-      nir_def *descriptor_address = load_resource_addr(b, 1, 64, deref,
-         offsetof(struct kk_storage_image_descriptor, image_gpu_resource_id), ctx);
-      resource_addr = kk_nir_storage_sparse_handle_address(b, descriptor_address,
-         sparse_descriptor, nir_intrinsic_image_array(intr));
+      if (ctx->sparse_image_query) {
+         resource_addr = kk_nir_storage_sparse_handle_address(b, descriptor_address,
+            sparse_descriptor, nir_intrinsic_image_array(intr));
+      } else {
+         /* No sparse image can exist on this device. Only the inline native
+          * array alias may change the ordinary primary-slot address. */
+         resource_addr = nir_bcsel(b,
+            nir_ine_imm(b, nir_channel(b, sparse_descriptor, 1), 0),
+            nir_iadd_imm(b, descriptor_address,
+               offsetof(struct kk_storage_image_descriptor, image_array_gpu_resource_id)),
+            descriptor_address);
+      }
    }
-   if (intr->intrinsic == nir_intrinsic_image_deref_sparse_load &&
+   if (ctx->sparse_image_query &&
+       intr->intrinsic == nir_intrinsic_image_deref_sparse_load &&
        nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_BUF &&
        nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_MS) {
       nir_def *query = load_resource_deref_desc(b, 1, 64, deref,
@@ -505,7 +520,7 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
       nir_src_rewrite(&intr->src[3], lod);
    }
 
-   if (kk_lower_msaa_storage(b, intr, ctx))
+   if (ctx->writable_msaa && kk_lower_msaa_storage(b, intr, ctx))
       return true;
 
    nir_alu_type type;
@@ -536,7 +551,8 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
       nir_src_rewrite(&intr->src[0], handle);
    } else {
       nir_rewrite_image_intrinsic(intr, handle, nir_image_intrinsic_type_bindless);
-   if (kk_alias_lower_array_atomic(b, intr, deref, ctx, type,
+   if (kk_alias_lower_array_atomic(b, intr, deref, ctx, sparse_descriptor,
+                                  descriptor_address, resource_addr, type,
                                   nir_intrinsic_access(intr) | access,
                                   msl_convert_access_flag(access)))
       return true;
@@ -858,7 +874,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
          if (lod_source >= 0) nir_src_rewrite(&tex->src[lod_source].src, lod);
          else nir_tex_instr_add_src(tex, nir_tex_src_lod, lod);
       }
-      if (kk_lower_msaa_fetch(b, tex, texture, ctx))
+      if (ctx->writable_msaa && kk_lower_msaa_fetch(b, tex, texture, ctx))
          return true;
 
       nir_def *handle = NULL;
@@ -1164,13 +1180,18 @@ kk_nir_prepare_layered_bc(nir_shader *nir,
 }
 
 bool
-kk_nir_lower_descriptors(nir_shader *nir, bool standard_3d,
+kk_nir_lower_descriptors(nir_shader *nir, kk_feature_key features,
                          const struct vk_pipeline_robustness_state *rs,
                          uint32_t set_layout_count,
                          struct vk_descriptor_set_layout *const *set_layouts)
 {
    struct lower_descriptors_ctx ctx = kk_descriptor_context(rs, set_layout_count, set_layouts);
-   ctx.standard_3d = standard_3d;
+   ctx.standard_3d = features & BITFIELD_BIT(KK_FEAT_STANDARD_3D);
+   ctx.image_array_alias = features & BITFIELD_BIT(KK_FEAT_IMAGE_ARRAY_ALIAS);
+   ctx.sparse_image_query = features & BITFIELD_BIT(KK_FEAT_SPARSE_IMAGE_QUERY);
+   ctx.array_storage_alias = ctx.image_array_alias ||
+      (features & BITFIELD_BIT(KK_FEAT_LAYERED_BLOCK_VIEWS));
+   ctx.writable_msaa = features & BITFIELD_BIT(KK_FEAT_WRITABLE_MSAA);
 
    /* First lower everything but complex SSBOs, then lower complex SSBOs.
     *

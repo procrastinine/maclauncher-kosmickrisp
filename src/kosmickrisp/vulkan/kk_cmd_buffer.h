@@ -229,6 +229,8 @@ struct kk_rendering_state {
    VkSampleLocationEXT sample_locations[KK_MAX_SAMPLES];
    bool force_attachment_store;
    bool writable_msaa_loaded;
+   uint32_t writable_msaa_attachments;
+   bool writable_msaa_inputs;
    bool rendering_to_whole_framebuffer;
 };
 
@@ -414,6 +416,7 @@ struct kk_cmd_buffer {
    bool writable_msaa_meta;
    uint32_t writable_msaa_render_attachments;
    uint32_t writable_msaa_render_writes;
+   uint32_t writable_msaa_draw_writes;
    struct util_dynarray msrtss_images;
    struct util_dynarray ts_resolves;
    /* Timestamps already sampled by the current render encoder. (struct

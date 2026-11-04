@@ -41,6 +41,11 @@ enum kk_feature_bit {
    KK_FEAT_PIXEL_ENVELOPE,
    KK_FEAT_DGC_REPLAY,
    KK_FEAT_STANDARD_3D,
+   KK_FEAT_SLICED_3D,
+   KK_FEAT_LAYERED_BLOCK_VIEWS,
+   KK_FEAT_IMAGE_ARRAY_ALIAS,
+   KK_FEAT_SPARSE_IMAGE_QUERY,
+   KK_FEAT_WRITABLE_MSAA,
    KK_FEAT_COUNT,
 };
 
@@ -333,7 +338,7 @@ bool kk_nir_prepare_layered_bc(nir_shader *nir,
    struct vk_descriptor_set_layout *const *set_layouts);
 
 bool
-kk_nir_lower_descriptors(nir_shader *nir, bool standard_3d,
+kk_nir_lower_descriptors(nir_shader *nir, kk_feature_key features,
                          const struct vk_pipeline_robustness_state *rs,
                          uint32_t set_layout_count,
                          struct vk_descriptor_set_layout *const *set_layouts);

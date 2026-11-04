@@ -71,6 +71,11 @@ kk_layered_bc_instruction(nir_builder *b, nir_instr *instr, void *data)
            nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_2D) ||
           !nir_intrinsic_image_array(intr))
          return false;
+      enum pipe_format format = nir_intrinsic_format(intr);
+      if (format != PIPE_FORMAT_NONE &&
+          util_format_get_blocksize(format) != 8 &&
+          util_format_get_blocksize(format) != 16)
+         return false;
       nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
       nir_def *address = load_resource_addr(b, 1, 64, deref, 0, ctx);
       nir_def *descriptor = load_resource_deref_desc(b, 2, 64, deref, 0, ctx);

@@ -89,7 +89,7 @@ kk_poly_retained_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data dr
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_UNKNOWN);
       return;
    }
-   kk_writable_msaa_record_draw(cmd);
+   cmd->writable_msaa_render_writes |= cmd->writable_msaa_draw_writes;
    struct kk_poly_retained_storage {
       struct kk_poly_retained_raster raster;
       struct kk_poly_retained_lifetime lifetime;

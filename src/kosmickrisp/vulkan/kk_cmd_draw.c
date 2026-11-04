@@ -154,7 +154,8 @@ kk_fill_common_attachment_description(
          descriptor, iview->vk.base_array_layer);
    }
 
-   kk_layered_bc_attachment_description(descriptor, info, render, false);
+   if (render->layered_bc)
+      kk_layered_bc_attachment_description(descriptor, info, render, false);
 
    /* STORE_OP_NONE behaves like DONT_CARE if there are writes
     * (CLEAR or DONT_CARE are writes).
@@ -183,7 +184,8 @@ kk_fill_common_attachment_description(
          mtl_render_pass_attachment_descriptor_set_resolve_slice(
             descriptor, info->resolve_iview->vk.base_array_layer);
       }
-      kk_layered_bc_attachment_description(descriptor, info, render, true);
+      if (render->layered_bc)
+         kk_layered_bc_attachment_description(descriptor, info, render, true);
    }
 }
 
@@ -351,6 +353,9 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
          .store_op = VK_ATTACHMENT_STORE_OP_NONE,
       };
    }
+
+   if (dev->vk.enabled_features.shaderStorageImageMultisample)
+      kk_writable_msaa_init_render(cmd);
 
    kk_init_rendering_locations(cmd, pRenderingInfo);
 
@@ -1837,6 +1842,7 @@ static void
 kk_flush_gfx_state(struct kk_cmd_buffer *cmd)
 {
    struct kk_graphics_state *gfx = &cmd->state.gfx;
+   struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_descriptor_state *desc = &gfx->descriptors;
 
    kk_flush_render_pass(cmd);
@@ -1844,6 +1850,15 @@ kk_flush_gfx_state(struct kk_cmd_buffer *cmd)
 
    if (desc->push_dirty)
       kk_cmd_buffer_flush_push_descriptors(cmd, desc);
+
+   /* Only changed draw state on a writable pass needs a new output mask.
+    * Physical encoder creation dirties this state through the existing path.
+    */
+   if (cmd->writable_msaa_render_attachments &&
+       (IS_SHADER_DIRTY(FRAGMENT) || IS_DIRTY(COLOR_ATTACHMENT_MAP) ||
+        IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(CB_WRITE_MASKS) ||
+        IS_DIRTY(RS_RASTERIZER_DISCARD_ENABLE)))
+      kk_writable_msaa_update_draw(cmd);
 
    kk_flush_dynamic_state(cmd);
 
@@ -2120,7 +2135,9 @@ static void
 kk_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data data)
 {
    mtl_render_encoder *enc = cs_get_render(cmd);
-   kk_writable_msaa_record_draw(cmd);
+   /* Actual draw execution cannot be inferred from pipeline binding: a later
+    * storage-only draw must not publish an earlier, unexecuted color state. */
+   cmd->writable_msaa_render_writes |= cmd->writable_msaa_draw_writes;
 
    if (kk_grid_is_indirect(data.grid)) {
       if (data.index.el_size_B) {

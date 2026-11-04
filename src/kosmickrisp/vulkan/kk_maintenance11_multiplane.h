@@ -4,18 +4,13 @@
 
 #ifdef KK_MAINTENANCE11_DESCRIPTOR
 static void
-kk_alias_sampled_tag(struct kk_sampled_image_descriptor *desc,
-                      const struct kk_image_view *view, bool input_attachment)
+kk_alias_sampled_tag(struct kk_sampled_image_descriptor *desc, bool native_alias)
 {
-   /* The LOD assignment precedes this publication. Preserve an independent
-    * sparse query-pointer tag and all numerical LOD bits. */
-   desc->image_min_lod_uint16 &= ~KK_IMAGE_NATIVE_ARRAY_ALIAS_TAG;
-   if (view->plane_count == 1 && kk_alias_view_is_1d_or_2d(view) &&
-       !kk_alias_has_writable_msaa(view) && desc->aux_resource_id &&
-       (input_attachment || kk_alias_view_is_array(view) ||
-        view->planes[0].sampled_alias_gpu_resource_id))
+   /* Called after ordinary LOD assignment; the sparse query tag is independent. */
+   if (native_alias)
       desc->image_min_lod_uint16 |= KK_IMAGE_NATIVE_ARRAY_ALIAS_TAG;
 }
+
 #else
 static nir_def *
 kk_alias_sampled_address(nir_builder *b, const nir_tex_instr *tex,
@@ -23,7 +18,8 @@ kk_alias_sampled_address(nir_builder *b, const nir_tex_instr *tex,
                          unsigned image_plane_offset_B, unsigned relative_offs,
                          const struct lower_descriptors_ctx *ctx)
 {
-   if (!tex->is_array || !kk_alias_array_dimension(tex->sampler_dim) ||
+   if (!ctx->image_array_alias || !tex->is_array ||
+       !kk_alias_array_dimension(tex->sampler_dim) ||
        relative_offs != offsetof(struct kk_sampled_image_descriptor,
                                  image_gpu_resource_id))
       return primary_slot_address;

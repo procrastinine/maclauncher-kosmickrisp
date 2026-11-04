@@ -2573,7 +2573,13 @@ msl_optimize_nir(struct nir_shader *nir)
     * (undef,undef,undef,undef). After nir_opt_remove_phis this gets optimized
     * to a single store for x, and nir_opt_shrink_stores will correctly reduce
     * the store. */
-   NIR_PASS(_, nir, kk_nir_lower_helper_side_effects);
+   /* Share the fragment info walk with the caller: early API shader info can
+    * predate discards inserted by line, cull and sample-mask lowering. */
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+      if (kk_nir_lower_helper_side_effects(nir))
+         nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+   }
    NIR_PASS(_, nir, nir_opt_shrink_stores, false);
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
    NIR_PASS(_, nir, msl_nir_lower_algebraic_late);

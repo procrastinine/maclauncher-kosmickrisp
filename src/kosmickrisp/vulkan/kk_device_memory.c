@@ -728,8 +728,23 @@ kk_device_memory_zero_init(struct kk_device *dev, struct kk_device_memory *mem)
       memset(mem->bo->cpu, 0, mem->bo->size_B);
       return VK_SUCCESS;
    }
+   mtl_command_queue *queue = p_atomic_read(&dev->zero_fill_queue);
+   if (!queue) {
+      /* This mutex exists on headless devices too. BO allocation released it
+       * before initialization, and queue creation does not change residency.
+       */
+      simple_mtx_lock(&dev->residency_set.mutex);
+      queue = p_atomic_read(&dev->zero_fill_queue);
+      if (!queue) {
+         queue = mtl_new_zero_fill_queue(dev->mtl_handle);
+         p_atomic_set(&dev->zero_fill_queue, queue);
+      }
+      simple_mtx_unlock(&dev->residency_set.mutex);
+   }
+   if (!queue)
+      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
    enum mtl_command_queue_error error =
-      mtl_buffer_zero_sync(dev->mtl_handle, mem->bo->map);
+      mtl_buffer_zero_sync(queue, mem->bo->map);
    if (error == MTL_COMMAND_QUEUE_ERROR_NONE)
       return VK_SUCCESS;
    if (error == MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY)

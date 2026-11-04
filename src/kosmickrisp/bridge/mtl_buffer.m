@@ -16,24 +16,26 @@
 #include <Metal/Metal.h>
 #include <Metal/MTLTexture.h>
 
-/* A private allocation is not visible to any Vulkan queue until this
- * independent fill has completed. No queue state or pending BO clear is kept.
- * The temporary queue exists only for allocations requesting zero contents.
- */
-enum mtl_command_queue_error
-mtl_buffer_zero_sync(mtl_device *device, mtl_buffer *buffer)
+mtl_command_queue *
+mtl_new_zero_fill_queue(mtl_device *device)
 {
    @autoreleasepool {
-      id<MTLCommandQueue> queue = [(id<MTLDevice>)device newCommandQueue];
-      if (!queue)
-         return MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY;
+      return [(id<MTLDevice>)device newCommandQueue];
+   }
+}
 
+/* The device lazily owns this independent queue. Each allocation waits for its
+ * own fill before becoming visible to any Vulkan queue; no pending BO state.
+ */
+enum mtl_command_queue_error
+mtl_buffer_zero_sync(mtl_command_queue *handle, mtl_buffer *buffer)
+{
+   @autoreleasepool {
+      id<MTLCommandQueue> queue = (id<MTLCommandQueue>)handle;
       id<MTLCommandBuffer> commands = [queue commandBuffer];
       id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
-      if (!blit) {
-         [queue release];
+      if (!blit)
          return MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY;
-      }
       id<MTLBuffer> target = (id<MTLBuffer>)buffer;
       [blit fillBuffer:target range:NSMakeRange(0, target.length) value:0];
       [blit endEncoding];
@@ -45,7 +47,6 @@ mtl_buffer_zero_sync(mtl_device *device, mtl_buffer *buffer)
          result = commands.error.code == MTLCommandBufferErrorOutOfMemory
                      ? MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY
                      : MTL_COMMAND_QUEUE_ERROR_INTERNAL;
-      [queue release];
       return result;
    }
 }

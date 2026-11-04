@@ -371,7 +371,8 @@ kk_CmdCopyImage2(VkCommandBuffer commandBuffer,
       kk_standard_3d_copy_image(cmd, pCopyImageInfo);
       return;
    }
-   if (kk_writable_msaa_copy_image(cmd, pCopyImageInfo))
+   if ((src->writable_msaa || dst->writable_msaa) &&
+       kk_writable_msaa_copy_image(cmd, pCopyImageInfo))
       return;
 
    size_t buffer_size = 0u;

@@ -17,7 +17,9 @@ kk_alias_has_writable_msaa(const struct kk_image_view *view)
 static bool
 kk_image_view_alias_eligible(const struct kk_image_view *view)
 {
-   return (view->vk.image->create_flags &
+   /* Whole multi-plane descriptors retain their plane chain and never
+    * publish these alternates. Selected plane views have plane_count == 1. */
+   return view->plane_count == 1 && (view->vk.image->create_flags &
            VK_IMAGE_CREATE_ALIAS_SINGLE_LAYER_DESCRIPTOR_BIT_KHR) &&
           view->vk.layer_count == 1 && !kk_alias_has_writable_msaa(view) &&
           (view->vk.view_type == VK_IMAGE_VIEW_TYPE_1D ||
@@ -36,25 +38,21 @@ kk_image_view_init_alias(struct kk_device *dev, struct kk_image_view *view, uint
    bool array = view->vk.view_type == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
                 view->vk.view_type == VK_IMAGE_VIEW_TYPE_2D_ARRAY;
    alias.view_type = array ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+   if (!(view->vk.usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT)))
+      return VK_SUCCESS;
+   assert(plane == 0 && view->plane_count == 1);
+   view->planes[0].mtl_handle_single_layer_alias = mtl_new_texture_view_with(image, &alias);
+   if (!view->planes[0].mtl_handle_single_layer_alias)
+      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   view->planes[0].single_layer_alias_gpu_resource_id =
+      mtl_texture_get_gpu_resource_id(view->planes[0].mtl_handle_single_layer_alias);
    if (view->vk.usage & VK_IMAGE_USAGE_SAMPLED_BIT) {
-      view->planes[plane].mtl_handle_sampled_alias =
-         mtl_new_texture_view_with(image, &alias);
-      if (!view->planes[plane].mtl_handle_sampled_alias)
-         return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
-      view->planes[plane].sampled_alias_gpu_resource_id =
-         mtl_texture_get_gpu_resource_id(view->planes[plane].mtl_handle_sampled_alias);
       VkResult result = kk_sparse_image_view_query_aliases(dev, view, image,
                                                          layout, false, array);
       if (result != VK_SUCCESS)
          return result;
    }
    if (view->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) {
-      view->planes[plane].mtl_handle_storage_alias =
-         mtl_new_texture_view_with(image, &alias);
-      if (!view->planes[plane].mtl_handle_storage_alias)
-         return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
-      view->planes[plane].storage_alias_gpu_resource_id =
-         mtl_texture_get_gpu_resource_id(view->planes[plane].mtl_handle_storage_alias);
       VkResult result = kk_sparse_image_view_query_aliases(dev, view, image,
                                                          layout, true, array);
       if (result != VK_SUCCESS)
@@ -63,14 +61,6 @@ kk_image_view_init_alias(struct kk_device *dev, struct kk_image_view *view, uint
    return VK_SUCCESS;
 }
 
-static void
-kk_image_view_finish_alias(struct kk_image_view *view, uint8_t plane)
-{
-   if (view->planes[plane].mtl_handle_sampled_alias)
-      mtl_release(view->planes[plane].mtl_handle_sampled_alias);
-   if (view->planes[plane].mtl_handle_storage_alias)
-      mtl_release(view->planes[plane].mtl_handle_storage_alias);
-}
 #elif defined(KK_MAINTENANCE11_DESCRIPTOR)
 static bool
 kk_alias_view_is_array(const struct kk_image_view *view)
@@ -87,55 +77,49 @@ kk_alias_view_is_1d_or_2d(const struct kk_image_view *view)
           view->vk.view_type == VK_IMAGE_VIEW_TYPE_2D;
 }
 
-static void
+static bool
 kk_alias_sampled_descriptor(struct kk_sampled_image_descriptor *desc,
-                            const struct kk_image_view *view, uint8_t plane,
+                            const struct kk_image_view *view,
                             bool input_attachment)
 {
-   /* Whole multi-plane views retain the primary/plane1/plane2 chain.
-    * An individually selected plane is still an ordinary single-plane view. */
-   if (view->plane_count != 1)
-      return;
-   /* Writable MSAA owns aux48/table and aux56/sample-layer metadata. */
-   if (kk_alias_has_writable_msaa(view))
-      return;
-   if (view->vk.image->samples > 1)
-      desc->aux_word = 0;
-   /* Cube face emulation owns the same auxiliary slot for cube descriptors. */
-   if (!kk_alias_view_is_1d_or_2d(view))
-      return;
-   if (input_attachment) {
-      desc->aux_resource_id = desc->image_gpu_resource_id;
-      return;
-   }
-   uint64_t alternate = view->planes[plane].sampled_alias_gpu_resource_id;
-   if (!alternate) {
-      desc->aux_resource_id = desc->image_gpu_resource_id;
-   } else if (kk_alias_view_is_array(view)) {
+   /* Whole multi-plane views retain their native plane chain. Input
+    * attachments already have the required array type in their primary slot.
+    * Writable MSAA owns its own auxiliary table/metadata representation. */
+   if (!(view->vk.image->create_flags & VK_IMAGE_CREATE_ALIAS_SINGLE_LAYER_DESCRIPTOR_BIT_KHR) ||
+       view->plane_count != 1 || input_attachment ||
+       kk_alias_has_writable_msaa(view) || !kk_alias_view_is_1d_or_2d(view))
+      return false;
+   const uint64_t alternate = view->planes[0].single_layer_alias_gpu_resource_id;
+   if (!alternate)
+      return false;
+   if (kk_alias_view_is_array(view)) {
       desc->aux_resource_id = desc->image_gpu_resource_id;
       desc->image_gpu_resource_id = alternate;
    } else {
       desc->aux_resource_id = alternate;
    }
+   return true;
 }
 
 static void
 kk_alias_storage_descriptor(struct kk_storage_image_descriptor *desc,
                             const struct kk_image_view *view)
 {
-   if (!kk_alias_view_is_1d_or_2d(view) || kk_alias_has_writable_msaa(view))
+   if (!(view->vk.image->create_flags & VK_IMAGE_CREATE_ALIAS_SINGLE_LAYER_DESCRIPTOR_BIT_KHR) ||
+       !kk_alias_view_is_1d_or_2d(view) || kk_alias_has_writable_msaa(view))
       return;
-   uint64_t alternate = view->planes[0].storage_alias_gpu_resource_id;
-   if (!alternate) {
-      desc->image_array_gpu_resource_id = desc->image_gpu_resource_id;
-   } else if (kk_alias_view_is_array(view)) {
-      desc->image_array_gpu_resource_id = desc->image_gpu_resource_id;
-      desc->image_gpu_resource_id = alternate;
-   } else {
-      desc->image_array_gpu_resource_id = alternate;
+   const uint64_t alternate = view->planes[0].single_layer_alias_gpu_resource_id;
+   uint64_t array_id = desc->image_gpu_resource_id;
+   if (alternate) {
+      if (kk_alias_view_is_array(view))
+         desc->image_gpu_resource_id = alternate;
+      else
+         array_id = alternate;
+      desc->image_array_gpu_resource_id = array_id;
    }
-   kk_sparse_storage_descriptor_aliases(view, desc->image_gpu_resource_id,
-                                        desc->image_array_gpu_resource_id);
+   /* With no alternate, the common array reader falls back to primary0.
+    * Sparse records still publish both actual native type IDs. */
+   kk_sparse_storage_descriptor_aliases(view, desc->image_gpu_resource_id, array_id);
 }
 #else
 static bool
@@ -147,6 +131,22 @@ kk_alias_array_dimension(enum glsl_sampler_dim dim)
 
 
 
+/* Known formats outside the compressed-block byte sizes cannot name a raw
+ * alias; unknown formats retain runtime descriptor selection. */
+static bool
+kk_alias_storage_array_possible(nir_intrinsic_instr *intr,
+                                 const struct lower_descriptors_ctx *ctx)
+{
+   if (!ctx->array_storage_alias || !nir_intrinsic_image_array(intr) ||
+       (nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_1D &&
+        nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_2D))
+      return false;
+   enum pipe_format format = nir_intrinsic_format(intr);
+   return ctx->image_array_alias || format == PIPE_FORMAT_NONE ||
+          util_format_get_blocksize(format) == 8 ||
+          util_format_get_blocksize(format) == 16;
+}
+
 /* Linear Metal 2D-array views support reads/writes but misaddress atomics.
  * An aliased descriptor has distinct plain/array handles. Use its plain handle
  * for array atomics while preserving the single-layer bounds contract. */
@@ -154,27 +154,20 @@ static bool
 kk_alias_lower_array_atomic(nir_builder *b, nir_intrinsic_instr *intr,
                             nir_deref_instr *deref,
                             const struct lower_descriptors_ctx *ctx,
-                            nir_alu_type type, unsigned access, unsigned flags)
+                            nir_def *descriptor, nir_def *descriptor_addr,
+                            nir_def *array_addr, nir_alu_type type,
+                            unsigned access, unsigned flags)
 {
-   if (!nir_intrinsic_image_array(intr) ||
-       (nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_1D &&
-        nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_2D) ||
-       (intr->intrinsic != nir_intrinsic_bindless_image_atomic &&
-        intr->intrinsic != nir_intrinsic_bindless_image_atomic_swap))
+   if ((intr->intrinsic != nir_intrinsic_bindless_image_atomic &&
+        intr->intrinsic != nir_intrinsic_bindless_image_atomic_swap) ||
+       !kk_alias_storage_array_possible(intr, ctx))
       return false;
 
-   nir_def *descriptor = load_resource_deref_desc(
-      b, 2, 64, deref,
-      offsetof(struct kk_storage_image_descriptor, image_gpu_resource_id), ctx);
-   nir_def *descriptor_addr = load_resource_addr(
-      b, 1, 64, deref,
-      offsetof(struct kk_storage_image_descriptor, image_gpu_resource_id), ctx);
-   /* The sparse accessor distinguishes both zero words from an indirect
-    * primary-zero/query descriptor; native IDs retain all opaque bits. */
-   nir_def *plain_addr = kk_nir_storage_sparse_handle_address(
-      b, descriptor_addr, descriptor, false);
-   nir_def *array_addr = kk_nir_storage_sparse_handle_address(
-      b, descriptor_addr, descriptor, true);
+   /* Reuse the descriptor and selected array slot already resolved by
+    * ordinary lowering. Only the alternate plain slot remains to resolve. */
+   nir_def *plain_addr = ctx->sparse_image_query ?
+      kk_nir_storage_sparse_handle_address(b, descriptor_addr, descriptor, false) :
+      descriptor_addr;
    nir_def *plain_id = nir_load_global_constant(b, 1, 64, plain_addr, .align_mul = 8);
    nir_def *array_id = nir_load_global_constant(b, 1, 64, array_addr, .align_mul = 8);
    nir_push_if(b, nir_ine(b, plain_id, array_id));

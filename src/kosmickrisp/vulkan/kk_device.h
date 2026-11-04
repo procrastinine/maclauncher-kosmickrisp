@@ -143,6 +143,10 @@ struct kk_device {
    struct kk_queue queues[5];
    simple_mtx_t blit_queue_mutex;
    struct kk_queue *blit_queue;
+   /* Legacy zero-fill queue, atomically published on first private flagged
+    * allocation under residency_set.mutex; no WSI queue dependency.
+    */
+   mtl_command_queue *zero_fill_queue;
 
    struct vk_meta_device meta;
 

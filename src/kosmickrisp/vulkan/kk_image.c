@@ -660,8 +660,12 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
    image->disjoint = image->plane_count > 1 &&
                      (image->vk.create_flags & VK_IMAGE_CREATE_DISJOINT_BIT);
 
-   struct vk_image native_layout = image->vk;
-   if (kk_writable_msaa_requested(&image->vk)) {
+   struct vk_image native_layout;
+   const struct vk_image *layout_image = &image->vk;
+   const bool writable_msaa = kk_writable_msaa_requested(&image->vk);
+   if (writable_msaa) {
+      native_layout = image->vk;
+      layout_image = &native_layout;
       native_layout.usage &= ~VK_IMAGE_USAGE_STORAGE_BIT;
       native_layout.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
       native_layout.create_flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
@@ -675,7 +679,7 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
          ycbcr_info ? ycbcr_info->planes[plane].denominator_scales[0] : 1;
       const uint8_t height_scale =
          ycbcr_info ? ycbcr_info->planes[plane].denominator_scales[1] : 1;
-      kk_image_layout_init(dev, &native_layout,
+      kk_image_layout_init(dev, layout_image,
          vk_format_to_pipe_format(format), width_scale, height_scale,
          &image->planes[plane].layout, pCreateInfo->initialLayout);
    }
@@ -686,8 +690,9 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
       image->planes[0].layout.usage &= ~MTL_TEXTURE_USAGE_RENDER_TARGET;
    if (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
       return kk_sparse_image_init(dev, image, vk_image_usage_flags(pCreateInfo));
-   VkResult result = kk_writable_msaa_image_init(dev, image,
-                                                       pCreateInfo->initialLayout);
+   VkResult result = writable_msaa
+      ? kk_writable_msaa_image_init(dev, image, pCreateInfo->initialLayout)
+      : VK_SUCCESS;
    if (result != VK_SUCCESS)
       vk_image_finish(&image->vk);
    return result;

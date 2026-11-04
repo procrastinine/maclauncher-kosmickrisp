@@ -75,6 +75,10 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
 
       plane_count = view->plane_count;
       const uint64_t sparse_query = kk_sparse_image_view_query_address(view, false);
+      /* Image-view LOD is immutable and shared by every descriptor plane. */
+      const float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0);
+      const uint16_t min_lod_fp16 = _mesa_float_to_half(min_lod);
+      const uint16_t min_lod_uint16 = min_lod;
       for (uint8_t plane = 0; plane < plane_count; plane++) {
          if (is_input_attachment) {
             assert(view->planes[plane].input_gpu_resource_id);
@@ -97,12 +101,13 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
             assert(desc[plane].aux_word == 0);
             desc[plane].aux_word = sparse_query;
          }
-         kk_alias_sampled_descriptor(&desc[plane], view, plane, is_input_attachment);
-         float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0);
-         desc[plane].image_min_lod_fp16 = _mesa_float_to_half(min_lod);
-         desc[plane].image_min_lod_uint16 = min_lod;
-         kk_layered_bc_sampled_descriptor(&desc[plane], view);
-         kk_alias_sampled_tag(&desc[plane], view, is_input_attachment);
+         const bool native_alias = kk_alias_sampled_descriptor(
+            &desc[plane], view, is_input_attachment);
+         desc[plane].image_min_lod_fp16 = min_lod_fp16;
+         desc[plane].image_min_lod_uint16 = min_lod_uint16;
+         if (view->layered_bc)
+            kk_layered_bc_sampled_descriptor(&desc[plane], view);
+         kk_alias_sampled_tag(&desc[plane], native_alias);
          kk_writable_msaa_sampled_descriptor(&desc[plane], view,
                                              is_input_attachment);
       }
@@ -229,7 +234,8 @@ get_storage_image_view_desc(
       kk_alias_storage_descriptor(&desc, view);
       kk_sliced_3d_descriptor(&desc, &view->vk);
       kk_sparse_storage_descriptor(&desc, view);
-      kk_layered_bc_storage_descriptor(&desc, view);
+      if (view->layered_bc)
+         kk_layered_bc_storage_descriptor(&desc, view);
       kk_writable_msaa_storage_descriptor(&desc, view);
    }
 

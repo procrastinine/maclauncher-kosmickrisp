@@ -660,9 +660,9 @@ Implementation: [kk_cmd_draw.c](../src/kosmickrisp/vulkan/kk_cmd_draw.c), [kk_cm
 
 Vulkan contract: Demoted fragment memory effects.
 
-After API-specific NIR lowering and dead-code cleanup, fragment demote/terminate shaders that write memory use shared Mesa write predication. Demoting shaders with helper queries also track the initial and demoted helper state even without memory writes. Skipped atomic results are zero and termination keeps its return. Other shaders retain their emitted Metal source.
+The final SSA shader-info walk identifies fragment discard, memory-write and helper-query use. Shaders without the required combination skip helper lowering. After API-specific NIR lowering and dead-code cleanup, fragment demote/terminate shaders that write memory use shared Mesa write predication. Demoting shaders with helper queries also track the initial and demoted helper state even without memory writes. Skipped atomic results are zero and termination keeps its return. Other shaders retain their emitted Metal source.
 
-Scope: fragment shaders with demote or terminate and external memory writes. Device support and operation restrictions are defined by the linked implementation.
+Scope: fragment shaders with demote or terminate and external memory writes, or demote and helper queries. Device support and operation restrictions are defined by the linked implementation.
 
 Consumers: DXVK, vkd3d-proton, Wine vkd3d, ANGLE GLES 3.2.
 
@@ -936,7 +936,7 @@ Implementation: [kk_device_memory.c](../src/kosmickrisp/vulkan/kk_device_memory.
 
 Vulkan contract: `shaderStorageImageMultisample`.
 
-Uses immutable per-view sample-resource tables and existing memory bindings for multisample storage operations, with native attachment and input publication through shared per-sample image copies.
+Uses immutable per-view sample-resource tables and existing memory bindings for multisample storage operations, with native attachment and input publication through shared per-sample image copies. The device feature key gates sample-table shader lowering. Rendering setup caches eligible attachments and input attachments; relevant graphics-state changes update the color-write mask, and actual draws accumulate that mask for publication at physical encoder boundaries. Ordinary descriptors retain their native representation.
 
 Limits and reported properties: `storageImageSampleCounts = pdev->info.supported_sample_counts & (VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT)`.
 
@@ -1134,7 +1134,7 @@ Implementation: [nir_to_msl.c](../src/kosmickrisp/compiler/nir_to_msl.c), [kk_fp
 
 Vulkan contract: Explicit zero-initialize allocation flag.
 
-The zero-initialize allocation flag clears the entire shared BO on the CPU or fills the private BO with a Metal blit and waits for completion before returning memory. Unflagged allocations and imports receive no clear or queue work. ZERO_INITIALIZED image storage remains unoptimized so cleared bits represent zero texels.
+The zero-initialize allocation flag clears the entire shared BO on the CPU or fills the private BO with a Metal blit and waits for completion before returning memory. Private fills share a device-owned queue created on the first such allocation; each allocation waits for its own fill. Unflagged allocations and imports receive no clear or queue work. ZERO_INITIALIZED image storage remains unoptimized so cleared bits represent zero texels.
 
 Scope: flagged non-imported device-memory allocation. Device support and operation restrictions are defined by the linked implementation.
 

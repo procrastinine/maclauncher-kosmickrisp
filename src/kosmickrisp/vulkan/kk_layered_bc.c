@@ -61,28 +61,39 @@ kk_layered_bc_view_init(struct kk_device *dev, struct kk_image_view *view)
    if (!state) return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    view->layered_bc = state;
    state->count = count;
-   const uint64_t sampled_offset = ALIGN_POT(sizeof(struct kk_layered_bc_record), 16);
-   const uint64_t storage_offset = sampled_offset + (count + 1) *
-      sizeof(struct kk_sampled_image_descriptor);
-   const uint64_t table_bytes = storage_offset + (count + 1) *
-      sizeof(struct kk_storage_image_descriptor);
-   VkResult result = kk_alloc_bo(dev, &view->vk.base, table_bytes, 16, &state->table);
-   if (result != VK_SUCCESS) return result;
-   memset(state->table->cpu, 0, table_bytes);
-   struct kk_layered_bc_record *record = state->table->cpu;
-   record->query.kind = KK_QUERY_RECORD_KIND_LAYERED_BC;
-   record->query.view_type = view->vk.view_type;
-   record->query.view_size[0] = view->vk.extent.width;
-   record->query.view_size[1] = view->vk.extent.height;
-   record->query.view_size[2] = count;
-   record->query.level_count = record->query.storage_level_count = 1;
-   record->sampled_descriptors = state->table->gpu + sampled_offset;
-   record->storage_descriptors = state->table->gpu + storage_offset;
-   record->layer_count = count;
-   struct kk_sampled_image_descriptor *sampled =
-      (void *)((uint8_t *)state->table->cpu + sampled_offset);
-   struct kk_storage_image_descriptor *storage =
-      (void *)((uint8_t *)state->table->cpu + storage_offset);
+   const bool needs_sampled = view->vk.usage &
+      (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+   const bool needs_storage = view->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT;
+   struct kk_sampled_image_descriptor *sampled = NULL;
+   struct kk_storage_image_descriptor *storage = NULL;
+   /* Render-only aliases need native textures, not shader descriptor tables.
+    * For shader views allocate only the tables admitted by the view's usage. */
+   if (needs_sampled || needs_storage) {
+      const uint64_t sampled_offset = ALIGN_POT(sizeof(struct kk_layered_bc_record), 16);
+      const uint64_t storage_offset = sampled_offset + (needs_sampled ?
+         (count + 1) * sizeof(struct kk_sampled_image_descriptor) : 0);
+      const uint64_t table_bytes = storage_offset + (needs_storage ?
+         (count + 1) * sizeof(struct kk_storage_image_descriptor) : 0);
+      VkResult result = kk_alloc_bo(dev, &view->vk.base, table_bytes, 16, &state->table);
+      if (result != VK_SUCCESS) return result;
+      memset(state->table->cpu, 0, table_bytes);
+      struct kk_layered_bc_record *record = state->table->cpu;
+      record->query.kind = KK_QUERY_RECORD_KIND_LAYERED_BC;
+      record->query.view_type = view->vk.view_type;
+      record->query.view_size[0] = view->vk.extent.width;
+      record->query.view_size[1] = view->vk.extent.height;
+      record->query.view_size[2] = count;
+      record->query.level_count = record->query.storage_level_count = 1;
+      record->layer_count = count;
+      if (needs_sampled) {
+         record->sampled_descriptors = state->table->gpu + sampled_offset;
+         sampled = (void *)((uint8_t *)state->table->cpu + sampled_offset);
+      }
+      if (needs_storage) {
+         record->storage_descriptors = state->table->gpu + storage_offset;
+         storage = (void *)((uint8_t *)state->table->cpu + storage_offset);
+      }
+   }
    const float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0f);
    struct kk_image *image = container_of(view->vk.image, struct kk_image, vk);
    struct kk_image_plane *plane = &image->planes[0];
@@ -122,13 +133,11 @@ kk_layered_bc_view_init(struct kk_device *dev, struct kk_image_view *view)
          layout.depth_px = layout.layers = layout.levels = 1;
          layout.format.pipe = view->planes[0].format;
          layout.format.mtl = format->mtl_pixel_format;
-         const bool sampled = view->vk.usage &
-            (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
          VkResult native_result = kk_layered_bc_native_alias_init(dev, plane,
             &layout, kk_get_layer_level_B(&plane->layout,
                view->vk.base_array_layer + l, view->vk.base_mip_level), NULL,
-            sampled ? &selected : NULL,
-            (view->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) ? &selected : NULL,
+            needs_sampled ? &selected : NULL,
+            needs_storage ? &selected : NULL,
             layer);
          if (native_result != VK_SUCCESS)
             return native_result;
@@ -177,7 +186,7 @@ void
 kk_layered_bc_sampled_descriptor(struct kk_sampled_image_descriptor *desc,
                                  const struct kk_image_view *view)
 {
-   if (!view->layered_bc) return;
+   if (!view->layered_bc || !view->layered_bc->table) return;
    desc->aux_word = view->layered_bc->table->gpu;
    desc->image_min_lod_uint16 |= KK_IMAGE_QUERY_RECORD_TAG;
 }
@@ -186,7 +195,7 @@ void
 kk_layered_bc_storage_descriptor(struct kk_storage_image_descriptor *desc,
                                  const struct kk_image_view *view)
 {
-   if (!view->layered_bc) return;
+   if (!view->layered_bc || !view->layered_bc->table) return;
    desc->image_gpu_resource_id = 0;
    const uint64_t encoded = kk_storage_sparse_query_encode(view->layered_bc->table->gpu);
    memcpy(&desc->texel_offset, &encoded, sizeof(encoded));
@@ -203,26 +212,30 @@ kk_layered_bc_attachment_texture(const struct kk_image_view *view, uint32_t laye
                        view->layered_bc->layers[layer].native.base;
 }
 
+static bool
+kk_layered_bc_attachment_requested(const VkRenderingAttachmentInfo *info)
+{
+   if (!info)
+      return false;
+   VK_FROM_HANDLE(kk_image_view, view, info->imageView);
+   if (view && view->layered_bc)
+      return true;
+   if (info->resolveMode != VK_RESOLVE_MODE_NONE) {
+      VK_FROM_HANDLE(kk_image_view, resolve, info->resolveImageView);
+      return resolve && resolve->layered_bc;
+   }
+   return false;
+}
+
 bool
 kk_layered_bc_rendering_info_requested(const VkRenderingInfo *info)
 {
-   const VkRenderingAttachmentInfo *attachments[KK_MAX_RTS + 2];
-   unsigned count = 0;
-   for (uint32_t i = 0; i < info->colorAttachmentCount; ++i)
-      attachments[count++] = &info->pColorAttachments[i];
-   if (info->pDepthAttachment) attachments[count++] = info->pDepthAttachment;
-   if (info->pStencilAttachment) attachments[count++] = info->pStencilAttachment;
-   for (unsigned i = 0; i < count; ++i) {
-      VK_FROM_HANDLE(kk_image_view, view, attachments[i]->imageView);
-      if (view && view->layered_bc)
+   for (uint32_t i = 0; i < info->colorAttachmentCount; ++i) {
+      if (kk_layered_bc_attachment_requested(&info->pColorAttachments[i]))
          return true;
-      if (attachments[i]->resolveMode != VK_RESOLVE_MODE_NONE) {
-         VK_FROM_HANDLE(kk_image_view, resolve, attachments[i]->resolveImageView);
-         if (resolve && resolve->layered_bc)
-            return true;
-      }
    }
-   return false;
+   return kk_layered_bc_attachment_requested(info->pDepthAttachment) ||
+          kk_layered_bc_attachment_requested(info->pStencilAttachment);
 }
 
 void

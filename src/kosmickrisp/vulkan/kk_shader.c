@@ -234,6 +234,8 @@ kk_make_feature_key(const struct vk_features *feats)
    if (feats->shaderOutputLayer || feats->multiview)
       key |= BITFIELD_BIT(KK_FEAT_POLY_LAYER_REPLAY);
    if (feats->sparseResidencyBuffer || feats->sparseResidencyImage3D) key |= BITFIELD_BIT(KK_FEAT_SPARSE_REPLAY);
+   if (feats->shaderStorageImageMultisample)
+      key |= BITFIELD_BIT(KK_FEAT_WRITABLE_MSAA);
    if (feats->nullDescriptor)
       key |= BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR);
    if (feats->nonSeamlessCubeMap)
@@ -242,6 +244,18 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX);
    if (feats->minLod)
       key |= BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD);
+   if (feats->imageSlicedViewOf3D)
+      key |= BITFIELD_BIT(KK_FEAT_SLICED_3D);
+   /* A raw block view requires a compressed parent image. Without an
+    * enabled compression family no descriptor can contain its layer table. */
+   if (feats->textureCompressionBC || feats->textureCompressionETC2 ||
+       feats->textureCompressionASTC_LDR || feats->textureCompressionASTC_HDR ||
+       feats->textureCompressionASTC_3D)
+      key |= BITFIELD_BIT(KK_FEAT_LAYERED_BLOCK_VIEWS);
+   if (feats->maintenance11)
+      key |= BITFIELD_BIT(KK_FEAT_IMAGE_ARRAY_ALIAS);
+   if (feats->sparseBinding)
+      key |= BITFIELD_BIT(KK_FEAT_SPARSE_IMAGE_QUERY);
    if (feats->pipelineStatisticsQuery)
       key |= BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS);
    if (feats->meshShaderQueries || feats->pipelineStatisticsQuery)
@@ -852,7 +866,8 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
    if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
       NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
 
-   NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts);
+   if (features & BITFIELD_BIT(KK_FEAT_LAYERED_BLOCK_VIEWS))
+      NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts);
    if (features & BITFIELD_BIT(KK_FEAT_STANDARD_3D))
       NIR_PASS(_, nir, kk_nir_lower_standard_3d_samples, set_layout_count, set_layouts);
 
@@ -871,10 +886,11 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
     * generate a nir_intrinsic_load_blend_const_color_rgba which gets lowered by
     * the lower descriptor pass
     */
-   NIR_PASS(_, nir, kk_nir_lower_descriptors, (features & BITFIELD_BIT(KK_FEAT_STANDARD_3D)) != 0, rs, set_layout_count,
+   NIR_PASS(_, nir, kk_nir_lower_descriptors, features, rs, set_layout_count,
             set_layouts);
 
-   NIR_PASS(_, nir, kk_nir_lower_sliced_3d);
+   if (features & BITFIELD_BIT(KK_FEAT_SLICED_3D))
+      NIR_PASS(_, nir, kk_nir_lower_sliced_3d);
 
    /* KK_WORKAROUND_16 - must be called after kk_nir_lower_descriptors(), which
     * lowers all image intrinsics to be bindless */
@@ -983,7 +999,8 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
 
    /* Common msl texture lowering needs to happen after ycbcr lowering and
     * before descriptor lowering. */
-   NIR_PASS(_, nir, kk_nir_prepare_layered_bc_cubes, rs, set_layout_count, set_layouts);
+   if (features & BITFIELD_BIT(KK_FEAT_LAYERED_BLOCK_VIEWS))
+      NIR_PASS(_, nir, kk_nir_prepare_layered_bc_cubes, rs, set_layout_count, set_layouts);
    if (features & BITFIELD_BIT(KK_FEAT_NON_SEAMLESS_CUBE))
       NIR_PASS(_, nir, kk_nir_lower_non_seamless_cube, set_layout_count, set_layouts);
 
@@ -1231,7 +1248,9 @@ gather_shader_info(struct kk_shader *shader, nir_shader *nir,
 static void
 modify_nir_info(nir_shader *nir)
 {
-   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+   /* Fragment info was gathered at the last SSA point in msl_optimize_nir. */
+   if (nir->info.stage != MESA_SHADER_FRAGMENT)
+      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
    if (nir->info.stage == MESA_SHADER_VERTEX) {
       /* Vertex attribute fetch is done in shader through argument buffers. */
       nir->info.inputs_read = 0u;

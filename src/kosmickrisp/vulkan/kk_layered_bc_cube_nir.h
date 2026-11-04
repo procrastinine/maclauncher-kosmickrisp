@@ -160,6 +160,10 @@ kk_layered_bc_cube_footprint(nir_builder *b, nir_tex_instr *tex,
                                       seamless, linear, mode);
    nir_def *maximum = kk_sampler_query_metadata(b, tex,
       KK_SAMPLER_META_MAX_ANISOTROPY, false);
+   /* A disabled/isotropic sampler has exactly one centered footprint.
+    * Keep the common filter/loop below, but do not evaluate ellipse axes or
+    * fetch the footprint-only bias when that result cannot affect the taps. */
+   nir_push_if(b, nir_fgt_imm(b, maximum, 1));
    nir_def *gx = nir_fmul(b, kk_cube_face_gradient(b, coord, dx, face), size);
    nir_def *gy = nir_fmul(b, kk_cube_face_gradient(b, coord, dy, face), size);
    nir_def *bias = kk_sampler_query_metadata(b, tex,
@@ -202,6 +206,12 @@ kk_layered_bc_cube_footprint(nir_builder *b, nir_tex_instr *tex,
    /* Zero offset for the isotropic/disabled case retains its exact center. */
    major = nir_bcsel(b, nir_ugt_imm(b, samples, 1), major,
                      nir_imm_vec2(b, 0, 0));
+   nir_push_else(b, NULL);
+   nir_def *center = nir_imm_vec2(b, 0, 0);
+   nir_def *single = nir_imm_int(b, 1);
+   nir_pop_if(b, NULL);
+   major = nir_if_phi(b, major, center);
+   samples = nir_if_phi(b, samples, single);
    nir_def *weight = nir_frcp(b, nir_u2f32(b, samples));
    nir_def *zero_index = nir_imm_int(b, 0);
    nir_def *zero_value = nir_imm_zero(b, tex->def.num_components,

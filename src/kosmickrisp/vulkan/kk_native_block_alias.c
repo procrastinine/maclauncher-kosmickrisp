@@ -34,8 +34,12 @@ kk_layered_bc_native_alias_init(struct kk_device *dev,
       return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
    if (sampled_layout)
       layer->sampled = mtl_new_texture_view_with(layer->base, sampled_layout);
-   if (storage_layout)
-      layer->storage = mtl_new_texture_view_with(layer->base, storage_layout);
+   if (storage_layout) {
+      if (layer->sampled && storage_layout == sampled_layout)
+         layer->storage = mtl_retain(layer->sampled);
+      else
+         layer->storage = mtl_new_texture_view_with(layer->base, storage_layout);
+   }
    if ((sampled_layout && !layer->sampled) ||
        (storage_layout && !layer->storage)) {
       kk_layered_bc_native_alias_finish(layer);
