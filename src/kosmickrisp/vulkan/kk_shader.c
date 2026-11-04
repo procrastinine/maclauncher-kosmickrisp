@@ -843,7 +843,7 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
       NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
 
    NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts);
-   if (features & BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER))
+   if (features & BITFIELD_BIT(KK_FEAT_STANDARD_3D))
       NIR_PASS(_, nir, kk_nir_lower_standard_3d_samples, set_layout_count, set_layouts);
 
    NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
@@ -861,7 +861,7 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
     * generate a nir_intrinsic_load_blend_const_color_rgba which gets lowered by
     * the lower descriptor pass
     */
-   NIR_PASS(_, nir, kk_nir_lower_descriptors, (features & BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER)) != 0, rs, set_layout_count,
+   NIR_PASS(_, nir, kk_nir_lower_descriptors, (features & BITFIELD_BIT(KK_FEAT_STANDARD_3D)) != 0, rs, set_layout_count,
             set_layouts);
 
    NIR_PASS(_, nir, kk_nir_lower_sliced_3d);
@@ -2318,6 +2318,11 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
 static VkResult
 kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
 {
+   if (vs->info.conservative) {
+      VkResult result = kk_device_init_conservative_lib(device);
+      if (result != VK_SUCCESS)
+         return result;
+   }
    if (vs->info.stage == MESA_SHADER_MESH)
       return kk_compile_mesh_pipeline(device, vs, false, &vs->pipeline);
    VkResult result = kk_compile_graphics_pipeline_native(device, vs, false);
@@ -2456,12 +2461,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    kk_feature_key features = kk_make_feature_key(enabled_features);
    if (sparse_modes & KK_SPARSE_BUFFER)
       features |= BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER);
-   if (sparse_modes & KK_SPARSE_STANDARD_3D) {
+   if (sparse_modes & KK_SPARSE_STANDARD_3D)
       features |= BITFIELD_BIT(KK_FEAT_STANDARD_3D);
-      /* Retain the old readers until the standard3D owner's two call sites
-       * switch together to KK_FEAT_STANDARD_3D. */
-      features |= BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER);
-   }
 
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */

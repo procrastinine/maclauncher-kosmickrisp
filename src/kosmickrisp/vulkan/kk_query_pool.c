@@ -153,6 +153,12 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
            VK_QUERY_PIPELINE_STATISTIC_MESH_SHADER_INVOCATIONS_BIT_EXT))))
       return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
 
+   if (pCreateInfo->queryType == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {
+      result = kk_device_init_primitives_generated_lib(dev);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+
    pool =
       vk_query_pool_create(&dev->vk, pCreateInfo, pAllocator, sizeof(*pool));
    if (!pool)

@@ -94,6 +94,10 @@ struct kk_sampler_heap {
 
 struct kk_precompiled_cache {
    struct kk_precompiled_shader shaders[LIBKK_NUM_PROGRAMS];
+   util_once_flag conservative_once;
+   VkResult conservative_result;
+   util_once_flag primitives_generated_once;
+   VkResult primitives_generated_result;
 };
 
 struct kk_device {
@@ -163,6 +167,8 @@ kk_device_physical(const struct kk_device *dev)
 VkResult kk_device_init_meta(struct kk_device *dev);
 void kk_device_finish_meta(struct kk_device *dev);
 VkResult kk_device_init_lib(struct kk_device *dev);
+VkResult kk_device_init_conservative_lib(struct kk_device *dev);
+VkResult kk_device_init_primitives_generated_lib(struct kk_device *dev);
 void kk_device_finish_lib(struct kk_device *dev);
 void kk_device_add_bo_to_residency_set(struct kk_device *dev, struct kk_bo *bo);
 void kk_device_remove_bo_from_residency_set(struct kk_device *dev, struct kk_bo *bo);
