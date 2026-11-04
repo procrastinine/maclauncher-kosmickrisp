@@ -102,16 +102,22 @@ kk_carry_constant_record(id copy, id original)
    kk_set_constant_record(copy, kk_constant_record(original));
 }
 
-/* This is only a search key. Metal still verifies every descriptor, including
- * state not represented here. Pipelines that share a key are recorded under it
- * once per piece, and a lookup tries each of those pieces. */
-static void
-kk_remember_library_hint(id library, MTL4LibraryDescriptor *descriptor)
+static char kk_library_key_association;
+
+/* Identity of a library compile: the BLAKE3 digest of the exact MSL source
+ * (including any debug prefix) and every compile option this bridge sets.
+ * It is both the in-process library cache key and the archive search key of
+ * the library's functions. Computed once per descriptor. */
+static NSData *
+kk_library_key(MTL4LibraryDescriptor *descriptor)
 {
-   if (!library || !descriptor.source) return;
-   NSData *text = [descriptor.source dataUsingEncoding:NSUTF8StringEncoding];
+   if (!descriptor.source) return nil;
+   NSData *key = objc_getAssociatedObject(descriptor, &kk_library_key_association);
+   if (key) return key;
+   const char *text = descriptor.source.UTF8String;
+   if (!text) return nil;
    blake3_hash digest;
-   _mesa_blake3_compute(text.bytes, text.length, digest);
+   _mesa_blake3_compute(text, strlen(text), digest);
    NSMutableArray *fields = [NSMutableArray arrayWithArray:@[
       [NSData dataWithBytes:digest length:sizeof(digest)],
       @(descriptor.options.languageVersion), @(descriptor.options.mathMode),
@@ -119,8 +125,22 @@ kk_remember_library_hint(id library, MTL4LibraryDescriptor *descriptor)
    /* Preserve existing identities for ordinary, self-contained libraries. */
    if (descriptor.options.allowReferencingUndefinedSymbols)
       [fields addObject:@"allow-undefined-symbols"];
-   NSData *key = [NSPropertyListSerialization dataWithPropertyList:fields
+   key = [NSPropertyListSerialization dataWithPropertyList:fields
       format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+   if (key)
+      objc_setAssociatedObject(descriptor, &kk_library_key_association, key,
+                               OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+   return key;
+}
+
+/* This is only a search key. Metal still verifies every descriptor, including
+ * state not represented here. Pipelines that share a key are recorded under it
+ * once per piece, and a lookup tries each of those pieces. */
+static void
+kk_remember_library_hint(id library, MTL4LibraryDescriptor *descriptor)
+{
+   NSData *key = library ? kk_library_key(descriptor) : nil;
+   if (!key) return;
    objc_setAssociatedObject(library, &kk_library_hint_association, key,
                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
@@ -368,19 +388,16 @@ kk_archive_remove_stale_temporaries(void)
 #endif
 #define KK_RESIDENT_ARCHIVE_LIMIT 256
 
-/* In-process MTLLibrary cache keyed by exact MSL source and compile options.
- * Bounds the native object count and retained source characters (MSL is
- * ASCII). Specialization and PSO state remain on their original paths. */
+/* In-process MTLLibrary cache keyed by kk_library_key (source digest and
+ * compile options). Bounds the native object count only: entries retain no
+ * source text, so large translated sources (DX12 titles average about 200 KB)
+ * no longer evict libraries that pipelines request again. Specialization and
+ * PSO state remain on their original paths. */
 #define KK_LIBRARY_CACHE_LIMIT 1024
-#define KK_LIBRARY_SOURCE_LIMIT (64 * 1024 * 1024)
 
 @interface KKCachedLibrary : NSObject {
 @public
-   NSString *source;
-   MTLLanguageVersion language;
-   MTLMathMode math;
-   MTLMathFloatingPointFunctions floating;
-   bool allow_undefined_symbols;
+   NSData *key;
    NSCondition *changed;
    id<MTLLibrary> library;
    pthread_t background_owner;
@@ -390,7 +407,7 @@ kk_archive_remove_stale_temporaries(void)
 @implementation KKCachedLibrary
 - (void)dealloc
 {
-   [source release];
+   [key release];
    [changed release];
    [library release];
    [super dealloc];
@@ -414,8 +431,9 @@ kk_archive_remove_stale_temporaries(void)
    NSMutableDictionary *piece_by_identity;
    NSMutableArray *resident_pieces;
    size_t resident_bytes;
+   /* Insertion order for eviction, and key -> entry. */
    NSMutableArray *cached_libraries;
-   size_t cached_source_bytes;
+   NSMutableDictionary *library_index;
    /* Non-capturing compiler for pipeline creation during a snapshot, and the
     * [descriptor, hint] pairs it compiled, awaiting capture. */
    id<MTL4Compiler> bypass_compiler;
@@ -768,6 +786,7 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
    [recapture release];
    [bypass_compiler release];
    [cached_libraries release];
+   [library_index release];
    [pieces release];
    [hints release];
    [pending_hints release];
@@ -809,58 +828,48 @@ kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vert
    KKCachedLibrary *entry = nil;
    NSMutableArray *retired = nil;
    bool owner = false;
-   size_t bytes = desc.source.length;
-   if (cache && desc.source && bytes <= KK_LIBRARY_SOURCE_LIMIT) {
+   NSData *key = cache ? kk_library_key(desc) : nil;
+   if (cache && key) {
       @synchronized(cache) {
          if (!completed_only) {
             cache->stats.library_requests++;
             if (vertex) cache->stats.vertex_library_requests++;
          }
-         for (KKCachedLibrary *candidate in cache->cached_libraries) {
-            if (completed_only && !__atomic_load_n(&candidate->complete, __ATOMIC_ACQUIRE)) continue;
-            if (candidate->language == desc.options.languageVersion &&
-                candidate->math == desc.options.mathMode &&
-                candidate->floating == desc.options.mathFloatingPointFunctions &&
-                candidate->allow_undefined_symbols == desc.options.allowReferencingUndefinedSymbols &&
-                [candidate->source isEqualToString:desc.source]) {
-               entry = [candidate retain];
-               if (completed_only) cache->stats.library_requests++;
-               cache->stats.library_hits++;
-               if (vertex) {
-                  if (completed_only) cache->stats.vertex_library_requests++;
-                  cache->stats.vertex_library_hits++;
-               }
-               break;
+         KKCachedLibrary *candidate = cache->library_index[key];
+         if (candidate && (!completed_only ||
+                           __atomic_load_n(&candidate->complete, __ATOMIC_ACQUIRE))) {
+            entry = [candidate retain];
+            if (completed_only) cache->stats.library_requests++;
+            cache->stats.library_hits++;
+            if (vertex) {
+               if (completed_only) cache->stats.vertex_library_requests++;
+               cache->stats.vertex_library_hits++;
             }
          }
-         if (!entry && !completed_only) {
+         if (!entry && !candidate && !completed_only) {
             /* FIFO eviction skips active compiles. If every slot is active,
              * use the ordinary synchronous path without retaining more state. */
             retired = [[NSMutableArray alloc] init];
             for (NSUInteger i = 0; i < cache->cached_libraries.count &&
-                 (cache->cached_libraries.count >= KK_LIBRARY_CACHE_LIMIT ||
-                  cache->cached_source_bytes + bytes > KK_LIBRARY_SOURCE_LIMIT);) {
+                 cache->cached_libraries.count >= KK_LIBRARY_CACHE_LIMIT;) {
                KKCachedLibrary *old = cache->cached_libraries[i];
                if (!__atomic_load_n(&old->complete, __ATOMIC_ACQUIRE)) { ++i; continue; }
                [retired addObject:old];
-               cache->cached_source_bytes -= old->source.length;
+               [cache->library_index removeObjectForKey:old->key];
                [cache->cached_libraries removeObjectAtIndex:i];
             }
-            if (cache->cached_libraries.count < KK_LIBRARY_CACHE_LIMIT &&
-                cache->cached_source_bytes + bytes <= KK_LIBRARY_SOURCE_LIMIT) {
+            if (cache->cached_libraries.count < KK_LIBRARY_CACHE_LIMIT) {
                if (!cache->cached_libraries) cache->cached_libraries = [NSMutableArray new];
+               if (!cache->library_index) cache->library_index = [NSMutableDictionary new];
                entry = [KKCachedLibrary new];
                if (entry) {
-                  entry->source = [desc.source copy];
-                  entry->language = desc.options.languageVersion;
-                  entry->math = desc.options.mathMode;
-                  entry->floating = desc.options.mathFloatingPointFunctions;
-                  entry->allow_undefined_symbols = desc.options.allowReferencingUndefinedSymbols;
+                  entry->key = [key copy];
                   entry->changed = [NSCondition new];
                   if (qos_class_self() == QOS_CLASS_BACKGROUND) entry->background_owner = pthread_self();
-                  if (entry->source && entry->changed && cache->cached_libraries) {
+                  if (entry->key && entry->changed && cache->cached_libraries &&
+                      cache->library_index) {
                      [cache->cached_libraries addObject:entry];
-                     cache->cached_source_bytes += bytes;
+                     cache->library_index[entry->key] = entry;
                      owner = true;
                   } else {
                      [entry release];
@@ -900,7 +909,8 @@ kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vert
          /* A failure wakes existing waiters but is never memoized. A later
           * request retries transient native errors with the same exact input. */
          if (!result) @synchronized(cache) {
-            cache->cached_source_bytes -= bytes;
+            if (cache->library_index[entry->key] == entry)
+               [cache->library_index removeObjectForKey:entry->key];
             [cache->cached_libraries removeObjectIdenticalTo:entry];
          }
          [entry->changed lock];
