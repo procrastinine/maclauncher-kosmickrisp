@@ -8,6 +8,7 @@
 #include "kk_image.h"
 #include "kosmickrisp/bridge/mtl_texture.h"
 #include "vk_util.h"
+#include "vk_pipeline.h"
 #include "vk_queue.h"
 #include "vk_sync.h"
 #include "kosmickrisp/bridge/mtl_render_state.h"
@@ -278,7 +279,8 @@ kk_perf_thread_id(void)
 
 static void
 kk_perf_pipeline_begin(struct kk_perf *p, struct kk_perf_pipeline_scope *scope,
-                       const char *kind, uint32_t count)
+                       const char *kind, uint32_t count,
+                       VkPipelineCreateFlags2KHR flags, bool feedback)
 {
    *scope = (struct kk_perf_pipeline_scope) {
       .previous = pipeline_scope, .perf = p, .start = kk_perf_now(),
@@ -287,8 +289,10 @@ kk_perf_pipeline_begin(struct kk_perf *p, struct kk_perf_pipeline_scope *scope,
    pthread_mutex_lock(&p->mutex);
    scope->id = ++p->pipeline_sequence;
    fprintf(p->log, "{\"kk_pipeline_create\":1,\"device\":\"%p\",\"request_id\":%"PRIu64
-      ",\"phase\":\"begin\",\"kind\":\"%s\",\"thread\":%"PRIu64",\"count\":%u,\"start_ms\":%.6f}\n",
-      (void *)p, scope->id, kind, scope->thread, count, (scope->start - p->created) / 1e6);
+      ",\"phase\":\"begin\",\"kind\":\"%s\",\"thread\":%"PRIu64",\"count\":%u,"
+      "\"flags\":%"PRIu64",\"feedback\":%s,\"start_ms\":%.6f}\n",
+      (void *)p, scope->id, kind, scope->thread, count, (uint64_t)flags,
+      feedback ? "true" : "false", (scope->start - p->created) / 1e6);
    fflush(p->log);
    pthread_mutex_unlock(&p->mutex);
    pipeline_scope = scope;
@@ -885,7 +889,16 @@ kk_perf_CreateGraphicsPipelines_detailed(VkDevice device, VkPipelineCache cache,
 {
    VK_FROM_HANDLE(kk_device, dev, device);
    struct kk_perf_pipeline_scope scope;
-   kk_perf_pipeline_begin(dev->perf, &scope, "graphics", count);
+   /* Creation flags (union over the infos) and whether any info chains creation
+    * feedback. */
+   VkPipelineCreateFlags2KHR flags = 0;
+   bool feedback = false;
+   for (uint32_t i = 0; i < count; ++i) {
+      flags |= vk_graphics_pipeline_create_flags(&infos[i]);
+      feedback |= vk_find_struct_const(infos[i].pNext,
+                                       PIPELINE_CREATION_FEEDBACK_CREATE_INFO) != NULL;
+   }
+   kk_perf_pipeline_begin(dev->perf, &scope, "graphics", count, flags, feedback);
    VkResult result = KK_PERF_CALL(dev, KK_PERF_PIPELINE_CREATE,
       dev->vk.dispatch_table.CreateGraphicsPipelines(device, cache, count, infos, alloc, pipelines));
    kk_perf_pipeline_end(&scope, result);
@@ -914,7 +927,16 @@ kk_perf_CreateComputePipelines_detailed(VkDevice device, VkPipelineCache cache,
 {
    VK_FROM_HANDLE(kk_device, dev, device);
    struct kk_perf_pipeline_scope scope;
-   kk_perf_pipeline_begin(dev->perf, &scope, "compute", count);
+   /* Creation flags (union over the infos) and whether any info chains creation
+    * feedback; both decide whether a restored compute shader's build can defer. */
+   VkPipelineCreateFlags2KHR flags = 0;
+   bool feedback = false;
+   for (uint32_t i = 0; i < count; ++i) {
+      flags |= vk_compute_pipeline_create_flags(&infos[i]);
+      feedback |= vk_find_struct_const(infos[i].pNext,
+                                       PIPELINE_CREATION_FEEDBACK_CREATE_INFO) != NULL;
+   }
+   kk_perf_pipeline_begin(dev->perf, &scope, "compute", count, flags, feedback);
    VkResult result = KK_PERF_CALL(dev, KK_PERF_PIPELINE_CREATE,
       dev->vk.dispatch_table.CreateComputePipelines(device, cache, count, infos, alloc, pipelines));
    kk_perf_pipeline_end(&scope, result);

@@ -441,6 +441,12 @@ deserialization callbacks have a separate origin label; they can still
 perform Metal compilation. Source records cover newly generated MSL, including
 generated helper stages, and do not dump shader contents.
 
+Each graphics or compute pipeline creation call also writes
+``kk_pipeline_create`` begin and end records with its pipeline count. The
+begin record carries the union of the create infos' pipeline creation flags
+and whether any create info chains creation feedback; the end record carries
+the result and wall time.
+
 With compile records enabled, ``KK_PERF_TRACKING_BUILD_REASONS=1`` adds
 native library and archive outcomes, exact archive search keys and stable
 function-constant value digests. Each attributed device also identifies the
