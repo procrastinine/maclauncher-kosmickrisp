@@ -33,6 +33,7 @@ struct nir_to_msl_ctx {
    struct hash_table *types;
    struct hash_table *sampler_helpers;
    nir_shader *shader;
+   nir_function *current_function;
    struct _mesa_string_buffer *text;
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;

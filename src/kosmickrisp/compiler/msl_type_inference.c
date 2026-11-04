@@ -370,6 +370,12 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       set_type(types, &instr->src[1], TYPE_UINT);
       set_type(types, &instr->src[2], TYPE_UINT);
       break;
+   case nir_intrinsic_load_deref:
+      set_type(types, &instr->def, TYPE_GENERIC_DATA);
+      break;
+   case nir_intrinsic_store_deref:
+      set_type(types, &instr->src[1], TYPE_GENERIC_DATA);
+      break;
    case nir_intrinsic_store_output: {
       ti_type ty = ti_type_from_nir(nir_intrinsic_src_type(instr));
       set_type(types, &instr->src[0], ty);
@@ -641,6 +647,15 @@ infer_types_from_instr(struct nir_to_msl_ctx *ctx, struct hash_table *types,
                        nir_instr *instr)
 {
    switch (instr->type) {
+   case nir_instr_type_call: {
+      nir_call_instr *call = nir_instr_as_call(instr);
+      for (unsigned i = 0; i < call->num_params; ++i) {
+         if (!call->callee->params[i].is_return)
+            set_type(types, &call->params[i],
+                     call->callee->params[i].bit_size == 1 ? TYPE_BOOL : TYPE_UINT);
+      }
+      return;
+   }
    case nir_instr_type_alu:
       infer_types_from_alu(types, nir_instr_as_alu(instr));
       return;

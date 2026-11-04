@@ -171,9 +171,29 @@ writemask_to_msl(struct nir_to_msl_ctx *ctx, unsigned write_mask,
    }
 }
 
+/* Generated helpers use scalar/vector arguments and one thread-local
+ * return pointer. Application function/deref lowering remains unchanged. */
+static void
+msl_helper_deref(struct nir_to_msl_ctx *ctx, nir_deref_instr *deref)
+{
+   if (deref->deref_type == nir_deref_type_var) {
+      assert(deref->var->data.mode == nir_var_function_temp);
+      P(ctx, "(&local%u)", deref->var->index);
+   } else {
+      assert(deref->deref_type == nir_deref_type_cast);
+      nir_intrinsic_instr *param = nir_def_as_intrinsic(deref->parent.ssa);
+      assert(param->intrinsic == nir_intrinsic_load_param);
+      P(ctx, "p%u", nir_intrinsic_param_idx(param));
+   }
+}
+
 static void
 src_to_msl(struct nir_to_msl_ctx *ctx, nir_src *src)
 {
+   if (nir_src_is_deref(*src)) {
+      msl_helper_deref(ctx, nir_src_as_deref(*src));
+      return;
+   }
    /* Pointer types cannot use as_type casting */
    const char *bitcast = msl_bitcast_for_src(ctx->types, src);
    if (nir_src_is_const(*src)) {
@@ -1229,6 +1249,10 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
        instr->intrinsic == nir_intrinsic_load_barycentric_at_offset)
       return;
 
+   if (instr->intrinsic == nir_intrinsic_load_param && ctx->current_function &&
+       !ctx->current_function->is_entrypoint &&
+       ctx->current_function->params[nir_intrinsic_param_idx(instr)].is_return)
+      return; /* The return deref names its thread pointer directly. */
    if (kk_emit_image64(ctx, instr)) return;
    if (kk_emit_atomic64(ctx, instr)) return;
    bool guarded = msl_interlock_side_effect(ctx, instr);
@@ -1256,8 +1280,32 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       kk_mesh_intrinsic_to_msl(ctx, instr);
       break;
    case nir_intrinsic_load_param:
-      kk_rt_parameter_to_msl(ctx, instr);
+      if (ctx->current_function && !ctx->current_function->is_entrypoint) {
+         unsigned index = nir_intrinsic_param_idx(instr);
+         if (ctx->current_function->params[index].is_return) {
+            P(ctx, "(ulong)p%u;\n", index);
+         } else {
+            P(ctx, "as_type<%s>(p%u);\n",
+               msl_type_for_def(ctx->types, &instr->def), index);
+         }
+      } else {
+         kk_rt_parameter_to_msl(ctx, instr);
+      }
       break;
+   case nir_intrinsic_load_deref:
+      P(ctx, "as_type<%s>(*", msl_type_for_def(ctx->types, &instr->def));
+      msl_helper_deref(ctx, nir_src_as_deref(instr->src[0]));
+      P(ctx, ");\n");
+      break;
+   case nir_intrinsic_store_deref: {
+      nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
+      P_IND(ctx, "*"); msl_helper_deref(ctx, deref);
+      P(ctx, " = as_type<%s>(", msl_uint_type(
+         glsl_get_bit_size(deref->type), glsl_get_vector_elements(deref->type)));
+      src_to_msl(ctx, &instr->src[1]);
+      P(ctx, ");\n");
+      break;
+   }
    case nir_intrinsic_decl_reg: {
       const char *reg_type = msl_uint_type(nir_intrinsic_bit_size(instr),
                                            nir_intrinsic_num_components(instr));
@@ -2313,7 +2361,8 @@ jump_instr_to_msl(struct nir_to_msl_ctx *ctx, nir_jump_instr *jump)
       P_IND(ctx, "continue;\n");
       break;
    case nir_jump_return:
-      if (mesa_shader_stage_is_rt(ctx->shader->info.stage)) {
+      if ((ctx->current_function && !ctx->current_function->is_entrypoint) ||
+          mesa_shader_stage_is_rt(ctx->shader->info.stage)) {
          P_IND(ctx, "return;\n");
          break;
       }
@@ -2384,9 +2433,24 @@ instr_to_msl(struct nir_to_msl_ctx *ctx, nir_instr *instr)
       break;
    }
    case nir_instr_type_deref:
-      assert(!"We should have lowered derefs by now");
+      /* Raw helper return pointers are printed at their uses. */
+      assert(nir_instr_as_deref(instr)->modes == nir_var_function_temp);
       break;
-   case nir_instr_type_call:
+   case nir_instr_type_call: {
+      nir_call_instr *call = nir_instr_as_call(instr);
+      assert(call->callee->dont_inline);
+      P_IND(ctx, "%s(", call->callee->name);
+      for (unsigned i = 0; i < call->num_params; ++i) {
+         if (i) P(ctx, ", ");
+         if (!call->callee->params[i].is_return)
+            P(ctx, "as_type<%s>(", msl_uint_type(
+               call->callee->params[i].bit_size, call->callee->params[i].num_components));
+         src_to_msl(ctx, &call->params[i]);
+         if (!call->callee->params[i].is_return) P(ctx, ")");
+      }
+      P(ctx, ");\n");
+      break;
+   }
    case nir_instr_type_cmat_call:
       assert(!"We should have inlined all functions by now");
       break;
@@ -2725,14 +2789,16 @@ kk_mesh_init_msl_info(struct nir_to_msl_ctx *ctx,
 static void
 msl_gather_info(struct nir_to_msl_ctx *ctx, struct nir_to_msl_options *options)
 {
-   nir_function_impl *impl = nir_shader_get_entrypoint(ctx->shader);
    ctx->types = msl_infer_types(ctx);
 
    /* TODO_KOSMICKRISP
     * Reindex blocks and ssa. This allows us to optimize things we don't at the
     * moment. */
-   nir_index_blocks(impl);
-   nir_index_ssa_defs(impl);
+   nir_foreach_function_impl(function_impl, ctx->shader) {
+      nir_index_blocks(function_impl);
+      nir_index_ssa_defs(function_impl);
+      nir_function_impl_index_vars(function_impl);
+   }
 
    switch (ctx->shader->info.stage) {
    case MESA_SHADER_TASK:
@@ -2858,6 +2924,44 @@ msl_emit_constant_data(struct nir_to_msl_ctx *ctx, nir_shader *shader)
    P(ctx, "};\n");
 }
 
+static void
+msl_helper_locals(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
+{
+   nir_foreach_function_temp_variable(var, impl) {
+      P_IND(ctx, "%s local%u;\n", msl_uint_type(glsl_get_bit_size(var->type),
+         glsl_get_vector_elements(var->type)), var->index);
+   }
+}
+
+static void
+msl_emit_helpers(struct nir_to_msl_ctx *ctx)
+{
+   nir_foreach_function_impl(impl, ctx->shader) {
+      nir_function *function = impl->function;
+      if (function->is_entrypoint) continue;
+      assert(function->dont_inline);
+      ctx->current_function = function;
+      P(ctx, "__attribute__((noinline)) void %s(", function->name);
+      for (unsigned i = 0; i < function->num_params; ++i) {
+         const nir_parameter *param = &function->params[i];
+         if (i) P(ctx, ", ");
+         if (param->is_return) {
+            P(ctx, "thread %s *p%u", msl_uint_type(glsl_get_bit_size(param->type),
+               glsl_get_vector_elements(param->type)), i);
+         } else {
+            P(ctx, "%s p%u", msl_uint_type(param->bit_size, param->num_components), i);
+         }
+      }
+      P(ctx, ")\n{\n"); ctx->indentlevel++;
+      msl_helper_locals(ctx, impl);
+      predeclare_ssa_values(ctx, impl);
+      foreach_list_typed(nir_cf_node, node, node, &impl->body)
+         cf_node_to_metal(ctx, node);
+      ctx->indentlevel--; P(ctx, "}\n");
+   }
+   ctx->current_function = nir_shader_get_entrypoint(ctx->shader)->function;
+}
+
 #include "kk_mesh_msl.h"
 
 #include "kk_rt_msl.h"
@@ -2936,6 +3040,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    msl_emit_constant_data(&ctx, shader);
 
    msl_emit_io_blocks(&ctx, shader);
+   msl_emit_helpers(&ctx);
    if (ctx.has_sampler_helpers)
       kk_sample_emit_helpers(&ctx);
    if (shader->info.stage == MESA_SHADER_FRAGMENT &&
@@ -2957,6 +3062,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    ctx.indentlevel++;
    msl_emit_output_var(&ctx, shader);
    emit_local_vars(&ctx, shader);
+   msl_helper_locals(&ctx, impl);
    msl_interlock_locals(&ctx);
    if (shader->info.stage == MESA_SHADER_VERTEX) {
       if (BITSET_TEST(shader->info.system_values_read, SYSTEM_VALUE_SUBGROUP_SIZE))
