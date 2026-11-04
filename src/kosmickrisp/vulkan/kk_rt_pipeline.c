@@ -13,6 +13,7 @@
 #include "kosmickrisp/bridge/mtl_compiler.h"
 #include "kosmickrisp/bridge/mtl_residency_set.h"
 #include "util/ralloc.h"
+#include "compiler/spirv/spirv.h"
 
 void kk_compile_msl(struct kk_device *, nir_shader *, const struct vk_graphics_pipeline_state *,struct msl_compile_data *);
 
@@ -116,7 +117,10 @@ kk_rt_pipeline_realize(struct vk_device *device, const struct vk_pipeline *commo
    pipeline->traversal_program=vk_pipeline_get_rt_stage_count(common);
    if(pipeline->traversal_program==UINT32_MAX)return VK_ERROR_OUT_OF_HOST_MEMORY;
    pipeline->program_count = pipeline->traversal_program+1;
-   result=kk_rt_compile_traversal(device,alloc,&pipeline->traversal,kk_compile_msl);
+   uint32_t pipeline_ray_flags =
+      ((common->flags & VK_PIPELINE_CREATE_2_RAY_TRACING_SKIP_TRIANGLES_BIT_KHR) ? SpvRayFlagsSkipTrianglesKHRMask : 0) |
+      ((common->flags & VK_PIPELINE_CREATE_2_RAY_TRACING_SKIP_AABBS_BIT_KHR) ? SpvRayFlagsSkipAABBsKHRMask : 0);
+   result=kk_rt_compile_traversal(device,alloc,&pipeline->traversal,kk_compile_msl,pipeline_ray_flags);
    if(result!=VK_SUCCESS)return result;
    uint64_t bytes;
    if (!pipeline->program_count ||

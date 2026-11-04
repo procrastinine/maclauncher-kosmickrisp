@@ -41,7 +41,7 @@ VkResult kk_rt_compile_lowered(struct vk_device *device, uint32_t count,
                                 const VkAllocationCallbacks *alloc,
                                 struct vk_shader **out,
                                 kk_rt_compile_part compile_part);
-VkResult kk_rt_compile_traversal(struct vk_device *device, const VkAllocationCallbacks *alloc, struct vk_shader **out, kk_rt_compile_part compile_part);
+VkResult kk_rt_compile_traversal(struct vk_device *device, const VkAllocationCallbacks *alloc, struct vk_shader **out, kk_rt_compile_part compile_part, uint32_t pipeline_ray_flags);
 bool kk_rt_shader_binary(const struct blob_reader *blob);
 VkResult kk_rt_shader_deserialize(struct vk_device *device, struct blob_reader *blob,
                                    const VkAllocationCallbacks *alloc,

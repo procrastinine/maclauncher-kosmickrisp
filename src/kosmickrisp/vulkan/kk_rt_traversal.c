@@ -38,14 +38,17 @@ static void snapshot(nir_builder *b,nir_def *q,bool committed){
 }
 /* Build param loads before splitting without introducing a fixed Metal slot.
  * The splitter adds the sole context parameter. */
-nir_shader *kk_rt_build_traversal(void *mem_ctx){
+/* pipeline_ray_flags holds the SPIR-V skip flags that the pipeline's
+ * SKIP_TRIANGLES/SKIP_AABBS create flags add to every trace. They select
+ * traversal only; shaders still read the trace's own incoming flags. */
+nir_shader *kk_rt_build_traversal(void *mem_ctx, uint32_t pipeline_ray_flags){
    nir_builder b=nir_builder_init_simple_shader(MESA_SHADER_RAYGEN,&kk_nir_options,"kk_rt_traversal");
    b.impl->function->num_params=1;
    b.impl->function->params=ralloc_array(b.impl->function,nir_parameter,1);
    b.impl->function->params[0]=(nir_parameter){.num_components=1,.bit_size=64};
    nir_variable *query=nir_local_variable_create(b.impl,glsl_uint64_t_type(),"traversal");query->data.ray_query=true;
    nir_def *q=&nir_build_deref_var(&b,query)->def;
-   nir_rq_initialize(&b,q,L(acceleration_structure,1,64),L(flags,1,32),L(cull_mask,1,32),L(origin,3,32),L(tmin,1,32),L(direction,3,32),L(tmax,1,32));
+   nir_rq_initialize(&b,q,L(acceleration_structure,1,64),nir_ior_imm(&b,L(flags,1,32),pipeline_ray_flags),L(cull_mask,1,32),L(origin,3,32),L(tmin,1,32),L(direction,3,32),L(tmax,1,32));
    nir_loop *outer=nir_push_loop(&b);
    nir_push_if(&b,nir_inot(&b,nir_rq_proceed(&b,1,q)));nir_jump(&b,nir_jump_break);nir_pop_if(&b,NULL);
    snapshot(&b,q,false);

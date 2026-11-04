@@ -28,6 +28,6 @@ bool kk_rt_prepare_context(nir_shader *shader);
 struct nir_builder;
 nir_def *kk_rt_load_embedded_sampler_table(struct nir_builder *b);
 bool kk_rt_shader_frame_fits(nir_shader *shader);
-nir_shader *kk_rt_build_traversal(void *mem_ctx);
+nir_shader *kk_rt_build_traversal(void *mem_ctx, uint32_t pipeline_ray_flags);
 bool kk_rt_split_shader_mode(nir_shader *shader, void *mem_ctx, struct kk_rt_shader_parts *parts, bool internal);
 #endif

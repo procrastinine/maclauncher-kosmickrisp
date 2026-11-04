@@ -360,9 +360,9 @@ fail:
    return result;
 }
 
-nir_shader *kk_rt_build_traversal(void *mem_ctx);
-VkResult kk_rt_compile_traversal(struct vk_device *device, const VkAllocationCallbacks *alloc, struct vk_shader **out, kk_rt_compile_part compile_part)
+nir_shader *kk_rt_build_traversal(void *mem_ctx, uint32_t pipeline_ray_flags);
+VkResult kk_rt_compile_traversal(struct vk_device *device, const VkAllocationCallbacks *alloc, struct vk_shader **out, kk_rt_compile_part compile_part, uint32_t pipeline_ray_flags)
 {
-   nir_shader *nir=kk_rt_build_traversal(NULL);
+   nir_shader *nir=kk_rt_build_traversal(NULL, pipeline_ray_flags);
    return kk_rt_compile_one(device,nir,alloc,out,compile_part,true);
 }
