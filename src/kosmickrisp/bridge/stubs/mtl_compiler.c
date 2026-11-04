@@ -89,6 +89,13 @@ mtl_sampler_emulation_render_descriptor(mtl_render_pipeline_descriptor *descript
    return NULL;
 }
 
+mtl_render_pipeline_descriptor *
+mtl_copy_render_pipeline_descriptor_with_fragment(mtl_render_pipeline_descriptor *descriptor,
+                                                  mtl_function_descriptor *fragment)
+{
+   return NULL;
+}
+
 /* Compute pipeline */
 
 mtl_compute_pipeline_state *

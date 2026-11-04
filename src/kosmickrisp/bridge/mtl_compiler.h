@@ -177,6 +177,10 @@ mtl_function_descriptor *mtl_specialize_sampler_emulation(
 mtl_render_pipeline_descriptor *mtl_sampler_emulation_render_descriptor(
    mtl_render_pipeline_descriptor *descriptor, uint32_t stages,
    uint32_t enabled_stages);
+/* Copies a render or Mesh pipeline descriptor with a new fragment function,
+ * keeping the archive key's record of the other stages' constant values. */
+mtl_render_pipeline_descriptor *mtl_copy_render_pipeline_descriptor_with_fragment(
+   mtl_render_pipeline_descriptor *descriptor, mtl_function_descriptor *fragment);
 
 /* Compute pipeline */
 mtl_compute_pipeline_state *

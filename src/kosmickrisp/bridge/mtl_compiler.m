@@ -680,6 +680,21 @@ mtl_sampler_emulation_render_descriptor(mtl_render_pipeline_descriptor *descript
    }
 }
 
+mtl_render_pipeline_descriptor *
+mtl_copy_render_pipeline_descriptor_with_fragment(mtl_render_pipeline_descriptor *descriptor,
+                                                  mtl_function_descriptor *fragment)
+{
+   @autoreleasepool {
+      id copy = [(id)descriptor copy];
+      if (!copy) return NULL;
+      kk_carry_constant_record(copy, (id)descriptor);
+      [(MTL4RenderPipelineDescriptor *)copy setFragmentFunctionDescriptor:
+         (MTL4FunctionDescriptor *)fragment];
+      kk_record_stage_constants(copy, @"fragmentFunctionDescriptor", (id)fragment, false);
+      return copy;
+   }
+}
+
 /* Compute pipeline */
 mtl_compute_pipeline_state *
 mtl_new_compute_pipeline_state(mtl_compiler *compiler,

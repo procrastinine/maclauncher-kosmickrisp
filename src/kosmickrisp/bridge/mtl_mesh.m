@@ -65,8 +65,6 @@ kk_mesh_retained_fragment_descriptor(const struct kk_mesh_retained_batch *batch,
          (MTL4MeshRenderPipelineDescriptor *)batch->raster_descriptor;
       if (!reader.meshFunctionDescriptor || reader.objectFunctionDescriptor)
          return NULL;
-      MTL4MeshRenderPipelineDescriptor *descriptor = [reader copy];
-      descriptor.fragmentFunctionDescriptor = (MTL4FunctionDescriptor *)fragment;
-      return (mtl_render_pipeline_descriptor *)descriptor;
+      return mtl_copy_render_pipeline_descriptor_with_fragment(reader, fragment);
    }
 }
