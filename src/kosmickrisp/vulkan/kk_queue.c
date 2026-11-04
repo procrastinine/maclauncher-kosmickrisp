@@ -10,6 +10,7 @@
 #include "kk_cmd_buffer.h"
 #include "kk_scene.h"
 #include "kk_device.h"
+#include "kk_device_fault.h"
 #include "kk_entrypoints.h"
 #include "kk_physical_device.h"
 #include "kk_sync.h"
@@ -55,6 +56,7 @@ check_device_lost(struct kk_device *dev, struct mtl_feedback_data *data)
       vk_device_set_lost(
          &dev->vk, "Command queue error: %s, with message \"%s\"",
          mtl_command_queue_error_to_string(data->error), data->error_message);
+      kk_device_fault_record(dev, data);
       kk_interlock_submission_lost(dev);
    }
 }

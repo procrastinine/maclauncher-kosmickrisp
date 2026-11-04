@@ -85,6 +85,8 @@ kk_files = files(
   'kk_device_memory.c',
   'kk_device.h',
   'kk_device.c',
+  'kk_device_fault.c',
+  'kk_device_fault_api.c',
   'kk_perf.c',
   'kk_atomic64.c',
   'kk_event.h',

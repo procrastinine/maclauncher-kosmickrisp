@@ -1875,3 +1875,15 @@ With the variable unset, ordinary device dispatch and presentation are unchanged
 * [shader cache](reference/kosmickrisp-shader-cache.md)
 * [varyings](reference/kosmickrisp-varyings.md)
 * [zero initialization](reference/kosmickrisp-zero-initialization.md)
+
+### Retained command-queue fault diagnostics
+
+Vulkan contract: diagnostic entrypoints for `VK_KHR_device_fault` and `VK_EXT_device_fault`, subject to the physical-device extension and feature queries.
+
+Diagnostic storage is allocated only for devices enabling `deviceFault`. Queue and sparse-mapping error callbacks copy their error enumeration and UTF-8 message while callback data is live. Reports preserve occurrence order, identify overflow in their bounded queue and support concurrent one-time retrieval. The legacy query retains the first error independently of report consumption. A callback timeout is identified by the bridge's timeout error code.
+
+GPU fault addresses, instruction addresses and vendor binaries are omitted because the public commit feedback supplies none. Vendor codes describe the existing callback error enumeration; a continuation-generated code is not a recovered raw native NSError. Original interlock capture/auxiliary detail follows the existing continuation callback contract. Physical-device capability queries govern availability.
+
+Retention is confined to existing error branches. Successful submission, completion, recording, shader compilation and GPU encoding use their existing paths. Storage is released after queue callbacks have drained.
+
+Implementation: [kk_device_fault.c](../src/kosmickrisp/vulkan/kk_device_fault.c), [kk_device_fault_api.c](../src/kosmickrisp/vulkan/kk_device_fault_api.c), [kk_device_fault.h](../src/kosmickrisp/vulkan/kk_device_fault.h), [kk_queue.c](../src/kosmickrisp/vulkan/kk_queue.c), [kk_sparse.c](../src/kosmickrisp/vulkan/kk_sparse.c).

@@ -34,6 +34,7 @@ struct kk_physical_device;
 struct kk_frame_capture;
 struct vk_pipeline_cache;
 struct kk_perf;
+struct kk_device_fault;
 
 struct kk_residency_set {
    simple_mtx_t mutex;
@@ -105,6 +106,7 @@ struct kk_device {
    struct kk_perf *perf;
    /* Monotonic: published before the first emulating sampler handle. */
    uint32_t sampler_emulation;
+   struct kk_device_fault *fault;
    simple_mtx_t depth_stencil_cache_mutex;
    struct hash_table *depth_stencil_cache;
    struct kk_sparse_device_state *sparse;

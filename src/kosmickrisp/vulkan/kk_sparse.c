@@ -7,6 +7,7 @@
 #include "kk_buffer.h"
 #include "kk_buffer_view.h"
 #include "kk_device.h"
+#include "kk_device_fault.h"
 #include "kk_device_memory.h"
 #include "kk_descriptor_types.h"
 #include "kk_format.h"
@@ -925,8 +926,10 @@ kk_sparse_mapping_complete(struct mtl_feedback_data *feedback)
    struct kk_sparse_mapping_commit *commit = feedback->user_data;
    struct kk_queue *queue = commit->queue;
    struct kk_device *dev = kk_queue_device(queue);
-   if (feedback->error != MTL_COMMAND_QUEUE_ERROR_NONE)
+   if (feedback->error != MTL_COMMAND_QUEUE_ERROR_NONE) {
       vk_device_set_lost(&dev->vk, "Sparse mapping barrier: %s", feedback->error_message);
+      kk_device_fault_record(dev, feedback);
+   }
    mtl_release(commit->command);
    mtl_release(commit->allocator);
    kk_sparse_release_copies(dev, &commit->copies);

@@ -6,6 +6,7 @@
  */
 
 #include "kk_device.h"
+#include "kk_device_fault.h"
 #include "kk_async_compute.h"
 #include "kosmickrisp-rt-commands.h"
 #include "kk_perf.h"
@@ -836,6 +837,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    kk_descriptor_heap_init(dev);
    result = kk_vrs_device_init(dev);
    if (result != VK_SUCCESS) goto fail_init;
+   result = kk_device_fault_init(dev);
+   if (result != VK_SUCCESS) goto fail_init;
    dev->vk.shader_ops = &kk_device_shader_ops;
    dev->mtl_handle = pdev->mtl_dev_handle;
    dev->poly_layer_argument = dev->vk.enabled_features.shaderOutputLayer ||
@@ -968,6 +971,7 @@ fail_vab_memory:
 fail_compiler:
    kk_release_compiler(dev);
 fail_init:
+   kk_device_fault_finish(dev);
    kk_depth_stencil_cache_finish(dev);
    kk_vrs_device_finish(dev);
    kk_descriptor_heap_finish(dev);
@@ -1050,6 +1054,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_interlock_submission_finish(dev);
 
    kk_perf_destroy(dev->perf);
+   kk_device_fault_finish(dev);
    vk_device_finish(&dev->vk);
 
    vk_free(&dev->vk.alloc, dev);
