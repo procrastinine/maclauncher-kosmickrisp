@@ -18,8 +18,8 @@
   {
     "name": "denorm_flush",
     "description": "Flush subnormal results to zero in requested floating-point modes.",
-    "cost_class": "native arithmetic / ALU fixups",
-    "cost_note": "FP32 adds exponent-mask fixups to selected operations; no full software FP32 replacement. Per-operation cost is unmeasured. FTZ16 and FTZ64 are unsupported.",
+    "cost_class": "native arithmetic / ALU fixups / cold software repair",
+    "cost_note": "FP32 arithmetic remains native. Multiply, FMA and divide test a zero result and repair finite normal nonzero operands through a cold correctly rounded fallback before final subnormal flushing. Selected non-arithmetic operations retain exponent-mask fixups. FTZ16 and FTZ64 remain unsupported.",
     "extensions": [],
     "features": [],
     "properties": [

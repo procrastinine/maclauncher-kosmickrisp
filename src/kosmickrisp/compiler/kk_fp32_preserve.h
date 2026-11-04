@@ -2,6 +2,7 @@
 #ifndef KOSMICKRISP_FP32_PRESERVE_H
 #define KOSMICKRISP_FP32_PRESERVE_H
 #include "kk_fp32_preserve_msl.h"
+#include "kk_fp32_flush_msl.h"
 static bool kk_fp32_preserve(const nir_shader *shader)
 {
    return nir_is_denorm_preserve(shader->info.float_controls_execution_mode,
@@ -56,13 +57,38 @@ kk_fp32_preserve_instr(UNUSED nir_builder *b, nir_instr *instr, void *data)
    return true;
 }
 
+/* Native FTZ can discard a subnormal before it rounds up to FLT_MIN.
+ * Keep only multiply, FMA and divide on a late boundary-repair emitter path;
+ * other operations retain their existing native/canonicalization lowering. */
 static bool
-kk_fp32_preserve_lower(struct nir_to_msl_ctx *ctx)
+kk_fp32_flush_instr(UNUSED nir_builder *b, nir_instr *instr, UNUSED void *data)
 {
-   if (!kk_fp32_preserve(ctx->shader))
+   if (instr->type != nir_instr_type_alu)
       return false;
-   return nir_shader_instructions_pass(ctx->shader, kk_fp32_preserve_instr,
-                                        nir_metadata_control_flow, ctx);
+   nir_alu_instr *alu = nir_instr_as_alu(instr);
+   if (alu->def.bit_size != 32)
+      return false;
+   switch (alu->op) {
+   case nir_op_fmul: alu->op = nir_op_fmul_preserve_kk; break;
+   case nir_op_ffma: alu->op = nir_op_ffma_preserve_kk; break;
+   case nir_op_fdiv: alu->op = nir_op_fdiv_preserve_kk; break;
+   default: return false;
+   }
+   return true;
+}
+
+static bool
+kk_fp32_controls_lower(struct nir_to_msl_ctx *ctx)
+{
+   unsigned mode = ctx->shader->info.float_controls_execution_mode &
+      (FLOAT_CONTROLS_DENORM_PRESERVE_FP32 |
+       FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP32);
+   if (!mode)
+      return false;
+   return nir_shader_instructions_pass(ctx->shader,
+      mode & FLOAT_CONTROLS_DENORM_PRESERVE_FP32
+         ? kk_fp32_preserve_instr : kk_fp32_flush_instr,
+      nir_metadata_control_flow, ctx);
 }
 /* Generic nir_lower_frexp assumes normalized significands. Normalize FP32
  * subnormals with integer bits before that pass; FP16 follows its native path.
