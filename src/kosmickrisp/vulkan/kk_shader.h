@@ -10,6 +10,7 @@
 
 #include "kk_device_memory.h"
 #include "kk_private.h"
+#include "kk_compile_options.h"
 #include <limits.h>
 
 #include "kosmickrisp/bridge/mtl_format.h"

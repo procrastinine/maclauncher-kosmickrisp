@@ -7,6 +7,7 @@
 #pragma once
 
 #include "nir.h"
+#include "kosmickrisp/libkk/kk_argument_table.h"
 
 #define MSL_MAX_SAMPLERS 4096
 
@@ -18,6 +19,7 @@ struct vk_render_pass_state;
 struct nir_to_msl_options {
    void *mem_ctx;
    uint64_t disabled_workarounds;
+   bool mesh_queries;
 
    /* Required to correctly declare fragment outputs. Shader may contain
     * shrinked writes which can lead to writting less components than the ones

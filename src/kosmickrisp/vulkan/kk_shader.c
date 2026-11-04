@@ -1072,19 +1072,21 @@ kk_nir_lower_vertex_id_zero_base(struct nir_shader *nir)
 
 /* Consumes nir */
 static void
-kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
+kk_compile_msl_options(struct kk_physical_device *pdev, nir_shader *nir,
                const struct vk_graphics_pipeline_state *state,
-               struct msl_compile_data *data)
+               struct msl_compile_data *data,
+               const struct kk_compile_options *opts)
 {
    NIR_PASS(_, nir, kk_nir_lower_poly);
 
    msl_optimize_nir(nir);
    modify_nir_info(nir);
 
-   struct nir_to_msl_options translate_options = {
-      .mem_ctx = NULL,
-      .disabled_workarounds = pdev->settings.disabled_workarounds,
-   };
+   struct nir_to_msl_options translate_options = opts && opts->msl_custom
+      ? *opts->msl_custom : (struct nir_to_msl_options){0};
+   translate_options.mem_ctx = NULL;
+   translate_options.disabled_workarounds = pdev->settings.disabled_workarounds;
+   translate_options.mesh_queries = opts && opts->mesh_queries;
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       for (uint32_t i = 0u; i < MAX_DRAW_BUFFERS; ++i) {
          /* If the attachment is unused, default to 4 to avoid issues with alpha
@@ -1121,6 +1123,14 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
    ralloc_free(nir);
 }
 
+static void
+kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
+               const struct vk_graphics_pipeline_state *state,
+               struct msl_compile_data *data)
+{
+   kk_compile_msl_options(pdev, nir, state, data, NULL);
+}
+
 #include "kk_polygon_nir.h"
 #include "kk_polygon_scalar_io.h"
 
@@ -1129,11 +1139,15 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
                   struct kk_shader *prev_stage,
                   const struct vk_pipeline_robustness_state *robustness,
                   const struct vk_graphics_pipeline_state *state,
-                  const struct kk_per_vertex_map *per_vertex_map,
+                  const struct kk_compile_options *opts,
                   const VkAllocationCallbacks *pAllocator,
                   struct kk_shader **shader_out)
 {
    assert(nir->info.io_lowered && "nir must have lowered io");
+   static const struct kk_compile_options defaults;
+   if (!opts)
+      opts = &defaults;
+   const struct kk_per_vertex_map *per_vertex_map = opts->per_vertex_map;
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
    struct kk_shader *shader;
@@ -1316,7 +1330,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       NIR_PASS(_, nir, kk_nir_lower_descriptors, robustness, 0, NULL);
    }
 
-   kk_compile_msl(pdev, nir, state, &shader->msl_data[stage]);
+   kk_compile_msl_options(pdev, nir, state, &shader->msl_data[stage], opts);
 
    *shader_out = shader;
 
@@ -2034,11 +2048,14 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
                        "Out of varying slots for barycentric emulation");
    }
 
+   const struct kk_compile_options compile_options = {
+      .per_vertex_map = &per_vertex_map,
+   };
    for (uint32_t i = 0; i < total_shaders; i++) {
       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
       result =
          kk_compile_shader(dev, nir_shaders[i], prev_stage, vertex_robustness,
-                           state, &per_vertex_map, pAllocator, &shaders[i]);
+                           state, &compile_options, pAllocator, &shaders[i]);
 
       if (result != VK_SUCCESS) {
          /* Clean up all the shaders before this point */

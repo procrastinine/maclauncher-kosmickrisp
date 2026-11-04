@@ -109,11 +109,11 @@ emit_inputs(struct nir_to_msl_ctx *ctx, nir_shader *shader)
       break;
    }
    msl_interlock_inputs(ctx);
-   P_IND(ctx, "constant Buffer &buf0 [[buffer(0)]],\n");
-   P_IND(ctx, "constant SamplerTable &sampler_table [[buffer(1)]]");
+   P_IND(ctx, "constant Buffer &buf0 [[buffer(%u)]],\n", KK_ARGUMENT_ROOT);
+   P_IND(ctx, "constant SamplerTable &sampler_table [[buffer(%u)]]", KK_ARGUMENT_SAMPLERS);
    if (ctx->uses_per_draw_data) {
       P(ctx, ",\n");
-      P_IND(ctx, "constant Buffer &per_draw [[buffer(2)]]\n");
+      P_IND(ctx, "constant Buffer &per_draw [[buffer(%u)]]\n", KK_ARGUMENT_PER_DRAW);
    } else {
       P(ctx, "\n");
    }

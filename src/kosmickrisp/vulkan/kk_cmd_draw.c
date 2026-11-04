@@ -2234,7 +2234,7 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
    if (unlikely(!shader_data_gpu.gpu))
       return;
 
-   mtl_set_address(cmd->argument_table, shader_data_gpu.gpu, 2u);
+   mtl_set_address(cmd->argument_table, shader_data_gpu.gpu, KK_ARGUMENT_PER_DRAW);
 }
 
 static void

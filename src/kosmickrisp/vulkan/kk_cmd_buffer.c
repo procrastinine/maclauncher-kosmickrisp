@@ -142,9 +142,12 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    {
       mtl_argument_table_descriptor *desc = mtl_new_argument_table_descriptor();
       /* Root at 0, samplers at 1 and per draw data at 2 */
-      mtl_set_max_buffer_binding_count(desc, 3u);
+      mtl_set_max_buffer_binding_count(desc,
+         kk_argument_table_buffer_count((struct kk_argument_table_usage){
+            .interlock_guard = dev->interlock_guard != NULL,
+         }));
       cmd->argument_table = mtl_new_argument_table(dev->mtl_handle, desc);
-      mtl_set_address(cmd->argument_table, dev->samplers.table.bo->gpu, 1u);
+      mtl_set_address(cmd->argument_table, dev->samplers.table.bo->gpu, KK_ARGUMENT_SAMPLERS);
       if (dev->interlock_guard)
          mtl_set_address(cmd->argument_table, dev->interlock_guard->gpu, KK_ARGUMENT_INTERLOCK_GUARD);
       mtl_release(desc);
@@ -398,7 +401,7 @@ cs_end(struct kk_cmd_buffer *cmd)
 void
 kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd, uint64_t addr)
 {
-   mtl_set_address(cmd->argument_table, addr, 0u);
+   mtl_set_address(cmd->argument_table, addr, KK_ARGUMENT_ROOT);
    cmd->state.root_addr = addr;
 }
 
@@ -843,7 +846,7 @@ kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    if (unlikely(!data_gpu.gpu))
       return;
 
-   mtl_set_address(cmd->argument_table, data_gpu.gpu, 0u);
+   mtl_set_address(cmd->argument_table, data_gpu.gpu, KK_ARGUMENT_ROOT);
    mtl_compute_set_pipeline_state(encoder, prog->pipeline);
 
    struct mtl_size local_size = {
@@ -863,7 +866,7 @@ kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
                                     MTL_STAGE_DISPATCH);
 
    /* Rebind the existing root. */
-   mtl_set_address(cmd->argument_table, cmd->state.root_addr, 0u);
+   mtl_set_address(cmd->argument_table, cmd->state.root_addr, KK_ARGUMENT_ROOT);
 }
 
 void
