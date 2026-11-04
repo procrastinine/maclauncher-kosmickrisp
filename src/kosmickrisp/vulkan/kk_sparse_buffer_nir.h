@@ -1,6 +1,14 @@
 /* SPDX-License-Identifier: MIT
  * Included by descriptor lowering so sparse IO shares its descriptor access.
  */
+#define KK_SPARSE_BUFFER_ACCESS "__kk_sparse_buffer_access"
+
+static bool
+kk_sparse_access_helper(const nir_function *function)
+{
+   return function->name && strcmp(function->name, KK_SPARSE_BUFFER_ACCESS) == 0;
+}
+
 static nir_def *
 kk_sparse_descriptor_index(nir_builder *b, nir_intrinsic_instr *descriptor,
                            const struct lower_descriptors_ctx *ctx)
@@ -248,13 +256,12 @@ kk_sparse_access_mask(nir_builder *b, nir_def *source, nir_def *address,
       return kk_sparse_access_mask_body(b, source, address, nir_imm_int(b, size),
                                         nir_imm_int(b, components),
                                         nir_imm_int(b, write_mask), range_lookup);
-   const char *name = "__kk_sparse_buffer_access";
    nir_function *helper = NULL;
    nir_foreach_function(function, b->shader) {
-      if (strcmp(function->name, name) == 0) { helper = function; break; }
+      if (kk_sparse_access_helper(function)) { helper = function; break; }
    }
    if (!helper) {
-      helper = nir_function_create(b->shader, name);
+      helper = nir_function_create(b->shader, KK_SPARSE_BUFFER_ACCESS);
       helper->dont_inline = true;
       helper->num_params = 7;
       helper->params = rzalloc_array(helper, nir_parameter, 7);
@@ -375,6 +382,119 @@ kk_sparse_buffer_io(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    nir_pop_if(b, ordinary);
    if (atomic) nir_def_rewrite_uses(&intr->def, nir_if_phi(b, &normal->def, atomic_result));
    nir_instr_remove(&intr->instr);
+   return true;
+}
+
+/* True unless every use of the call's result variable is the call itself. */
+static bool
+kk_sparse_access_result_read(nir_function_impl *impl, nir_call_instr *call)
+{
+   nir_deref_instr *out = nir_src_as_deref(call->params[0]);
+   nir_variable *var = out ? nir_deref_instr_get_variable(out) : NULL;
+   if (!var) return true;
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_deref) continue;
+         nir_deref_instr *deref = nir_instr_as_deref(instr);
+         if (nir_deref_instr_get_variable(deref) != var) continue;
+         nir_foreach_use_including_if(use, &deref->def) {
+            if (nir_src_is_if(use)) return true;
+            nir_instr *user = nir_src_use_instr(use);
+            /* Child derefs are visited with their own uses. */
+            if (user != &call->instr && user->type != nir_instr_type_deref)
+               return true;
+         }
+      }
+   }
+   return false;
+}
+
+/* Poly's geometry lowering removes application stores from the main geometry
+ * program, then the atomics whose results are no longer used, because
+ * another geometry program performs them. The residency helper is a call,
+ * which dead code elimination never removes, so after a guarded store is gone
+ * its mask call still uses the store's address. When that address comes from
+ * an atomic's result, as in index = atomicAdd(count, 1); data[index] = value,
+ * the atomic stays and runs in both programs. The helper only computes the
+ * mask in its first parameter, so this removes each call whose mask nothing
+ * reads and repeats the atomic removal. It runs on the main geometry program
+ * after poly_nir_lower_gs_capture; accesses whose mask is read keep their
+ * guard. */
+bool
+kk_nir_strip_unread_sparse_access(nir_shader *nir)
+{
+   bool helper = false;
+   nir_foreach_function(function, nir)
+      helper |= kk_sparse_access_helper(function);
+   if (!helper) return false;
+   bool any = false;
+   for (;;) {
+      bool removed = false;
+      nir_foreach_function_impl(impl, nir) {
+         bool here = false;
+         nir_foreach_block(block, impl) {
+            nir_foreach_instr_safe(instr, block) {
+               if (instr->type == nir_instr_type_call) {
+                  nir_call_instr *call = nir_instr_as_call(instr);
+                  if (kk_sparse_access_helper(call->callee) &&
+                      !kk_sparse_access_result_read(impl, call)) {
+                     nir_instr_remove(instr);
+                     here = true;
+                  }
+                  continue;
+               }
+               if (instr->type != nir_instr_type_intrinsic) continue;
+               nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+               switch (intr->intrinsic) {
+               case nir_intrinsic_global_atomic:
+               case nir_intrinsic_global_atomic_swap:
+               case nir_intrinsic_image_atomic:
+               case nir_intrinsic_image_atomic_swap:
+               case nir_intrinsic_bindless_image_atomic:
+               case nir_intrinsic_bindless_image_atomic_swap:
+                  if (list_is_empty(&intr->def.uses)) {
+                     nir_instr_remove(instr);
+                     here = true;
+                  }
+                  break;
+               default:
+                  break;
+               }
+            }
+         }
+         removed |= nir_progress(here, impl, nir_metadata_control_flow);
+      }
+      if (!removed) break;
+      any = true;
+      /* Removing an emptied guard leaves its condition, a load of the mask,
+       * to DCE, and that load counts as a read of the helper's result. */
+      bool progress;
+      do {
+         progress = false;
+         NIR_PASS(progress, nir, nir_opt_dead_cf);
+         NIR_PASS(progress, nir, nir_opt_dce);
+      } while (progress);
+   }
+   if (!any) return false;
+   NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
+   /* MSL emits every non-entrypoint function; drop the helper once no call
+    * is left so the program does not compile it for nothing. */
+   bool called = false;
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type == nir_instr_type_call &&
+                kk_sparse_access_helper(nir_instr_as_call(instr)->callee))
+               called = true;
+         }
+      }
+   }
+   if (!called) {
+      nir_foreach_function_safe(function, nir) {
+         if (kk_sparse_access_helper(function))
+            exec_node_remove(&function->node);
+      }
+   }
    return true;
 }
 

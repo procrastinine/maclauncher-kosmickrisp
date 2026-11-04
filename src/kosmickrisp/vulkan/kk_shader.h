@@ -521,6 +521,7 @@ bool kk_nir_lower_sparse_sample_views(nir_shader *nir, uint32_t count, struct vk
 bool kk_nir_lower_sparse_buffer_io(nir_shader *nir,
    const struct vk_pipeline_robustness_state *rs, uint32_t count,
    struct vk_descriptor_set_layout *const *layouts);
+bool kk_nir_strip_unread_sparse_access(nir_shader *nir);
 nir_def *kk_nir_sparse_buffer_resident(nir_builder *b, nir_def *metadata, nir_def *coord);
 nir_def *kk_nir_sparse_view_address(nir_builder *b, nir_def *address, nir_def *query_record, nir_def **lod, bool storage, bool query_array);
 

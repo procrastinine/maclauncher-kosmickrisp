@@ -2298,6 +2298,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
                &shader->info.gs, &shader->info.polygon,
                (polygon || pixel_envelope) ? &capture : NULL,
                (polygon || pixel_envelope) ? &capture_xfb : NULL);
+      NIR_PASS(_, nir, kk_nir_strip_unread_sparse_access);
       if (polygon || pixel_envelope) {
          shader->info.polygon_point = polygon;
          nir_shader *point_vs = retained_points ?
