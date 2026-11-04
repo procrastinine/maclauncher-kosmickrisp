@@ -51,6 +51,7 @@ struct fsr_ctx {
    nir_def *fx, *fy;      /* fragment width and height, float */
    /* Neighbor displacements for the derivative solve. */
    nir_def *dhx, *dhy, *dvx, *dvy, *inv_det;
+   nir_def *coverage; /* verified executing lanes for post-handshake reads */
    nir_def *use_hd, *use_dv; /* diagonal basis when the H/V pair is singular */
    nir_instr *top_end;    /* last instruction of the setup block */
 };
@@ -110,6 +111,149 @@ fsr_extrapolate_at(nir_builder *b, struct fsr_ctx *ctx, nir_def *g, nir_cursor p
    return fsr_combine(b, ctx, g, h, v);
 }
 
+/* Suppressed sample lanes can return arbitrary registers after atomics.
+ * Never consume their shuffled value as a derivative observation. */
+static nir_def *
+fsr_neighbor(nir_builder *b, struct fsr_ctx *ctx, nir_def *v, unsigned k)
+{
+   nir_def *other = k == 1 ? nir_quad_swap_horizontal(b, v) :
+                    k == 2 ? nir_quad_swap_vertical(b, v) :
+                             nir_quad_swap_diagonal(b, v);
+   if (!ctx->sample_group)
+      return other;
+   nir_def *present = nir_ine_imm(b, nir_iand(b, ctx->coverage, ctx->bits[k]), 0);
+   return nir_bcsel(b, present, other, v);
+}
+
+/* Prove invocation-invariant leaves, including descriptor indices and texture
+ * dimensions. Varying input loads and external memory reads are excluded. */
+static bool
+fsr_uniform(nir_scalar v, unsigned depth)
+{
+   if (!depth)
+      return false;
+   v = nir_scalar_chase_movs(v);
+   nir_instr *i = nir_def_instr(v.def);
+   if (i->type == nir_instr_type_load_const)
+      return true;
+   if (i->type == nir_instr_type_alu) {
+      nir_alu_instr *alu = nir_instr_as_alu(i);
+      if (nir_op_infos[alu->op].output_size)
+         return false;
+      for (unsigned j = 0; j < nir_op_infos[alu->op].num_inputs; ++j) {
+         if (nir_op_infos[alu->op].input_sizes[j] > 1 ||
+             !fsr_uniform(nir_scalar_chase_alu_src(v, j), depth - 1))
+            return false;
+      }
+      return true;
+   }
+   nir_src *src = NULL;
+   unsigned count = 0;
+   if (i->type == nir_instr_type_deref) {
+      nir_deref_instr *d = nir_instr_as_deref(i);
+      if (!nir_deref_mode_is(d, nir_var_uniform))
+         return false;
+      if (d->deref_type == nir_deref_type_var)
+         return true;
+      if (d->deref_type == nir_deref_type_array)
+         return fsr_uniform(nir_get_scalar(d->parent.ssa, 0), depth - 1) &&
+                fsr_uniform(nir_get_scalar(d->arr.index.ssa, 0), depth - 1);
+      if (d->deref_type == nir_deref_type_struct)
+         return fsr_uniform(nir_get_scalar(d->parent.ssa, 0), depth - 1);
+      return false;
+   }
+   if (i->type == nir_instr_type_tex) {
+      nir_tex_instr *tex = nir_instr_as_tex(i);
+      if (tex->op != nir_texop_txs && tex->op != nir_texop_query_levels)
+         return false;
+      for (unsigned j = 0; j < tex->num_srcs; ++j)
+         for (unsigned c = 0; c < tex->src[j].src.ssa->num_components; ++c)
+            if (!fsr_uniform(nir_get_scalar(tex->src[j].src.ssa, c), depth - 1))
+               return false;
+      return true;
+   }
+   if (i->type != nir_instr_type_intrinsic)
+      return false;
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(i);
+   switch (intr->intrinsic) {
+   case nir_intrinsic_load_push_constant:
+   case nir_intrinsic_load_ubo:
+   case nir_intrinsic_load_global_constant:
+   case nir_intrinsic_load_vulkan_descriptor:
+   case nir_intrinsic_vulkan_resource_index:
+   case nir_intrinsic_vulkan_resource_reindex:
+   case nir_intrinsic_load_buffer_ptr_kk:
+      src = intr->src;
+      count = nir_intrinsic_infos[intr->intrinsic].num_srcs;
+      break;
+   default:
+      return false;
+   }
+   for (unsigned j = 0; j < count; ++j)
+      for (unsigned c = 0; c < src[j].ssa->num_components; ++c)
+         if (!fsr_uniform(nir_get_scalar(src[j].ssa, c), depth - 1))
+            return false;
+   return true;
+}
+
+/* Exact coefficients of affine coordinate expressions. In sparse sample
+ * coverage there may be no pair of present neighbors; these expressions
+ * need no neighboring invocation at all. Non-affine expressions use the
+ * verified observations below. */
+static bool
+fsr_affine(nir_builder *b, struct fsr_ctx *ctx, nir_scalar v,
+           nir_def **gx, nir_def **gy, unsigned depth)
+{
+   if (!depth)
+      return false;
+   v = nir_scalar_chase_movs(v);
+   if (nir_scalar_equal(v, nir_scalar_resolved(ctx->vx, 0)) ||
+       nir_scalar_equal(v, nir_scalar_resolved(ctx->vy, 0))) {
+      bool x = nir_scalar_equal(v, nir_scalar_resolved(ctx->vx, 0));
+      *gx = nir_imm_float(b, x ? 1.0f : 0.0f);
+      *gy = nir_imm_float(b, x ? 0.0f : 1.0f);
+      return true;
+   }
+   if (fsr_uniform(v, depth)) {
+      *gx = *gy = nir_imm_float(b, 0.0f);
+      return true;
+   }
+   if (!nir_scalar_is_alu(v))
+      return false;
+   nir_op op = nir_scalar_alu_op(v);
+   if (op != nir_op_fadd && op != nir_op_fsub && op != nir_op_fneg &&
+       op != nir_op_fmul && op != nir_op_fdiv)
+      return false;
+   nir_scalar a = nir_scalar_chase_alu_src(v, 0);
+   nir_def *ax, *ay;
+   if (op == nir_op_fneg) {
+      if (!fsr_affine(b, ctx, a, &ax, &ay, depth - 1))
+         return false;
+      *gx = nir_fneg(b, ax); *gy = nir_fneg(b, ay);
+      return true;
+   }
+   nir_scalar c = nir_scalar_chase_alu_src(v, 1);
+   if (op == nir_op_fmul || op == nir_op_fdiv) {
+      if (op == nir_op_fmul && fsr_uniform(a, depth - 1)) {
+         nir_scalar tmp = a; a = c; c = tmp;
+      }
+      if (!fsr_uniform(c, depth - 1) ||
+          !fsr_affine(b, ctx, a, &ax, &ay, depth - 1))
+         return false;
+      nir_def *factor = nir_channel(b, c.def, c.comp);
+      *gx = op == nir_op_fdiv ? nir_fdiv(b, ax, factor) : nir_fmul(b, ax, factor);
+      *gy = op == nir_op_fdiv ? nir_fdiv(b, ay, factor) : nir_fmul(b, ay, factor);
+      return true;
+   }
+   nir_def *cx, *cy;
+   if (!fsr_affine(b, ctx, a, &ax, &ay, depth - 1) ||
+       !fsr_affine(b, ctx, c, &cx, &cy, depth - 1))
+      return false;
+   *gx = op == nir_op_fadd ? nir_fadd(b, ax, cx) : nir_fsub(b, ax, cx);
+   *gy = op == nir_op_fadd ? nir_fadd(b, ay, cy) : nir_fsub(b, ay, cy);
+   return true;
+}
+
 /* Fragment-scale derivatives at the lane positions: solve the 2x2 system
  * formed by the horizontal and vertical neighbor differences. */
 static void
@@ -117,9 +261,22 @@ fsr_derivatives(nir_builder *b, struct fsr_ctx *ctx, nir_def *value,
                 nir_def **ddx, nir_def **ddy)
 {
    nir_def *v = value->bit_size == 32 ? value : nir_f2f32(b, value);
-   nir_def *dh = nir_fsub(b, nir_quad_swap_horizontal(b, v), v);
-   nir_def *dv = nir_fsub(b, nir_quad_swap_vertical(b, v), v);
-   nir_def *diagonal = nir_fsub(b, nir_quad_swap_diagonal(b, v), v);
+   nir_def *affine_x[NIR_MAX_VEC_COMPONENTS], *affine_y[NIR_MAX_VEC_COMPONENTS];
+   bool affine = ctx->sample_group;
+   for (unsigned c = 0; affine && c < v->num_components; ++c)
+      affine = fsr_affine(b, ctx, nir_get_scalar(v, c), &affine_x[c], &affine_y[c], 48);
+   if (affine) {
+      *ddx = nir_fmul(b, nir_vec(b, affine_x, v->num_components), ctx->fx);
+      *ddy = nir_fmul(b, nir_vec(b, affine_y, v->num_components), ctx->fy);
+      if (value->bit_size != 32) {
+         *ddx = nir_f2fN(b, *ddx, value->bit_size);
+         *ddy = nir_f2fN(b, *ddy, value->bit_size);
+      }
+      return;
+   }
+   nir_def *dh = nir_fsub(b, fsr_neighbor(b, ctx, v, 1), v);
+   nir_def *dv = nir_fsub(b, fsr_neighbor(b, ctx, v, 2), v);
+   nir_def *diagonal = nir_fsub(b, fsr_neighbor(b, ctx, v, 3), v);
    dh = nir_bcsel(b, ctx->use_dv, diagonal, dh);
    dv = nir_bcsel(b, ctx->use_hd, diagonal, dv);
    nir_def *gx = nir_fmul(b, nir_fsub(b, nir_fmul(b, dh, ctx->dvy),
@@ -247,6 +404,7 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
       ctx->covered_store = b->cursor.instr;
       covered = nir_load_var(b, ctx->covered_var);
    }
+   ctx->coverage = covered;
    nir_def *candidates = nir_iand(b, covered, group);
    nir_def *real_pos = nir_find_lsb(b, nir_bcsel(b, nir_ine_imm(b, candidates, 0),
                                                  candidates, group));
@@ -270,14 +428,14 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
    ctx->dx = nir_fsub(b, ctx->vx, nir_fadd_imm(b, nir_u2f32(b, px), 0.5));
    ctx->dy = nir_fsub(b, ctx->vy, nir_fadd_imm(b, nir_u2f32(b, py), 0.5));
 
-   ctx->dhx = nir_fsub(b, nir_quad_swap_horizontal(b, ctx->vx), ctx->vx);
-   ctx->dhy = nir_fsub(b, nir_quad_swap_horizontal(b, ctx->vy), ctx->vy);
-   ctx->dvx = nir_fsub(b, nir_quad_swap_vertical(b, ctx->vx), ctx->vx);
-   ctx->dvy = nir_fsub(b, nir_quad_swap_vertical(b, ctx->vy), ctx->vy);
+   ctx->dhx = nir_fsub(b, fsr_neighbor(b, ctx, ctx->vx, 1), ctx->vx);
+   ctx->dhy = nir_fsub(b, fsr_neighbor(b, ctx, ctx->vy, 1), ctx->vy);
+   ctx->dvx = nir_fsub(b, fsr_neighbor(b, ctx, ctx->vx, 2), ctx->vx);
+   ctx->dvy = nir_fsub(b, fsr_neighbor(b, ctx, ctx->vy, 2), ctx->vy);
    nir_def *det = nir_fsub(b, nir_fmul(b, ctx->dhx, ctx->dvy),
                               nir_fmul(b, ctx->dhy, ctx->dvx));
-   nir_def *ddx = nir_fsub(b, nir_quad_swap_diagonal(b, ctx->vx), ctx->vx);
-   nir_def *ddy = nir_fsub(b, nir_quad_swap_diagonal(b, ctx->vy), ctx->vy);
+   nir_def *ddx = nir_fsub(b, fsr_neighbor(b, ctx, ctx->vx, 3), ctx->vx);
+   nir_def *ddy = nir_fsub(b, fsr_neighbor(b, ctx, ctx->vy, 3), ctx->vy);
    nir_def *det_hd = nir_fsub(b, nir_fmul(b, ctx->dhx, ddy),
                                  nir_fmul(b, ctx->dhy, ddx));
    nir_def *det_dv = nir_fsub(b, nir_fmul(b, ddx, ctx->dvy),
