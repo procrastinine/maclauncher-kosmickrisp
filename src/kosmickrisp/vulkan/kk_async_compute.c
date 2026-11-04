@@ -271,8 +271,12 @@ bound_thread_main(void *data)
    cache_key parent;
    uint64_t sequence = 0;
    if (disk) {
-      static const char tag[] = "KosmicKrisp compute first binds 1";
-      disk_cache_compute_key(disk, tag, sizeof(tag), parent);
+      /* KK_DEBUG_MSL_SALT starts a cold Metal cache; it also starts an empty set. */
+      struct { char tag[sizeof("KosmicKrisp compute first binds 1")]; blake3_hash salt; } input = {
+         .tag = "KosmicKrisp compute first binds 1" };
+      const char *salt = getenv("KK_DEBUG_MSL_SALT");
+      if (salt && *salt) _mesa_blake3_compute(salt, strlen(salt), input.salt);
+      disk_cache_compute_key(disk, &input, sizeof(input), parent);
       size_t size = 0;
       void *blob = kk_compiler_index_load(disk, parent, &sequence, &size);
       unsigned count = size / sizeof(struct kk_bound_id);
