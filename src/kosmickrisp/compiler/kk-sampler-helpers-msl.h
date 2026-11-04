@@ -98,9 +98,14 @@ kk_sample_sparse_tap(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
       P(ctx, "        if (*(constant ulong*)(sparse.query_address + %zuul) != 0ul) query_slot = sparse.query_address + %zuul;\n",
         offsetof(struct kk_sparse_query_record, face_resource_id), offsetof(struct kk_sparse_query_record, face_resource_id));
    }
-   P(ctx, "        auto query_image = *(constant ");
+   /* Assigned like the body's texture values: copy-initialization would
+    * instantiate the type's device-coherence counterpart. */
    nir_src *handle = nir_tex_get_src(tex, nir_tex_src_texture_handle);
-   msl_emit_texture_type(ctx, nir_instr_as_intrinsic(nir_def_instr(handle->ssa)));
+   nir_intrinsic_instr *handle_load = nir_instr_as_intrinsic(nir_def_instr(handle->ssa));
+   P(ctx, "        ");
+   msl_emit_texture_type(ctx, handle_load);
+   P(ctx, " query_image; query_image = *(constant ");
+   msl_emit_texture_type(ctx, handle_load);
    P(ctx, "*)query_slot;\n");
    P(ctx, "        uint border_class = sparse.physical_facts & %uu;\n", KK_SPARSE_PHYSICAL_BORDER_MASK);
    P(ctx, "        uint address_modes = metadata[23] & 511u;\n");
@@ -315,12 +320,18 @@ kk_sample_native(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
    }
 }
 
+/* Helpers take the texture by const reference. Copy-initializing a texture
+ * parameter makes Metal's front end instantiate the type's
+ * memory_coherence_device counterpart for constructor overload resolution,
+ * about 40 ms per texture type and library. Every argument is a thread
+ * texture variable or another helper's parameter. */
 static void
 kk_sample_texture_param(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
 {
    nir_src *handle = nir_tex_get_src(tex, nir_tex_src_texture_handle);
+   P(ctx, "const thread ");
    msl_emit_texture_type(ctx, nir_instr_as_intrinsic(nir_def_instr(handle->ssa)));
-   P(ctx, " image");
+   P(ctx, " &image");
 }
 
 static void
