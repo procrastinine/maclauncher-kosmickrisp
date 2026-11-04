@@ -447,10 +447,14 @@ kk_hash_graphics_state(struct vk_physical_device *device,
    }
 
    /* Serialized producer topology is pipeline state, including when the
-    * same shader body is reused by different raster classes. */
-   if (state && state->rs && state->ia) {
+    * same shader body is reused by different raster classes. Mesh pipelines
+    * have no input assembly, but their fragment variants follow the same
+    * polygon and line modes; a Mesh marker takes the topology's place. */
+   if (state && state->rs &&
+       (state->ia || (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT))) {
       const uint32_t raster_key[] = {
-         state->ia->primitive_topology, state->rs->polygon_mode, state->rs->line.mode,
+         state->ia ? state->ia->primitive_topology : 0x4d455348u /* MESH */,
+         state->rs->polygon_mode, state->rs->line.mode,
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE),
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE),
       };
