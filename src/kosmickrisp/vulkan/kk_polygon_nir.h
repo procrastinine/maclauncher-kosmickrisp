@@ -25,7 +25,7 @@ static bool
 kk_polygon_regular_possible(const struct kk_device *dev, const struct vk_graphics_pipeline_state *state)
 {
    return state && state->rs &&
-      ((!(state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT) && dev->vk.enabled_features.shaderCullDistance) || kk_wide_line_possible(state) || state->rs->polygon_mode == VK_POLYGON_MODE_POINT ||
+      (kk_wide_line_possible(state) || state->rs->polygon_mode == VK_POLYGON_MODE_POINT ||
        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE) ||
        (dev->vk.enabled_features.depthBiasControl &&
         (state->rs->depth_bias.enable ||
@@ -33,13 +33,6 @@ kk_polygon_regular_possible(const struct kk_device *dev, const struct vk_graphic
         (state->rs->depth_bias.exact || state->rs->depth_bias.representation !=
             VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT ||
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_FACTORS))));
-}
-
-static bool
-kk_polygon_possible(const struct kk_device *dev,
-                    const struct vk_graphics_pipeline_state *state)
-{
-   return kk_polygon_regular_possible(dev, state) || kk_conservative_possible(state);
 }
 
 static uint64_t

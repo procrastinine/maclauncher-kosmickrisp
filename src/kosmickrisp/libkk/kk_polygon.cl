@@ -114,6 +114,29 @@ polygon_triangle(global struct poly_geometry_capture *p, uint id,
    return true;
 }
 
+/* Reject from original vertices before loading positions or clip distances.
+ * Test one plane at a time: a nonnegative or NaN vertex keeps that plane.
+ * Points/lines read only their real vertices, not the padded triangle packet. */
+static bool
+polygon_cull_primitive(global struct poly_geometry_capture *p,
+                       uint invocation, uint stream, uint4 vertices)
+{
+   for (uint c = 0; c < p->cull_count; ++c) {
+      uint slot = polygon_slot(p, VARYING_SLOT_CULL_DIST0 + c / 4);
+      bool culled = true;
+      for (uint v = 0; v < p->primitive_vertices; ++v) {
+         global uint4 *input = polygon_vertex(p, invocation, stream, vertices[v]);
+         if (!(as_float4(input[slot])[c % 4] < 0.0f)) {
+            culled = false;
+            break;
+         }
+      }
+      if (culled)
+         return true;
+   }
+   return false;
+}
+
 static void
 polygon_clip_primitive(global struct poly_geometry_params *geometry,
                        global struct poly_heap *heap, uint id, bool defer_facing)
@@ -130,9 +153,11 @@ polygon_clip_primitive(global struct poly_geometry_params *geometry,
    if (!polygon_triangle(p, id, &invocation, &stream, &vertices))
       return;
 
+   if (polygon_cull_primitive(p, invocation, stream, vertices))
+      return;
+
    float positions[3][4];
    float clip[3][KK_POLYGON_CLIP_DISTANCES];
-   float cull[3][KK_POLYGON_CLIP_DISTANCES];
    for (uint i = 0; i < 3; ++i) {
       float4 position = polygon_position(p, invocation, stream, vertices[i]);
       for (uint c = 0; c < 4; ++c)
@@ -142,19 +167,15 @@ polygon_clip_primitive(global struct poly_geometry_params *geometry,
          float4 value = as_float4(input[polygon_slot(p, VARYING_SLOT_CLIP_DIST0 + c / 4)]);
          clip[i][c] = value[c % 4];
       }
-      for (uint c = 0; c < p->cull_count; ++c) {
-         float4 value = as_float4(input[polygon_slot(p, VARYING_SLOT_CULL_DIST0 + c / 4)]);
-         cull[i][c] = value[c % 4];
-      }
    }
    struct kk_polygon_vertex output[KK_POLYGON_MAX_VERTICES];
    uint count = p->primitive_vertices == 1 ?
-      kk_polygon_clip_point(positions, clip, cull, p->clip_count, p->cull_count,
+      kk_polygon_clip_point(positions, clip, clip, p->clip_count, 0,
                             p->depth_clip, p->negative_one_to_one, output) :
       p->primitive_vertices == 2 ?
-      kk_polygon_clip_line(positions, clip, cull, p->clip_count, p->cull_count,
+      kk_polygon_clip_line(positions, clip, clip, p->clip_count, 0,
                            p->depth_clip, p->negative_one_to_one, output) :
-      kk_polygon_clip(positions, clip, cull, p->clip_count, p->cull_count,
+      kk_polygon_clip(positions, clip, clip, p->clip_count, 0,
                       p->depth_clip, p->negative_one_to_one, output);
    if (count < p->primitive_vertices)
       return;

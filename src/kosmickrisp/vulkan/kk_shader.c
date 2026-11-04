@@ -1500,13 +1500,13 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    }
    kk_barycentric_shader_info(shader, per_vertex_map);
    if (stage == MESA_SHADER_FRAGMENT &&
-       (pixel_envelope || kk_polygon_possible(dev, state) || opts->poly_layer_replay)) {
+       (pixel_envelope || opts->polygon_capture || opts->poly_layer_replay)) {
       shader->info.fs.noperspective_outputs = kk_polygon_noperspective_outputs(nir);
       nir_shader *point_fs = nir_shader_clone(NULL, nir);
       kk_vrs_finish_captured_fragment(point_fs, prev_stage, state, opts,
          robustness, pixel_envelope);
       shader->info.polygon_point = true;
-      if (pixel_envelope || kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay) {
+      if (pixel_envelope || opts->polygon_regular || opts->poly_layer_replay) {
          vrs_captured_required = dev->vrs && opts->vrs_source && !pixel_envelope;
          nir_shader *captured = vrs_captured_required ?
             nir_shader_clone(NULL, opts->vrs_source) : NULL;
@@ -1634,7 +1634,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       nir_shader *capture = NULL, *capture_xfb = NULL;
       bool retained_points = opts->poly_layer_replay &&
          u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_POINTS;
-      bool polygon = retained_points || ((kk_polygon_possible(dev, state) || opts->poly_layer_replay) &&
+      bool polygon = retained_points || ((opts->polygon_capture || opts->poly_layer_replay) &&
          (u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_TRIANGLES ||
           u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_LINES ||
           u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_POINTS));
@@ -1661,7 +1661,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             kk_interlock_source_resolved_cull(point_vs, &shader->info.polygon);
          NIR_PASS(_, point_vs, msl_nir_vs_io_types);
          NIR_PASS(_, point_vs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
-         if (pixel_envelope || kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay)
+         if (pixel_envelope || opts->polygon_regular || opts->poly_layer_replay)
             kk_compile_msl(dev, point_vs, state, &shader->polygon[2]);
          else
             ralloc_free(point_vs);
@@ -2483,8 +2483,17 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
 
    bool poly_layer_replay = false;
    mesa_shader_stage layer_producer = MESA_SHADER_NONE;
+   mesa_shader_stage cull_producer = MESA_SHADER_NONE;
+   bool cull_distance = false;
    for (uint32_t i = 0; i < shader_count; ++i) {
       mesa_shader_stage stage = infos[i].stage;
+      if ((stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_TESS_EVAL ||
+           stage == MESA_SHADER_GEOMETRY || stage == MESA_SHADER_MESH) &&
+          (cull_producer == MESA_SHADER_NONE || stage > cull_producer)) {
+         cull_producer = stage;
+         cull_distance = stage != MESA_SHADER_MESH &&
+            infos[i].nir->info.cull_distance_array_size != 0;
+      }
       if ((stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_TESS_EVAL ||
            stage == MESA_SHADER_GEOMETRY) &&
           (layer_producer == MESA_SHADER_NONE || stage > layer_producer)) {
@@ -2502,6 +2511,11 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       (enabled_features->pipelineFragmentShadingRate ||
        enabled_features->primitiveFragmentShadingRate ||
        enabled_features->attachmentFragmentShadingRate);
+   /* Device enablement alone must not create a captured pipeline. The final
+    * producer owns primitive rejection; earlier-stage distances are inputs
+    * for that producer. Native mesh output performs its own cull test. */
+   const bool polygon_regular = cull_distance || kk_polygon_regular_possible(dev, state);
+   const bool polygon_capture = polygon_regular || kk_conservative_possible(state);
    unsigned barycentric_inputs = 0;
    if (enabled_features->fragmentShaderBarycentric && shader_count &&
        infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT)
@@ -2555,7 +2569,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          (nir->info.stage == MESA_SHADER_VERTEX || nir->info.stage == MESA_SHADER_TESS_EVAL);
       /* XFB without an explicit GS gets a Poly passthrough after linking.
        * Keep its producer in compute form before hardware-VS lowering. */
-      emulated_stage |= (nir->xfb_info || kk_polygon_possible(dev, state) || poly_layer_replay) && (nir->info.stage == MESA_SHADER_VERTEX ||
+      emulated_stage |= (nir->xfb_info || polygon_capture || poly_layer_replay) && (nir->info.stage == MESA_SHADER_VERTEX ||
                                          nir->info.stage == MESA_SHADER_TESS_EVAL);
       if (pixel_candidate && nir->info.stage == MESA_SHADER_FRAGMENT) {
          pixel_envelope = true;
@@ -2590,7 +2604,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    nir_shader *native_pair[2] = {NULL, NULL};
    bool native_fragment_needs_finish = false;
    bool native_passthrough = !explicit_geometry && !xfb && !tess &&
-      (kk_wide_line_possible(state) || poly_layer_replay || dev->vk.enabled_features.shaderCullDistance);
+      (kk_wide_line_possible(state) || poly_layer_replay);
    nir_shader *native_vs = NULL, *native_fs = NULL;
    for (unsigned i = 0; i < shader_count; ++i) {
       nir_shader *n = nir_shaders[i];
@@ -2625,7 +2639,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          kk_finish_fragment_nir(dev, native_pair[1], state, info, features, NULL);
       }
    }
-   if (!explicit_geometry && (xfb || pixel_envelope || kk_polygon_possible(dev, state) || poly_layer_replay)) {
+   if (!explicit_geometry && (xfb || pixel_envelope || polygon_capture || poly_layer_replay)) {
       nir_shader *producer = NULL;
       unsigned insert = shader_count;
       for (unsigned i = 0; i < shader_count; ++i) {
@@ -2668,7 +2682,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       nir_builder builder = nir_builder_init_simple_shader(MESA_SHADER_GEOMETRY,
          producer->options, "Poly transform feedback passthrough");
       poly_nir_passthrough_gs(&builder, key);
-      if (pixel_envelope || kk_polygon_possible(dev, state) || poly_layer_replay)
+      if (pixel_envelope || polygon_capture || poly_layer_replay)
          nir_shader_intrinsics_pass(builder.shader, kk_polygon_passthrough_primitive_id,
                                     nir_metadata_control_flow, NULL);
       ralloc_free(key);
@@ -2764,6 +2778,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       .pixel_envelope = pixel_envelope,
       .pixel_sample_shading = pixel_sample_shading,
       .poly_layer_replay = poly_layer_replay,
+      .polygon_capture = polygon_capture,
+      .polygon_regular = polygon_regular,
       .per_vertex_map = &per_vertex_map,
       .mesh_queries = features & BITFIELD_BIT(KK_FEAT_MESH_QUERIES),
       .conservative_fs = conservative_fs,

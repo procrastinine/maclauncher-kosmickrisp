@@ -14,6 +14,8 @@ struct kk_compile_options {
    struct nir_shader *vrs_source;
    bool independent_interface;
    bool poly_layer_replay;
+   bool polygon_capture;
+   bool polygon_regular;
    bool pixel_envelope;
    bool pixel_sample_shading;
    bool mesh_queries;

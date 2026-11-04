@@ -760,6 +760,10 @@ scalarize_clip_cull_distance_filter(const nir_intrinsic_instr *intrin,
 void
 msl_nir_lower_clip_cull_distance(nir_shader *nir, unsigned num_cull_distances)
 {
+   if (!(nir->info.clip_distance_array_size |
+         nir->info.cull_distance_array_size | num_cull_distances))
+      return;
+
    /* Fragment outputs cannot carry clip/cull distances. Pre-raster shaders
     * without either array need neither scalarization nor distance lowering.
     * Expanded Poly outputs are scalarized by their dedicated interface pass. */

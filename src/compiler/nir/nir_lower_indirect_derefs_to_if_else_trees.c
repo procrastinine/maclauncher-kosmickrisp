@@ -189,12 +189,24 @@ lower_indirect_derefs_block(nir_block *block, nir_builder *b,
       nir_deref_path_init(&path, deref, NULL);
       assert(path.path[0] == base);
 
+      /* Software pre-raster stages address the outer vertex array directly.
+       * Only lower the inner components; expanding gl_in/gl_out here creates
+       * a large selection tree for every distance and invocation. */
+      nir_deref_instr *parent = base;
+      nir_deref_instr **tail = &path.path[1];
+      if (b->shader->options->preserve_clip_cull_io &&
+          b->shader->info.stage <= MESA_SHADER_GEOMETRY &&
+          nir_is_arrayed_io(base->var, b->shader->info.stage)) {
+         parent = nir_build_deref_array(b, parent, (*tail)->arr.index.ssa);
+         ++tail;
+      }
+
       if (intrin->intrinsic == nir_intrinsic_store_deref) {
-         emit_load_store_deref(b, intrin, base, &path.path[1],
+         emit_load_store_deref(b, intrin, parent, tail,
                                NULL, intrin->src[1].ssa);
       } else {
          nir_def *result;
-         emit_load_store_deref(b, intrin, base, &path.path[1],
+         emit_load_store_deref(b, intrin, parent, tail,
                                &result, NULL);
          nir_def_rewrite_uses(&intrin->def, result);
       }

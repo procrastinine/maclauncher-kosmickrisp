@@ -901,12 +901,13 @@ kk_polygon_expansion_active(struct kk_cmd_buffer *cmd)
    if (!vs || !vs->info.polygon_point) return false;
    if ((cmd->state.gfx.layer_replay.bind || cmd->state.gfx.poly_retained.consume) &&
        vs->info.poly_layer_replay) return true;
+   if (vs->info.polygon.cull_count) return true;
    bool controlled_bias = dyn->rs.depth_bias.enable &&
       (dyn->rs.depth_bias.exact || dyn->rs.depth_bias.representation !=
          VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
    bool lines = vs->info.polygon.primitive_vertices == 2 ||
       dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE;
-   return vs->info.polygon.cull_count || (vs->info.conservative && dyn->rs.conservative_mode ==
+   return (vs->info.conservative && dyn->rs.conservative_mode ==
       VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT) ||
       dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT || controlled_bias ||
       (lines && (dyn->rs.line.width != 1.0f ||
