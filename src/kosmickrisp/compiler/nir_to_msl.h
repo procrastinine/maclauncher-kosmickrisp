@@ -34,6 +34,8 @@ struct nir_to_msl_options {
    bool uses_matrix_coordinates;
    /* Outputs from the surviving operations in this translation. */
    bool uses_pipeline_statistics;
+   bool uses_sampler_emulation;
+   bool requires_sampler_emulation;
    bool uses_atomic64_locks;
 
    /* Required to correctly declare fragment outputs. Shader may contain

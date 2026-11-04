@@ -103,6 +103,8 @@ struct kk_device {
    struct vk_device vk;
    simple_mtx_t pipeline_cache_init_mutex;
    struct kk_perf *perf;
+   /* Monotonic: published before the first emulating sampler handle. */
+   uint32_t sampler_emulation;
    simple_mtx_t depth_stencil_cache_mutex;
    struct hash_table *depth_stencil_cache;
    struct kk_sparse_device_state *sparse;

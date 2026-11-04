@@ -9,6 +9,7 @@
 #define KK_SAMPLER_H 1
 
 #include "kk_device.h"
+#include "kk_sampler_emulation.h"
 #include "kosmickrisp/compiler/kk-sampler-params.h"
 #include "kk_physical_device.h"
 #include "kk_private.h"
@@ -46,6 +47,21 @@ struct kk_sampler {
       struct kk_rc_sampler *hw;
    } planes[2];
 };
+
+/* Finalized implementation state, not raw filter/LOD values or allocation
+ * of a metadata record. Native Apple10 reduction is already encoded in Metal. */
+static inline bool
+kk_sampler_needs_emulation(const struct kk_sampler *sampler)
+{
+   return sampler->is_virtual || sampler->has_border || sampler->reduction_mode != 0;
+}
+
+static inline void
+kk_sampler_publish_emulation(struct kk_device *dev, const struct kk_sampler *sampler)
+{
+   if (kk_sampler_needs_emulation(sampler))
+      p_atomic_set(&dev->sampler_emulation, 1);
+}
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(kk_sampler, vk.base, VkSampler,
                                VK_OBJECT_TYPE_SAMPLER)

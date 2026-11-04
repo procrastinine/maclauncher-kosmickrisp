@@ -1511,6 +1511,9 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       ctx->indentlevel--;
       P_IND(ctx, "}\n");
       break;
+   case nir_intrinsic_load_sampler_emulation_enabled_kk:
+      P(ctx, "kk_sampler_emulation_active;\n");
+      break;
    case nir_intrinsic_load_pipeline_statistics_enabled_kk:
       P(ctx, "kk_pipeline_statistics_active;\n");
       break;
@@ -2021,6 +2024,8 @@ tex_coord_swizzle(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
                              tex->coord_components, false, tex->is_array);
 }
 
+static void tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex);
+
 #include "kk-sampler-helpers-msl.h"
 
 static void
@@ -2074,7 +2079,11 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
          src_to_msl(ctx, lod);
          P(ctx, ")");
       }
-      if (ddx) {
+      if (ddx && (tex->backend_flags & KK_SAMPLE_NATIVE_CUBE_LOD)) {
+         P(ctx, ", level(");
+         src_to_msl(ctx, nir_tex_get_src(tex, nir_tex_src_backend2));
+         P(ctx, ".x)");
+      } else if (ddx) {
          P(ctx, ", gradient%s(", texture_dim(tex->sampler_dim));
          src_to_msl(ctx, ddx);
          P(ctx, ", ");
@@ -2843,6 +2852,19 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (shader->info.stage == MESA_SHADER_COMPUTE && shader->info.cs.has_cooperative_matrix)
       P(&ctx, "#include <metal_simdgroup_matrix>\n");
    P(&ctx, "using namespace metal;\n");
+   if (ctx.uses_sampler_emulation) {
+      P(&ctx, "constant bool kk_sampler_emulation [[function_constant(%u)]];\n",
+        KK_FUNCTION_CONSTANT_SAMPLER_EMULATION);
+      /* Omitted values preserve semantics for callers outside the driver;
+       * driver PSOs always provide their actual monotonic specialization. */
+      P(&ctx, "constant bool kk_sampler_emulation_active = "
+              "is_function_constant_defined(kk_sampler_emulation) ? "
+              "kk_sampler_emulation : true;\n");
+   } else if (ctx.has_sampler_helpers) {
+      /* Native QueryLOD/cube corrections are base Vulkan work. They need
+       * neither sampler-state specialization nor a runtime device check. */
+      P(&ctx, "constant bool kk_sampler_emulation_active = false;\n");
+   }
    if (ctx.uses_pipeline_statistics) {
       P(&ctx, "constant bool kk_pipeline_statistics_enabled "
               "[[function_constant(%u)]];\n",
@@ -2923,6 +2945,8 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    options->requires_msl41 = ctx.requires_msl41;
    options->uses_matrix_coordinates = ctx.uses_matrix_coordinates;
    options->uses_pipeline_statistics = ctx.uses_pipeline_statistics;
+   options->uses_sampler_emulation = ctx.uses_sampler_emulation;
+   options->requires_sampler_emulation = ctx.requires_sampler_emulation;
    char *ret = ctx.text->buf;
    if (ctx.sampler_helpers) _mesa_hash_table_destroy(ctx.sampler_helpers, NULL);
    _mesa_hash_table_destroy(ctx.types, NULL);

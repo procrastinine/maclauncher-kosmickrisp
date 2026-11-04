@@ -5,6 +5,7 @@
 /* Function constants 0..7 belong to framebuffer input presence. */
 #define KK_FUNCTION_CONSTANT_PIPELINE_STATISTICS 8u
 #define KK_FUNCTION_CONSTANT_ATOMIC64_LOCK_TABLE 9u
+#define KK_FUNCTION_CONSTANT_SAMPLER_EMULATION 10u
 
 /* Driver-owned buffer entries shared by native stages and command expansion.
  * VFT entries contain addresses of buffers holding table resource IDs. */

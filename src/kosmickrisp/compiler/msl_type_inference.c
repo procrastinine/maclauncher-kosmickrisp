@@ -466,6 +466,11 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       ctx->uses_pipeline_statistics = true;
       set_type(types, &instr->src[0], TYPE_UINT);
       break;
+   case nir_intrinsic_load_sampler_emulation_enabled_kk:
+      ctx->has_sampler_helpers = true;
+      ctx->uses_sampler_emulation = true;
+      set_type(types, &instr->def, TYPE_BOOL);
+      break;
    case nir_intrinsic_load_pipeline_statistics_enabled_kk:
       ctx->uses_pipeline_statistics = true;
       set_type(types, &instr->def, TYPE_BOOL);
@@ -643,6 +648,12 @@ infer_types_from_instr(struct nir_to_msl_ctx *ctx, struct hash_table *types,
    case nir_instr_type_tex:
       ctx->has_sampler_helpers |= nir_instr_as_tex(instr)->backend_flags &
                               (KK_SAMPLE_HELPER | KK_SAMPLE_METADATA);
+      ctx->uses_sampler_emulation |= nir_instr_as_tex(instr)->backend_flags &
+         (KK_SAMPLE_METADATA | KK_SAMPLE_VIRTUAL | KK_SAMPLE_MINMAX |
+          KK_SAMPLE_BORDER | KK_SAMPLE_SPARSE);
+      ctx->requires_sampler_emulation |=
+         (nir_instr_as_tex(instr)->backend_flags & KK_SAMPLE_HELPER) &&
+         (nir_instr_as_tex(instr)->backend_flags & KK_SAMPLE_SPARSE);
       infer_types_from_tex(types, nir_instr_as_tex(instr));
       break;
    default:
@@ -931,6 +942,8 @@ msl_infer_types(struct nir_to_msl_ctx *ctx)
 {
    nir_shader *shader = ctx->shader;
    ctx->has_sampler_helpers = false;
+   ctx->uses_sampler_emulation = false;
+   ctx->requires_sampler_emulation = false;
    ctx->sparse_residency = false;
    ctx->uses_atomic64 = ctx->uses_image_atomic64 = false;
    ctx->uses_pipeline_statistics = false;

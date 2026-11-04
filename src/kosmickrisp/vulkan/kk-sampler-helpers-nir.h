@@ -247,6 +247,7 @@ kk_sample_native_dispatch(nir_builder *b, nir_tex_instr *tex,
    /* Implicit candidates have quad-uniform descriptor selection. Only this
     * uniform emulation branch needs quad derivatives or software LOD. Explicit
     * level/gradient candidates carry all their original derivative inputs. */
+   emulated = nir_iand(b, nir_load_sampler_emulation_enabled_kk(b), emulated);
    nir_push_if(b, emulated);
    nir_tex_instr *slow = kk_sample_clone(b, tex);
    if (!kk_sample_prepare_2d(b, slow, flags, lower_native)) {

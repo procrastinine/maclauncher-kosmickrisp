@@ -3337,6 +3337,9 @@ intrinsic("is_null_descriptor", src_comp=[-1], dest_comp=1, flags=[CAN_ELIMINATE
 load("buffer_ptr_kk", [], [BINDING], [CAN_ELIMINATE, CAN_REORDER])
 # Represents a pointer to the start of the per-draw data buffer
 load("per_draw_ptr_kk", [], [], [CAN_ELIMINATE, CAN_REORDER])
+# Device-monotonic sampler-state specialization, resolved before Metal PSO creation.
+intrinsic("load_sampler_emulation_enabled_kk", src_comp=[], dest_comp=1,
+          bit_sizes=[1], flags=[CAN_ELIMINATE, CAN_REORDER])
 # Query-active Metal function constant, preserved through captured shaders.
 intrinsic("load_pipeline_statistics_enabled_kk", src_comp=[], dest_comp=1,
           bit_sizes=[1], flags=[CAN_ELIMINATE, CAN_REORDER])

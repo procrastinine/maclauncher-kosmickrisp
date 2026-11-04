@@ -37,6 +37,8 @@ struct nir_to_msl_ctx {
    bool native_sampler_lod_bias;
    bool uses_per_draw_data;
    bool has_sampler_helpers;
+   bool uses_sampler_emulation;
+   bool requires_sampler_emulation;
    bool sparse_residency;
    bool interlock;
    bool requires_msl41;
