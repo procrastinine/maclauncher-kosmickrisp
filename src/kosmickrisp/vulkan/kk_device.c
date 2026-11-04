@@ -433,6 +433,10 @@ kk_ensure_pipeline_cache(struct kk_device *dev)
    if (p_atomic_read(&dev->vk.mem_cache))
       return VK_SUCCESS;
 
+   /* Publishing the memory cache also publishes completion of the physical
+    * store's once initialization to warm acquire-readers. A disabled store
+    * remains NULL without preventing ordinary compilation. */
+   kk_physical_device_ensure_disk_cache(kk_device_physical(dev));
    simple_mtx_lock(&dev->pipeline_cache_init_mutex);
    struct vk_pipeline_cache *cache = p_atomic_read(&dev->vk.mem_cache);
    if (!cache) {
@@ -477,6 +481,35 @@ kk_CreateComputePipelines(VkDevice device, VkPipelineCache cache,
    }
    return vk_common_CreateComputePipelines(device, cache, count, infos,
                                            allocator, pipelines);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+kk_CreateShadersEXT(VkDevice device, uint32_t count,
+                    const VkShaderCreateInfoEXT *infos,
+                    const VkAllocationCallbacks *allocator,
+                    VkShaderEXT *shaders)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   /* Driver sparse/replay artifacts also use the common memory cache. */
+   VkResult result = count ? kk_ensure_pipeline_cache(dev) : VK_SUCCESS;
+   if (result != VK_SUCCESS) {
+      memset(shaders, 0, count * sizeof(*shaders));
+      return result;
+   }
+   return vk_common_CreateShadersEXT(device, count, infos, allocator, shaders);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+kk_CreatePipelineCache(VkDevice device, const VkPipelineCacheCreateInfo *info,
+                       const VkAllocationCallbacks *allocator,
+                       VkPipelineCache *cache)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   /* Initial-data import inserts records in the physical disk store too.
+    * An empty application cache alone needs neither implicit cache. */
+   if (info->initialDataSize)
+      kk_physical_device_ensure_disk_cache(kk_device_physical(dev));
+   return vk_common_CreatePipelineCache(device, info, allocator, cache);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
