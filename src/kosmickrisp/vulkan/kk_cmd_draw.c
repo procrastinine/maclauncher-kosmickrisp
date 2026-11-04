@@ -11,6 +11,7 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "vk_standard_sample_locations.h"
 #include "kk-writable-msaa.h"
 #include "kk_conservative.h"
 #include "kk_dgc.h"
@@ -858,12 +859,36 @@ kk_calculate_vbo_clamp(uint64_t vbuf, uint64_t sink, enum pipe_format format,
 }
 
 /* The GS output primitive if one is bound, otherwise the input topology */
+/* All polygon representations share this selection, including a native
+ * passthrough when the original pipeline needs no tessellation, GS or XFB. */
+static bool
+kk_polygon_expansion_active(struct kk_cmd_buffer *cmd)
+{
+   const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
+   const struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   if (!vs || !vs->info.polygon_point) return false;
+   bool controlled_bias = dyn->rs.depth_bias.enable &&
+      (dyn->rs.depth_bias.exact || dyn->rs.depth_bias.representation !=
+         VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
+   bool lines = vs->info.polygon.primitive_vertices == 2 ||
+      dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE;
+   return (vs->info.conservative && dyn->rs.conservative_mode ==
+      VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT) ||
+      dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT || controlled_bias ||
+      (lines && (dyn->rs.line.width != 1.0f ||
+                 dyn->rs.line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR ||
+                 dyn->rs.line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+                 dyn->rs.line.stipple.enable));
+}
+
 /* Synthetic XFB passthrough stages are retained by the VS pipeline. */
 static struct kk_shader *
 kk_geometry_shader(struct kk_cmd_buffer *cmd)
 {
    struct kk_shader *gs = cmd->state.shaders[MESA_SHADER_GEOMETRY];
    struct kk_shader *vs = cmd->state.gfx.shader;
+   if (!gs && vs && vs->info.polygon_native && !kk_polygon_expansion_active(cmd))
+      return NULL;
    return gs ? gs : vs && vs->info.has_geometry ? vs : NULL;
 }
 
@@ -1443,10 +1468,25 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          .noperspective_outputs = fs ? fs->info.fs.noperspective_outputs : 0,
          .vertex_stride = util_bitcount64(capture->outputs) * 16,
          .vertices_out = capture->vertices_out,
+         .primitive_vertices = capture->primitive_vertices,
+         .line_expand = capture->primitive_vertices == 2 || dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE,
+         .line_mode = dyn->rs.line.mode,
+         .line_stipple_flags = dyn->rs.line.stipple.enable ?
+            KK_LINE_STIPPLE_ENABLED |
+            ((fs && fs->info.fs.line_geometry_stipple &&
+              (capture->primitive_vertices == 2 || dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE)) ?
+               KK_LINE_STIPPLE_GEOMETRY : 0) : 0,
+         .line_stipple_factor = dyn->rs.line.stipple.factor,
+         .line_stipple_pattern = dyn->rs.line.stipple.pattern,
+         .line_strip = !cmd->state.shaders[MESA_SHADER_VERTEX]->info.api_geometry &&
+            !cmd->state.shaders[MESA_SHADER_TESS_EVAL] &&
+            (dyn->ia.primitive_topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP ||
+             dyn->ia.primitive_topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY),
+         .line_width = CLAMP(floorf(dyn->rs.line.width * 256.0f + 0.5f) / 256.0f, 1.0f, 4096.0f),
          .streams = capture->streams,
          .clip_count = capture->clip_count,
          .cull_count = capture->cull_count,
-         .cull_mode = dyn->rs.cull_mode,
+         .cull_mode = capture->primitive_vertices == 2 ? 0 : dyn->rs.cull_mode,
          .front_ccw = dyn->rs.front_face != VK_FRONT_FACE_CLOCKWISE,
          .depth_clip = vk_rasterization_state_depth_clip_enable(&dyn->rs),
          .depth_clamp = dyn->rs.depth_clamp_enable,
@@ -1496,7 +1536,27 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          params.capture = gfx->polygon_capture =
             kk_pool_upload(cmd, &conservative, sizeof(conservative), 8).gpu;
       } else {
+         if ((point.line_stipple_flags & KK_LINE_STIPPLE_GEOMETRY) && point.line_mode != 2) {
+         const struct vk_sample_locations_state *locations = dyn->ms.sample_locations_enable ?
+            dyn->ms.sample_locations : vk_standard_sample_locations_state(MAX2(dyn->ms.rasterization_samples, 1u));
+         uint32_t samples = locations->per_pixel;
+         uint32_t header[2] = {samples, 0};
+         struct kk_ptr capture_data = kk_pool_alloc(cmd,
+            sizeof(point) + sizeof(header) + samples * sizeof(VkSampleLocationEXT), 8);
+         memcpy(capture_data.cpu, &point, sizeof(point));
+         memcpy((char *)capture_data.cpu + sizeof(point), header, sizeof(header));
+         VkSampleLocationEXT *output_locations = (void *)((char *)capture_data.cpu +
+            sizeof(point) + sizeof(header));
+         for (uint32_t i = 0; i < samples; ++i) {
+            output_locations[i].x = CLAMP(locations->locations[i].x,
+               KK_MIN_SAMPLE_LOCATION, KK_MAX_SAMPLE_LOCATION);
+            output_locations[i].y = CLAMP(locations->locations[i].y,
+               KK_MIN_SAMPLE_LOCATION, KK_MAX_SAMPLE_LOCATION);
+         }
+         params.capture = gfx->polygon_capture = capture_data.gpu;
+      } else {
          params.capture = gfx->polygon_capture = kk_pool_upload(cmd, &point, sizeof(point), 8).gpu;
+      }
       }
    }
    return kk_pool_upload(cmd, &params, sizeof(params), 8).gpu;
@@ -2400,6 +2460,8 @@ kk_draw_without_restart(struct kk_cmd_buffer *cmd,
       .in_draw = draw.grid.addr,
       .out_draw = out_draw.gpu,
       .restart_index = data->restart_index,
+      .capture = cmd->state.gfx.polygon_points &&
+         cmd->vk.dynamic_graphics_state.rs.line.stipple.enable ? cmd->state.gfx.polygon_capture : 0,
       .index_buffer_size_el = draw.index.gpu.range / draw.index.el_size_B,
       .index_size_B = draw.index.el_size_B,
       .flatshade_first = data->flatshade_first,
@@ -2593,19 +2655,13 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_shader *vs = cmd->state.gfx.shader;
-   /* Poly clips original triangles before applying bias. Native bias is
-    * disabled while this path is active, including FILL/LINE representations. */
-   bool controlled_bias = dyn->rs.depth_bias.enable &&
-      (dyn->rs.depth_bias.exact || dyn->rs.depth_bias.representation !=
-         VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
    bool conservative = vs->info.conservative && dyn->rs.conservative_mode ==
       VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT;
    if (conservative != gfx->conservative) {
       gfx->conservative = conservative;
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
    }
-   bool point = conservative || (vs->info.polygon_point &&
-      (dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT || controlled_bias));
+   bool point = kk_polygon_expansion_active(cmd);
    if (point && BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE))
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORTS);
    if (point != gfx->polygon_points) {

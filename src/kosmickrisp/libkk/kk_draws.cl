@@ -7,6 +7,7 @@
 #include "compiler/libcl/libcl_vk.h"
 
 #include "poly/cl/restart.h"
+#include "poly/geometry_capture.h"
 
 /*
  * To implement drawIndirectCount generically, we dispatch a kernel to
@@ -142,12 +143,21 @@ libkk_unroll_restart(uint64_t index_buffer, global struct poly_heap *heap,
                      constant uint32_t *in_draw, global uint32_t *out_draw,
                      uint32_t restart_index, uint32_t index_buffer_size_el,
                      uint32_t index_size_B, uint32_t flatshade_first,
-                     uint32_t mode)
+                     uint32_t mode, uint64_t capture)
 {
    POLY_DECL_UNROLL_RESTART_SCRATCH(scratch, 1024);
-   poly_unroll_restart(out_draw, heap, in_draw, index_buffer,
-                       index_buffer_size_el, index_size_B, restart_index,
-                       flatshade_first, mode, scratch);
+   global uint *strip_starts = NULL;
+   if (capture) {
+      global struct poly_geometry_capture *p = (global struct poly_geometry_capture *)capture;
+      if (cl_local_id.x == 0)
+         p->restart_strips = (uintptr_t)poly_heap_alloc(heap,
+            u_decomposed_prims_for_vertices(mode, in_draw[0]) * 4, 4);
+      barrier(CLK_GLOBAL_MEM_FENCE);
+      strip_starts = (global uint *)p->restart_strips;
+   }
+   poly_unroll_geometry_strips(out_draw, heap, in_draw, index_buffer,
+      index_buffer_size_el, index_size_B, index_size_B, restart_index,
+      flatshade_first, false, mode, scratch, strip_starts);
 }
 
 /* Rewrites adjacency primitives to the lines or triangles they rasterize for

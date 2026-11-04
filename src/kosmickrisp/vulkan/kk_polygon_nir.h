@@ -4,10 +4,28 @@
  * layout after clipping; all polygon attributes remain constant per point. */
 
 static bool
+kk_wide_line_possible(const struct vk_graphics_pipeline_state *state)
+{
+   if (!state || !state->rs) return false;
+   bool possible = state->rs->line.width != 1.0f ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_WIDTH) ||
+      state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR ||
+      state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+      state->rs->line.stipple.enable ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE) ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE);
+   bool line_class = state->rs->polygon_mode == VK_POLYGON_MODE_LINE ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE) ||
+      (state->ia && u_reduced_prim(vk_topology_to_mesa(state->ia->primitive_topology)) == MESA_PRIM_LINES) ||
+      (state->shader_stages & (VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT));
+   return possible && line_class;
+}
+
+static bool
 kk_polygon_regular_possible(const struct kk_device *dev, const struct vk_graphics_pipeline_state *state)
 {
    return state && state->rs &&
-      (state->rs->polygon_mode == VK_POLYGON_MODE_POINT ||
+      (kk_wide_line_possible(state) || state->rs->polygon_mode == VK_POLYGON_MODE_POINT ||
        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE) ||
        (dev->vk.enabled_features.depthBiasControl &&
         (state->rs->depth_bias.enable ||
@@ -84,33 +102,84 @@ kk_polygon_point_coord(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    b->cursor = nir_before_instr(&intr->instr);
    nir_def *barycentric = nir_load_barycentric_pixel(b, 32,
       .interp_mode = INTERP_MODE_NOPERSPECTIVE);
-   nir_def *coord = nir_load_interpolated_input(b, 2, 32, barycentric,
+   nir_def *coord = nir_load_interpolated_input(b, data ? 4 : 2, 32, barycentric,
       nir_imm_int(b, 0), .dest_type = nir_type_float32,
       .io_semantics.location = VARYING_SLOT_PNTC,
       .io_semantics.num_slots = 1);
-   nir_def_replace(&intr->def, coord);
+   nir_def_replace(&intr->def, nir_trim_vector(b, coord, 2));
    return true;
 }
 
+#include "kk_lines_nir.h"
+
 static nir_shader *
 kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
-                          const nir_shader_compiler_options *options)
+                          const nir_shader_compiler_options *options, bool line_effects)
 {
    nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_VERTEX, options,
                                                   "Poly polygon points");
    nir_shader *nir = b.shader;
    nir->info.io_lowered = true;
    nir->info.outputs_written = (info->outputs & ~VARYING_BIT_PSIZ) | VARYING_BIT_PNTC;
+   if (line_effects) nir->info.outputs_written |= VARYING_BIT_FOGC;
    nir_def *id = nir_load_vertex_id(&b);
    nir_def *mode = kk_polygon_load(&b, 1, 32,
       offsetof(struct poly_geometry_capture, polygon_mode), 4);
    nir_def *is_point = nir_ieq_imm(&b, mode, VK_POLYGON_MODE_POINT);
-   nir_def *point = nir_bcsel(&b, is_point, nir_udiv_imm(&b, id, 6), id);
+   nir_def *line_expand = kk_polygon_load(&b, 1, 32,
+      offsetof(struct poly_geometry_capture, line_expand), 4);
+   nir_def *is_line = nir_ine_imm(&b, line_expand, 0);
+   nir_def *line_mode = kk_polygon_load(&b, 1, 32,
+      offsetof(struct poly_geometry_capture, line_mode), 4);
+   nir_def *bresenham = nir_iand(&b, is_line, nir_ieq_imm(&b, line_mode, 2));
+   nir_def *stipple_flags = kk_polygon_load(&b, 1, 32,
+      offsetof(struct poly_geometry_capture, line_stipple_flags), 4);
+   nir_def *geometry_stipple = nir_ine_imm(&b,
+      nir_iand_imm(&b, stipple_flags, KK_LINE_STIPPLE_GEOMETRY), 0);
+   nir_def *rectangle_stipple = nir_iand(&b, geometry_stipple, nir_inot(&b, bresenham));
+   nir_def *packet_stride = nir_imul_imm(&b,
+      nir_iadd_imm(&b, nir_b2i32(&b, geometry_stipple), util_bitcount64(info->outputs) + 1), 16);
+   nir_def *line_width = kk_polygon_load(&b, 1, 32,
+      offsetof(struct poly_geometry_capture, line_width), 4);
+   nir_def *copies = nir_f2u32(&b, nir_ffloor(&b, nir_fadd_imm(&b, line_width, 0.5f)));
+   nir_def *line_vertices = nir_bcsel(&b, bresenham,
+      nir_bcsel(&b, geometry_stipple, nir_imm_int(&b, 2), nir_imul_imm(&b, copies, 2)), nir_imm_int(&b, 6));
+   nir_def *segment = nir_udiv(&b, id, line_vertices);
+   nir_def *local_id = nir_umod(&b, id, line_vertices);
+   nir_def *default_front = nir_imm_int(&b, 1);
+   nir_push_if(&b, is_line);
+   nir_def *segment_address = nir_iadd(&b,
+      kk_polygon_load(&b, 1, 64, offsetof(struct poly_geometry_capture, output), 8),
+      nir_u2u64(&b, nir_iadd_imm(&b,
+         nir_imul(&b, segment, nir_imul(&b, packet_stride, nir_bcsel(&b, rectangle_stipple, nir_imm_int(&b, 4), nir_imm_int(&b, 2)))),
+         util_bitcount64(info->outputs) * 16)));
+   nir_def *segment_front = nir_load_global_constant(&b, 1, 32, segment_address, .align_mul = 16);
+   nir_pop_if(&b, NULL);
+   nir_def *line_front = nir_if_phi(&b, segment_front, default_front);
+   nir_def *line_ccw = kk_polygon_load(&b, 1, 32,
+      offsetof(struct poly_geometry_capture, front_ccw), 4);
+   nir_def *line_order = nir_bcsel(&b, nir_ine(&b, line_front, line_ccw), local_id,
+      nir_iadd(&b, nir_imul_imm(&b, nir_udiv_imm(&b, local_id, 3), 3),
+         nir_bcsel(&b, nir_ieq_imm(&b, nir_umod_imm(&b, local_id, 3), 0),
+            nir_imm_int(&b, 0),
+            nir_isub(&b, nir_imm_int(&b, 3), nir_umod_imm(&b, local_id, 3)))));
+   const unsigned line_corners[6] = {0, 2, 3, 0, 3, 1};
+   nir_def *line_corner = nir_imm_int(&b, 0);
+   for (unsigned i = 0; i < ARRAY_SIZE(line_corners); ++i)
+      line_corner = nir_bcsel(&b, nir_ieq_imm(&b, line_order, i),
+         nir_imm_int(&b, line_corners[i]), line_corner);
+   nir_def *endpoint = nir_bcsel(&b, bresenham, nir_iand_imm(&b, id, 1),
+      nir_ushr_imm(&b, line_corner, 1));
+   nir_def *point = nir_bcsel(&b, is_line,
+      nir_bcsel(&b, rectangle_stipple,
+         nir_iadd(&b, nir_imul_imm(&b, segment, 4), line_corner),
+         nir_iadd(&b, nir_imul_imm(&b, segment, 2), endpoint)),
+      nir_bcsel(&b, is_point, nir_udiv_imm(&b, id, 6), id));
    nir_def *in_point = nir_umod_imm(&b, id, 6);
    unsigned slots = util_bitcount64(info->outputs);
    nir_def *address = nir_iadd(&b,
       kk_polygon_load(&b, 1, 64, offsetof(struct poly_geometry_capture, output), 8),
-      nir_u2u64(&b, nir_imul_imm(&b, point, (slots + 1) * 16)));
+      nir_u2u64(&b, nir_imul(&b, point, packet_stride)));
    nir_def *front = nir_load_global_constant(&b, 1, 32,
       nir_iadd_imm(&b, address, slots * 16), .align_mul = 16);
    nir_def *front_ccw = kk_polygon_load(&b, 1, 32,
@@ -142,6 +211,38 @@ kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
    nir_def *render_size = kk_polygon_load(&b, 2, 32,
       offsetof(struct poly_geometry_capture, render_size), 4);
 
+   nir_def *line_coord = nir_imm_vec4(&b, 0, 0, 0, 0);
+   nir_def *line_phase = nir_imm_float(&b, 0);
+   if (line_effects) {
+      nir_push_if(&b, is_line);
+      nir_def *metadata = nir_load_global_constant(&b, 4, 32,
+         nir_iadd_imm(&b, address, slots * 16), .align_mul = 16);
+      nir_def *prefix = nir_channel(&b, metadata, 1);
+      nir_push_if(&b, geometry_stipple);
+      nir_def *saved_endpoints = nir_load_global_constant(&b, 4, 32,
+         nir_iadd_imm(&b, address, (slots + 1) * 16), .align_mul = 16);
+      nir_push_else(&b, NULL);
+      nir_def *base = nir_iadd(&b,
+         kk_polygon_load(&b, 1, 64, offsetof(struct poly_geometry_capture, output), 8),
+         nir_u2u64(&b, nir_imul(&b, nir_imul_imm(&b, segment, 2), packet_stride)));
+      unsigned position_slot = util_bitcount64(info->outputs & BITFIELD64_MASK(VARYING_SLOT_POS)) * 16;
+      nir_def *a = nir_load_global_constant(&b, 4, 32, nir_iadd_imm(&b, base, position_slot), .align_mul = 16);
+      nir_def *bpos = nir_load_global_constant(&b, 4, 32,
+         nir_iadd_imm(&b, nir_iadd(&b, base, nir_u2u64(&b, packet_stride)), position_slot), .align_mul = 16);
+      nir_def *screen_a = nir_ffma(&b,
+         nir_fmul_imm(&b, nir_fadd_imm(&b, nir_fdiv(&b, nir_channels(&b, a, 3), nir_channel(&b, a, 3)), 1), 0.5f),
+         nir_channels(&b, vp, 12), nir_channels(&b, vp, 3));
+      nir_def *screen_b = nir_ffma(&b,
+         nir_fmul_imm(&b, nir_fadd_imm(&b, nir_fdiv(&b, nir_channels(&b, bpos, 3), nir_channel(&b, bpos, 3)), 1), 0.5f),
+         nir_channels(&b, vp, 12), nir_channels(&b, vp, 3));
+      nir_def *native_endpoints = nir_vec4(&b, nir_channel(&b, screen_a, 0), nir_channel(&b, screen_a, 1),
+         nir_channel(&b, screen_b, 0), nir_channel(&b, screen_b, 1));
+      nir_pop_if(&b, NULL);
+      nir_def *endpoints = nir_if_phi(&b, saved_endpoints, native_endpoints);
+      nir_pop_if(&b, NULL);
+      line_coord = nir_if_phi(&b, endpoints, line_coord);
+      line_phase = nir_if_phi(&b, prefix, line_phase);
+   }
    unsigned packed = 0;
    u_foreach_bit64(slot, info->outputs) {
       nir_def *value = nir_load_global_constant(&b, 4, 32,
@@ -154,8 +255,65 @@ kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
          nir_def *screen = nir_ffma(&b,
             nir_fmul_imm(&b, nir_fadd_imm(&b, ndc, 1), 0.5f),
             nir_channels(&b, vp, 12), nir_channels(&b, vp, 3));
-         screen = nir_fadd(&b, screen, nir_bcsel(&b, is_point,
-            nir_fadd_imm(&b, coord, -0.5f), nir_imm_vec2(&b, 0, 0)));
+         nir_def *offset = nir_bcsel(&b, is_point,
+            nir_fadd_imm(&b, coord, -0.5f), nir_imm_vec2(&b, 0, 0));
+         nir_def *plain_screen = nir_fadd(&b, screen, offset);
+         nir_push_if(&b, nir_iand(&b, is_line, nir_inot(&b, rectangle_stipple)));
+         {
+            nir_def *other_index = nir_iadd(&b, nir_imul_imm(&b, segment, 2),
+               nir_isub(&b, nir_imm_int(&b, 1), endpoint));
+            nir_def *other_address = nir_iadd(&b,
+               kk_polygon_load(&b, 1, 64, offsetof(struct poly_geometry_capture, output), 8),
+               nir_u2u64(&b, nir_iadd_imm(&b,
+                  nir_imul(&b, other_index, packet_stride),
+                  util_bitcount64(info->outputs & BITFIELD64_MASK(VARYING_SLOT_POS)) * 16)));
+            nir_def *other = nir_load_global_constant(&b, 4, 32, other_address, .align_mul = 16);
+            nir_def *delta = nir_fmul(&b,
+               nir_fsub(&b, nir_fdiv(&b, nir_channels(&b, other, 3), nir_channel(&b, other, 3)),
+                  nir_channels(&b, ndc, 3)), nir_fmul_imm(&b, nir_channels(&b, vp, 12), 0.5f));
+            delta = nir_bcsel(&b, nir_ieq_imm(&b, endpoint, 0), delta, nir_fneg(&b, delta));
+            nir_def *dx = nir_channel(&b, delta, 0), *dy = nir_channel(&b, delta, 1);
+            nir_def *length2 = nir_fadd(&b, nir_fmul(&b, dx, dx), nir_fmul(&b, dy, dy));
+            nir_def *perpendicular = nir_fmul(&b, nir_vec2(&b, nir_fneg(&b, dy), dx),
+               nir_frsq(&b, nir_fmax(&b, length2, nir_imm_float(&b, 1.0e-30f))));
+            nir_def *side = nir_fadd_imm(&b,
+               nir_u2f32(&b, nir_iand_imm(&b, line_corner, 1)), -0.5f);
+            nir_def *smooth = line_effects ? nir_ieq_imm(&b, line_mode,
+               VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH) : nir_imm_false(&b);
+            nir_def *smooth_pad = nir_bcsel(&b, smooth, nir_imm_float(&b, 1), nir_imm_float(&b, 0));
+            nir_def *expanded_width = nir_fadd(&b, line_width, smooth_pad);
+            nir_def *packet = nir_load_global_constant(&b, 4, 32,
+               nir_iadd_imm(&b, address, slots * 16), .align_mul = 16);
+            nir_def *original_along = nir_channel(&b, packet, 2);
+            nir_def *original_length = nir_channel(&b, packet, 3);
+            nir_def *original_endpoint = nir_ior(&b,
+               nir_feq_imm(&b, original_along, 0), nir_feq(&b, original_along, original_length));
+            nir_def *pad_enabled = nir_bcsel(&b,
+               nir_iand(&b, geometry_stipple, nir_inot(&b, original_endpoint)),
+               nir_imm_float(&b, 0), smooth_pad);
+            nir_def *endpoint_pad = nir_fmul_imm(&b, nir_fmul(&b, pad_enabled,
+               nir_fadd_imm(&b, nir_fmul_imm(&b, nir_u2f32(&b, endpoint), 2), -1)), 0.5f);
+            nir_def *length = nir_fsqrt(&b, length2);
+            nir_def *tangent = nir_fmul(&b, delta,
+               nir_frsq(&b, nir_fmax(&b, length2, nir_imm_float(&b, 1.0e-30f))));
+            nir_def *rectangle_offset = nir_fadd(&b,
+               nir_fmul(&b, perpendicular, nir_fmul(&b, side, expanded_width)),
+               nir_fmul(&b, tangent, endpoint_pad));
+            nir_def *copy = nir_udiv_imm(&b, local_id, 2);
+            nir_def *replica_offset = nir_bcsel(&b, geometry_stipple,
+               nir_channel(&b, packet, 2),
+               nir_fsub(&b, nir_u2f32(&b, copy),
+                  nir_fmul_imm(&b, nir_u2f32(&b, nir_iadd_imm(&b, copies, -1)), 0.5f)));
+            nir_def *x_major = nir_fge(&b, nir_fabs(&b, dx), nir_fabs(&b, dy));
+            nir_def *bresenham_offset = nir_bcsel(&b, x_major,
+               nir_vec2(&b, nir_imm_float(&b, 0), replica_offset),
+               nir_vec2(&b, replica_offset, nir_imm_float(&b, 0)));
+            nir_def *expanded = nir_fadd(&b, screen,
+               nir_bcsel(&b, bresenham, bresenham_offset, rectangle_offset));
+            nir_pop_if(&b, NULL);
+            screen = nir_if_phi(&b, expanded, plain_screen);
+
+         }
          nir_def *position = nir_fmul(&b,
             nir_fadd_imm(&b, nir_fmul_imm(&b, nir_fdiv(&b, screen, render_size), 2), -1), w);
          value = nir_vec4(&b, nir_channel(&b, position, 0),
@@ -169,7 +327,14 @@ kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
          nir_imm_int(&b, 0), .src_type = info->output_types[slot],
          .io_semantics.location = slot, .io_semantics.num_slots = 1);
    }
-   nir_store_output(&b, coord, nir_imm_int(&b, 0), .src_type = nir_type_float32,
+   if (line_effects)
+      nir_store_output(&b, line_coord, nir_imm_int(&b, 0), .src_type = nir_type_float32,
+         .io_semantics.location = VARYING_SLOT_FOGC, .io_semantics.num_slots = 1);
+   nir_def *point_payload = coord;
+   if (line_effects) point_payload = nir_vec4(&b,
+      nir_bcsel(&b, is_line, line_phase, nir_channel(&b, coord, 0)),
+      nir_channel(&b, coord, 1), nir_u2f32(&b, front), nir_imm_float(&b, 0));
+   nir_store_output(&b, point_payload, nir_imm_int(&b, 0), .src_type = nir_type_float32,
       .io_semantics.location = VARYING_SLOT_PNTC, .io_semantics.num_slots = 1);
    /* Clipping and cull-distance rejection happened on original triangles.
     * Keep their varyings, but do not clip the expanded squares again. */

@@ -62,6 +62,7 @@ static const struct {
 } VARYING_SLOT_INFO[NUM_TOTAL_VARYING_SLOTS] = {
    [VARYING_SLOT_POS] = {"position"},
    [VARYING_SLOT_PNTC] = {"polygon_point_coord", .user = true},
+   [VARYING_SLOT_FOGC] = {"polygon_line_coord", .user = true},
    [VARYING_SLOT_PSIZ] = {"point_size"},
    [VARYING_SLOT_PRIMITIVE_ID] = {"primitive_id"},
    [VARYING_SLOT_LAYER] = {"render_target_array_index"},

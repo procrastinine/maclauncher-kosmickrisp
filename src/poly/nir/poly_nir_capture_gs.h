@@ -94,9 +94,24 @@ capture_gs_intrinsic(nir_builder *b, nir_intrinsic_instr *intr, void *data)
       nir_def *address = nir_iadd(
          b, CAPTURE_PARAM(b, strips), nir_u2u64(b, nir_imul_imm(b, index, 16)));
       nir_store_global(b, nir_vec4(b, first, length, intr->src[3].ssa, id), address);
-      nir_push_if(b, nir_uge_imm(b, id, 2));
+      unsigned primitive_vertices =
+         u_reduced_prim(b->shader->info.gs.output_primitive) == MESA_PRIM_LINES ? 2 : 3;
+      nir_push_if(b, nir_uge_imm(b, id, primitive_vertices - 1));
       {
-         nir_def *primitive = nir_iadd_imm(b, id, -2);
+         nir_def *primitive = nir_iadd_imm(b, id, 1 - primitive_vertices);
+         if (primitive_vertices == 2) {
+            nir_def *base = nir_iadd(b,
+               nir_imul(b, calc_unrolled_id(b), CAPTURE_PARAM(b, streams)),
+               nir_imm_int(b, nir_intrinsic_stream_id(intr)));
+            nir_def *index = nir_iadd(b,
+               nir_imul(b, base, nir_iadd_imm(b, CAPTURE_PARAM(b, vertices_out), -1)),
+               nir_iadd(b, intr->src[3].ssa, primitive));
+            nir_def *address = nir_iadd(b, CAPTURE_PARAM(b, triangles),
+               nir_u2u64(b, nir_imul_imm(b, index, 16)));
+            nir_def *a = nir_iadd(b, first, primitive);
+            nir_def *c = nir_iadd_imm(b, a, 1);
+            nir_store_global(b, nir_vec4(b, a, c, c, intr->src[3].ssa), address);
+         } else {
          nir_def *odd = nir_ine_imm(b, nir_iand_imm(b, primitive, 1), 0);
          nir_def *last = nir_i2b(b, nir_load_provoking_last(b));
          nir_def *a = nir_iadd(b, primitive,
@@ -118,6 +133,7 @@ capture_gs_intrinsic(nir_builder *b, nir_intrinsic_instr *intr, void *data)
          nir_store_global(b, nir_vec4(b, nir_iadd(b, first, a),
             nir_iadd(b, first, nir_iadd(b, primitive, middle)),
             nir_iadd(b, first, c), nir_imm_int(b, 0)), triangle_address);
+         }
       }
       nir_pop_if(b, NULL);
       nir_store_var(b, i, nir_iadd_imm(b, id, 1), 1);
@@ -156,6 +172,7 @@ create_gs_capture_shader(const nir_shader *gs, struct lower_gs_state *gs_state,
    *info = (struct poly_gs_capture_info){
       .outputs = gs->info.outputs_written,
       .vertices_out = gs->info.gs.vertices_out,
+      .primitive_vertices = u_reduced_prim(gs->info.gs.output_primitive) == MESA_PRIM_LINES ? 2 : 3,
       .streams = stream_multiplier(gs),
       .clip_count = gs->info.clip_distance_array_size,
       .cull_count = gs->info.cull_distance_array_size,

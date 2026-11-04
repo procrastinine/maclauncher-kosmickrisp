@@ -116,6 +116,36 @@ kk_polygon_clip(const float position[3][4],
    return count;
 }
 
+/* Line clipping shares the polygon plane distances, original-vertex weights
+ * and intersection interpolation. Cull distances reject an entire segment. */
+static inline unsigned
+kk_polygon_clip_line(const float position[3][4],
+                     const float clip[3][KK_POLYGON_CLIP_DISTANCES],
+                     const float cull[3][KK_POLYGON_CLIP_DISTANCES],
+                     unsigned clip_count, unsigned cull_count,
+                     bool depth_clip, bool negative_one_to_one,
+                     struct kk_polygon_vertex out[KK_POLYGON_MAX_VERTICES])
+{
+   for (unsigned i = 0; i < cull_count; ++i)
+      if (cull[0][i] < 0 && cull[1][i] < 0) return 0;
+   for (unsigned v = 0; v < 2; ++v) {
+      for (unsigned c = 0; c < 4; ++c) out[v].position[c] = position[v][c];
+      for (unsigned c = 0; c < 3; ++c) out[v].weight[c] = v == c ? 1.0f : 0.0f;
+   }
+   for (unsigned plane = 0; plane < 6 + clip_count; ++plane) {
+      if (!depth_clip && (plane == 4 || plane == 5)) continue;
+      float a = kk_polygon_plane_distance(&out[0], plane, clip, negative_one_to_one);
+      float b = kk_polygon_plane_distance(&out[1], plane, clip, negative_one_to_one);
+      if (a < 0 && b < 0) return 0;
+      if ((a < 0) != (b < 0)) {
+         struct kk_polygon_vertex intersection =
+            kk_polygon_intersection(&out[0], &out[1], a / (a - b));
+         out[a < 0 ? 0 : 1] = intersection;
+      }
+   }
+   return 2;
+}
+
 /* Perspective varyings interpolate with homogeneous clipping weights. Linear
  * screen-space varyings use the same weights multiplied by original W / new W,
  * as in Mesa's clipper. Integer and flat outputs keep the provoking value. */

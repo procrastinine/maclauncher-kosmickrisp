@@ -117,6 +117,7 @@ struct kk_shader_info {
    bool has_geometry;
    bool api_geometry;
    bool polygon_point;
+   bool polygon_native;
    bool conservative;
    bool conservative_full_coverage;
    uint64_t conservative_canonical_outputs;
@@ -180,6 +181,7 @@ struct kk_shader_info {
 
       struct {
          bool uses_flat_varyings;
+         bool line_geometry_stipple;
          bool emulates_per_vertex_inputs;
          bool per_vertex_uses_heap;
          uint64_t flat_outputs;
@@ -238,6 +240,8 @@ struct kk_shader {
     * msl_data[MESA_SHADER_GEOMETRY]. */
    struct msl_compile_data gs_main;
    struct msl_compile_data polygon[6];
+   struct msl_compile_data polygon_native;
+   struct msl_compile_data polygon_native_fs;
    struct msl_compile_data gs_aux[2];
 };
 

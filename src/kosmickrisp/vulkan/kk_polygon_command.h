@@ -44,7 +44,8 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    }
 
    const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
-   if (dyn->rs.rasterizer_discard_enable || gfx->is_cull_front_and_back)
+   if (dyn->rs.rasterizer_discard_enable ||
+       (gfx->is_cull_front_and_back && vs->info.polygon.primitive_vertices != 2))
       return (struct kk_draw_data){.grid = kk_grid_1d(0)};
 
    struct kk_grid triangles = kk_grid_indirect_local(capture +
@@ -57,6 +58,13 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    if (gfx->conservative)
       libkk_conservative_prepare(cmd, triangles, true, geometry_params, kk_heap(cmd));
    libkk_polygon_prefix_sum(cmd, kk_grid_1d(1024), true, geometry_params);
+   struct kk_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+   if (fs && fs->info.fs.line_geometry_stipple && dyn->rs.line.stipple.enable &&
+       (vs->info.polygon.primitive_vertices == 2 || dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE)) {
+      libkk_polygon_dash_counts(cmd, kk_grid_indirect(capture +
+         offsetof(struct poly_geometry_capture, clip_grid)), true, geometry_params, kk_heap(cmd));
+      libkk_polygon_prefix_sum(cmd, kk_grid_1d(1024), true, geometry_params);
+   }
    if (gfx->conservative) {
       libkk_conservative_output_setup(cmd, kk_grid_1d(1), true, geometry_params, kk_heap(cmd));
       libkk_conservative_output(cmd, triangles, true, geometry_params);
@@ -65,7 +73,9 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
       libkk_polygon_output(cmd, triangles, true, geometry_params);
    }
    return (struct kk_draw_data){
-      .primitive_type = dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE ?
+      .primitive_type =
+         (vs->info.polygon.primitive_vertices == 2 || dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE) &&
+         dyn->rs.line.mode == VK_LINE_RASTERIZATION_MODE_BRESENHAM ?
          MTL_PRIMITIVE_TYPE_LINE : MTL_PRIMITIVE_TYPE_TRIANGLE,
       .grid = kk_grid_indirect(capture + offsetof(struct poly_geometry_capture, draw)),
    };

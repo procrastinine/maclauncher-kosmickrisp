@@ -4,6 +4,12 @@
 
 #include "compiler/libcl/libcl.h"
 
+enum kk_line_stipple_flags {
+   KK_LINE_STIPPLE_ENABLED = 1u,
+   KK_LINE_STIPPLE_GEOMETRY = 2u,
+   KK_LINE_STIPPLE_PHASE_READY = 4u,
+};
+
 /* Per-draw storage for polygon rasterization after geometry assembly. */
 struct poly_geometry_capture {
    uint64_t vertices;
@@ -43,6 +49,16 @@ struct poly_geometry_capture {
    uint32_t depth_bias_enable;
    uint32_t depth_bias_representation;
    uint32_t polygon_mode;
+   uint32_t primitive_vertices;
+   uint32_t line_expand;
+   uint32_t line_mode;
+   float line_width;
+   uint32_t line_stipple_flags;
+   uint32_t line_stipple_factor;
+   uint32_t line_stipple_pattern;
+   uint32_t line_strip;
+   uint64_t line_phases;
+   uint64_t restart_strips;
 };
 
 #ifndef __OPENCL_VERSION__
@@ -51,6 +67,7 @@ struct poly_gs_capture_info {
    uint64_t float_outputs;
    uint32_t vertices_out;
    uint32_t streams;
+   uint32_t primitive_vertices;
    uint8_t clip_count;
    uint8_t cull_count;
    uint16_t output_types[64];

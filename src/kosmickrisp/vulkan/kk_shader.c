@@ -574,6 +574,8 @@ lower_subpass_dim(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
 
 #include "kk_dynamic_multisample.h"
 
+#include "kk_polygon_nir.h"
+
 static void
 kk_lower_fs(struct kk_device *dev, nir_shader *nir,
             const struct vk_graphics_pipeline_state *state)
@@ -582,6 +584,13 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
 
    nir->info.fs.uses_sample_shading |=
       state->ms && state->ms->sample_shading_enable;
+
+   if (state && state->rs &&
+       (state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE)))
+      nir_shader_intrinsics_pass(nir, kk_line_alpha, nir_metadata_control_flow, NULL);
+
+   kk_line_lower_pure_early(nir, state);
 
    /* Must be lowered before blending */
    kk_lower_multisample_alpha(nir, state);
@@ -1030,6 +1039,10 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
       ralloc_free(shader->polygon[i].entrypoint_name);
       ralloc_free(shader->polygon[i].code);
    }
+   ralloc_free((void *)shader->polygon_native.entrypoint_name);
+   ralloc_free((void *)shader->polygon_native.code);
+   ralloc_free((void *)shader->polygon_native_fs.entrypoint_name);
+   ralloc_free((void *)shader->polygon_native_fs.code);
    ralloc_free((void *)shader->gs_main.entrypoint_name);
    ralloc_free((void *)shader->gs_main.code);
 
@@ -1235,7 +1248,6 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
    kk_compile_msl_options(pdev, nir, state, data, NULL, NULL);
 }
 
-#include "kk_polygon_nir.h"
 #include "kk_conservative_nir.h"
 #include "kk_polygon_scalar_io.h"
 
@@ -1269,6 +1281,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
    shader->info.conservative = kk_conservative_possible(state);
    gather_shader_info(shader, nir, state);
+   if (stage == MESA_SHADER_FRAGMENT)
+      shader->info.fs.line_geometry_stipple = kk_line_geometry_stipple(nir, state);
    if (stage == MESA_SHADER_FRAGMENT) {
       shader->info.conservative_full_coverage =
          BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FULLY_COVERED);
@@ -1309,8 +1323,14 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    if (stage == MESA_SHADER_FRAGMENT && kk_polygon_possible(dev, state)) {
       shader->info.fs.noperspective_outputs = kk_polygon_noperspective_outputs(nir);
       nir_shader *point_fs = nir_shader_clone(NULL, nir);
+      bool point_line_effects = state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+         state->rs->line.stipple.enable ||
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
       nir_shader_intrinsics_pass(point_fs, kk_polygon_point_coord,
-                                 nir_metadata_control_flow, NULL);
+                                 nir_metadata_control_flow, point_line_effects ? (void *)1 : NULL);
+      kk_line_fragment(point_fs, true, state);
+      NIR_PASS(_, point_fs, kk_nir_lower_descriptors, robustness, 0, NULL);
       shader->info.polygon_point = true;
       if (kk_polygon_regular_possible(dev, state))
          kk_compile_msl(pdev, point_fs, state, &shader->polygon[3]);
@@ -1321,6 +1341,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          kk_compile_msl(pdev, conservative_fs, state, &shader->polygon[5]);
       }
    }
+
+   if (stage == MESA_SHADER_FRAGMENT) kk_line_fragment(nir, false, state);
 
    unsigned num_cull_distances =
       prev_stage ? prev_stage->info.num_cull_distances : 0;
@@ -1418,13 +1440,18 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       nir_shader *count = NULL, *rast = NULL, *pre_gs = NULL;
       nir_shader *capture = NULL, *capture_xfb = NULL;
       bool polygon = kk_polygon_possible(dev, state) &&
-         u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_TRIANGLES;
+         (u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_TRIANGLES ||
+          u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_LINES);
       NIR_PASS(_, nir, poly_nir_lower_gs_capture, &count, &rast, &pre_gs,
                &shader->info.gs, &shader->info.polygon,
                polygon ? &capture : NULL, polygon ? &capture_xfb : NULL);
       if (polygon) {
          shader->info.polygon_point = true;
-         nir_shader *point_vs = kk_polygon_vertex_shader(&shader->info.polygon, nir->options);
+         nir_shader *point_vs = kk_polygon_vertex_shader(&shader->info.polygon, nir->options,
+            state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+            state->rs->line.stipple.enable ||
+            BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
+            BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE));
          NIR_PASS(_, point_vs, kk_nir_lower_polygon_scalar_outputs);
          NIR_PASS(_, point_vs, msl_nir_vs_io_types);
          NIR_PASS(_, point_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
@@ -1988,7 +2015,8 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
       if (result != VK_SUCCESS) return result;
    }
    }
-   const struct msl_compile_data *vs_data = polygon ? &vs->polygon[2 * polygon] : &vs->msl_data[vs_stage];
+   const struct msl_compile_data *vs_data = polygon ? &vs->polygon[2 * polygon] :
+      vs->info.polygon_native ? &vs->polygon_native : &vs->msl_data[vs_stage];
    mtl_library *vertex_library = mtl_new_library(
       device->mtl_compiler_handle, vs_data->code, pdev->info.msl_version,
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
@@ -1999,7 +2027,8 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
       mtl_new_library_function_descriptor(vertex_library,
                                           vs_data->entrypoint_name);
 
-   const struct msl_compile_data *fs_data = polygon ? &vs->polygon[2 * polygon + 1] : &vs->msl_data[MESA_SHADER_FRAGMENT];
+   const struct msl_compile_data *fs_data = polygon ? &vs->polygon[2 * polygon + 1] :
+      vs->info.polygon_native ? &vs->polygon_native_fs : &vs->msl_data[MESA_SHADER_FRAGMENT];
    mtl_library *fragment_library = mtl_new_library(
       device->mtl_compiler_handle, fs_data->code, pdev->info.msl_version,
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
@@ -2226,6 +2255,35 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       xfb |= nir_shaders[i]->xfb_info != NULL;
    }
    uint32_t total_shaders = shader_count;
+   nir_shader *native_pair[2] = {NULL, NULL};
+   bool native_passthrough = !explicit_geometry && !xfb && !tess &&
+      kk_wide_line_possible(state);
+   nir_shader *native_vs = NULL, *native_fs = NULL;
+   for (unsigned i = 0; i < shader_count; ++i) {
+      nir_shader *n = nir_shaders[i];
+      if (n->info.stage == MESA_SHADER_VERTEX) native_vs = n;
+      if (n->info.stage == MESA_SHADER_FRAGMENT) {
+         native_fs = n;
+         if (BITSET_TEST(n->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID))
+            native_passthrough = false;
+      }
+   }
+   if (native_passthrough && native_vs) {
+      native_pair[0] = nir_shader_clone(NULL, native_vs);
+      native_pair[1] = native_fs ? nir_shader_clone(NULL, native_fs) :
+         get_empty_nir(dev, MESA_SHADER_FRAGMENT, state, features);
+      native_pair[0]->info.next_stage = MESA_SHADER_FRAGMENT;
+      kk_lower_hw_vs(native_pair[0], state, false);
+      msl_nir_lower_clip_cull_distance(native_pair[0], 0);
+      kk_lower_vs_vbo(native_pair[0], state, vertex_robustness);
+      NIR_PASS(_, native_pair[0], msl_nir_lower_instance_id);
+      /* The first descriptor pass rewrites uses but keeps dead resource
+       * descriptors until DCE. Remove those before lowering only new sysvals. */
+      NIR_PASS(_, native_pair[0], nir_opt_dce);
+      NIR_PASS(_, native_pair[0], kk_nir_lower_descriptors, vertex_robustness, 0, NULL);
+      nir_opt_varyings_bulk(native_pair, 2, true, UINT32_MAX, UINT32_MAX, nir_opts, NULL);
+      nir_opt_varyings_bulk(native_pair, 2, true, UINT32_MAX, UINT32_MAX, nir_opts, NULL);
+   }
    if (!explicit_geometry && (xfb || kk_polygon_possible(dev, state))) {
       nir_shader *producer = NULL;
       unsigned insert = shader_count;
@@ -2351,7 +2409,9 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          for (uint32_t j = i + 1; j < total_shaders; j++)
             ralloc_free(nir_shaders[j]);
 
-         /* Memset the output array */
+         ralloc_free(native_pair[0]);
+      ralloc_free(native_pair[1]);
+      /* Memset the output array */
          memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
 
          return result;
@@ -2401,6 +2461,13 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          result = VK_ERROR_INVALID_SHADER_NV;
    } else {
       gather_graphics_pipeline_create_info(state, shaders, total_shaders);
+      if (native_pair[0]) {
+         kk_compile_msl(pdev, native_pair[0], state, &shaders[0]->polygon_native);
+         kk_line_fragment(native_pair[1], false, state);
+         kk_compile_msl(pdev, native_pair[1], state, &shaders[0]->polygon_native_fs);
+         native_pair[0] = native_pair[1] = NULL;
+         shaders[0]->info.polygon_native = true;
+      }
       shaders[0]->info.api_geometry = explicit_geometry;
       result = kk_compile_graphics_pipeline(dev, shaders[shaders[0]->info.stage == MESA_SHADER_TASK ? 1 : 0]);
 
@@ -2413,6 +2480,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          kk_shader_destroy(&dev->vk, shaders[i], pAllocator);
       }
 
+      ralloc_free(native_pair[0]);
+      ralloc_free(native_pair[1]);
       /* Memset the output array */
       memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
    } else {
@@ -2474,6 +2543,10 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
          blob_write_uint8(blob, shader->polygon[i].code != NULL);
          if (shader->polygon[i].code) kk_msl_serialize(&shader->polygon[i], blob);
       }
+   }
+   if (shader->info.polygon_native) {
+      kk_msl_serialize(&shader->polygon_native, blob);
+      kk_msl_serialize(&shader->polygon_native_fs, blob);
    }
    return !blob->out_of_memory;
 }
@@ -2548,6 +2621,12 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
          result = kk_msl_deserialize(blob, &shader->polygon[i]);
          if (result != VK_SUCCESS) goto fail;
       }
+   }
+   if (info.polygon_native) {
+      result = kk_msl_deserialize(blob, &shader->polygon_native);
+      if (result != VK_SUCCESS) goto fail;
+      result = kk_msl_deserialize(blob, &shader->polygon_native_fs);
+      if (result != VK_SUCCESS) goto fail;
    }
    if (info.stage == MESA_SHADER_COMPUTE) {
       uint32_t local_size_threads = shader->info.cs.local_size.x *

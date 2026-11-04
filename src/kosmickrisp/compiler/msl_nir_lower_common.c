@@ -503,6 +503,12 @@ msl_vs_io_types(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
    if (intr->intrinsic == nir_intrinsic_store_output) {
       struct nir_io_semantics io = nir_intrinsic_io_semantics(intr);
+      if (io.location == VARYING_SLOT_POS || io.location == VARYING_SLOT_PSIZ ||
+          io.location == VARYING_SLOT_CLIP_DIST0 || io.location == VARYING_SLOT_CLIP_DIST1 ||
+          io.location == VARYING_SLOT_CULL_DIST0 || io.location == VARYING_SLOT_CULL_DIST1) {
+         nir_intrinsic_set_src_type(intr, nir_type_float32);
+         return true;
+      }
       if (io.location == VARYING_SLOT_LAYER ||
           io.location == VARYING_SLOT_VIEWPORT) {
          nir_intrinsic_set_src_type(intr, nir_type_uint32);

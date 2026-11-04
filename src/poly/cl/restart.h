@@ -164,7 +164,7 @@ poly_setup_unroll_for_draw(global struct poly_heap *heap,
 }
 
 static inline void
-poly_unroll_geometry(global uint32_t *out_draw,
+poly_unroll_geometry_strips(global uint32_t *out_draw,
                      global struct poly_heap *heap,
                      constant uint *in_draw,
                      uint64_t index_buffer,
@@ -175,7 +175,7 @@ poly_unroll_geometry(global uint32_t *out_draw,
                      uint32_t flatshade_first,
                      uint32_t emulate_flatshade_last,
                      enum mesa_prim mode,
-                     local void *scratch)
+                     local void *scratch, global uint32_t *strip_starts)
 {
    uint tid = cl_local_id.x;
    uint count = in_draw[0];
@@ -225,6 +225,7 @@ poly_unroll_geometry(global uint32_t *out_draw,
       uint subprims = u_decomposed_prims_for_vertices(mode, subcount);
       uint out_prims_base = out_prims;
       for (uint i = tid; i < subprims; i += cl_local_size.x) {
+         if (strip_starts) strip_starts[out_prims_base + i] = out_prims_base;
          for (uint vtx = 0; vtx < per_prim; ++vtx) {
             uint id = poly_vertex_id_for_topology(mode, flatshade_first, i,
                                                   vtx, subprims);
@@ -246,6 +247,18 @@ poly_unroll_geometry(global uint32_t *out_draw,
 
    if (tid == 0)
       out_draw[0] = out_prims * per_prim;
+}
+
+static inline void
+poly_unroll_geometry(global uint32_t *out_draw, global struct poly_heap *heap,
+   constant uint *in_draw, uint64_t index_buffer, uint32_t index_buffer_range_el,
+   uint32_t in_index_size_B, uint32_t out_index_size_B, uint32_t restart_index,
+   uint32_t flatshade_first, uint32_t emulate_flatshade_last, enum mesa_prim mode,
+   local void *scratch)
+{
+   poly_unroll_geometry_strips(out_draw, heap, in_draw, index_buffer,
+      index_buffer_range_el, in_index_size_B, out_index_size_B, restart_index,
+      flatshade_first, emulate_flatshade_last, mode, scratch, NULL);
 }
 
 static inline void

@@ -269,6 +269,7 @@ kk_get_device_features(
       .fragmentStoresAndAtomics = true,
       .fullDrawIndexUint32 = true,
       .fillModeNonSolid = true,
+      .wideLines = true,
       .geometryShader = true,
       .imageCubeArray = true,
       .independentBlend = true,
@@ -413,6 +414,11 @@ kk_get_device_features(
 
       /* Vulkan 1.4 */
       .bresenhamLines = true,
+      .rectangularLines = true,
+      .smoothLines = true,
+      .stippledRectangularLines = false,
+      .stippledBresenhamLines = true,
+      .stippledSmoothLines = false,
       .dynamicRenderingLocalRead = true,
       .globalPriorityQuery = true,
       .hostImageCopy = true,
@@ -548,6 +554,7 @@ kk_get_device_features(
       .extendedDynamicState3DepthClipEnable = true,
       .extendedDynamicState3DepthClipNegativeOneToOne = true,
       .extendedDynamicState3LineRasterizationMode = true,
+      .extendedDynamicState3LineStippleEnable = true,
       .extendedDynamicState3PolygonMode = true,
       .extendedDynamicState3ConservativeRasterizationMode = true,
       .extendedDynamicState3ExtraPrimitiveOverestimationSize = true,
@@ -815,9 +822,9 @@ kk_get_device_properties(
       .maxCombinedClipAndCullDistances = 8,
       .discreteQueuePriorities = 2,
       .pointSizeRange = {1.0f, 511.0f},
-      .lineWidthRange = {1.0f, 1.0f},
+      .lineWidthRange = {1.0f, 4096.0f},
       .pointSizeGranularity = 0.0625f,
-      .lineWidthGranularity = 0.0f,
+      .lineWidthGranularity = 1.0f / 256.0f,
       .strictLines = false,
       .standardSampleLocations = true,
       .optimalBufferCopyOffsetAlignment = 1,
@@ -969,7 +976,7 @@ kk_get_device_properties(
       .depthStencilSwizzleOneSupport = true,
       .polygonModePointSize = false,
       .nonStrictSinglePixelWideLinesUseParallelogram = false,
-      .nonStrictWideLinesUseParallelogram = false,
+      .nonStrictWideLinesUseParallelogram = true,
 
       /* VK_KHR_maintenance6 */
       .blockTexelViewCompatibleMultipleLayers = false,
