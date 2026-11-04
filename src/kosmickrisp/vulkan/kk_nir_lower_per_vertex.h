@@ -75,6 +75,13 @@ bool kk_nir_lower_mesh_flat_inputs(nir_shader *fs, nir_shader *mesh,
 bool kk_nir_lower_vs_per_vertex_outputs(nir_shader *vs,
                                         const struct kk_per_vertex_map *map);
 
+/* Only an ordinary linked VS uses its input-assembly state for rasterization.
+ * Generated GS/TES readers and independent producers retain the dynamic ABI. */
+struct vk_graphics_pipeline_state;
+bool kk_nir_lower_vs_per_vertex_outputs_with_state(
+   nir_shader *vs, const struct kk_per_vertex_map *map,
+   const struct vk_graphics_pipeline_state *state);
+
 #ifdef __cplusplus
 } /* extern C */
 #endif

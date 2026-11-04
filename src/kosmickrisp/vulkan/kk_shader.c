@@ -143,10 +143,17 @@ static bool kk_wide_line_possible(const struct vk_graphics_pipeline_state *state
 static bool kk_poly_layer_alias_possible(const struct vk_graphics_pipeline_state *state,
                                          const struct vk_features *features);
 
+enum kk_vs_assembly_flags {
+   KK_VS_STRIP_FAN_OR_ADJACENCY = BITFIELD_BIT(0),
+   KK_VS_DYNAMIC_TOPOLOGY = BITFIELD_BIT(1),
+   KK_VS_DYNAMIC_PROVOKING = BITFIELD_BIT(2),
+   KK_VS_RESTART_TOPOLOGY = BITFIELD_BIT(3),
+};
+
 struct kk_vs_key {
    bool is_points;
    bool dynamic_vi;
-   bool strip_fan_or_adjacency;
+   uint8_t assembly_flags;
    bool provoking_last;
    struct vk_vertex_input_state vi;
 };
@@ -161,8 +168,25 @@ kk_populate_vs_key(struct kk_vs_key *key,
                                     VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
    key->dynamic_vi = !kk_vi_is_static(state);
    if (barycentric) {
-      key->strip_fan_or_adjacency = kk_state_strip_fan_or_adjacency(state);
+      if (kk_state_strip_fan_or_adjacency(state))
+         key->assembly_flags |= KK_VS_STRIP_FAN_OR_ADJACENCY;
       key->provoking_last = kk_state_provoking_last(state);
+      /* Static assembly is folded only for the barycentric corner path.
+       * Keep dynamic state distinct from an identical placeholder value. */
+      if (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_IA_PRIMITIVE_TOPOLOGY))
+         key->assembly_flags |= KK_VS_DYNAMIC_TOPOLOGY;
+      if (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_PROVOKING_VERTEX))
+         key->assembly_flags |= KK_VS_DYNAMIC_PROVOKING;
+      if (state->ia) {
+         VkPrimitiveTopology topology = state->ia->primitive_topology;
+         if ((topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP ||
+             topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+             topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) &&
+            (state->ia->primitive_restart_enable ||
+             BITSET_TEST(state->dynamic,
+                          MESA_VK_DYNAMIC_IA_PRIMITIVE_RESTART_ENABLE)))
+            key->assembly_flags |= KK_VS_RESTART_TOPOLOGY;
+      }
    }
    if (!key->dynamic_vi)
       key->vi = *state->vi;
@@ -1706,8 +1730,10 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          if (per_vertex_map &&
              (per_vertex_map->active || per_vertex_map->canonical_heap)) {
             bool progress = false;
-            NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
-                     per_vertex_map);
+            NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs_with_state,
+                     per_vertex_map,
+                     dev->vk.enabled_features.fragmentShaderBarycentric
+                        ? state : NULL);
             if (progress)
                shader->info.uses_per_draw_data = true;
          }

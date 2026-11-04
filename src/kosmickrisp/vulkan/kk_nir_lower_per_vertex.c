@@ -9,6 +9,7 @@
 #include "kk_debug.h"
 
 #include "nir_builder.h"
+#include "vk_util.h"
 
 static bool
 is_per_vertex_input(nir_intrinsic_instr *intr)
@@ -735,8 +736,9 @@ select_by_topology(nir_builder *b, nir_def *topology,
 }
 
 bool
-kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
-                                   const struct kk_per_vertex_map *map)
+kk_nir_lower_vs_per_vertex_outputs_with_state(
+   nir_shader *nir, const struct kk_per_vertex_map *map,
+   const struct vk_graphics_pipeline_state *state)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
    struct kk_per_vertex_map canonical;
@@ -787,10 +789,50 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
       load_per_draw(&b, 32, per_draw_offset(per_vertex_first_vertex));
    nir_def *base_vertex =
       load_per_draw(&b, 32, per_draw_offset(per_vertex_base_vertex));
-   nir_def *topology =
-      load_per_draw(&b, 32, per_draw_offset(per_vertex_topology));
-   nir_def *provoking_last = nir_ine_imm(
-      &b, load_per_draw(&b, 32, per_draw_offset(provoking_last)), 0);
+   /* The draw ABI also serves dynamic and independent producers. A linked
+    * ordinary VS already has these values in its pipeline key: specialize
+    * here so constant folding removes the generic topology selects and
+    * runtime primitive-size division. Canonical producers keep the ABI. */
+   bool static_topology = state && state->ia && !map->canonical_heap &&
+      !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_IA_PRIMITIVE_TOPOLOGY);
+   unsigned static_prim_vertices = 0;
+   if (static_topology) {
+      switch (state->ia->primitive_topology) {
+      case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
+         static_prim_vertices = 1;
+         break;
+      case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+         static_prim_vertices = 2;
+         break;
+      case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
+         static_prim_vertices = 3;
+         break;
+      case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+      case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
+      case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
+         /* Restart preserves primitive size even when it changes topology. */
+         static_prim_vertices = state->ia->primitive_topology ==
+            VK_PRIMITIVE_TOPOLOGY_LINE_STRIP ? 2 : 3;
+         /* Indexed restart is unrolled to lists before the corner draw.
+          * The input topology is fixed only when that rewrite cannot occur. */
+         static_topology = !state->ia->primitive_restart_enable &&
+            !BITSET_TEST(state->dynamic,
+                         MESA_VK_DYNAMIC_IA_PRIMITIVE_RESTART_ENABLE);
+         break;
+      default:
+         static_topology = false;
+         break;
+      }
+   }
+   nir_def *topology = static_topology
+      ? nir_imm_int(&b, vk_topology_to_mesa(state->ia->primitive_topology))
+      : load_per_draw(&b, 32, per_draw_offset(per_vertex_topology));
+   bool static_provoking = state && state->rs && !map->canonical_heap &&
+      !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_PROVOKING_VERTEX);
+   nir_def *provoking_last = static_provoking
+      ? nir_imm_bool(&b, state->rs->provoking_vertex ==
+                           VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT)
+      : nir_ine_imm(&b, load_per_draw(&b, 32, per_draw_offset(provoking_last)), 0);
 
    /* Indirect draws: firstVertex/firstIndex and vertexOffset are at the same
     * place in both command layouts. */
@@ -822,9 +864,10 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
    nir_def *one = nir_imm_int(&b, 1);
    nir_def *two = nir_imm_int(&b, 2);
    nir_def *three = nir_imm_int(&b, 3);
-   nir_def *prim_vertices = select_by_topology(
-      &b, topology,
-      &(struct topology_values){one, two, two, three, three, three});
+   nir_def *prim_vertices = static_prim_vertices
+      ? nir_imm_int(&b, static_prim_vertices)
+      : select_by_topology(&b, topology,
+          &(struct topology_values){one, two, two, three, three, three});
    nir_def *triangle = nir_udiv(&b, hw_vertex_id, prim_vertices);
    nir_def *corner = nir_umod(&b, hw_vertex_id, prim_vertices);
    nir_def *odd = nir_ine_imm(&b, nir_iand_imm(&b, triangle, 1), 0);
@@ -988,6 +1031,13 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
    nir_progress(true, impl, nir_metadata_none);
    nir_shader_gather_info(nir, impl);
    return true;
+}
+
+bool
+kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
+                                   const struct kk_per_vertex_map *map)
+{
+   return kk_nir_lower_vs_per_vertex_outputs_with_state(nir, map, NULL);
 }
 
 /* Mesh outputs are already staged after its collective body. Flat interfaces
