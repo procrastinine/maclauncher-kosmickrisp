@@ -1077,6 +1077,7 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
    uint32_t next_dyn_offset = 0;
    for (uint32_t i = 0; i < info->descriptorSetCount; ++i) {
       unsigned s = i + info->firstSet;
+      desc->root.set_dynamic_buffer_start[s] = dyn_buffer_start;
       VK_FROM_HANDLE(kk_descriptor_set, set, info->pDescriptorSets[i]);
 
       if (desc->sets[s] != set) {
