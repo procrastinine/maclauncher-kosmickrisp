@@ -11,6 +11,7 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "kk_depth_stencil_state.h"
 #include "kk_interlock_heap.h"
 #include "kk_interlock_draw.h"
 #include "kk_interlock_envelope.h"
@@ -71,6 +72,7 @@ kk_attachment_init(struct kk_attachment *att,
    VK_FROM_HANDLE(kk_image_view, iview, info->imageView);
    *att = (struct kk_attachment){
       .flags = vk_get_rendering_attachment_flags(info),
+      .image_layout = info->imageLayout,
       .vk_format = iview->vk.format,
       .iview = iview,
    };
@@ -1107,8 +1109,7 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
       if (!pipeline)
          return;
       mtl_render_set_pipeline_state(enc, pipeline);
-      mtl_depth_stencil_state *ds = gfx->is_depth_stencil_dynamic
-         ? gfx->depth_stencil_state : kk_attachment_depth_stencil(cmd, vs);
+      mtl_depth_stencil_state *ds = kk_cmd_selected_depth_stencil(cmd, vs);
       if (ds)
          mtl_set_depth_stencil_state(enc, ds);
    }

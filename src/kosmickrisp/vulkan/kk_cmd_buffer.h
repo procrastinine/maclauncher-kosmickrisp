@@ -165,6 +165,8 @@ struct kk_per_draw_data {
    uint64_t multiview_index;
 };
 
+struct kk_depth_stencil_record;
+
 struct kk_attachment {
    VkRenderingAttachmentFlagsKHR flags;
    VkFormat vk_format;
@@ -173,6 +175,7 @@ struct kk_attachment {
    VkResolveModeFlagBits resolve_mode;
    struct kk_image_view *resolve_iview;
 
+   VkImageLayout image_layout;
    VkAttachmentLoadOp load_op;
    VkAttachmentStoreOp store_op;
    VkClearValue clear_value;
@@ -358,6 +361,7 @@ struct kk_whole_pass_state {
 
 struct kk_cmd_buffer {
    struct vk_command_buffer vk;
+   struct kk_depth_stencil_record *depth_stencil_records;
    struct kk_interlock_segment *interlock_segments;
    struct kk_interlock_heap *interlock_heap;
    bool interlock_heap_active;

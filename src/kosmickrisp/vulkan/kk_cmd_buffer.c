@@ -6,6 +6,7 @@
  */
 
 #include "kk_cmd_buffer.h"
+#include "kk_depth_stencil_state.h"
 #include "kk_interlock_submit.h"
 #include "kk_interlock_heap.h"
 #include "kk_interlock_draw.h"
@@ -60,6 +61,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    kk_dgc_release_commands(cmd);
    kk_interlock_segments_finish(cmd);
    kk_interlock_heap_finish(cmd);
+   kk_cmd_depth_stencil_finish(cmd);
    kk_cmd_release_dynamic_ds_state(cmd);
    kk_descriptor_state_fini(cmd, &cmd->state.gfx.descriptors);
    kk_descriptor_state_fini(cmd, &cmd->state.cs.descriptors);
