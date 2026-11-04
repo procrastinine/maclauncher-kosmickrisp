@@ -42,8 +42,6 @@ struct kk_root_descriptor_table {
          uint64_t attrib_base[KK_MAX_ATTRIBS];
          uint32_t attrib_clamps[KK_MAX_ATTRIBS];
          uint64_t vertex_input;
-         uint32_t sample_mask;
-         uint32_t alpha_to_coverage;
 
          uint64_t fragment_statistic;
          float blend_constant[4];
@@ -52,6 +50,8 @@ struct kk_root_descriptor_table {
          float viewport_z_range[KK_MAX_VIEWPORTS * 2];
          bool emulate_depth_clamp;
          bool emulate_viewport_z;
+         uint8_t sample_mask;
+         uint8_t alpha_to_coverage;
       } draw;
       struct {
          uint32_t base_group[3];
@@ -82,6 +82,8 @@ struct kk_root_descriptor_table {
    /* Client push constants: upload only the bound pipeline range. */
    uint8_t push[KK_MAX_PUSH_SIZE];
 };
+
+static_assert(KK_MAX_SAMPLES <= 8, "dynamic sample mask fits the draw tail");
 
 static_assert(2u + MESA_ALL_SHADER_STAGES <= KK_MAX_SETS,
               "embedded stage bindings fit the existing heap root union");

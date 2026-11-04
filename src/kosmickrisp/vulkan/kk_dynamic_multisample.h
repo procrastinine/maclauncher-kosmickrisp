@@ -23,7 +23,8 @@ static nir_def *
 kk_fs_multisample_value(nir_builder *b, uint64_t offset)
 {
    nir_def *root = nir_load_buffer_ptr_kk(b, 1, 64, .binding = 0);
-   return nir_load_global_constant(b, 1, 32, nir_iadd_imm(b, root, offset));
+   return nir_u2u32(b, nir_load_global_constant(
+      b, 1, 8, nir_iadd_imm(b, root, offset)));
 }
 
 static void
