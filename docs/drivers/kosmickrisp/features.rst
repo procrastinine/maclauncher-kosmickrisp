@@ -4,7 +4,8 @@ Features and Apple GPU families
 This page lists every capability that KosmicKrisp advertises and how the
 driver provides it: natively through Metal, by emulation in shaders or compute
 passes, or natively with some cases emulated. Rows that name an entry are
-controlled by ``KK_EMULATION``; :doc:`emulation` lists the cost, default and
+controlled by ``KK_EMULATION``; the :doc:`main driver page <../kosmickrisp>`
+lists the cost, default and
 reason for each entry. In the performance mode column, ``On`` and ``Off`` give
 the entry's default in the default ``performance`` mode, ``Always`` marks a
 capability advertised in every mode, and ``Experimental`` marks one that only
