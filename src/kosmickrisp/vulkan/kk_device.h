@@ -38,12 +38,10 @@ struct kk_perf;
 struct kk_residency_set {
    simple_mtx_t mutex;
    bool dirty; /* Protected by mutex, including commit. */
-   bool requested; /* Persistent residency request, under the same mutex. */
    mtl_residency_set *handle;
    struct list_head allocations;
    /* Requested only for the high-priority working set, including while idle. */
    mtl_residency_set *priority_handle;
-   struct list_head priority_memories;
 };
 
 struct mtl_sampler_packed {
@@ -178,6 +176,8 @@ void kk_device_finish_lib(struct kk_device *dev);
 void kk_depth_stencil_cache_finish(struct kk_device *dev);
 
 void kk_device_add_bo_to_residency_set(struct kk_device *dev, struct kk_bo *bo);
+void kk_device_add_imported_bo_to_residency_set(struct kk_device *dev,
+                                               struct kk_bo *bo);
 void kk_device_remove_bo_from_residency_set(struct kk_device *dev, struct kk_bo *bo);
 void kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap);
 void kk_device_remove_heap_from_residency_set(struct kk_device *dev,

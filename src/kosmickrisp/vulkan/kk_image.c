@@ -486,25 +486,6 @@ kk_GetPhysicalDeviceImageFormatProperties2(
       }
    }
 
-   /* Metal exposes lossless/default or disabled compression, not an
-    * explicit fixed-rate format. Unsupported fixed-rate hints retain the
-    * default lossless policy, as allowed by the compression-control contract. */
-   const VkImageCompressionControlEXT *compression = vk_find_struct_const(
-      pImageFormatInfo->pNext, IMAGE_COMPRESSION_CONTROL_EXT);
-   bool compression_disabled = compression &&
-      (compression->flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
-   VkImageCompressionPropertiesEXT *compression_props = vk_find_struct(
-      pImageFormatProperties->pNext, IMAGE_COMPRESSION_PROPERTIES_EXT);
-   if (compression_props) {
-      bool optimize = !compression_disabled && kk_image_layout_can_optimize(
-         pdev, all_usage, pImageFormatInfo->tiling, pImageFormatInfo->flags,
-         p_format);
-      compression_props->imageCompressionFlags = optimize
-         ? VK_IMAGE_COMPRESSION_DEFAULT_EXT : VK_IMAGE_COMPRESSION_DISABLED_EXT;
-      compression_props->imageCompressionFixedRateFlags =
-         VK_IMAGE_COMPRESSION_FIXED_RATE_NONE_EXT;
-   }
-
    const unsigned plane_count =
       vk_format_get_plane_count(pImageFormatInfo->format);
 
@@ -573,8 +554,26 @@ kk_GetPhysicalDeviceImageFormatProperties2(
          ycbcr_props->combinedImageSamplerDescriptorCount = plane_count;
          break;
       }
+      case VK_STRUCTURE_TYPE_IMAGE_COMPRESSION_PROPERTIES_EXT: {
+         VkImageCompressionPropertiesEXT *props = s;
+         const VkImageCompressionControlEXT *compression = vk_find_struct_const(
+            pImageFormatInfo->pNext, IMAGE_COMPRESSION_CONTROL_EXT);
+         bool disabled = compression &&
+            (compression->flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
+         /* Metal supports default lossless or disabled, not fixed-rate compression. */
+         bool optimize = !disabled && kk_image_layout_can_optimize(
+            pdev, all_usage, pImageFormatInfo->tiling, create_flags, p_format);
+         props->imageCompressionFlags = optimize
+            ? VK_IMAGE_COMPRESSION_DEFAULT_EXT : VK_IMAGE_COMPRESSION_DISABLED_EXT;
+         props->imageCompressionFixedRateFlags = VK_IMAGE_COMPRESSION_FIXED_RATE_NONE_EXT;
+         break;
+      }
       case VK_STRUCTURE_TYPE_HOST_IMAGE_COPY_DEVICE_PERFORMANCE_QUERY_EXT: {
          VkHostImageCopyDevicePerformanceQueryEXT *host_props = s;
+         const VkImageCompressionControlEXT *compression = vk_find_struct_const(
+            pImageFormatInfo->pNext, IMAGE_COMPRESSION_CONTROL_EXT);
+         bool compression_disabled = compression &&
+            (compression->flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
          /* Optimal device access and identical memory layout if optimization
           * is the same both with and without host transfer usage */
          bool with_host_transfer = kk_image_layout_can_optimize(

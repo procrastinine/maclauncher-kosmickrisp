@@ -97,13 +97,26 @@ mtl_heap_set_memory_region(mtl_heap *heap,
                             const struct mtl_heap_memory_region *region)
 {
    @autoreleasepool {
-      NSData *data = [[NSData alloc] initWithBytes:region length:sizeof(*region)];
-      if (!data)
-         return false;
-      objc_setAssociatedObject((id)heap, mtl_heap_memory_region_key(), data,
-                                OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-      [data release];
-      return true;
+      /* Only handle export publishes metadata. Concurrent exports publish once;
+       * retained/imported aliases must never replace the original region. */
+      @synchronized ((id)heap) {
+         NSData *data = objc_getAssociatedObject((id)heap, mtl_heap_memory_region_key());
+         if (data) {
+            struct mtl_heap_memory_region existing;
+            if (data.length != sizeof(existing))
+               return false;
+            [data getBytes:&existing length:sizeof(existing)];
+            return existing.offset_B == region->offset_B &&
+                   existing.size_B == region->size_B;
+         }
+         data = [[NSData alloc] initWithBytes:region length:sizeof(*region)];
+         if (!data)
+            return false;
+         objc_setAssociatedObject((id)heap, mtl_heap_memory_region_key(), data,
+                                   OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+         [data release];
+         return true;
+      }
    }
 }
 
@@ -113,15 +126,17 @@ mtl_heap_get_memory_region(mtl_heap *heap,
 {
    @autoreleasepool {
       id<MTLHeap> hp = (id<MTLHeap>)heap;
-      NSData *data = objc_getAssociatedObject(hp, mtl_heap_memory_region_key());
-      *region = (struct mtl_heap_memory_region){.size_B = hp.size};
-      if (data) {
-         if (data.length != sizeof(*region))
-            return false;
-         [data getBytes:region length:sizeof(*region)];
+      @synchronized (hp) {
+         NSData *data = objc_getAssociatedObject(hp, mtl_heap_memory_region_key());
+         *region = (struct mtl_heap_memory_region){.size_B = hp.size};
+         if (data) {
+            if (data.length != sizeof(*region))
+               return false;
+            [data getBytes:region length:sizeof(*region)];
+         }
+         return region->offset_B <= hp.size &&
+                region->size_B <= hp.size - region->offset_B;
       }
-      return region->offset_B <= hp.size &&
-             region->size_B <= hp.size - region->offset_B;
    }
 }
 

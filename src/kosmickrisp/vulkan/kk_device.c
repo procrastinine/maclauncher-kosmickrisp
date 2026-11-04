@@ -513,7 +513,6 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    result = kk_interlock_submission_init(dev);
    if (result != VK_SUCCESS)
       goto fail_vab_memory;
-   list_inithead(&dev->residency_set.priority_memories);
    if (dev->vk.enabled_features.memoryPriority ||
        dev->vk.enabled_features.pageableDeviceLocalMemory) {
       dev->residency_set.priority_handle = mtl_new_residency_set(dev->mtl_handle);
@@ -584,6 +583,13 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    }
 
    kk_frame_capture_init(dev);
+   /* Commit the initial working set before its one persistent request. Later
+    * commits update that request; pageable devices retain queue-scoped residency. */
+   if (!dev->vk.enabled_features.pageableDeviceLocalMemory) {
+      dev->residency_set.dirty = true;
+      kk_device_make_resources_resident(dev);
+      mtl_residency_set_request_residency(dev->residency_set.handle);
+   }
    *pDevice = kk_device_to_handle(dev);
 
    return VK_SUCCESS;
@@ -723,29 +729,44 @@ kk_bo_allocation(struct kk_bo *bo)
                          : (mtl_allocation *)bo->map;
 }
 
-void
-kk_device_add_bo_to_residency_set(struct kk_device *dev, struct kk_bo *bo)
+/* Newly constructed heaps/buffers have a unique native identity. Only a
+ * foreign/imported native object needs to search for an existing BO alias. */
+static void
+kk_device_register_bo(struct kk_device *dev, struct kk_bo *bo, bool imported)
 {
    mtl_allocation *allocation = kk_bo_allocation(bo);
+   bool alias_found = false;
    simple_mtx_lock(&dev->residency_set.mutex);
    list_inithead(&bo->residency_alias_link);
-   if (mtl_residency_set_contains_allocation(dev->residency_set.handle,
-                                             allocation)) {
-      /* Only imported native aliases need a lookup; ordinary new allocations
-       * take the constant-time path and allocate no reference-count record. */
+   if (imported && mtl_residency_set_contains_allocation(
+                      dev->residency_set.handle, allocation)) {
       list_for_each_entry(struct kk_bo, alias, &dev->residency_set.allocations,
                           residency_link) {
          if (kk_bo_allocation(alias) == allocation) {
             list_addtail(&bo->residency_alias_link, &alias->residency_alias_link);
+            alias_found = true;
             break;
          }
       }
-   } else {
+   }
+   if (!alias_found) {
       mtl_residency_set_add_allocation(dev->residency_set.handle, allocation);
+      dev->residency_set.dirty = true;
    }
    list_addtail(&bo->residency_link, &dev->residency_set.allocations);
-   dev->residency_set.dirty = true;
    simple_mtx_unlock(&dev->residency_set.mutex);
+}
+
+void
+kk_device_add_bo_to_residency_set(struct kk_device *dev, struct kk_bo *bo)
+{
+   kk_device_register_bo(dev, bo, false);
+}
+
+void
+kk_device_add_imported_bo_to_residency_set(struct kk_device *dev, struct kk_bo *bo)
+{
+   kk_device_register_bo(dev, bo, true);
 }
 
 void
@@ -755,10 +776,11 @@ kk_device_remove_bo_from_residency_set(struct kk_device *dev, struct kk_bo *bo)
    bool last_alias = list_is_empty(&bo->residency_alias_link);
    list_del(&bo->residency_alias_link);
    list_del(&bo->residency_link);
-   if (last_alias)
+   if (last_alias) {
       mtl_residency_set_remove_allocation(dev->residency_set.handle,
                                           kk_bo_allocation(bo));
-   dev->residency_set.dirty = true;
+      dev->residency_set.dirty = true;
+   }
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
@@ -807,16 +829,6 @@ kk_device_make_resources_resident(struct kk_device *dev)
       KK_PERF_VOID(dev, KK_PERF_EXECUTION_RESIDENCY_COMMIT,
          mtl_residency_set_commit(dev->residency_set.handle));
       dev->residency_set.dirty = false;
-   }
-   /* Every Metal queue already uses this set for execution-scoped residency.
-    * Pageable mode leaves idle pages to the OS instead of requesting lifetime
-    * residency for every allocation. The priority set requests extra retention. */
-   /* A residency request persists until endResidency. Subsequent commits
-    * propagate membership changes to the already resident set. */
-   if (!dev->vk.enabled_features.pageableDeviceLocalMemory &&
-       !dev->residency_set.requested) {
-      mtl_residency_set_request_residency(dev->residency_set.handle);
-      dev->residency_set.requested = true;
    }
    simple_mtx_unlock(&dev->residency_set.mutex);
 }

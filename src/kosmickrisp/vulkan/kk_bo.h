@@ -27,6 +27,8 @@ struct kk_bo {
    void *cpu;    // CPU address
    struct list_head residency_link;
    struct list_head residency_alias_link;
+   bool export_heap_region; /* Publish immutable bounds only on handle export. */
+   bool priority_resident; /* Protected by the residency-set mutex. */
 };
 
 struct kk_ptr {

@@ -26,8 +26,6 @@ struct kk_device_memory {
    uint32_t image_bind_count;
    simple_mtx_t transient_mutex;
    float priority;
-   bool priority_resident;
-   struct list_head priority_link;
 };
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(kk_device_memory, vk.base, VkDeviceMemory,

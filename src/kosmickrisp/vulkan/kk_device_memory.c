@@ -310,42 +310,36 @@ kk_device_memory_set_priority(struct kk_device *dev,
                               struct kk_device_memory *mem, float priority)
 {
    mem->priority = priority;
-   if (!dev->residency_set.priority_handle)
+   if (!dev->residency_set.priority_handle || !mem->bo)
       return;
 
+   struct kk_bo *bo = mem->bo;
    bool retain = priority > 0.5f;
+   /* The caller holds transient_mutex or owns this unpublished memory.
+    * Alias flags are written under the residency mutex for alias readers. */
+   if (retain == bo->priority_resident)
+      return;
+
    simple_mtx_lock(&dev->residency_set.mutex);
-   if (retain != mem->priority_resident) {
-      mtl_allocation *allocation = mem->bo->mtl_handle
-         ? (mtl_allocation *)mem->bo->mtl_handle : (mtl_allocation *)mem->bo->map;
-      /* Imported VkDeviceMemory objects can refer to the same native heap.
-       * Keep its one native retention request until the final high-priority
-       * alias is released. Hints run at allocation/update, never per draw. */
-      if (!retain)
-         list_del(&mem->priority_link);
-      bool retained_alias = false;
-      list_for_each_entry(struct kk_device_memory, alias,
-                          &dev->residency_set.priority_memories, priority_link) {
-         mtl_allocation *other = alias->bo->mtl_handle
-            ? (mtl_allocation *)alias->bo->mtl_handle
-            : (mtl_allocation *)alias->bo->map;
-         if (other == allocation) {
-            retained_alias = true;
-            break;
-         }
+   bo->priority_resident = retain;
+   bool retained_alias = false;
+   list_for_each_entry(struct kk_bo, alias, &bo->residency_alias_link,
+                       residency_alias_link) {
+      if (alias->priority_resident) {
+         retained_alias = true;
+         break;
       }
-      if (!retained_alias) {
-         if (retain)
-            mtl_residency_set_add_allocation(dev->residency_set.priority_handle,
-                                             allocation);
-         else
-            mtl_residency_set_remove_allocation(dev->residency_set.priority_handle,
-                                                allocation);
-         mtl_residency_set_commit(dev->residency_set.priority_handle);
-      }
+   }
+   if (!retained_alias) {
+      mtl_allocation *allocation = bo->mtl_handle
+         ? (mtl_allocation *)bo->mtl_handle : (mtl_allocation *)bo->map;
       if (retain)
-         list_addtail(&mem->priority_link, &dev->residency_set.priority_memories);
-      mem->priority_resident = retain;
+         mtl_residency_set_add_allocation(dev->residency_set.priority_handle,
+                                          allocation);
+      else
+         mtl_residency_set_remove_allocation(dev->residency_set.priority_handle,
+                                             allocation);
+      mtl_residency_set_commit(dev->residency_set.priority_handle);
    }
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
@@ -356,7 +350,9 @@ kk_SetDeviceMemoryPriorityEXT(VkDevice device, VkDeviceMemory memory,
 {
    VK_FROM_HANDLE(kk_device, dev, device);
    VK_FROM_HANDLE(kk_device_memory, mem, memory);
+   simple_mtx_lock(&mem->transient_mutex);
    kk_device_memory_set_priority(dev, mem, priority);
+   simple_mtx_unlock(&mem->transient_mutex);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -487,7 +483,10 @@ fail_import:
 
       }
 
-      kk_device_add_bo_to_residency_set(dev, mem->bo);
+      if (import_metal)
+         kk_device_add_imported_bo_to_residency_set(dev, mem->bo);
+      else
+         kk_device_add_bo_to_residency_set(dev, mem->bo);
       mem->bo->gpu = mtl_buffer_get_gpu_address(mem->bo->map);
       if (host_visible)
          mem->bo->cpu = mtl_get_contents(mem->bo->map);
@@ -509,8 +508,9 @@ fail_import:
    }
 
 set_priority:
-   kk_device_memory_set_priority(dev, mem,
-                                 priority_info ? priority_info->priority : 0.5f);
+   if (dev->residency_set.priority_handle)
+      kk_device_memory_set_priority(dev, mem,
+                                    priority_info ? priority_info->priority : 0.5f);
 
    /* Only successful live allocations can require transient scans. */
    if (mem->lazy)
@@ -541,7 +541,8 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
 
    if (mem->standard_3d)
       kk_standard_3d_memory_finish(dev, mem);
-   kk_device_memory_set_priority(dev, mem, 0.0f);
+   if (mem->bo && mem->bo->priority_resident)
+      kk_device_memory_set_priority(dev, mem, 0.0f);
    if (mem->bo)
       kk_destroy_bo(dev, mem->bo);
    if (mem->lazy)
@@ -689,6 +690,13 @@ kk_GetMemoryMetalHandleEXT(
     *    "Unless the app retains the handle object returned by the call,
     *     the lifespan will be the same as the associated VkDeviceMemory"
     */
+   if (mem->bo->export_heap_region) {
+      const struct mtl_heap_memory_region region = {
+         .offset_B = mem->bo->heap_offset_B, .size_B = mem->bo->size_B,
+      };
+      if (!mtl_heap_set_memory_region(mem->bo->mtl_handle, &region))
+         return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
    *pHandle = mem->bo->mtl_handle;
    return VK_SUCCESS;
 }
@@ -746,6 +754,10 @@ kk_device_memory_commit_private(struct kk_device *dev, struct kk_device_memory *
    if (result != VK_SUCCESS && mem->bo) {
       kk_destroy_bo(dev, mem->bo);
       mem->bo = NULL;
+   } else if (result == VK_SUCCESS &&
+              dev->residency_set.priority_handle && mem->priority > 0.5f) {
+      /* A lazy allocation can receive its priority before it owns a BO. */
+      kk_device_memory_set_priority(dev, mem, mem->priority);
    }
    return result;
 }

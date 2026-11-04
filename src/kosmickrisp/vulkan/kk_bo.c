@@ -77,8 +77,10 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
       goto fail_map;
    }
 
+   uint64_t gpu = mtl_buffer_get_gpu_address(map);
+   uint64_t native_size_B = align_gpu_base ? mtl_heap_get_size(handle) : size_B;
    if (align_gpu_base) {
-      heap_offset_B = -mtl_buffer_get_gpu_address(map) & UINT64_C(65535);
+      heap_offset_B = -gpu & UINT64_C(65535);
       if (heap_offset_B && private_heap &&
           mtl_device_supports_placement_sparse(dev->mtl_handle)) {
          /* A half-page prefix cannot be expressed by sparse heap-page binds.
@@ -87,7 +89,7 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
                            "Native sparse-compatible heap base is not 64 KiB aligned");
          goto fail_alloc;
       }
-      if (heap_offset_B > mtl_heap_get_size(handle) - size_B) {
+      if (heap_offset_B > native_size_B - size_B) {
          if (size_B > UINT64_MAX - 65536) {
             result = vk_error(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY);
             goto fail_alloc;
@@ -107,7 +109,9 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
             result = vk_error(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY);
             goto fail_map;
          }
-         heap_offset_B = -mtl_buffer_get_gpu_address(map) & UINT64_C(65535);
+         gpu = mtl_buffer_get_gpu_address(map);
+         native_size_B = mtl_heap_get_size(handle);
+         heap_offset_B = -gpu & UINT64_C(65535);
       }
       if (heap_offset_B) {
          mtl_buffer *logical_map =
@@ -118,20 +122,12 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
          }
          mtl_release(map);
          map = logical_map;
+         gpu = mtl_buffer_get_gpu_address(map);
       }
-      if (mtl_buffer_get_gpu_address(map) & UINT64_C(65535)) {
+      if (gpu & UINT64_C(65535)) {
          result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                            "Native logical allocation base is not 64 KiB aligned");
          goto fail_alloc;
-      }
-      if (heap_offset_B || mtl_heap_get_size(handle) != size_B) {
-         const struct mtl_heap_memory_region region = {
-            .offset_B = heap_offset_B, .size_B = size_B,
-         };
-         if (!mtl_heap_set_memory_region(handle, &region)) {
-            result = vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
-            goto fail_alloc;
-         }
       }
    }
 
@@ -146,7 +142,9 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
    bo->size_B = size_B;
    bo->heap_offset_B = heap_offset_B;
    bo->map = map;
-   bo->gpu = mtl_buffer_get_gpu_address(map);
+   bo->gpu = gpu;
+   bo->export_heap_region = align_gpu_base &&
+      (heap_offset_B || native_size_B != size_B);
    if ((options & (3u << MTL_RESOURCE_STORAGE_MODE_SHIFT)) ==
        MTL_RESOURCE_STORAGE_MODE_SHARED)
       bo->cpu = mtl_get_contents(map);
