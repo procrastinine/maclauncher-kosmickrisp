@@ -98,6 +98,9 @@ struct kk_device {
 
    bool has_queue;
    struct kk_queue queue;
+   simple_mtx_t blit_queue_mutex;
+   bool has_blit_queue;
+   struct kk_queue blit_queue;
 
    struct vk_meta_device meta;
 

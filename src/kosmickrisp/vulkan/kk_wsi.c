@@ -118,26 +118,40 @@ kk_encode_drawable_present(VkCommandBuffer vk_cmd, void *drawable)
    cmd->drawable = drawable;
 }
 
+static struct vk_queue *kk_get_blit_queue(VkDevice device);
+
 static void *
 kk_get_mtl4_command_queue(VkDevice device)
 {
-   VK_FROM_HANDLE(kk_device, dev, device);
-   if (dev->has_queue) {
-      return dev->queue.mtl_handle;
-   }
-
-   return NULL;
+   struct vk_queue *queue = kk_get_blit_queue(device);
+   return queue ? container_of(queue, struct kk_queue, vk)->mtl_handle : NULL;
 }
 
 static struct vk_queue *
 kk_get_blit_queue(VkDevice device)
 {
-   /* We only have one queue, so just return that one. */
    VK_FROM_HANDLE(kk_device, dev, device);
    if (!dev->has_queue)
       return NULL;
 
-   return &dev->queue.vk;
+   simple_mtx_lock(&dev->blit_queue_mutex);
+   if (!dev->has_blit_queue) {
+      const float priority = 1.0f;
+      const VkDeviceQueueCreateInfo info = {
+         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+         .queueFamilyIndex = 0,
+         .queueCount = 1,
+         .pQueuePriorities = &priority,
+      };
+      VkResult result = kk_queue_init(dev, &dev->blit_queue, &info, 0);
+      if (result == VK_SUCCESS)
+         dev->has_blit_queue = true;
+      else
+         mesa_logw("kk: failed to create the WSI queue");
+   }
+   struct vk_queue *queue = dev->has_blit_queue ? &dev->blit_queue.vk : &dev->queue.vk;
+   simple_mtx_unlock(&dev->blit_queue_mutex);
+   return queue;
 }
 
 VkResult

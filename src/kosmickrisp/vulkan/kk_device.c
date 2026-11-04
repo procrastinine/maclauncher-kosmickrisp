@@ -311,6 +311,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (dev->residency_set.handle == NULL)
       goto fail_compiler;
 
+   simple_mtx_init(&dev->blit_queue_mutex, mtx_plain);
    if (pCreateInfo->queueCreateInfoCount > 0) {
       result =
          kk_queue_init(dev, &dev->queue, &pCreateInfo->pQueueCreateInfos[0], 0);
@@ -358,6 +359,7 @@ fail_mem_cache:
       dev->has_queue = false;
    }
 fail_vab_memory:
+   simple_mtx_destroy(&dev->blit_queue_mutex);
    mtl_release(dev->residency_set.handle);
    simple_mtx_destroy(&dev->residency_set.mutex);
 fail_compiler:
@@ -383,6 +385,13 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    if (pdev->settings.gpu_capture_enabled) {
       mtl_stop_gpu_capture();
    }
+
+   /* Drain the private present queue before destroying shared meta state. */
+   if (dev->has_blit_queue) {
+      kk_queue_finish(dev, &dev->blit_queue);
+      dev->has_blit_queue = false;
+   }
+   simple_mtx_destroy(&dev->blit_queue_mutex);
 
    /* Meta first since it may destroy Vulkan objects */
    kk_device_finish_meta(dev);
