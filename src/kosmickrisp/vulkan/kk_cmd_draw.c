@@ -906,9 +906,10 @@ kk_polygon_expansion_active(struct kk_cmd_buffer *cmd)
    const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    const struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
    if (!vs || !vs->info.polygon_point) return false;
-   if (vs->info.poly_layer_replay &&
-       (cmd->state.gfx.poly_replay_active ||
-        (cmd->state.gfx.render.layered_bc && cmd->state.gfx.shader == vs)))
+   if (cmd->state.gfx.poly_retained.consume ||
+       (vs->info.poly_layer_replay &&
+        (cmd->state.gfx.poly_replay_active ||
+         (cmd->state.gfx.render.layered_bc && cmd->state.gfx.shader == vs))))
       return true;
    if (vs->info.polygon.cull_count) return true;
    bool controlled_bias = kk_depth_bias_control_active(
@@ -2986,6 +2987,7 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
          uint32_t layers[KK_MAX_MULTIVIEW_VIEW_COUNT] = {0};
          uint32_t count = 0;
          if (tess || vs->info.api_geometry || gfx->layer_replay.bind ||
+             gfx->poly_retained.consume ||
              (vs->info.poly_layer_replay && gfx->polygon_points)) {
             count = 1;
          } else {
@@ -3025,9 +3027,10 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       return;
    }
 
-   bool cached_views = vs->info.poly_layer_replay &&
-      (gfx->render.layered_bc || gfx->poly_retained.consume || kk_polygon_expansion_active(cmd) ||
-       !vs->info.polygon_native);
+   bool cached_views = gfx->poly_retained.consume ||
+      (vs->info.poly_layer_replay &&
+       (gfx->render.layered_bc || kk_polygon_expansion_active(cmd) ||
+        !vs->info.polygon_native));
    if (!(vs->info.api_geometry || cached_views ||
                       cmd->state.shaders[MESA_SHADER_TESS_EVAL])) {
       kk_draw_one_view(cmd, data);

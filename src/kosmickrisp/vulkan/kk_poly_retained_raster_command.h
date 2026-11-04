@@ -13,13 +13,21 @@ kk_poly_retained_begin(struct kk_cmd_buffer *cmd, struct kk_draw_command *draw,
 {
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    if (!draw || !consume || gfx->poly_retained.consume || !gfx->shader ||
-       !gfx->shader->info.poly_layer_replay ||
+       !gfx->shader->info.has_geometry || !gfx->shader->info.polygon_point ||
        gfx->shader->info.stage == MESA_SHADER_MESH)
       return VK_ERROR_FEATURE_NOT_PRESENT;
+   /* Eligibility names an actual prepared capture, independently of Layer.
+    * Publish its existing lazy executable before changing draw state. */
+   VkResult result = kk_shader_ensure_polygon(kk_cmd_buffer_device(cmd), gfx->shader);
+   if (result != VK_SUCCESS)
+      return result;
+   if (!gfx->shader->pipeline.gfx.polygon_capture ||
+       !kk_poly_retained_pipeline_descriptor(gfx->shader, gfx->conservative))
+      return VK_ERROR_INVALID_SHADER_NV;
    gfx->poly_retained = (struct kk_poly_retained_state){.consume = consume, .data = data};
    gfx->poly_replay_active = true;
-   /* The captured sibling and original native pair were compiled together.
-    * Select the former before uploads and producer preparation, once. */
+   /* Select the prepared captured executable before uploads and producer
+    * preparation. Reader replay never invokes an application stage. */
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    if (!gfx->polygon_points) {
       gfx->polygon_points = true;
