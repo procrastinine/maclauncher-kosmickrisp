@@ -471,6 +471,24 @@ kk_sparse_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer)
 }
 
 struct kk_sparse_view_descriptor
+kk_sparse_buffer_range_descriptor(const struct kk_buffer *buffer,
+                                 uint64_t first_byte, uint32_t coordinate_stride_B,
+                                 bool rgb32_scalar)
+{
+   if (!buffer || !buffer->sparse_residency)
+      return (struct kk_sparse_view_descriptor){0};
+   assert(first_byte <= buffer->vk.size);
+   assert(coordinate_stride_B && !(coordinate_stride_B & KK_TEXEL_BUFFER_RGB32));
+   assert(!rgb32_scalar || coordinate_stride_B == 4);
+   return (struct kk_sparse_view_descriptor){
+      .residency_address = mtl_buffer_get_gpu_address(buffer->sparse_residency) +
+                           first_byte / KK_SPARSE_PAGE_SIZE,
+      .byte_offset = first_byte % KK_SPARSE_PAGE_SIZE,
+      .texel_size = coordinate_stride_B | (rgb32_scalar ? KK_TEXEL_BUFFER_RGB32 : 0),
+   };
+}
+
+struct kk_sparse_view_descriptor
 kk_sparse_buffer_view_descriptor(struct kk_buffer_view *view)
 {
    struct kk_buffer *buffer = container_of(view->vk.buffer, struct kk_buffer, vk);
@@ -480,11 +498,7 @@ kk_sparse_buffer_view_descriptor(struct kk_buffer_view *view)
       util_format_get_blocksize(vk_format_to_pipe_format(view->vk.format));
    uint32_t prefix = view->texel_offset & ~KK_TEXEL_BUFFER_RGB32;
    uint64_t first = view->vk.offset - (uint64_t)prefix * texel_size;
-   return (struct kk_sparse_view_descriptor){
-      .residency_address = mtl_buffer_get_gpu_address(buffer->sparse_residency) + first / KK_SPARSE_PAGE_SIZE,
-      .byte_offset = first % KK_SPARSE_PAGE_SIZE,
-      .texel_size = texel_size | (rgb32 ? KK_TEXEL_BUFFER_RGB32 : 0),
-   };
+   return kk_sparse_buffer_range_descriptor(buffer, first, texel_size, rgb32);
 }
 
 static VkExtent3D

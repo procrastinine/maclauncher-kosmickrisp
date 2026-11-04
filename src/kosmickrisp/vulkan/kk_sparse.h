@@ -137,6 +137,13 @@ VkResult kk_sparse_prepare_pipeline(struct kk_device *dev, uint32_t modes);
 bool kk_sparse_submission_begin(struct kk_device *dev);
 void kk_sparse_submission_end(struct kk_device *dev);
 void kk_sparse_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer);
+/* Borrow the actual selected virtual source; this builder does not retain it.
+ * first_byte is buffer-relative. coordinate_stride_B advances one incoming
+ * residency coordinate; rgb32_scalar covers three consecutive 4-byte native
+ * components. Raw logical RGB32 uses stride 12 and rgb32_scalar=false. */
+struct kk_sparse_view_descriptor kk_sparse_buffer_range_descriptor(
+   const struct kk_buffer *buffer, uint64_t first_byte,
+   uint32_t coordinate_stride_B, bool rgb32_scalar);
 struct kk_sparse_view_descriptor kk_sparse_buffer_view_descriptor(
    struct kk_buffer_view *view);
 void kk_sparse_image_requirements(struct kk_image *image, uint32_t *count,
