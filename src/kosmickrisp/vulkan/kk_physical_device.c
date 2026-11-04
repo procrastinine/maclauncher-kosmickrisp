@@ -844,7 +844,7 @@ kk_get_device_properties(
       .maxComputeWorkGroupSize = {pdev->info.max_workgroup_count[0],
                                   pdev->info.max_workgroup_count[1],
                                   pdev->info.max_workgroup_count[2]},
-      .subPixelPrecisionBits = 8,
+      .subPixelPrecisionBits = KK_SUBPIXEL_PRECISION_BITS,
       .subTexelPrecisionBits = 8,
       .mipmapPrecisionBits = 8,
       .maxDrawIndexedIndexValue = UINT32_MAX,

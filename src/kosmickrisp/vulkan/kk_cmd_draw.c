@@ -891,8 +891,16 @@ kk_CmdBindVertexBuffers3KHR(VkCommandBuffer commandBuffer,
    }
 }
 
+/* Metal places a line endpoint that lies exactly on a pixel row boundary in
+ * the row above it, so a line drawn downward starts one row early and leaves
+ * out its last row. Default lines are non-strict and may deviate by one pixel
+ * (the Bresenham rules). Moving native default-mode lines one sub-pixel step
+ * down puts such an endpoint in the row below: a downward line covers its
+ * start through end rows, and an upward line takes the permitted one-pixel
+ * deviation. On the sub-pixel grid no other position changes rows.
+ */
 static void
-kk_flush_vp_state(struct kk_cmd_buffer *cmd)
+kk_flush_vp_state(struct kk_cmd_buffer *cmd, bool default_lines)
 {
    const struct vk_dynamic_graphics_state *dyn =
       &cmd->vk.dynamic_graphics_state;
@@ -920,7 +928,8 @@ kk_flush_vp_state(struct kk_cmd_buffer *cmd)
       const VkViewport *vp = &dyn->vp.viewports[i];
 
       viewports[i].originX = vp->x;
-      viewports[i].originY = vp->y + vp->height;
+      viewports[i].originY = vp->y + vp->height +
+         (default_lines ? 1.0 / (1u << KK_SUBPIXEL_PRECISION_BITS) : 0.0);
       viewports[i].width = vp->width;
       viewports[i].height = -vp->height;
 
@@ -1836,8 +1845,10 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
    if (!(gfx->rasterizer_discard || gfx->is_cull_front_and_back) &&
        (flush_scissors || IS_DIRTY(VP_VIEWPORT_COUNT) || IS_DIRTY(VP_VIEWPORTS) ||
         IS_DIRTY(VP_SCISSOR_COUNT) || IS_DIRTY(VP_SCISSORS) ||
-        IS_DIRTY(RS_DEPTH_CLAMP_ENABLE) || IS_DIRTY(RS_DEPTH_CLIP_ENABLE)))
-      kk_flush_vp_state(cmd);
+        IS_DIRTY(RS_DEPTH_CLAMP_ENABLE) || IS_DIRTY(RS_DEPTH_CLIP_ENABLE) ||
+        IS_DIRTY(RS_LINE_MODE)))
+      kk_flush_vp_state(cmd, dyn->rs.line.mode == VK_LINE_RASTERIZATION_MODE_DEFAULT &&
+                             u_reduced_prim(kk_rast_prim(cmd)) == MESA_PRIM_LINES);
 
    if (IS_DIRTY(VP_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE)) {
       desc->root.draw.clip_z_coeff =

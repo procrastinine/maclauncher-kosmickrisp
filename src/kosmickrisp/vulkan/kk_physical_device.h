@@ -22,6 +22,9 @@
 
 #include <sys/types.h>
 
+/* VkPhysicalDeviceLimits::subPixelPrecisionBits */
+#define KK_SUBPIXEL_PRECISION_BITS 8
+
 struct kk_instance;
 struct kk_physical_device;
 

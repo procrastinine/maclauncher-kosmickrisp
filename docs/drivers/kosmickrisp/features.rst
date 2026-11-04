@@ -112,10 +112,11 @@ Feature table
        ``stippledBresenhamLines``, ``bresenhamLines``),
        ``extendedDynamicState3LineRasterizationMode``,
        ``extendedDynamicState3LineStippleEnable``
-     - Native with emulated cases: thin solid lines are native. Wide, smooth
-       and stippled lines are expanded into triangles with coverage and dash
-       generation. Stippled rectangular and stippled smooth lines are not
-       provided.
+     - Native with emulated cases: thin solid lines are native. Thin lines in
+       the default mode are drawn 1/256 pixel lower, so an endpoint on a pixel
+       row boundary belongs to the row below it. Wide, smooth and stippled
+       lines are expanded into triangles with coverage and dash generation.
+       Stippled rectangular and stippled smooth lines are not provided.
      - None listed; thin lines native on all families.
      - ``line_expansion``
      - On
