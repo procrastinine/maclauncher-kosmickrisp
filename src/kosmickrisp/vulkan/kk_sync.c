@@ -10,8 +10,80 @@
 #include "kk_interlock_submit.h"
 #include "kk_perf.h"
 #include "vk_common_entrypoints.h"
+#include "util/timespec.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
+
+/* Loss may be reported synchronously while a signal publisher owns its
+ * nonrecursive publish_mutex. Use the independent publication-wait lock. */
+static void
+kk_sync_notify_lost(struct vk_device *device)
+{
+   struct kk_device *dev = container_of(device, struct kk_device, vk);
+   mtx_lock(&dev->pending_mutex);
+   u_cnd_monotonic_broadcast(&dev->pending_cond);
+   mtx_unlock(&dev->pending_mutex);
+}
+
+VkResult
+kk_sync_device_init(struct kk_device *dev)
+{
+   if (mtx_init(&dev->pending_mutex, mtx_plain) != thrd_success)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   if (u_cnd_monotonic_init(&dev->pending_cond) != thrd_success) {
+      mtx_destroy(&dev->pending_mutex);
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+   dev->vk.notify_lost = kk_sync_notify_lost;
+   return VK_SUCCESS;
+}
+
+void
+kk_sync_device_finish(struct kk_device *dev)
+{
+   dev->vk.notify_lost = NULL;
+   u_cnd_monotonic_destroy(&dev->pending_cond);
+   mtx_destroy(&dev->pending_mutex);
+}
+
+struct kk_pending_wait {
+   struct list_head link;
+   struct kk_device *device;
+};
+
+VkResult
+kk_sync_pending_init(struct kk_sync_timeline *sync)
+{
+   if (mtx_init(&sync->pending_mutex, mtx_plain) != thrd_success)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   list_inithead(&sync->pending_waits);
+   p_atomic_set(&sync->pending_waiters, 0);
+   return VK_SUCCESS;
+}
+
+void
+kk_sync_pending_finish(struct kk_sync_timeline *sync)
+{
+   assert(list_is_empty(&sync->pending_waits));
+   mtx_destroy(&sync->pending_mutex);
+}
+
+void
+kk_sync_notify_pending(struct kk_sync_timeline *sync)
+{
+   mtx_lock(&sync->pending_mutex);
+   struct kk_device *previous = NULL;
+   list_for_each_entry(struct kk_pending_wait, wait, &sync->pending_waits, link) {
+      struct kk_device *dev = wait->device;
+      if (dev == previous)
+         continue;
+      mtx_lock(&dev->pending_mutex);
+      u_cnd_monotonic_broadcast(&dev->pending_cond);
+      mtx_unlock(&dev->pending_mutex);
+      previous = dev;
+   }
+   mtx_unlock(&sync->pending_mutex);
+}
 
 static VkResult
 kk_timeline_init(struct vk_device *device, struct vk_sync *sync,
@@ -23,8 +95,14 @@ kk_timeline_init(struct vk_device *device, struct vk_sync *sync,
    struct kk_device *dev = container_of(device, struct kk_device, vk);
    if (mtx_init(&timeline->publish_mutex, mtx_plain) != thrd_success)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
+   VkResult result = kk_sync_pending_init(timeline);
+   if (result != VK_SUCCESS) {
+      mtx_destroy(&timeline->publish_mutex);
+      return result;
+   }
    timeline->mtl_handle = mtl_new_shared_event(dev->mtl_handle);
    if (!timeline->mtl_handle) {
+      kk_sync_pending_finish(timeline);
       mtx_destroy(&timeline->publish_mutex);
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
    }
@@ -42,6 +120,7 @@ kk_timeline_finish(struct vk_device *device, struct vk_sync *sync)
       container_of(sync, struct kk_sync_timeline, base);
    kk_interlock_sync_finish(container_of(device, struct kk_device, vk), timeline);
    mtl_release(timeline->mtl_handle);
+   kk_sync_pending_finish(timeline);
    mtx_destroy(&timeline->publish_mutex);
 }
 
@@ -79,16 +158,56 @@ kk_timeline_wait_impl(struct vk_device *device, struct vk_sync *sync,
       container_of(sync, struct kk_sync_timeline, base);
 
    if (wait_flags & VK_SYNC_WAIT_PENDING) {
+      if (vk_device_is_lost(device))
+         return VK_ERROR_DEVICE_LOST;
+      if (p_atomic_read(&timeline->pending_value) >= wait_value)
+         return VK_SUCCESS;
+
+      struct kk_device *dev = container_of(device, struct kk_device, vk);
+      struct kk_pending_wait wait = {.device = dev};
+      struct timespec deadline;
+      timespec_from_nsec(&deadline, abs_timeout_ns);
+      /* Match the publisher's sync -> device lock order. The stack entry
+       * keeps notification independent of an opaque payload's creator. */
+      mtx_lock(&timeline->pending_mutex);
+      mtx_lock(&dev->pending_mutex);
+      list_addtail(&wait.link, &timeline->pending_waits);
+      p_atomic_inc(&timeline->pending_waiters);
+      mtx_unlock(&timeline->pending_mutex);
+      VkResult result;
       for (;;) {
-         if (vk_device_is_lost(device))
-            return VK_ERROR_DEVICE_LOST;
-         if (p_atomic_read(&timeline->pending_value) >= wait_value)
-            return VK_SUCCESS;
+         if (vk_device_is_lost(device)) {
+            result = VK_ERROR_DEVICE_LOST;
+            break;
+         }
+         if (p_atomic_read(&timeline->pending_value) >= wait_value) {
+            result = VK_SUCCESS;
+            break;
+         }
          if (abs_timeout_ns != OS_TIMEOUT_INFINITE &&
-             os_time_get_nano() >= abs_timeout_ns)
-            return VK_TIMEOUT;
-         os_time_sleep(1000);
+             os_time_get_nano() >= abs_timeout_ns) {
+            result = VK_TIMEOUT;
+            break;
+         }
+         /* Register before rechecking the atomic predicate. A publisher either
+          * sees this waiter and takes the same lock, or its value is already
+          * visible here. Spurious wakes retain the original absolute deadline. */
+         int ret = abs_timeout_ns == OS_TIMEOUT_INFINITE
+            ? u_cnd_monotonic_wait(&dev->pending_cond, &dev->pending_mutex)
+            : u_cnd_monotonic_timedwait(&dev->pending_cond, &dev->pending_mutex,
+                                        &deadline);
+         if (ret != thrd_success && ret != thrd_timedout) {
+            result = vk_errorf(device, VK_ERROR_UNKNOWN,
+                               "Pending publication condition wait failed");
+            break;
+         }
       }
+      mtx_unlock(&dev->pending_mutex);
+      mtx_lock(&timeline->pending_mutex);
+      list_del(&wait.link);
+      p_atomic_dec(&timeline->pending_waiters);
+      mtx_unlock(&timeline->pending_mutex);
+      return result;
    }
 
    /* abs_timeout_ns is the point in time when we should stop waiting, not the

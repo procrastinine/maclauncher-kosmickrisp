@@ -338,6 +338,10 @@ struct vk_device {
    struct vk_pipeline_robustness_state robustness_state;
 
    FILE *debug_output;
+
+   /* Optional host-wait wakeup after loss has been published. The callback
+    * must not reenter loss reporting or wait for native GPU completion. */
+   void (*notify_lost)(struct vk_device *device);
 };
 
 VK_DEFINE_HANDLE_CASTS(vk_device, base, VkDevice,

@@ -440,6 +440,8 @@ _vk_device_set_lost(struct vk_device *device,
 
    p_atomic_inc(&device->_lost.lost);
    device->_lost.reported = true;
+   if (device->notify_lost)
+      device->notify_lost(device);
 
    va_list ap;
    va_start(ap, msg);

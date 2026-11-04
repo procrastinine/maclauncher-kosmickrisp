@@ -85,6 +85,7 @@ payload_unref(struct kk_opaque_payload *payload)
    if (!payload || !p_atomic_dec_zero(&payload->references))
       return;
    mtl_release(payload->native.mtl_handle);
+   kk_sync_pending_finish(&payload->native);
    mtx_destroy(&payload->native.publish_mutex);
    free(payload);
 }
@@ -170,8 +171,15 @@ opaque_init(struct vk_device *device, struct vk_sync *base,
       free(payload);
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    }
+   VkResult result = kk_sync_pending_init(&payload->native);
+   if (result != VK_SUCCESS) {
+      mtx_destroy(&payload->native.publish_mutex);
+      free(payload);
+      return result;
+   }
    payload->native.mtl_handle = mtl_new_shared_event(dev->mtl_handle);
    if (!payload->native.mtl_handle) {
+      kk_sync_pending_finish(&payload->native);
       mtx_destroy(&payload->native.publish_mutex);
       free(payload);
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -185,7 +193,7 @@ opaque_init(struct vk_device *device, struct vk_sync *base,
    payload->next_signal = initial_value ? 2 : 1;
    payload->next_wait = 1;
    mtl_shared_event_set_signaled_value(payload->native.mtl_handle, initial_value);
-   VkResult result = alias_attach(device, to_opaque(base), payload);
+   result = alias_attach(device, to_opaque(base), payload);
    payload_unref(payload);
    return result;
 }

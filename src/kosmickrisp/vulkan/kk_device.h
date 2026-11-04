@@ -19,6 +19,7 @@
 #include "libkk_shaders.h"
 
 #include "util/u_dynarray.h"
+#include "util/cnd_monotonic.h"
 
 #include "vk_device.h"
 #include "vk_meta.h"
@@ -167,6 +168,11 @@ struct kk_device {
    struct kk_interlock_registry *interlock_registry;
    util_once_flag heap_init_once;
    struct kk_frame_capture *frame_capture;
+
+   /* Host publication waits only; independent of native signal completion
+    * and the per-sync publisher lifetime mutex. */
+   mtx_t pending_mutex;
+   struct u_cnd_monotonic pending_cond;
 };
 
 VK_DEFINE_HANDLE_CASTS(kk_device, vk.base, VkDevice, VK_OBJECT_TYPE_DEVICE)

@@ -11,6 +11,7 @@
 #include "kosmickrisp-rt-commands.h"
 #include "kk_perf.h"
 #include "kk_opaque_sync.h"
+#include "kk_sync.h"
 #include "kk_frame_capture.h"
 #include "util/disk_cache.h"
 #ifdef ENABLE_SHADER_CACHE
@@ -805,6 +806,10 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_alloc;
 
+   result = kk_sync_device_init(dev);
+   if (result != VK_SUCCESS)
+      goto fail_device;
+
    if (dev->vk.enabled_features.rayTracingPipeline) {
       kk_rt_descriptor_dispatch_init(dev);
       kk_rt_heap_dispatch_init(dev);
@@ -978,6 +983,8 @@ fail_init:
    kk_vrs_device_finish(dev);
    kk_descriptor_heap_finish(dev);
    kk_perf_destroy(dev->perf);
+   kk_sync_device_finish(dev);
+fail_device:
    vk_device_finish(&dev->vk);
 fail_alloc:
    vk_free(&dev->vk.alloc, dev);
@@ -1058,6 +1065,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    kk_perf_destroy(dev->perf);
    kk_device_fault_finish(dev);
+   kk_sync_device_finish(dev);
    vk_device_finish(&dev->vk);
 
    vk_free(&dev->vk.alloc, dev);
