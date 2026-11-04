@@ -251,8 +251,17 @@ job_record_bind(struct kk_async_compute *job)
 }
 
 #ifdef ENABLE_SHADER_CACHE
-/* Stores the loaded set plus every first bind recorded so far; returns how
- * many recorded slots the stored set covers. */
+/* Every device of the application stores into one journal, and a load takes
+ * its newest record. A store therefore merges the newest stored set and is
+ * written past its sequence: a long-lived device storing after short-lived
+ * devices (one per test case, say) advanced the journal must not publish an
+ * older record, and a short-lived device must not publish a newer record
+ * without the long-lived device's binds. Stores run on bound-set threads
+ * only; within the process they are serialized. */
+static pthread_mutex_t bound_store_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Stores the newest stored set, the loaded set and every first bind recorded
+ * so far; returns how many recorded slots the stored set covers. */
 static unsigned
 bound_store(struct kk_async_compute_owner *owner, struct disk_cache *disk,
             const cache_key parent, uint64_t *sequence, unsigned stored)
@@ -261,20 +270,33 @@ bound_store(struct kk_async_compute_owner *owner, struct disk_cache *disk,
    unsigned ready = stored;
    while (ready < count && p_atomic_read(&owner->bound[ready].ready)) ++ready;
    if (ready == stored) return stored;
+   pthread_mutex_lock(&bound_store_mutex);
+   uint64_t newest = 0;
+   size_t size = 0;
+   void *current = kk_compiler_index_load(disk, parent, &newest, &size);
+   unsigned current_count = size % sizeof(struct kk_bound_id) ? 0 :
+      MIN2(size / sizeof(struct kk_bound_id), KK_BOUND_LIMIT);
    const struct kk_predicted *loaded = owner->predicted;
    unsigned previous = loaded ? loaded->count : 0;
-   struct kk_bound_id *ids = malloc((ready + previous) * sizeof(*ids));
-   if (!ids) return stored;
-   for (unsigned i = 0; i < ready; ++i) ids[i] = owner->bound[i].id;
-   if (previous) memcpy(ids + ready, loaded->ids, previous * sizeof(*ids));
-   unsigned total = ready + previous, unique = 0;
-   qsort(ids, total, sizeof(*ids), bound_id_compare);
-   for (unsigned i = 0; i < total; ++i)
-      if (!unique || bound_id_compare(&ids[unique - 1], &ids[i])) ids[unique++] = ids[i];
-   unique = MIN2(unique, KK_BOUND_LIMIT);
-   kk_compiler_index_store(disk, parent, sequence, ids, unique * sizeof(*ids));
-   free(ids);
-   return ready;
+   unsigned total = ready + previous + current_count, unique = 0;
+   struct kk_bound_id *ids = malloc(total * sizeof(*ids));
+   bool complete = false;
+   if (ids) {
+      for (unsigned i = 0; i < ready; ++i) ids[i] = owner->bound[i].id;
+      if (previous) memcpy(ids + ready, loaded->ids, previous * sizeof(*ids));
+      if (current_count) memcpy(ids + ready + previous, current, current_count * sizeof(*ids));
+      qsort(ids, total, sizeof(*ids), bound_id_compare);
+      for (unsigned i = 0; i < total; ++i)
+         if (!unique || bound_id_compare(&ids[unique - 1], &ids[i])) ids[unique++] = ids[i];
+      unique = MIN2(unique, KK_BOUND_LIMIT);
+      *sequence = MAX2(*sequence, newest);
+      complete = kk_compiler_index_store(disk, parent, sequence, ids, unique * sizeof(*ids));
+      free(ids);
+   }
+   free(current);
+   pthread_mutex_unlock(&bound_store_mutex);
+   /* An incomplete store is retried at the next period. */
+   return complete ? ready : stored;
 }
 
 /* Builds submitted before the set was published start on a predicted-build

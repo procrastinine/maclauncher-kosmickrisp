@@ -525,6 +525,20 @@ deferred compute pipeline of a device allocates the device's 64-bit atomic
 lock table, which builds of translated shaders that use 64-bit atomic locks
 share.
 
+Deferred builds wait while demand compiles run. A device records the first
+bind of each deferred build by a digest of the build's source: the compiler
+input of a pipeline translated in its build, otherwise its MSL. A thread of
+the device stores the recorded digests in the Mesa disk cache, in the Metal
+archive namespace, every two seconds and at device destruction, at most 4096
+digests. Each store merges the newest stored set, so devices that an
+application creates and destroys while another device runs add to one set
+instead of replacing it. At device creation the thread loads the set. A
+deferred build whose source is in it is predicted: it starts at once on two
+utility-priority workers that demand compiles do not pause, so it is usually
+ready before its first bind. Builds queued before the set loads move to those
+workers when it loads, unless they have started. A new
+``KK_DEBUG_MSL_SALT`` value starts an empty set.
+
 Library reuse
 =============
 
