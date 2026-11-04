@@ -825,6 +825,8 @@ kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
 
    if (grid.mode == KK_GRID_DIRECT)
       mtl_dispatch_threads(encoder, grid.size, local_size);
+   else if (grid.mode == KK_GRID_INDIRECT_LOCAL)
+      mtl_dispatch_threads_with_indirect_buffer(encoder, grid.addr);
    else
       mtl_dispatch_threadgroups_with_indirect_buffer(encoder, grid.addr,
                                                      local_size);
