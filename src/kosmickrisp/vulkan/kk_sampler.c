@@ -169,7 +169,12 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
 
    bool custom_border = dev->vk.enabled_features.customBorderColors &&
                         uses_border(pCreateInfo) &&
-                        is_border_color_custom(pCreateInfo->borderColor);
+                        is_border_color_custom(pCreateInfo->borderColor) &&
+                        /* RGBA4 needs the colour workaround. Shadow
+                         * instructions must retain the native depth border. */
+                        !(pCreateInfo->compareEnable &&
+                          pCreateInfo->borderColor ==
+                             VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK);
 
    struct mtl_sampler_packed packed =
       pack_sampler_info(pdev, pCreateInfo, custom_border);
