@@ -193,14 +193,9 @@ kk_interlock_program_intrinsic(nir_builder *b, nir_intrinsic_instr *intr,
 }
 
 static void
-kk_interlock_wrap_program_nir(nir_shader *shader,
-                               struct kk_interlock_program_nir *s)
+kk_interlock_program_init_nir(nir_shader *shader,
+   struct kk_interlock_program_nir *s)
 {
-   assert(shader->info.stage == MESA_SHADER_FRAGMENT);
-   NIR_PASS(_, shader, nir_inline_functions);
-   nir_remove_non_entrypoints(shader);
-   nir_function_impl *program = nir_shader_get_entrypoint(shader);
-   assert(program->function->num_params == 0);
    s->coord = kk_interlock_program_var(shader, glsl_vec4_type(), "virtual_coord");
    s->sample = kk_interlock_program_var(shader, glsl_uint_type(), "virtual_sample");
    s->sample_position = kk_interlock_program_var(shader,
@@ -216,6 +211,12 @@ kk_interlock_wrap_program_nir(nir_shader *shader,
 
    s->outputs = kk_interlock_program_var(shader,
       glsl_array_type(glsl_uvec4_type(), 2 * FRAG_RESULT_MAX, 0), "virtual_outputs");
+}
+
+static void
+kk_interlock_program_lower_nir(nir_shader *shader,
+   struct kk_interlock_program_nir *s, nir_function_impl *program)
+{
    nir_shader_intrinsics_pass(shader, kk_interlock_output_nir,
                                nir_metadata_none, s);
    if (s->lower_inputs)
@@ -235,6 +236,34 @@ kk_interlock_wrap_program_nir(nir_shader *shader,
                                nir_metadata_none, s);
    if (s->prepare_sample_outputs)
       s->prepare_sample_outputs(shader, s);
+
+}
+
+static void
+kk_interlock_program_finish_nir(nir_shader *shader)
+{
+   shader->info.fs.uses_sample_shading = false;
+   shader->info.fs.early_fragment_tests = false;
+   shader->info.fs.post_depth_coverage = false;
+   NIR_PASS(_, shader, nir_lower_returns);
+   NIR_PASS(_, shader, nir_inline_functions);
+   nir_remove_non_entrypoints(shader);
+   NIR_PASS(_, shader, nir_lower_global_vars_to_local);
+   NIR_PASS(_, shader, nir_lower_vars_to_ssa);
+   nir_shader_gather_info(shader, nir_shader_get_entrypoint(shader));
+}
+
+static void
+kk_interlock_wrap_program_nir(nir_shader *shader,
+                               struct kk_interlock_program_nir *s)
+{
+   assert(shader->info.stage == MESA_SHADER_FRAGMENT);
+   NIR_PASS(_, shader, nir_inline_functions);
+   nir_remove_non_entrypoints(shader);
+   nir_function_impl *program = nir_shader_get_entrypoint(shader);
+   assert(program->function->num_params == 0);
+   kk_interlock_program_init_nir(shader, s);
+   kk_interlock_program_lower_nir(shader, s, program);
 
    program->function->is_entrypoint = false;
    nir_function *entry = nir_function_create(shader, "kk_interlock_transaction");
@@ -272,15 +301,7 @@ kk_interlock_wrap_program_nir(nir_shader *shader,
       NIR_MEMORY_RELEASE, nir_var_mem_global | nir_var_image | nir_var_mem_ssbo);
    nir_end_invocation_interlock(&b);
 
-   shader->info.fs.uses_sample_shading = false;
-   shader->info.fs.early_fragment_tests = false;
-   shader->info.fs.post_depth_coverage = false;
-   NIR_PASS(_, shader, nir_lower_returns);
-   NIR_PASS(_, shader, nir_inline_functions);
-   nir_remove_non_entrypoints(shader);
-   NIR_PASS(_, shader, nir_lower_global_vars_to_local);
-   NIR_PASS(_, shader, nir_lower_vars_to_ssa);
-   nir_shader_gather_info(shader, nir_shader_get_entrypoint(shader));
+   kk_interlock_program_finish_nir(shader);
 }
 
 #endif

@@ -367,16 +367,17 @@ kk_interlock_framebuffer_sample_outputs(nir_builder *b,
    nir_call(b, s->sample_function);
 }
 
-static void
-kk_interlock_framebuffer_commit_sample(nir_builder *b,
-   struct kk_interlock_program_nir *program)
+static nir_def *
+kk_interlock_framebuffer_commit_sample_impl(nir_builder *b,
+   struct kk_interlock_program_nir *program, bool lower_outputs, bool count_samples)
 {
    struct kk_interlock_framebuffer_nir *s = program->data;
    struct kk_interlock_transaction_nir *t = &s->transaction;
    nir_def *params = t->render->parameters(b, t->render->data);
    nir_def *sample = nir_load_var(b, program->sample);
    nir_def *bit = nir_ishl(b, nir_imm_int(b, 1), sample);
-   kk_interlock_framebuffer_sample_outputs(b, program);
+   if (lower_outputs)
+      kk_interlock_framebuffer_sample_outputs(b, program);
    nir_def *mask = nir_channel(b,
       kk_interlock_load_output(b, program, FRAG_RESULT_SAMPLE_MASK, 0), 0);
    nir_def *coverage = nir_iand(b, kk_interlock_program_live(b, program),
@@ -394,7 +395,8 @@ kk_interlock_framebuffer_commit_sample(nir_builder *b,
       }
       coverage = kk_interlock_framebuffer_test_sample(b, program, sample,
          coverage, depth, s->stencil_export);
-      kk_interlock_count_samples(b, params, nir_b2i32(b, coverage));
+      if (count_samples)
+         kk_interlock_count_samples(b, params, nir_b2i32(b, coverage));
    }
    nir_push_if(b, coverage);
    nir_def *index = kk_interlock_shadow_sample(b, t, params, sample);
@@ -416,6 +418,14 @@ kk_interlock_framebuffer_commit_sample(nir_builder *b,
       nir_store_global(b, value, address, .align_mul = 16);
    }
    nir_pop_if(b, NULL);
+   return coverage;
+}
+
+static void
+kk_interlock_framebuffer_commit_sample(nir_builder *b,
+   struct kk_interlock_program_nir *program)
+{
+   kk_interlock_framebuffer_commit_sample_impl(b, program, true, true);
 }
 
 static void
@@ -450,7 +460,7 @@ kk_interlock_framebuffer_end_sample(nir_builder *b,
 }
 
 static void
-kk_interlock_wrap_framebuffer(nir_shader *shader,
+kk_interlock_framebuffer_init_nir(nir_shader *shader,
    struct kk_interlock_framebuffer_nir *s)
 {
    s->outputs = shader->info.outputs_written;
@@ -470,6 +480,13 @@ kk_interlock_wrap_framebuffer(nir_shader *shader,
          }
       }
    }
+}
+
+static void
+kk_interlock_wrap_framebuffer(nir_shader *shader,
+   struct kk_interlock_framebuffer_nir *s)
+{
+   kk_interlock_framebuffer_init_nir(shader, s);
    s->tested_coverage = kk_interlock_program_var(shader,
       glsl_uint_type(), "tested_coverage");
    s->sample_outputs = kk_interlock_program_var(shader,
