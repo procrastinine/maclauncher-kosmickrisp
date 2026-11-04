@@ -32,6 +32,9 @@ struct kk_async_compute {
    struct kk_async_compute_owner *owner;
    VkResult (*compile)(struct kk_device *, struct kk_shader *);
    void *task;
+   /* Borrowed from shader: destruction joins task retirement before freeing
+    * the shader or its embedded cache object. An owning reference here would
+    * prevent that destruction from cancelling an otherwise unneeded job. */
    struct vk_pipeline_cache_object *cache_object;
    struct blob cache_blob;
    struct kk_perf_compile_scope scope;
@@ -63,6 +66,7 @@ job_result(struct kk_async_compute *job, VkResult result)
    /* Release publication covers the native handle and all function metadata. */
    p_atomic_set(&job->ready, true);
    struct vk_pipeline_cache_object *object = job->cache_object;
+   job->cache_object = NULL;
    pthread_mutex_unlock(&job->mutex);
    if (job->dev->perf) {
       job->scope.cancelled = p_atomic_read(&job->cancel_requested);
@@ -157,8 +161,6 @@ kk_async_compute_drain(struct kk_device *dev)
    pthread_mutex_unlock(&owner->mutex);
    while (job) {
       struct kk_async_compute *next = job->next;
-      if (job->cache_object)
-         vk_pipeline_cache_object_unref(&dev->vk, job->cache_object);
       job_unref(job);
       job = next;
    }
@@ -267,7 +269,7 @@ kk_async_compute_serializable(struct kk_shader *shader)
    if (!ready && !job->cache_object && !job->dev->vk.disable_internal_cache) {
       struct vk_pipeline_cache_object *object = &shader->vk.pipeline.cache_obj;
       if (object->ops && object->key_data)
-         job->cache_object = vk_pipeline_cache_object_ref(object);
+         job->cache_object = object;
    }
    bool success = ready && job->result == VK_SUCCESS;
    pthread_mutex_unlock(&job->mutex);
