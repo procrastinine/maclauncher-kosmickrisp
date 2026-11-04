@@ -412,21 +412,21 @@ Built-in compute kernels compile when an operation first needs them. Each
 kernel shares one completed pipeline within the Vulkan device. Native compile
 failures propagate to command recording; a failed kernel is not dispatched.
 
-Graphics library reuse
-======================
+Library reuse
+=============
 
-Each cached compiler retains up to 128 graphics libraries and 8 MiB of
-UTF-16 shader source. Reuse requires identical generated source, including
-any diagnostic salt, and identical language version, math mode and floating
-point function options. Concurrent identical requests share the synchronous
-native compilation. Completed entries are evicted in insertion order; active
-entries are retained until compilation finishes. Requests outside the bounds
-compile without retention. Failed compilations are retried by later requests.
+Each cached compiler retains up to 1024 Metal libraries and 64 MiB of shader
+source characters. Reuse requires identical generated source, including any
+diagnostic salt, and identical language version, math mode and floating point
+function options. Concurrent identical requests share the synchronous native
+compilation. Completed entries are evicted in insertion order; active entries
+are retained until compilation finishes. Requests outside the bounds compile
+without retention. Failed compilations are retried by later requests.
 
-This in-memory reuse applies to vertex and fragment libraries. Function
-constants and render pipeline state remain part of pipeline creation.
-Single-library compute compilation and persistent archive identities do not
-use it.
+This in-memory reuse applies to every library the driver compiles: vertex and
+fragment pairs, compute, mesh, ray tracing and internal kernels. Function
+constants and pipeline state remain part of pipeline creation. Persistent
+archive identities do not use it.
 
 Native pipeline archives
 ========================
@@ -453,6 +453,15 @@ The journal stores one row for each hint and piece pair. Journals with a single
 row per hint, and legacy journals containing only piece references, remain
 readable; pipelines without a recorded piece compile once and are recorded by
 the next checkpoint.
+
+A checkpoint holds the capture gate exclusively while Metal serializes the
+captured pipelines. On macOS 27 and later, pipeline creation that finds the
+gate held compiles on a second compiler without a serializer instead of
+waiting. Each such descriptor is created again on the capturing compiler after
+the checkpoint, where the native binaries are already compiled, so the next
+checkpoint records it. Remaining descriptors are recorded before the final
+checkpoint at device teardown. On earlier systems, pipeline creation waits for
+the checkpoint.
 
 Metal workarounds
 *****************
