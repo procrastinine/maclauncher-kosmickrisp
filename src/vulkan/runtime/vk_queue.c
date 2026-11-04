@@ -673,13 +673,14 @@ vk_queue_submit_final(struct vk_queue *queue,
 
       simple_mtx_lock(&real_queue->lock);
       real_queue->driver_submit_active = submit;
-      result = real_queue->driver_submit(real_queue, submit);
+      result = p_atomic_read_relaxed(&real_queue->driver_submit)(
+         real_queue, submit);
       real_queue->driver_submit_active = NULL;
       simple_mtx_unlock(&real_queue->lock);
    } else {
       vk_queue_lock(queue);
       queue->driver_submit_active = submit;
-      result = queue->driver_submit(queue, submit);
+      result = p_atomic_read_relaxed(&queue->driver_submit)(queue, submit);
       queue->driver_submit_active = NULL;
       vk_queue_unlock(queue);
    }

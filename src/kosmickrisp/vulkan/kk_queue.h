@@ -21,6 +21,8 @@
 struct kk_queue {
    struct vk_queue vk;
    struct mtl_command_queue *mtl_handle;
+   /* Immutable setup-selected callback, retained by actual-use adapters. */
+   VkResult (*native_submit)(struct vk_queue *, struct vk_queue_submit *);
    struct kk_interlock_queue *interlock_submission;
 
    /* Resources for command buffer re-recording. These are required for
@@ -54,6 +56,7 @@ VkResult kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
                        uint32_t index_in_family);
 
 void kk_queue_finish(struct kk_device *dev, struct kk_queue *queue);
+
 
 /* Register after CPU preflight, before capture. ready is a fresh timeline
  * point, initially zero, completed at value 1. Success transfers one off-thread

@@ -8,6 +8,7 @@
 #include "kk_device.h"
 #include "kosmickrisp-rt-commands.h"
 #include "kk_perf.h"
+#include "kk_opaque_sync.h"
 #include "kk_frame_capture.h"
 #include "util/disk_cache.h"
 #ifdef ENABLE_SHADER_CACHE
@@ -770,6 +771,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    /* Metal cannot order a queue behind work that has not been encoded.
     * Start Mesa's submit worker only when a pending dependency requires it. */
    vk_device_enable_threaded_submit(&dev->vk);
+   kk_opaque_sync_init_device(dev);
 
    /* The original extension has no feature structure. Normalize its
     * request to the promoted feature used by the shader cache/lowering. */

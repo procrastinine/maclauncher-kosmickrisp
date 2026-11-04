@@ -29,6 +29,8 @@ enum kk_experimental {
    /* Using allowGPUOptimizedContents for this format causes
     * vkCmdCopyImage() tests in CTS to fail, but it is otherwise usable */
    KK_EXPERIMENTAL_OPTIMIZE_E5B9G9R9 = 1ull << 2,
+   /* Private same-process opaque semaphore path; properties stay unchanged. */
+   KK_EXPERIMENTAL_OPAQUE_SYNC = 1ull << 3,
 };
 
 extern enum kk_experimental kk_mesa_experimental_flags;

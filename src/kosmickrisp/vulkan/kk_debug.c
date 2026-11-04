@@ -24,6 +24,7 @@ const struct debug_named_value experimental_flags[] = {
    {"custom_border", KK_EXPERIMENTAL_CUSTOM_BORDER},
    {"image_view_min_lod", KK_EXPERIMENTAL_IMAGE_VIEW_MIN_LOD},
    {"optimize_e5b9g9r9", KK_EXPERIMENTAL_OPTIMIZE_E5B9G9R9},
+   {"opaque_sync", KK_EXPERIMENTAL_OPAQUE_SYNC},
    {NULL, 0},
 };
 

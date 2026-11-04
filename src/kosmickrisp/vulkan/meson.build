@@ -145,6 +145,7 @@ kk_files = files(
   'kk_conservative_fs_prolog.c',
   'kk_sync.h',
   'kk_sync.c',
+  'kk_opaque_sync.c',
   'kk_wsi.h',
   'kk_wsi.c',
 )

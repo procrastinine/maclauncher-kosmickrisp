@@ -508,7 +508,8 @@ kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
    mtl_command_queue_add_residency_set(queue->mtl_handle,
                                        dev->residency_set.handle);
 
-   queue->vk.driver_submit = kk_queue_submit;
+   queue->native_submit = kk_queue_submit;
+   queue->vk.driver_submit = queue->native_submit;
 
    return VK_SUCCESS;
 }
