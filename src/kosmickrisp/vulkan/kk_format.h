@@ -53,6 +53,7 @@ struct kk_va_format {
    } texel_buffer;
    uint8_t is_native  : 1;
    uint8_t gpu_family : 5;
+   uint8_t texel_buffer_only : 1;
 };
 
 static inline bool

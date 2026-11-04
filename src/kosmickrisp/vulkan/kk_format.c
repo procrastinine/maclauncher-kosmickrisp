@@ -190,24 +190,24 @@ kk_host_texel_buffer_format(VkFormat format)
 #define MTL_FMT_NONE(width) \
    .bit_widths = width, .filter = 0u, .write = 0u, .color = 0u, .blend = 0u, \
    .msaa = 0u, .resolve = 0u, .sparse = 0u, .atomic = 0u
-#define MTL_FMT_NATIVE_FAMILY(format, capabilities, texel_buffer_capabilities, family) \
+#define MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(format, capabilities, texel_buffer_capabilities, family) \
    [PIPE_FORMAT_##format] = {.mtl_pixel_format = MTL_PIXEL_FORMAT_##format, \
       MTL_SWIZZLE_IDENTITY, capabilities, texel_buffer_capabilities, \
-      .is_native = 1, .gpu_family = family}
+      .is_native = 1, .gpu_family = family, .texel_buffer_only = 1}
 
 /* TODO_KOSMICKRISP: This is based on the Apple 7 GPU family, dynamically add
  * newly supported capabilities on newer gens. */
 static const struct kk_va_format kk_vf_formats[] = {
    /* Apple11 adds native read-only RGB8 and RGB16 texel buffers. */
-   MTL_FMT_NATIVE_FAMILY(R8G8B8_UNORM, MTL_FMT_NONE(24), MTL_FMT_TB_R, 11),
-   MTL_FMT_NATIVE_FAMILY(R8G8B8_SNORM, MTL_FMT_NONE(24), MTL_FMT_TB_R, 11),
-   MTL_FMT_NATIVE_FAMILY(R8G8B8_UINT, MTL_FMT_NONE(24), MTL_FMT_TB_R, 11),
-   MTL_FMT_NATIVE_FAMILY(R8G8B8_SINT, MTL_FMT_NONE(24), MTL_FMT_TB_R, 11),
-   MTL_FMT_NATIVE_FAMILY(R16G16B16_UNORM, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
-   MTL_FMT_NATIVE_FAMILY(R16G16B16_SNORM, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
-   MTL_FMT_NATIVE_FAMILY(R16G16B16_UINT, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
-   MTL_FMT_NATIVE_FAMILY(R16G16B16_SINT, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
-   MTL_FMT_NATIVE_FAMILY(R16G16B16_FLOAT, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
+   MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(R8G8B8_UNORM, MTL_FMT_NONE(24), MTL_FMT_TB_R, 11),
+   MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(R8G8B8_SNORM, MTL_FMT_NONE(24), MTL_FMT_TB_R, 11),
+   MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(R8G8B8_UINT, MTL_FMT_NONE(24), MTL_FMT_TB_R, 11),
+   MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(R8G8B8_SINT, MTL_FMT_NONE(24), MTL_FMT_TB_R, 11),
+   MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(R16G16B16_UNORM, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
+   MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(R16G16B16_SNORM, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
+   MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(R16G16B16_UINT, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
+   MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(R16G16B16_SINT, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
+   MTL_FMT_TEXEL_BUFFER_NATIVE_FAMILY(R16G16B16_FLOAT, MTL_FMT_NONE(48), MTL_FMT_TB_R, 11),
 
    // 8-bit formats
    MTL_FMT_NATIVE(R8_UNORM, MTL_FMT_ALL_NO_ATOMIC(8), MTL_FMT_TB_ALL),

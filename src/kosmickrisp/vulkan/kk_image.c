@@ -81,7 +81,7 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
    }
    /* Some formats require a minimum GPU family, or may be texel buffer only */
    if (pdev->info.gpu_apple_family < va_format->gpu_family ||
-       va_format->image_feats == 0)
+       va_format->texel_buffer_only)
       return 0;
 
    // Textures can at least be sampled
