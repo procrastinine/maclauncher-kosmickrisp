@@ -2756,6 +2756,13 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_CONSERVATIVE_MODE))
       kk_cmd_buffer_update_conservative(cmd, vs);
    bool point = kk_polygon_expansion_active(cmd);
+   if (vs->lazy_polygon && (point || gfx->layer_replay.bind || gfx->poly_retained.consume)) {
+      VkResult result = kk_shader_ensure_polygon(kk_cmd_buffer_device(cmd), vs);
+      if (result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&cmd->vk, result);
+         goto layered_bc_done;
+      }
+   }
    if (point && BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE))
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORTS);
    if (point != gfx->polygon_points) {

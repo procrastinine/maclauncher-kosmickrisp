@@ -1244,7 +1244,11 @@ kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
                     size_t data_size)
 {
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
-   struct kk_precompiled_shader *prog = &dev->precompiled_cache.shaders[idx];
+   struct kk_precompiled_shader *prog = kk_device_get_precompiled(dev, idx);
+   if (unlikely(!prog)) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INVALID_SHADER_NV);
+      return;
+   }
 
    mtl_compute_encoder *encoder = cs_get_compute(cmd);
    mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,

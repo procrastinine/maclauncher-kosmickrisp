@@ -22,6 +22,19 @@ enum kk_perf_metric {
    KK_PERF_METRIC_COUNT
 };
 
+/* Diagnostic scopes are stack-owned and nest on the calling thread. They do
+ * not include work performed on another thread (for example Metal callbacks). */
+struct kk_perf_compile_scope {
+   struct kk_perf_compile_scope *previous;
+   struct kk_perf *perf;
+   uint64_t id, start;
+   uint64_t ns[KK_PERF_METRIC_COUNT];
+   uint64_t count[KK_PERF_METRIC_COUNT];
+};
+void kk_perf_compile_begin(struct kk_perf *, struct kk_perf_compile_scope *);
+void kk_perf_compile_end(struct kk_perf_compile_scope *, bool binary, int result);
+void kk_perf_msl_source(struct kk_perf *, unsigned stage, const char *source);
+
 struct kk_perf *kk_perf_create(void);
 void kk_perf_destroy(struct kk_perf *perf);
 uint64_t kk_perf_now(void);

@@ -262,6 +262,7 @@ struct kk_shader {
    struct kk_vrs_source *vrs_source;
 
    struct kk_attachment_pipelines *attachment_pipelines;
+   struct kk_lazy_polygon *lazy_polygon;
    mtl_compute_pipeline_state *dgc_compute;
    struct kk_pipeline_handles pipeline;
    struct kk_pipeline_handles *mesh_virtual;
@@ -368,6 +369,8 @@ bool kk_nir_lower_image_view_min_lod(nir_shader *nir);
 VkResult kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
                                const VkAllocationCallbacks *alloc,
                                struct kk_shader **shader_out);
+
+VkResult kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader);
 
 mtl_render_pipeline_state *kk_attachment_pipeline(struct kk_cmd_buffer *cmd,
    struct kk_shader *shader, unsigned kind);

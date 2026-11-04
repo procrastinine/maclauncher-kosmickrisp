@@ -1105,6 +1105,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
          kk_mesh_release_pipeline(dev, shader, shader->mesh_sliced[i],
             i ? KK_PIPELINE_MESH_VIRTUAL_SLICED : KK_PIPELINE_MESH_SLICED);
    free(shader->mesh_fragment);
+   free(shader->lazy_polygon);
    kk_attachment_pipelines_finish(shader);
    kk_interlock_pipeline_finish(shader->interlock_pipeline);
    kk_interlock_shader_finish(shader->interlock);
@@ -1357,6 +1358,8 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    data->code = KK_PERF_CALL(dev, KK_PERF_MSL,
       nir_to_msl(nir, &translate_options));
    data->requires_msl41 = translate_options.requires_msl41;
+   if (unlikely(dev->perf))
+      kk_perf_msl_source(dev->perf, nir->info.stage, data->code);
    const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
 
    /* We need to steal so it doesn't get destroyed with the nir. Needs to happen
@@ -2338,21 +2341,21 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
 
 #include "kk_mesh_pipeline.h"
 
-static VkResult
-kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
-{
-   struct kk_physical_device *pdev = kk_device_physical(device);
+struct kk_lazy_polygon {
+   util_once_flag once;
+   VkResult result;
+   struct kk_device *device;
+   struct kk_shader *shader;
+};
 
-   VkResult result = VK_SUCCESS;
+static VkResult
+kk_compile_graphics_prerender(struct kk_device *device, struct kk_shader *vs,
+                             mesa_shader_stage *raster_stage)
+{
    struct kk_pipeline_handles *pipe = &vs->pipeline;
    mesa_shader_stage vs_stage = MESA_SHADER_VERTEX;
-
-   /* When tessellation or geometry shaders are present, the pair that will be
-    * used for the Metal render pipeline will be the fragment shader and the
-    * previous stage. This means that any shader before that needs to be a
-    * compute pipeline to be launched before the render pipeline. */
+   VkResult result;
    uint32_t stages_bits = vs->info.vs.additional_stages_bits;
-   if (!polygon) {
    pipe->gfx.pre_render_count = util_bitcount(stages_bits) - 1u;
    for (uint32_t i = 0u; i < pipe->gfx.pre_render_count; ++i) {
       uint32_t local_thread_size = vs_stage == MESA_SHADER_TESS_CTRL
@@ -2383,6 +2386,22 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
          i ? 1 : KK_POLY_WG_SIZE, &pipe->gfx.gs_aux[i]);
       if (result != VK_SUCCESS) return result;
    }
+   *raster_stage = vs_stage;
+   return VK_SUCCESS;
+}
+
+static VkResult
+kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
+{
+   struct kk_physical_device *pdev = kk_device_physical(device);
+   VkResult result = VK_SUCCESS;
+   struct kk_pipeline_handles *pipe = &vs->pipeline;
+   mesa_shader_stage vs_stage = MESA_SHADER_VERTEX;
+   /* A complete native pair does not consume the optional compute siblings. */
+   if (!polygon && !vs->lazy_polygon) {
+      result = kk_compile_graphics_prerender(device, vs, &vs_stage);
+      if (result != VK_SUCCESS)
+         return result;
    }
    const struct msl_compile_data *vs_data = polygon ? &vs->polygon[2 * polygon] :
       vs->info.polygon_native ? &vs->polygon_native : &vs->msl_data[vs_stage];
@@ -2442,18 +2461,15 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
 }
 
 static VkResult
-kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
+kk_compile_polygon_siblings(struct kk_device *device, struct kk_shader *vs)
 {
-   if (vs->info.conservative) {
-      VkResult result = kk_device_init_conservative_lib(device);
+   VkResult result = VK_SUCCESS;
+   if (vs->lazy_polygon) {
+      mesa_shader_stage unused;
+      result = kk_compile_graphics_prerender(device, vs, &unused);
       if (result != VK_SUCCESS)
          return result;
    }
-   if (vs->info.stage == MESA_SHADER_MESH)
-      return kk_compile_mesh_pipeline(device, vs, false, &vs->pipeline);
-   VkResult result = kk_compile_graphics_pipeline_native(device, vs, false);
-   if (result != VK_SUCCESS || !(vs->info.polygon_point || vs->info.poly_layer_replay || vs->info.interlock_envelope))
-      return result == VK_SUCCESS ? kk_dgc_eager_graphics_pipeline(device, vs) : result;
    if (vs->info.polygon_point || vs->info.interlock_envelope) {
    result = kk_compile_compute_pipeline(device, &vs->polygon[0], KK_POLY_WG_SIZE,
                                         &vs->pipeline.gfx.polygon_capture);
@@ -2470,7 +2486,60 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
       result = kk_compile_graphics_pipeline_native(device, vs, 2);
    if (result == VK_SUCCESS && vs->interlock)
       result = kk_interlock_pipeline_compile(device, vs);
-   return result == VK_SUCCESS ? kk_dgc_eager_graphics_pipeline(device, vs) : result;
+   return result;
+}
+
+static void
+kk_compile_polygon_once(const void *data)
+{
+   struct kk_lazy_polygon *lazy = (struct kk_lazy_polygon *)data;
+   lazy->result = kk_compile_polygon_siblings(lazy->device, lazy->shader);
+}
+
+VkResult
+kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader)
+{
+   struct kk_lazy_polygon *lazy = shader->lazy_polygon;
+   if (!lazy)
+      return VK_SUCCESS;
+   assert(lazy->device == dev);
+   util_call_once_data(&lazy->once, kk_compile_polygon_once, lazy);
+   return lazy->result;
+}
+
+static VkResult
+kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
+{
+   if (vs->info.conservative) {
+      VkResult result = kk_device_init_conservative_lib(device);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+   if (vs->info.stage == MESA_SHADER_MESH)
+      return kk_compile_mesh_pipeline(device, vs, false, &vs->pipeline);
+   const bool siblings = vs->info.polygon_point || vs->info.poly_layer_replay ||
+                         vs->info.interlock_envelope;
+   /* Other routes consume pre-render programs as part of their ordinary
+    * pipeline. Keep their existing readiness and indirect-link contracts. */
+   if (siblings && vs->info.polygon_native && !vs->interlock &&
+       !vs->info.interlock_envelope && !vs->info.indirect_bindable &&
+       !device->vk.enabled_features.deviceGeneratedCommands) {
+      vs->lazy_polygon = calloc(1, sizeof(*vs->lazy_polygon));
+      if (!vs->lazy_polygon)
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      vs->lazy_polygon->once = (util_once_flag)UTIL_ONCE_FLAG_INIT;
+      vs->lazy_polygon->device = device;
+      vs->lazy_polygon->shader = vs;
+   }
+   VkResult result = kk_compile_graphics_pipeline_native(device, vs, false);
+   if (result != VK_SUCCESS)
+      return result;
+   if (siblings && !vs->lazy_polygon) {
+      result = kk_compile_polygon_siblings(device, vs);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+   return kk_dgc_eager_graphics_pipeline(device, vs);
 }
 
 static bool

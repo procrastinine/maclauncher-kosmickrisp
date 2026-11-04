@@ -95,10 +95,8 @@ struct kk_sampler_heap {
 
 struct kk_precompiled_cache {
    struct kk_precompiled_shader shaders[LIBKK_NUM_PROGRAMS];
-   util_once_flag conservative_once;
-   VkResult conservative_result;
-   util_once_flag primitives_generated_once;
-   VkResult primitives_generated_result;
+   util_once_flag once[LIBKK_NUM_PROGRAMS];
+   VkResult result[LIBKK_NUM_PROGRAMS];
 };
 
 struct kk_device {
@@ -171,6 +169,10 @@ void kk_device_finish_meta(struct kk_device *dev);
 VkResult kk_device_init_lib(struct kk_device *dev);
 VkResult kk_device_init_conservative_lib(struct kk_device *dev);
 VkResult kk_device_init_primitives_generated_lib(struct kk_device *dev);
+VkResult kk_device_ensure_precompiled_shader(struct kk_device *dev,
+                                          enum libkk_program idx);
+struct kk_precompiled_shader *kk_device_get_precompiled(struct kk_device *dev,
+                                                       enum libkk_program idx);
 void kk_device_finish_lib(struct kk_device *dev);
 void kk_depth_stencil_cache_finish(struct kk_device *dev);
 

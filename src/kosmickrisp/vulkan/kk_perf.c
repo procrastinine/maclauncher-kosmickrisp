@@ -2,6 +2,7 @@
 #include "kk_perf.h"
 #include "kk_device.h"
 #include "util/os_time.h"
+#include "util/mesa-blake3.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <math.h>
@@ -17,7 +18,8 @@ struct kk_perf_gpu_stat {
 struct kk_perf {
    pthread_mutex_t mutex;
    FILE *log;
-   bool close_log;
+   bool close_log, compile_details;
+   uint64_t compile_sequence;
    uint64_t created, interval_start, frames, interval_frames;
    uint64_t frame_interval, time_interval, sequence;
    int64_t pending, submit_pending, compiler_active;
@@ -58,6 +60,8 @@ kk_perf_create(void)
    struct kk_perf *p = calloc(1, sizeof(*p));
    if (!p) return NULL;
    if (pthread_mutex_init(&p->mutex, NULL)) { free(p); return NULL; }
+   const char *details = getenv("KK_PERF_TRACKING_COMPILES");
+   p->compile_details = details && *details && strcmp(details, "0") && strcmp(details, "false");
    p->log = stderr;
    const char *path = getenv("KK_PERF_TRACKING_LOG");
    if (path && *path) {
@@ -116,12 +120,73 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
    p->compiler_peak = p->compiler_active > 0 ? p->compiler_active : 0;
 }
 
+static _Thread_local struct kk_perf_compile_scope *compile_scope;
+
+void
+kk_perf_compile_begin(struct kk_perf *p, struct kk_perf_compile_scope *scope)
+{
+   memset(scope, 0, sizeof(*scope));
+   if (!p->compile_details) return;
+   scope->perf = p;
+   scope->previous = compile_scope;
+   pthread_mutex_lock(&p->mutex);
+   scope->id = ++p->compile_sequence;
+   pthread_mutex_unlock(&p->mutex);
+   scope->start = kk_perf_now();
+   compile_scope = scope;
+}
+
+void
+kk_perf_compile_end(struct kk_perf_compile_scope *scope, bool binary, int result)
+{
+   struct kk_perf *p = scope->perf;
+   if (!p) return;
+   uint64_t end = kk_perf_now();
+   compile_scope = scope->previous;
+   pthread_mutex_lock(&p->mutex);
+   fprintf(p->log, "{\"kk_compile\":1,\"device\":\"%p\",\"id\":%"PRIu64
+           ",\"origin\":\"%s\",\"result\":%d,\"start_ms\":%.6f,\"wall_ms\":%.6f,"
+           "\"cpu_spans\":\"nested_caller_thread_wall_ms\",\"metrics\":{",
+           (void *)p, scope->id, binary ? "deserialize" : "compile", result,
+           (scope->start-p->created)/1e6, (end-scope->start)/1e6);
+   for (unsigned i = 0; i < KK_PERF_METRIC_COUNT; i++)
+      fprintf(p->log, "%s\"%s\":{\"count\":%"PRIu64",\"total_ms\":%.6f}",
+              i ? "," : "", names[i], scope->count[i], scope->ns[i]/1e6);
+   fprintf(p->log, "}}\n");
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+}
+
+void
+kk_perf_msl_source(struct kk_perf *p, unsigned stage, const char *source)
+{
+   if (!p->compile_details || !source) return;
+   size_t bytes = strlen(source);
+   blake3_hash hash;
+   _mesa_blake3_compute(source, bytes, hash);
+   char hex[BLAKE3_OUT_LEN * 2 + 1];
+   for (unsigned i = 0; i < BLAKE3_OUT_LEN; i++)
+      snprintf(hex + 2*i, 3, "%02x", hash[i]);
+   struct kk_perf_compile_scope *scope = compile_scope;
+   pthread_mutex_lock(&p->mutex);
+   fprintf(p->log, "{\"kk_compile_msl\":1,\"device\":\"%p\",\"id\":%"PRIu64
+           ",\"stage\":%u,\"bytes\":%zu,\"blake3\":\"%s\"}\n",
+           (void *)p, scope && scope->perf == p ? scope->id : 0,
+           stage, bytes, hex);
+   pthread_mutex_unlock(&p->mutex);
+}
+
 void
 kk_perf_add(struct kk_perf *p, enum kk_perf_metric metric, uint64_t ns)
 {
    pthread_mutex_lock(&p->mutex);
    struct kk_perf_stat *s = &p->stat[metric];
    s->count++; s->total += ns;
+   for (struct kk_perf_compile_scope *scope = compile_scope; scope; scope = scope->previous) {
+      if (scope->perf != p) continue;
+      scope->count[metric]++;
+      scope->ns[metric] += ns;
+   }
    if (ns > s->max) s->max = ns;
    pthread_mutex_unlock(&p->mutex);
 }

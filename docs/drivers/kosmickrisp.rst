@@ -84,6 +84,31 @@ KosmicKrisp specific environment variables:
   - ``image_view_min_lod`` to advertise ``VK_EXT_image_view_min_lod``.
   - ``optimize_e5r9g9b9`` to use allowGPUOptimizedContents with this format, which causes some CTS tests for vkCmdCopyImage() to fail
 
+Compile timing
+**************
+
+Built-in compute kernels compile when an operation first needs them. Each
+kernel shares one completed pipeline within the Vulkan device. Native compile
+failures propagate to command recording; a failed kernel is not dispatched.
+
+``KK_PERF_TRACKING=1`` enables interval timing records. The output is newline
+separated JSON on stderr, or in the file selected by ``KK_PERF_TRACKING_LOG``.
+``KK_PERF_TRACKING_INTERVAL_MS`` and ``KK_PERF_TRACKING_INTERVAL_FRAMES``
+select the reporting intervals; their defaults are 1000 ms and 60 frames.
+
+With tracking enabled, ``KK_PERF_TRACKING_COMPILES=1`` adds individual shader
+compile callback records and generated MSL source sizes and BLAKE3 hashes.
+Each source record carries its enclosing callback ID and shader stage. ID zero
+indicates emission outside a tracked callback. A callback can compile several
+linked stages. Binary deserialization callbacks have a separate origin label;
+they can still perform Metal compilation. Source records cover newly generated
+MSL, including generated helper stages, and do not dump shader contents.
+
+Stage durations are nested elapsed wall times on the calling thread. They do
+not measure compiler-service CPU usage or attribute asynchronous callback work
+on other threads. Diagnostic logging, source hashing and timing add overhead.
+Tracking is disabled by default.
+
 Metal workarounds
 *****************
 

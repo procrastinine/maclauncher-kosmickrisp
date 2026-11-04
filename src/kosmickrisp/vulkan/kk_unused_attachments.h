@@ -109,6 +109,14 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
    bool indirect, VkResult *error, uint32_t samples,
    enum mtl_primitive_topology_class topology)
 {
+   if (shader->lazy_polygon &&
+       (kind == KK_PIPELINE_POLYGON || kind == KK_PIPELINE_CONSERVATIVE)) {
+      VkResult result = kk_shader_ensure_polygon(device, shader);
+      if (result != VK_SUCCESS) {
+         *error = result;
+         return NULL;
+      }
+   }
    mtl_render_pipeline_state *original = kind == KK_PIPELINE_MESH_VIRTUAL
       ? shader->mesh_virtual->gfx.render : kind == KK_PIPELINE_MESH_CAPTURE
       ? shader->mesh_retained[0]->gfx.render : kind == KK_PIPELINE_MESH_READER
@@ -117,6 +125,10 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
       ? shader->mesh_sliced[1]->gfx.render : kind == KK_PIPELINE_CONSERVATIVE
       ? shader->pipeline.gfx.conservative_render : kind == KK_PIPELINE_POLYGON
       ? shader->pipeline.gfx.polygon_render : shader->pipeline.gfx.render;
+   if (!original) {
+      *error = VK_ERROR_INVALID_SHADER_NV;
+      return NULL;
+   }
    struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
    if (!cache) {
       if (indirect) *error = VK_ERROR_OUT_OF_HOST_MEMORY;
