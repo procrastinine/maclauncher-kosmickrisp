@@ -32,7 +32,7 @@ kk_writable_msaa_image_init(struct kk_device *dev, struct kk_image *image,
    physical.create_flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
    enum pipe_format format = vk_format_to_pipe_format(image->vk.format);
    kk_image_layout_init(dev, &physical, format, 1, 1,
-                         &storage->sample_layout, initial_layout);
+                         &storage->sample_layout, initial_layout, true);
    /* Each sample retains every logical layer. No dimensions or global array
     * limits are divided by the sample count.
     */

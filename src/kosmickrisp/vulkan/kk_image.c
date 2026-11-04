@@ -16,6 +16,7 @@
 #include "kk_entrypoints.h"
 #include "kk_format.h"
 #include "kk_physical_device.h"
+#include "kk_perf.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/vk_to_mtl_map.h"
@@ -674,6 +675,8 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
    }
    const struct vk_format_ycbcr_info *ycbcr_info =
       vk_format_get_ycbcr_info(pCreateInfo->format);
+   const bool requires_format_view =
+      writable_msaa || kk_image_requires_format_view(pCreateInfo);
    for (uint8_t plane = 0; plane < image->plane_count; plane++) {
       VkFormat format =
          ycbcr_info ? ycbcr_info->planes[plane].format : pCreateInfo->format;
@@ -683,7 +686,8 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
          ycbcr_info ? ycbcr_info->planes[plane].denominator_scales[1] : 1;
       kk_image_layout_init(dev, layout_image,
          vk_format_to_pipe_format(format), width_scale, height_scale,
-         &image->planes[plane].layout, pCreateInfo->initialLayout);
+         &image->planes[plane].layout, pCreateInfo->initialLayout,
+         requires_format_view);
    }
 
    if (image->vk.image_type == VK_IMAGE_TYPE_3D &&
@@ -767,6 +771,8 @@ kk_CreateImage(VkDevice _device, const VkImageCreateInfo *pCreateInfo,
       return result;
    }
 
+   if (unlikely(dev->perf != NULL))
+      kk_perf_image_create(dev->perf, image, pCreateInfo);
    *pImage = kk_image_to_handle(image);
 
    return VK_SUCCESS;
@@ -1073,6 +1079,8 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
    }
 
    *offset_B += plane_size_B;
+   if (unlikely(dev->perf != NULL))
+      kk_perf_image_bind(dev->perf, image, (uint32_t)(plane - image->planes));
 
    return VK_SUCCESS;
 }
@@ -1110,6 +1118,8 @@ kk_bind_image_memory(struct kk_device *dev, const VkBindImageMemoryInfo *info)
             ? mtl_retain(swapchain_plane->mtl_handle_array)
             : NULL;
       plane->addr = swapchain_plane->addr;
+      if (unlikely(dev->perf != NULL))
+         kk_perf_image_bind(dev->perf, image, 0);
 
       return VK_SUCCESS;
    }

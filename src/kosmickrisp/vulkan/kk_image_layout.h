@@ -217,10 +217,12 @@ bool kk_image_layout_can_optimize(const struct kk_physical_device *pdev,
                                   VkImageCreateFlags2KHR flags,
                                   enum pipe_format format);
 
+bool kk_image_requires_format_view(const struct VkImageCreateInfo *info);
+
 void kk_image_layout_init(const struct kk_device *dev,
                           const struct vk_image *image, enum pipe_format format,
                           const uint8_t width_scale, const uint8_t height_scale,
                           struct kk_image_layout *layout,
-                          VkImageLayout initial_layout);
+                          VkImageLayout initial_layout, bool requires_format_view);
 
 #endif /* KK_IMAGE_LAYOUT_H */

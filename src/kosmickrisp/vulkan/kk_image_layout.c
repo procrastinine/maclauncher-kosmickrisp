@@ -17,6 +17,8 @@
 #include "kosmickrisp/bridge/mtl_format.h"
 
 #include "util/format/u_format.h"
+#include "vk_format.h"
+#include "vk_util.h"
 
 static enum mtl_texture_type
 vk_image_to_mtl_texture_type(const struct vk_image *image,
@@ -41,9 +43,38 @@ vk_image_to_mtl_texture_type(const struct vk_image *image,
    }
 }
 
+bool
+kk_image_requires_format_view(const VkImageCreateInfo *info)
+{
+   const VkImageCreateFlags2KHR flags = vk_image_create_flags(info);
+   if (!(flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT))
+      return false;
+
+   /* Block aliases can require internal raw views beyond the application list. */
+   if (flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT)
+      return true;
+
+   const VkImageFormatListCreateInfo *formats =
+      vk_find_struct_const(info->pNext, IMAGE_FORMAT_LIST_CREATE_INFO);
+   if (!formats || !formats->viewFormatCount)
+      return true;
+
+   const enum pipe_format base = vk_format_to_pipe_format(info->format);
+   if (base == PIPE_FORMAT_NONE)
+      return true;
+   for (uint32_t i = 0; i < formats->viewFormatCount; ++i) {
+      const enum pipe_format view =
+         vk_format_to_pipe_format(formats->pViewFormats[i]);
+      if (view == PIPE_FORMAT_NONE ||
+          util_format_linear(view) != util_format_linear(base))
+         return true;
+   }
+   return false;
+}
+
 static enum mtl_texture_usage
 vk_image_usage_flags_to_mtl_texture_usage(VkImageUsageFlags2KHR usage_flags,
-                                          VkImageCreateFlags2KHR create_flags,
+                                          bool requires_format_view,
                                           bool supports_atomics)
 {
    enum mtl_texture_usage usage = 0u;
@@ -65,7 +96,7 @@ vk_image_usage_flags_to_mtl_texture_usage(VkImageUsageFlags2KHR usage_flags,
    if (usage_flags & render_attachment)
       usage |= MTL_TEXTURE_USAGE_RENDER_TARGET;
 
-   if (create_flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT)
+   if (requires_format_view)
       usage |= MTL_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
 
    if (supports_atomics) {
@@ -265,7 +296,7 @@ void
 kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
                      enum pipe_format format, const uint8_t width_scale,
                      const uint8_t height_scale, struct kk_image_layout *layout,
-                     VkImageLayout initial_layout)
+                     VkImageLayout initial_layout, bool requires_format_view)
 {
    const struct kk_physical_device *pdev = kk_device_physical(dev);
    const struct kk_va_format *supported_format = kk_get_va_format(format);
@@ -285,7 +316,7 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
       initial_layout) &&
       !(image->compr_flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(
-      usage, image->create_flags, supported_format->atomic);
+      usage, requires_format_view, supported_format->atomic);
    layout->block_texel_view_compatible =
       (image->create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) != 0;
    layout->format.pipe = kk_format_backing(format);

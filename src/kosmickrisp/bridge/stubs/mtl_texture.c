@@ -7,6 +7,12 @@
 #include "mtl_texture.h"
 
 /* Utils*/
+void
+mtl_texture_get_info(mtl_texture *texture, struct mtl_texture_info *info)
+{
+   *info = (struct mtl_texture_info){0};
+}
+
 uint64_t
 mtl_texture_get_gpu_resource_id(mtl_texture *texture)
 {

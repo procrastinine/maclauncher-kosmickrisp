@@ -14,6 +14,12 @@
 /* TODO_KOSMICKRISP Move this to bridge. */
 struct kk_view_layout;
 
+/* Read-only native state for opt-in diagnostics. */
+struct mtl_texture_info {
+   uint32_t format, usage, storage_mode, samples;
+};
+void mtl_texture_get_info(mtl_texture *texture, struct mtl_texture_info *info);
+
 /* Utils */
 uint64_t mtl_texture_get_gpu_resource_id(mtl_texture *texture);
 

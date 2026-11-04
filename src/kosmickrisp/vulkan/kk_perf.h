@@ -8,6 +8,8 @@
 struct kk_device;
 struct vk_device;
 struct kk_perf;
+struct kk_image;
+struct VkImageCreateInfo;
 enum kk_perf_metric {
    KK_PERF_RECORD, KK_PERF_REPLAY, KK_PERF_ENCODE, KK_PERF_SUBMIT,
    KK_PERF_ACQUIRE, KK_PERF_PRESENT, KK_PERF_PRESENT_WAIT,
@@ -60,6 +62,9 @@ void kk_perf_render_begin(struct kk_perf *, const void *encoder, void *descripto
 void kk_perf_render_stores(struct kk_perf *, const void *encoder,
                             const uint32_t stores[10]);
 void kk_perf_render_end(struct kk_perf *, const void *encoder);
+void kk_perf_image_create(struct kk_perf *, const struct kk_image *,
+                           const struct VkImageCreateInfo *);
+void kk_perf_image_bind(struct kk_perf *, const struct kk_image *, uint32_t plane);
 void kk_perf_init_dispatch(struct kk_device *);
 void kk_perf_init_wait_dispatch(struct kk_device *);
 void kk_perf_init_wsi_dispatch(struct kk_device *);

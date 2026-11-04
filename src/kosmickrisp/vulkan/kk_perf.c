@@ -4,6 +4,9 @@
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kk_device.h"
 #include "kk_cmd_buffer.h"
+#include "kk_image.h"
+#include "kosmickrisp/bridge/mtl_texture.h"
+#include "vk_util.h"
 #include "kosmickrisp/bridge/mtl_render_state.h"
 #include "util/os_time.h"
 #include "util/mesa-blake3.h"
@@ -227,6 +230,56 @@ kk_perf_pipeline_end(struct kk_perf_pipeline_scope *scope, VkResult result)
    fprintf(p->log, "{\"kk_pipeline_create\":1,\"device\":\"%p\",\"request_id\":%"PRIu64
       ",\"phase\":\"end\",\"kind\":\"%s\",\"thread\":%"PRIu64",\"count\":%u,\"result\":%d,\"wall_ms\":%.6f}\n",
       (void *)p, scope->id, scope->kind, scope->thread, scope->count, result, (end - scope->start) / 1e6);
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+}
+
+void
+kk_perf_image_create(struct kk_perf *p, const struct kk_image *image,
+                      const VkImageCreateInfo *info)
+{
+   const VkImageFormatListCreateInfo *formats =
+      vk_find_struct_const(info->pNext, IMAGE_FORMAT_LIST_CREATE_INFO);
+   const double start_ms = (kk_perf_now() - p->created) / 1e6;
+   pthread_mutex_lock(&p->mutex);
+   fprintf(p->log, "{\"kk_image\":1,\"event\":\"create\",\"device\":\"%p\","
+           "\"image\":\"%p\",\"start_ms\":%.6f,\"vk_format\":%u,"
+           "\"application_usage\":%"PRIu64",\"vk_usage\":%"PRIu64","
+           "\"vk_flags\":%"PRIu64",\"width\":%u,\"height\":%u,\"depth\":%u,"
+           "\"samples\":%u,\"format_list_present\":%s,\"view_formats\":[",
+           (void *)p, (const void *)image, start_ms, image->vk.format,
+           (uint64_t)image->application_usage, (uint64_t)image->vk.usage,
+           (uint64_t)image->vk.create_flags, image->vk.extent.width,
+           image->vk.extent.height, image->vk.extent.depth, image->vk.samples,
+           formats ? "true" : "false");
+   for (uint32_t i = 0; formats && i < formats->viewFormatCount; ++i)
+      fprintf(p->log, "%s%u", i ? "," : "", formats->pViewFormats[i]);
+   fprintf(p->log, "],\"planes\":[");
+   for (uint32_t i = 0; i < image->plane_count; ++i) {
+      const struct kk_image_layout *layout = &image->planes[i].layout;
+      fprintf(p->log, "%s{\"plane\":%u,\"metal_format\":%u,\"metal_usage\":%u,"
+              "\"optimized_layout\":%s,\"linear\":%s,\"storage_mode\":null}",
+              i ? "," : "", i, layout->format.mtl, (unsigned)layout->usage,
+              layout->optimized_layout ? "true" : "false",
+              layout->linear ? "true" : "false");
+   }
+   fprintf(p->log, "]}\n");
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+}
+
+void
+kk_perf_image_bind(struct kk_perf *p, const struct kk_image *image, uint32_t plane)
+{
+   struct mtl_texture_info info;
+   mtl_texture_get_info(image->planes[plane].mtl_handle, &info);
+   const double start_ms = (kk_perf_now() - p->created) / 1e6;
+   pthread_mutex_lock(&p->mutex);
+   fprintf(p->log, "{\"kk_image\":1,\"event\":\"bind\",\"device\":\"%p\","
+           "\"image\":\"%p\",\"plane\":%u,\"start_ms\":%.6f,"
+           "\"metal_format\":%u,\"metal_usage\":%u,\"storage_mode\":%u,"
+           "\"samples\":%u}\n", (void *)p, (const void *)image, plane, start_ms,
+           info.format, info.usage, info.storage_mode, info.samples);
    fflush(p->log);
    pthread_mutex_unlock(&p->mutex);
 }
