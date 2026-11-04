@@ -2024,7 +2024,7 @@ kk_compile_compute_with_library(struct kk_device *device, struct kk_shader *shad
 }
 
 static VkResult
-kk_compile_compute_pipeline_mode(struct kk_device *device, struct kk_shader *shader,
+kk_compile_compute_pipeline_mode_body(struct kk_device *device, struct kk_shader *shader,
                             const struct msl_compile_data *data,
                             uint32_t local_size_threads,
                             mtl_compute_pipeline_state **pipe, bool indirect,
@@ -2037,6 +2037,19 @@ kk_compile_compute_pipeline_mode(struct kk_device *device, struct kk_shader *sha
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
    return kk_compile_compute_with_library(device, shader, data, local_size_threads,
       pipe, indirect, retained_function, library);
+}
+
+static VkResult
+kk_compile_compute_pipeline_mode(struct kk_device *device, struct kk_shader *shader,
+                            const struct msl_compile_data *data,
+                            uint32_t local_size_threads,
+                            mtl_compute_pipeline_state **pipe, bool indirect,
+                            mtl_function_descriptor **retained_function)
+{
+   void *foreground = mtl_compiler_foreground_begin(device->mtl_compiler_handle);
+   VkResult result = kk_compile_compute_pipeline_mode_body(device, shader, data, local_size_threads, pipe, indirect, retained_function);
+   mtl_compiler_foreground_end(foreground);
+   return result;
 }
 
 static VkResult
@@ -2632,7 +2645,7 @@ kk_compile_graphics_prerender(struct kk_device *device, struct kk_shader *vs,
 }
 
 static VkResult
-kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
+kk_compile_graphics_pipeline_native_body(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
 {
    struct kk_physical_device *pdev = kk_device_physical(device);
    VkResult result = VK_SUCCESS;
@@ -2717,6 +2730,15 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    mtl_release(vertex_function);
    mtl_release(vertex_library);
 
+   return result;
+}
+
+static VkResult
+kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
+{
+   void *foreground = mtl_compiler_foreground_begin(device->mtl_compiler_handle);
+   VkResult result = kk_compile_graphics_pipeline_native_body(device, vs, polygon);
+   mtl_compiler_foreground_end(foreground);
    return result;
 }
 

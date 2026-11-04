@@ -77,6 +77,8 @@ void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),
    void (*cleanup)(void *));
 void mtl_compiler_task_wait(void *task);
+void *mtl_compiler_foreground_begin(mtl_compiler *compiler);
+void mtl_compiler_foreground_end(void *token);
 void mtl_compiler_store_shader(mtl_compiler *compiler, const void *key,
    size_t key_size, const void *bytes, size_t size);
 

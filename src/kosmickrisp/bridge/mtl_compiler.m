@@ -82,8 +82,55 @@ mtl_compiler_finish_cache(mtl_compiler *compiler)
    @autoreleasepool { [kk_compiler_archive(compiler) finish]; }
 }
 
-static char kk_compile_queue_association;
+@interface KKCompileQueue : NSOperationQueue {
+@public
+   unsigned foreground, urgent;
+}
+@end
+@implementation KKCompileQueue
+@end
+
+static char kk_compile_queue_association, kk_task_queue_association;
+static unsigned kk_background_pending;
+static _Thread_local bool kk_background_thread;
 static pthread_mutex_t kk_compile_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* A zero pending count avoids Objective-C lookup, locks and queue changes on
+ * ordinary synchronous compiles. Background callers never pause their queue. */
+void *
+mtl_compiler_foreground_begin(mtl_compiler *compiler)
+{
+   if (kk_background_thread || !__atomic_load_n(&kk_background_pending, __ATOMIC_ACQUIRE))
+      return NULL;
+   pthread_mutex_lock(&kk_compile_queue_lock);
+   KKCompileQueue *queue = objc_getAssociatedObject((id)compiler, &kk_compile_queue_association);
+   if (queue && queue.operationCount) {
+      ++queue->foreground;
+      if (!queue->urgent) queue.suspended = YES;
+   } else queue = nil;
+   pthread_mutex_unlock(&kk_compile_queue_lock);
+   return queue;
+}
+
+void
+mtl_compiler_foreground_end(void *token)
+{
+   if (!token) return;
+   KKCompileQueue *queue = (KKCompileQueue *)token;
+   pthread_mutex_lock(&kk_compile_queue_lock);
+   assert(queue->foreground);
+   if (!--queue->foreground) queue.suspended = NO;
+   pthread_mutex_unlock(&kk_compile_queue_lock);
+}
+
+static void
+kk_foreground_cleanup(void **token)
+{
+   mtl_compiler_foreground_end(*token);
+}
+#define KK_FOREGROUND_SCOPE(compiler) \
+   void *foreground __attribute__((cleanup(kk_foreground_cleanup))) = \
+      mtl_compiler_foreground_begin(compiler)
 
 /* Native miss scheduling only: cached deserialization stays on its original
  * synchronous path. Never retain caller create-info or feedback pointers. */
@@ -97,13 +144,13 @@ mtl_compiler_submit(mtl_compiler *compiler, void *data,
        * lock covers lookup/publication only, never a native compile or wait;
        * do not synchronize on Metal's compiler object/internal monitor. */
       pthread_mutex_lock(&kk_compile_queue_lock);
-      NSOperationQueue *queue = objc_getAssociatedObject((id)compiler,
+      KKCompileQueue *queue = objc_getAssociatedObject((id)compiler,
          &kk_compile_queue_association);
       if (!queue) {
-         queue = [NSOperationQueue new];
+         queue = [KKCompileQueue new];
          NSUInteger cores = MIN((NSUInteger)8, [NSProcessInfo processInfo].activeProcessorCount);
          queue.maxConcurrentOperationCount = cores > 1 ? cores - 1 : 1;
-         queue.qualityOfService = NSQualityOfServiceUserInitiated;
+         queue.qualityOfService = NSQualityOfServiceUtility;
          queue.name = @"kosmickrisp.compute";
          if (queue) {
             objc_setAssociatedObject((id)compiler, &kk_compile_queue_association,
@@ -118,12 +165,20 @@ mtl_compiler_submit(mtl_compiler *compiler, void *data,
        * still retire the final native compiler before publishing a new one. */
       NSBlockOperation *operation = [[NSBlockOperation blockOperationWithBlock:^{
          @autoreleasepool {
+            kk_background_thread = true;
             @try { execute(data); }
             @catch (NSException *exception) { failed(data, exception.reason.UTF8String); }
+            @finally { kk_background_thread = false; }
          }
       }] retain];
       if (!operation) return NULL;
-      operation.completionBlock = ^{ @autoreleasepool { cleanup(data); } };
+      operation.qualityOfService = NSQualityOfServiceUtility;
+      operation.completionBlock = ^{ @autoreleasepool {
+         cleanup(data);
+         __atomic_sub_fetch(&kk_background_pending, 1, __ATOMIC_RELEASE);
+      } };
+      objc_setAssociatedObject(operation, &kk_task_queue_association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      __atomic_add_fetch(&kk_background_pending, 1, __ATOMIC_RELEASE);
       [queue addOperation:operation];
       return operation;
    }
@@ -138,7 +193,22 @@ mtl_compiler_task_wait(void *task)
       /* Wait only for this pipeline. Promote a queued first-use request over
        * unrelated cold misses; running native jobs remain machine-bounded. */
       operation.queuePriority = NSOperationQueuePriorityVeryHigh;
+      KKCompileQueue *queue = objc_getAssociatedObject(operation, &kk_task_queue_association);
+      if (queue) {
+         pthread_mutex_lock(&kk_compile_queue_lock);
+         ++queue->urgent;
+         /* A selected first-use task is foreground work. It must not wait for
+          * an unrelated caller compile just because admission is suspended. */
+         queue.suspended = NO;
+         pthread_mutex_unlock(&kk_compile_queue_lock);
+      }
       [operation waitUntilFinished];
+      if (queue) {
+         pthread_mutex_lock(&kk_compile_queue_lock);
+         --queue->urgent;
+         if (queue->foreground && !queue->urgent) queue.suspended = YES;
+         pthread_mutex_unlock(&kk_compile_queue_lock);
+      }
    }
 }
 
@@ -179,6 +249,7 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
                 enum mtl_math_floating_point_functions math_fp_fns)
 {
    @autoreleasepool {
+      KK_FOREGROUND_SCOPE(compiler);
       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
       MTL4LibraryDescriptor *desc =
          mtl_library_descriptor(src, msl_version, math_mode, math_fp_fns);
@@ -268,6 +339,7 @@ mtl_new_library_pair(mtl_compiler *compiler,
                      mtl_library *libraries[2])
 {
    @autoreleasepool {
+      KK_FOREGROUND_SCOPE(compiler);
       struct mtl_library_pair pair = {
          .compiler = (id<MTL4Compiler>)compiler,
          .completion = dispatch_group_create(),
@@ -413,6 +485,7 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
                                uint64_t max_total_threads_per_threadgroup)
 {
    @autoreleasepool {
+      KK_FOREGROUND_SCOPE(compiler);
       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
 
       bool valid = true;
@@ -523,6 +596,7 @@ mtl_render_pipeline_state *
 mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *descriptor)
 {
    @autoreleasepool {
+      KK_FOREGROUND_SCOPE(compiler);
       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
       MTL4PipelineDescriptor *desc =
          kk_prepare_render_function_constants((MTL4PipelineDescriptor *)descriptor);
