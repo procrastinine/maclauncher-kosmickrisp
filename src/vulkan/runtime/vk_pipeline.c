@@ -46,6 +46,27 @@
 #include "shader_enums.h"
 
 #include "util/mesa-blake3.h"
+#include "util/os_time.h"
+
+#ifdef __APPLE__
+#include <time.h>
+#endif
+
+/* Time for creation feedback durations, in nanoseconds, used only for
+ * differences. On Apple platforms CLOCK_MONOTONIC, behind os_time_get_nano(),
+ * advances in whole microseconds, so a creation served from a cache can
+ * report zero nanoseconds; CLOCK_UPTIME_RAW advances in timebase ticks
+ * (about 42 ns on Apple silicon).
+ */
+static inline int64_t
+vk_pipeline_feedback_time(void)
+{
+#ifdef __APPLE__
+   return (int64_t)clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#else
+   return os_time_get_nano();
+#endif
+}
 
 struct vk_pipeline_binary {
    struct vk_object_base base;
@@ -1750,7 +1771,7 @@ vk_graphics_pipeline_compile_shaders(struct vk_device *device,
    }
 
    for (uint32_t p = 0; p < compile_info->part_count; p++) {
-      const int64_t part_start = os_time_get_nano();
+      const int64_t part_start = vk_pipeline_feedback_time();
 
       /* Don't try to re-compile any fast-link shaders */
       if (!compile_info->optimize &&
@@ -1833,7 +1854,7 @@ vk_graphics_pipeline_compile_shaders(struct vk_device *device,
 
          if (all_shaders_found) {
             /* Update duration to take cache lookups into account */
-            const int64_t part_end = os_time_get_nano();
+            const int64_t part_end = vk_pipeline_feedback_time();
             for (uint32_t i = compile_info->partition[p]; i < compile_info->partition[p + 1]; i++) {
                struct vk_pipeline_stage *stage = &compile_info->stages[i];
                stage_feedbacks[stage->stage].duration += part_end - part_start;
@@ -1930,7 +1951,7 @@ vk_graphics_pipeline_compile_shaders(struct vk_device *device,
       if (result != VK_SUCCESS)
          return result;
 
-      const int64_t part_end = os_time_get_nano();
+      const int64_t part_end = vk_pipeline_feedback_time();
       for (uint32_t i = compile_info->partition[p]; i < compile_info->partition[p + 1]; i++) {
          struct vk_pipeline_stage *stage = &compile_info->stages[i];
 
@@ -2195,7 +2216,7 @@ vk_create_graphics_pipeline(struct vk_device *device,
                             VkPipeline *pPipeline)
 {
    VK_FROM_HANDLE(vk_pipeline_layout, pipeline_layout, pCreateInfo->layout);
-   const int64_t pipeline_start = os_time_get_nano();
+   const int64_t pipeline_start = vk_pipeline_feedback_time();
    VkResult result;
 
    const VkPipelineCreateFlags2KHR pipeline_flags =
@@ -2253,7 +2274,7 @@ vk_create_graphics_pipeline(struct vk_device *device,
             if (compile_info.stages[i].imported)
                continue;
 
-            const int64_t stage_start = os_time_get_nano();
+            const int64_t stage_start = vk_pipeline_feedback_time();
 
             mesa_shader_stage stage = compile_info.stages[i].stage;
 
@@ -2280,7 +2301,7 @@ vk_create_graphics_pipeline(struct vk_device *device,
 
             stage_feedbacks[stage].flags |= VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
 
-            const int64_t stage_end = os_time_get_nano();
+            const int64_t stage_end = vk_pipeline_feedback_time();
             stage_feedbacks[stage].duration += stage_end - stage_start;
          }
       }
@@ -2289,7 +2310,7 @@ vk_create_graphics_pipeline(struct vk_device *device,
          const VkPipelineShaderStageCreateInfo *stage_info =
             &pCreateInfo->pStages[i];
 
-         const int64_t stage_start = os_time_get_nano();
+         const int64_t stage_start = vk_pipeline_feedback_time();
 
          assert(util_bitcount(stage_info->stage) == 1);
 
@@ -2316,7 +2337,7 @@ vk_create_graphics_pipeline(struct vk_device *device,
          if (result != VK_SUCCESS)
             goto fail_stages;
 
-         const int64_t stage_end = os_time_get_nano();
+         const int64_t stage_end = vk_pipeline_feedback_time();
          stage_feedbacks[stage].duration += stage_end - stage_start;
       }
 
@@ -2382,7 +2403,7 @@ vk_create_graphics_pipeline(struct vk_device *device,
       }
    }
 
-   const int64_t pipeline_end = os_time_get_nano();
+   const int64_t pipeline_end = vk_pipeline_feedback_time();
    if (feedback_info != NULL) {
       VkPipelineCreationFeedback pipeline_feedback = {
          .flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT,
@@ -2767,7 +2788,7 @@ vk_create_compute_pipeline(struct vk_device *device,
                            VkPipeline *pPipeline)
 {
    VK_FROM_HANDLE(vk_pipeline_layout, pipeline_layout, pCreateInfo->layout);
-   int64_t pipeline_start = os_time_get_nano();
+   int64_t pipeline_start = vk_pipeline_feedback_time();
    VkResult result;
 
    struct vk_pipeline_stage stage;
@@ -2820,7 +2841,7 @@ vk_create_compute_pipeline(struct vk_device *device,
 
    pipeline->stage = vk_pipeline_stage_clone(&stage);
 
-   const int64_t pipeline_end = os_time_get_nano();
+   const int64_t pipeline_end = vk_pipeline_feedback_time();
    if (feedback_info != NULL) {
       VkPipelineCreationFeedback pipeline_feedback = {
          .flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT,
@@ -3468,7 +3489,7 @@ vk_pipeline_compile_rt_shader(struct vk_device *device,
 {
    const struct vk_device_shader_ops *ops = device->shader_ops;
 
-   int64_t stage_start = os_time_get_nano();
+   int64_t stage_start = vk_pipeline_feedback_time();
 
    if (cache != NULL) {
       bool cache_hit = false;
@@ -3481,7 +3502,7 @@ vk_pipeline_compile_rt_shader(struct vk_device *device,
          stage->shader = vk_shader_from_cache_obj(cache_obj);
 
          if (stage_feedback != NULL) {
-            const int64_t stage_end = os_time_get_nano();
+            const int64_t stage_end = vk_pipeline_feedback_time();
             stage_feedback->flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
             if (cache_hit) {
                stage_feedback->flags |=
@@ -3550,7 +3571,7 @@ vk_pipeline_compile_rt_shader(struct vk_device *device,
    stage->shader = vk_shader_from_cache_obj(cache_obj);
 
    if (stage_feedback != NULL) {
-      const int64_t stage_end = os_time_get_nano();
+      const int64_t stage_end = vk_pipeline_feedback_time();
       stage_feedback->flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
       stage_feedback->duration = stage_end - stage_start;
    }
@@ -3814,7 +3835,7 @@ vk_create_rt_pipeline(struct vk_device *device,
                       VkPipeline *pPipeline)
 {
    VK_FROM_HANDLE(vk_pipeline_layout, pipeline_layout, pCreateInfo->layout);
-   int64_t pipeline_start = os_time_get_nano();
+   int64_t pipeline_start = vk_pipeline_feedback_time();
    VkResult result;
 
    if (!vk_rt_pipeline_callbacks_valid(device->shader_ops))
@@ -4114,7 +4135,7 @@ vk_create_rt_pipeline(struct vk_device *device,
 
    vk_release_rt_pipeline_compile_info(&compile_info, device, pAllocator);
 
-   const int64_t pipeline_end = os_time_get_nano();
+   const int64_t pipeline_end = vk_pipeline_feedback_time();
    if (feedback_info != NULL) {
       VkPipelineCreationFeedback pipeline_feedback = {
          .flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT,
