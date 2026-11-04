@@ -742,3 +742,16 @@ microseconds of GPU time per timestamp, and records its own time.
 Inside a render pass, Metal samples each render stage once per render encoder.
 The first timestamp written at a stage takes that sample, and later timestamps
 at the same stage in the encoder, from any pool, report it.
+
+Compressed sparse 2D images
+---------------------------
+
+With sparse translation enabled, non-ASTC compressed 2D residency images
+without cube compatibility use the existing canonical page storage. Each mip
+keeps separate block data and images aliasing the same memory share page
+identity. ASTC and cube-compatible sampled images retain native placement.
+Copies between ordinary and canonical compressed images use native buffer
+transfers on the ordinary side, preserving opaque mip layouts. The staging
+buffer and its GPU barriers belong to those copies; draws add no waits.
+Standalone stages compile the canonical 2D route at creation so images bound
+later work through the same descriptors. Ordinary images select native sampling.

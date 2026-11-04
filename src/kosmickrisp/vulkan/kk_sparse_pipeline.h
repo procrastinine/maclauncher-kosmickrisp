@@ -263,13 +263,11 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
       modes |= stage_modes;
    }
    /* The lazy native object represents a linked VS/CS pipeline. Standalone
-    * stages and task/mesh groups retain their own native ownership. Standard
-    * 2D translation is selected only lazily: 2D image access is in almost
-    * every shader, which must not change until a standard 2D image exists,
-    * so standalone stages access those images natively. */
+    * stages and task/mesh groups own their native code, so their 2D route must
+    * already handle canonical images created or bound later. Ordinary image
+    * descriptors select the native sampling branch. */
    if (count && infos[0].stage != MESA_SHADER_VERTEX &&
        infos[0].stage != MESA_SHADER_COMPUTE) {
-      modes &= ~KK_SPARSE_STANDARD_2D;
       *always_modes |= modes;
    }
    *always_modes &= enabled;

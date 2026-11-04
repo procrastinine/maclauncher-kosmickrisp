@@ -652,14 +652,19 @@ kk_sparse_image_init(struct kk_device *dev, struct kk_image *image,
    image->sparse->format_flags = props.flags;
    /* Storage-usage 2D residency images are Metal sparse tier 1, whose shader
     * residency and partial-tile/tail reads are wrong, and block-texel views
-    * of compressed images need canonical-page aliases. Both use the standard
-    * canonical-page path; render attachments keep native placement. */
+    * of compressed images need canonical-page aliases. Native non-ASTC
+    * compressed sparse 2D levels also have incompatible blit and sampling
+    * layouts. Cube-compatible images retain their native face sampler.
+    * Share canonical pages for them so each level keeps its own bytes and
+    * aliases retain the bound memory identity. Render attachments stay native. */
    const bool standard_2d = image->vk.image_type == VK_IMAGE_TYPE_2D &&
       kk_device_physical(dev)->vk.properties.sparseResidencyStandard2DBlockShape &&
       (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) &&
       ((declared_usage & VK_IMAGE_USAGE_STORAGE_BIT) ||
-       ((image->vk.create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) &&
-        vk_format_is_compressed(image->vk.format))) &&
+       (vk_format_is_compressed(image->vk.format) &&
+        ((image->vk.create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) ||
+         (util_format_description(plane->layout.format.pipe)->layout != UTIL_FORMAT_LAYOUT_ASTC &&
+          !(image->vk.create_flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT))))) &&
       !(declared_usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
       !(props.flags & VK_SPARSE_IMAGE_FORMAT_NONSTANDARD_BLOCK_SIZE_BIT);

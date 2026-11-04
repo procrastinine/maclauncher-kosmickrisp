@@ -142,7 +142,7 @@
      - On
      - On
      - On
-     - On Apple7-11: Native placement and mapping remain native. The scalar buffer page-status helper emits three 64-bit metadata loads, two byte-status loads, bounds checks and a conditional branch, in addition to directory/range lookup and the resource access. Standard-shaped 3D accesses, and accesses to 2D residency images with storage usage or block-texel views, translate coordinates and select page storage, with copies or blits on relevant operations; filtered samples of those images combine fetched texels. 2D translation is compiled only into linked vertex and compute pipelines after such a 2D image exists. Unused shader operations emit no translation.
+     - On Apple7-11: Native placement and mapping remain native. The scalar buffer page-status helper emits three 64-bit metadata loads, two byte-status loads, bounds checks and a conditional branch, in addition to directory/range lookup and the resource access. Standard-shaped 3D accesses, and accesses to 2D residency images with storage usage, block-texel views or non-ASTC compression without cube compatibility, translate coordinates and select page storage, with copies or blits on relevant operations; filtered samples of those images combine fetched texels. Linked vertex and compute pipelines add 2D translation after such an image exists; standalone stages compile that route at creation so later sparse bindings remain valid. Ordinary descriptors retain native sampling. Unused shader operations emit no translation.
    * - ``robustness2``
      - On
      - On
