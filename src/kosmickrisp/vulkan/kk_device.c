@@ -414,6 +414,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    dev->perf = kk_perf_create();
    if (dev->perf) {
       dev->vk.pipeline_cache_lookup = kk_perf_cache_lookup;
+      dev->vk.queue_submit_depth = kk_perf_submit_queue;
       kk_perf_init_dispatch(dev);
    }
 

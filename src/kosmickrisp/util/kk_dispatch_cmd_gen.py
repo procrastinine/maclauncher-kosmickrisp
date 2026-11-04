@@ -78,6 +78,15 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
     VK_FROM_HANDLE(kk_cmd_buffer, cmd, ${e.params[0].name});
   % if e.params[0].type == 'VkCommandBuffer':
     struct kk_device *dev = kk_cmd_buffer_device(cmd);
+    % if e.name == 'CmdBeginRendering':
+    cmd->deferred_render_chain |= pRenderingInfo->flags &
+        (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT);
+    % elif e.name == 'CmdExecuteCommands':
+    for (uint32_t i = 0; !cmd->deferred_render_chain && i < commandBufferCount; i++) {
+        VK_FROM_HANDLE(kk_cmd_buffer, secondary, pCommandBuffers[i]);
+        cmd->deferred_render_chain |= secondary->deferred_render_chain;
+    }
+    % endif
     % if e.return_type == 'void':
     KK_PERF_VOID(dev, KK_PERF_RECORD,
         vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()}));

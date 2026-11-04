@@ -221,6 +221,7 @@ vk_device_init(struct vk_device *device,
 
    device->mem_cache = NULL;
    device->pipeline_cache_lookup = NULL;
+   device->queue_submit_depth = NULL;
 
    device->timeline_mode = get_timeline_mode(physical_device);
 

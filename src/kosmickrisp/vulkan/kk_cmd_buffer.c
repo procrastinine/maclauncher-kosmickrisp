@@ -364,7 +364,6 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
 
    if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY &&
        cmd->vk.record_result == VK_SUCCESS) {
-      cmd->deferred_render_chain = kk_whole_pass_needs_submit(cmd);
       struct vk_command_buffer *source = &cmd->vk;
       cmd->transient_safe = kk_whole_pass_transient_safe(kk_cmd_buffer_device(cmd),
                                                          &source, 1);

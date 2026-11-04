@@ -249,6 +249,11 @@ struct vk_device {
    /* Optional driver diagnostics; NULL avoids all collection when disabled. */
    void (*pipeline_cache_lookup)(struct vk_device *device, bool hit);
 
+   /* Optional diagnostics for common submit-list membership. The worker's
+    * active head remains a member until completion. Called under the submit
+    * mutex, except for joined lost-device cleanup; must not reenter queues. */
+   void (*queue_submit_depth)(struct vk_device *device, int64_t delta);
+
    /** An enum describing how timeline semaphores work */
    enum vk_device_timeline_mode {
       /** Timeline semaphores are not supported */

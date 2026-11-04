@@ -182,26 +182,6 @@ kk_whole_pass_local_barrier(const VkDependencyInfo *dep)
    return true;
 }
 
-bool
-kk_whole_pass_needs_submit(struct kk_cmd_buffer *cmd)
-{
-   list_for_each_entry(struct vk_cmd_queue_entry, entry,
-                       &cmd->vk.cmd_queue.cmds, cmd_link) {
-      if (entry->type == VK_CMD_EXECUTE_COMMANDS) {
-         for (uint32_t i = 0; i < entry->u.execute_commands.command_buffer_count; i++) {
-            VK_FROM_HANDLE(kk_cmd_buffer, secondary, entry->u.execute_commands.command_buffers[i]);
-            if (kk_whole_pass_needs_submit(secondary))
-               return true;
-         }
-      }
-      if (entry->type == VK_CMD_BEGIN_RENDERING &&
-          (entry->u.begin_rendering.rendering_info->flags &
-           (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT)))
-         return true;
-   }
-   return false;
-}
-
 void
 kk_whole_pass_command_boundary(struct kk_cmd_buffer *cmd)
 {

@@ -20,8 +20,8 @@ struct kk_perf {
    bool close_log;
    uint64_t created, interval_start, frames, interval_frames;
    uint64_t frame_interval, time_interval, sequence;
-   int64_t pending, compiler_active;
-   uint64_t pending_peak, compiler_peak, invalid_gpu;
+   int64_t pending, submit_pending, compiler_active;
+   uint64_t pending_peak, submit_peak, compiler_peak, invalid_gpu;
    struct kk_perf_stat stat[KK_PERF_METRIC_COUNT];
    struct kk_perf_gpu_stat gpu[256];
    unsigned gpu_count;
@@ -91,8 +91,12 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
    }
    fprintf(p->log, "},\"deferred_pending\":%"PRId64",\"deferred_peak\":%"PRIu64
            ",\"compiler_active\":%"PRId64",\"compiler_peak\":%"PRIu64
-           ",\"gpu_unavailable\":%"PRIu64",\"gpu_frames\":[",
+           ",\"gpu_unavailable\":%"PRIu64,
            p->pending, p->pending_peak, p->compiler_active, p->compiler_peak, p->invalid_gpu);
+   fprintf(p->log, ",\"submit_pending\":%"PRId64",\"submit_peak\":%"PRIu64
+           ",\"submit_scope\":\"common_submit_list_including_worker_head\","
+           "\"compiler_scope\":\"in_progress_calls_not_queued_jobs\","
+           "\"gpu_frames\":[", p->submit_pending, p->submit_peak);
    for (unsigned i = 0; i < p->gpu_count; i++) {
       const struct kk_perf_gpu_stat *g = &p->gpu[i];
       fprintf(p->log, "%s{\"submit_frame\":%"PRIu64",\"commits\":%"PRIu64
@@ -107,6 +111,7 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
    p->interval_frames = 0;
    p->interval_start = now;
    p->pending_peak = p->pending > 0 ? p->pending : 0;
+   p->submit_peak = p->submit_pending > 0 ? p->submit_pending : 0;
    p->compiler_peak = p->compiler_active > 0 ? p->compiler_active : 0;
 }
 
@@ -127,6 +132,18 @@ kk_perf_queue(struct kk_perf *p, int64_t delta)
    p->pending += delta;
    if (p->pending > 0 && (uint64_t)p->pending > p->pending_peak)
       p->pending_peak = p->pending;
+   pthread_mutex_unlock(&p->mutex);
+}
+
+void
+kk_perf_submit_queue(struct vk_device *vk, int64_t delta)
+{
+   struct kk_device *dev = container_of(vk, struct kk_device, vk);
+   struct kk_perf *p = dev->perf;
+   pthread_mutex_lock(&p->mutex);
+   p->submit_pending += delta;
+   if (p->submit_pending > 0 && (uint64_t)p->submit_pending > p->submit_peak)
+      p->submit_peak = p->submit_pending;
    pthread_mutex_unlock(&p->mutex);
 }
 

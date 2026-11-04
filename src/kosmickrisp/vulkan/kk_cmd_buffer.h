@@ -370,6 +370,7 @@ struct kk_cmd_buffer {
    bool interlock_heap_active;
    bool interlock_heap_used;
    struct kk_whole_pass_state whole_pass;
+   /* Recorded at rendering/secondary enqueue, consumed without an End scan. */
    bool deferred_render_chain;
    bool transient_safe;
 
@@ -608,7 +609,6 @@ void kk_cmd_buffer_set_label(struct kk_cmd_buffer *cb, const char *label);
 
 
 bool kk_whole_pass_transient_safe(struct kk_device *, struct vk_command_buffer **, uint32_t);
-bool kk_whole_pass_needs_submit(struct kk_cmd_buffer *cmd);
 void kk_whole_pass_command_boundary(struct kk_cmd_buffer *cmd);
 VKAPI_ATTR void VKAPI_CALL
 kk_begin_rendering(VkCommandBuffer, const VkRenderingInfo *);

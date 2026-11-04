@@ -574,6 +574,8 @@ vk_queue_push_submit(struct vk_queue *queue,
 {
    mtx_lock(&queue->submit.mutex);
    list_addtail(&submit->link, &queue->submit.submits);
+   if (unlikely(queue->base.device->queue_submit_depth != NULL))
+      queue->base.device->queue_submit_depth(queue->base.device, 1);
    cnd_signal(&queue->submit.push);
    mtx_unlock(&queue->submit.mutex);
 }
@@ -746,6 +748,8 @@ vk_queue_flush(struct vk_queue *queue, uint32_t *submit_count_out)
       submit_count++;
 
       list_del(&submit->link);
+      if (unlikely(queue->base.device->queue_submit_depth != NULL))
+         queue->base.device->queue_submit_depth(queue->base.device, -1);
 
       vk_queue_submit_destroy(queue, submit);
    }
@@ -834,6 +838,8 @@ vk_queue_submit_thread_func(void *_data)
        * vk_queue_drain() completes, there are no more pending jobs.
        */
       list_del(&submit->link);
+      if (unlikely(queue->base.device->queue_submit_depth != NULL))
+         queue->base.device->queue_submit_depth(queue->base.device, -1);
       vk_queue_submit_free(queue, submit);
 
       cnd_broadcast(&queue->submit.pop);
@@ -1151,9 +1157,13 @@ vk_queue_submit(struct vk_queue *queue,
          mtx_lock(&queue->submit.mutex);
          if (queue->submit.driver_handoff == submit) {
             list_add(&submit->link, &queue->submit.submits);
+            if (unlikely(queue->base.device->queue_submit_depth != NULL))
+               queue->base.device->queue_submit_depth(queue->base.device, 1);
             queue->submit.driver_handoff = NULL;
          } else {
             list_addtail(&submit->link, &queue->submit.submits);
+            if (unlikely(queue->base.device->queue_submit_depth != NULL))
+               queue->base.device->queue_submit_depth(queue->base.device, 1);
          }
          cnd_signal(&queue->submit.push);
          mtx_unlock(&queue->submit.mutex);
@@ -1299,6 +1309,8 @@ vk_queue_finish(struct vk_queue *queue)
                           struct vk_queue_submit, link);
 
       list_del(&submit->link);
+      if (unlikely(queue->base.device->queue_submit_depth != NULL))
+         queue->base.device->queue_submit_depth(queue->base.device, -1);
       vk_queue_submit_destroy(queue, submit);
    }
 
