@@ -2,11 +2,12 @@
 
 .. list-table::
    :header-rows: 1
-   :widths: 10 20 24 8 12 14 12
+   :widths: 10 20 24 12 8 12 14 12
 
    * - Name
      - Emulated behavior
      - Cost
+     - Native on
      - Performance default
      - Performance reason
      - When off
@@ -15,6 +16,7 @@
      - Gradual underflow for requested floating-point preservation modes.
        Controls: ``shaderDenormPreserveFloat16``, ``shaderDenormPreserveFloat32``, ``shaderDenormPreserveFloat64``.
      - mixed native / software. FP16 uses native half arithmetic. Requested FP32 add, multiply, FMA and divide use native operations with subnormal-operand and result guards, with exact software handling in out-of-line cold functions; other preservation operations retain their numerical helpers. FP64 uses software binary64.
+     - No native-family threshold declared
      - On
      - vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.
      - Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.
@@ -23,6 +25,7 @@
      - Flush subnormal results to zero in requested floating-point modes.
        Controls: ``shaderDenormFlushToZeroFloat16``, ``shaderDenormFlushToZeroFloat32``, ``shaderDenormFlushToZeroFloat64``.
      - native arithmetic / ALU fixups / cold software repair. FP32 arithmetic remains native. Multiply, FMA and divide test a zero result and repair finite normal nonzero operands through a cold correctly rounded fallback before final subnormal flushing. Selected non-arithmetic operations retain exponent-mask fixups. FTZ16 and FTZ64 remain unsupported.
+     - No native-family threshold declared
      - On
      - vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.
      - Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.
@@ -31,6 +34,7 @@
      - Acceleration structures, ray queries and continuation-based ray-tracing pipelines.
        Controls: ``VK_KHR_acceleration_structure``, ``VK_KHR_ray_tracing_pipeline``, ``VK_KHR_ray_query``, ``VK_KHR_ray_tracing_maintenance1``, ``VK_KHR_pipeline_library``, ``accelerationStructure``, ``descriptorBindingAccelerationStructureUpdateAfterBind``, ``rayTracingPipeline``, ``rayTracingPipelineTraceRaysIndirect``, ``rayTraversalPrimitiveCulling``, ``rayQuery``, ``rayTracingMaintenance1``, ``rayTracingPipelineTraceRaysIndirect2``, ``maxGeometryCount``, ``maxInstanceCount``, ``maxPrimitiveCount``, ``maxPerStageDescriptorAccelerationStructures``, ``maxPerStageDescriptorUpdateAfterBindAccelerationStructures``, ``maxDescriptorSetAccelerationStructures``, ``maxDescriptorSetUpdateAfterBindAccelerationStructures``, ``minAccelerationStructureScratchOffsetAlignment``, ``shaderGroupHandleSize``, ``shaderGroupHandleAlignment``, ``shaderGroupBaseAlignment``, ``maxShaderGroupStride``, ``maxRayRecursionDepth``, ``maxRayHitAttributeSize``, ``maxRayDispatchInvocationCount``, ``shaderGroupHandleCaptureReplaySize``, ``subgroupSupportedStages``, ``VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR``.
      - compute / software traversal. AS construction and traversal use compute and continuation dispatch. Work is selected by RT commands and shaders. Runtime cost is unmeasured.
+     - No native-family threshold declared
      - Off
      - Ray-tracing interfaces require explicit selection.
      - Vulkan acceleration-structure, ray-query and ray-tracing pipeline interfaces and D3D12 DXR are unavailable; the RTXPT DXR path cannot run.
@@ -39,6 +43,7 @@
      - Pixel interlock with cross-sample ordering for multisampled rendering.
        Controls: ``fragmentShaderPixelInterlock``.
      - native single-sample / software multisample envelope. Sample interlock and single-sample pixel interlock use native raster order groups. Multisample pixel interlock captures coverage and inputs, then performs ordered load/replay/store passes in bounded tile and primitive batches with CPU/GPU continuation sequencing and scratch clearing. Cost scales with actual coverage, sample count and batch count; per-use runtime cost is unmeasured.
+     - No native-family threshold declared
      - On
      - vkd3d-proton requires pixel and sample interlock for ROV support and D3D FL12_1; the multisample envelope is selected only for shaders using pixel interlock with multisampling.
      - Pixel interlock is unavailable, including its native single-sample route; vkd3d-proton loses ROV support and D3D FL12_1. Native sample interlock and ordered color attachment access remain available.
@@ -47,6 +52,7 @@
      - Pipeline-statistics queries backed by draw data and shader execution counters.
        Controls: ``pipelineStatisticsQuery``.
      - draw-data counters / shader atomics. An active fragment query adds a counter-address load and one 32-bit atomic increment, plus a carry atomic when the low word wraps. Other stages use draw data or instrumented execution. Inactive queries specialize the counter region away. Per-use timing is unmeasured.
+     - No native-family threshold declared
      - On
      - Wine vkd3d requires pipelineStatisticsQuery for feature level 11_1 and above; inactive queries retain the false native specialization without counter operations.
      - Disabling pipelineStatisticsQuery limits Wine vkd3d to feature level 11_0 and removes pipeline-statistics queries; DXVK treats the feature as optional.
@@ -55,6 +61,7 @@
      - Native object and mesh shaders with virtual task grids and sliced output when required.
        Controls: ``VK_EXT_mesh_shader``, ``taskShader``, ``meshShader``, ``multiviewMeshShader``, ``primitiveFragmentShadingRateMeshShader``, ``meshShaderQueries``, ``maxTaskWorkGroupTotalCount``, ``maxTaskWorkGroupCount``, ``maxTaskWorkGroupInvocations``, ``maxTaskWorkGroupSize``, ``maxTaskPayloadSize``, ``maxTaskSharedMemorySize``, ``maxTaskPayloadAndSharedMemorySize``, ``maxMeshWorkGroupTotalCount``, ``maxMeshWorkGroupCount``, ``maxMeshWorkGroupInvocations``, ``maxMeshWorkGroupSize``, ``maxMeshSharedMemorySize``, ``maxMeshPayloadAndSharedMemorySize``, ``maxMeshOutputMemorySize``, ``maxMeshPayloadAndOutputMemorySize``, ``maxMeshOutputComponents``, ``maxMeshOutputVertices``, ``maxMeshOutputPrimitives``, ``maxMeshOutputLayers``, ``maxMeshMultiviewViewCount``, ``meshOutputPerVertexGranularity``, ``meshOutputPerPrimitiveGranularity``, ``maxPreferredTaskWorkGroupInvocations``, ``maxPreferredMeshWorkGroupInvocations``, ``prefersLocalInvocationVertexOutput``, ``prefersLocalInvocationPrimitiveOutput``, ``prefersCompactVertexOutput``, ``prefersCompactPrimitiveOutput``.
      - mixed native / virtualized. Unsliced direct mesh uses one native mesh render call. Virtual task batches add prepare, task and prefix compute followed by mesh rendering; output slicing and retained replay add selected captures and mesh draws. Queries add counters only when used. Per-use GPU instruction count and runtime cost are unmeasured.
+     - No native-family threshold declared
      - On
      - vkd3d-proton requires both meshShader and taskShader for D3D12 MeshTier1; disabling them removes feature-level 12.2 eligibility.
      - D3D12 MeshTier1 and feature-level 12.2 are unavailable; mesh/task Vulkan shaders and mesh queries are unavailable. Lower feature levels remain subject to their other requirements; this entry does not remove a shader-model requirement or a translator device-creation prerequisite.
@@ -63,6 +70,7 @@
      - Polygon POINT rasterization through captured primitive expansion.
        Controls: ``fillModeNonSolid``, ``extendedDynamicState3PolygonMode``.
      - primitive capture / triangle expansion. POINT emits two triangles per point after capture; FILL and eligible thin LINE draws retain native alternatives. Availability alone adds no shader code.
+     - No native-family threshold declared
      - On
      - Preserve the non-solid fill feature selected by D3D translators; POINT cost is selected by actual polygon state.
      - Hides fillModeNonSolid and dynamic polygon mode, including native wireframe because Vulkan shares its feature bit with POINT; translator non-solid fill support is lost; SM and FL effects are not independently established.
@@ -71,6 +79,7 @@
      - Wide, rectangular, smooth and stippled Bresenham line rasterization.
        Controls: ``wideLines``, ``rectangularLines``, ``smoothLines``, ``stippledBresenhamLines``, ``extendedDynamicState3LineRasterizationMode``, ``extendedDynamicState3LineStippleEnable``.
      - primitive capture / line expansion. Selected wide/smooth/stipple lines capture vertices and emit expanded primitives; smooth lines add fragment alpha coverage and stipple adds dash generation. Thin default solid lines remain native.
+     - No native-family threshold declared
      - On
      - Retain translator-selected line features until disabling them is established to preserve device creation and D3D feature levels; only actual expanded lines pay the cost.
      - Hides wide, rectangular, smooth and stippled Bresenham line features and their dynamic selectors; native thin Bresenham lines remain; SM/FL and translator device-creation neutrality are not established.
@@ -79,6 +88,7 @@
      - Dynamic fragment sample mask and alpha-to-coverage lowering.
        Controls: ``extendedDynamicState3SampleMask``, ``extendedDynamicState3AlphaToCoverageEnable``.
      - fragment coverage / root state loads. Dynamic sample mask loads root state and filters coverage; nonconstant alpha-to-coverage computes a dither mask and demotes samples. Constant opaque alpha omits alpha coverage lowering. Rasterization sample count uses native attachment variants.
+     - No native-family threshold declared
      - On
      - Preserve translator-selected dynamic coverage state; no evidence establishes device-creation neutrality when these controls are hidden.
      - Hides dynamic sample-mask and alpha-to-coverage selectors; static coverage and native dynamic rasterization sample count remain; SM/FL and translator device-creation neutrality are not established.
@@ -87,6 +97,7 @@
      - Runtime vertex attribute descriptions and format conversion for dynamic vertex input.
        Controls: ``VK_EXT_vertex_input_dynamic_state``, ``vertexInputDynamicState``.
      - runtime metadata / vertex fetch. Dynamic vertex inputs load format, divisor and stride metadata for consumed attributes and perform format-dependent conversion; static pipelines retain constant attribute specialization. Unused inputs emit no fetch work.
+     - No native-family threshold declared
      - Off
      - DXVK and vkd3d-proton shader-model, feature-level and required device-creation checks do not require dynamic vertex-input state; static pipeline input remains available.
      - No D3D shader-model, feature-level or translator device-creation loss in the checked DXVK/vkd3d-proton paths; dynamic vertex-input pipelines must use static vertex layouts instead.
@@ -95,6 +106,7 @@
      - Original-view replay for geometry and tessellation multiview producers.
        Controls: ``multiviewGeometryShader``, ``multiviewTessellationShader``.
      - per-view producer replay. Advanced multiview producers execute for each active view using the original view index; single-view and ordinary native vertex amplification remain separate paths. Emitted producer instructions are repeated by view count, with a per-draw view load when used.
+     - No native-family threshold declared
      - Off
      - These advanced multiview combinations are not required by the checked D3D maximum shader-model, feature-level or translator device-creation predicates; ordinary multiview remains available.
      - No D3D maximum shader-model, feature-level or translator device-creation loss in checked paths; vkd3d-proton ViewInstancingTier can fall from tier 2 to unsupported when its advanced-multiview predicate requires these features.
@@ -103,6 +115,7 @@
      - Full-quad helper invocation and quad derivative control around native quad operations.
        Controls: ``VK_KHR_shader_quad_control``, ``shaderQuadControl``.
      - native quad operations / helper merge guard. Native quad and subgroup instructions are retained. A shader requiring full or coarse quad helper invocations can add the existing barycentric triangle-merge guard, or a sample-mask output when no color store exists; unused helper requirements emit neither guard.
+     - No native-family threshold declared
      - On
      - vkd3d-proton requires shaderQuadControl together with maximal reconvergence to advance from SM 6.6 to SM 6.7 and later; only affected fragment requirements select the helper guard.
      - vkd3d-proton cannot expose SM 6.7 or later through its ordinary quad-control/reconvergence path when the earlier SM 6.6 requirements are satisfied; no additional feature-level or device-creation loss is established.
@@ -111,6 +124,7 @@
      - Single-texel-offset buffer views over aligned native textures and raw buffer addresses.
        Controls: ``VK_EXT_texel_buffer_alignment``, ``texelBufferAlignment``, ``storageTexelBufferOffsetSingleTexelAlignment``, ``uniformTexelBufferOffsetSingleTexelAlignment``.
      - native access / coordinate adjustment. Typed native buffer access adds logical range comparison, prefix addition and invalid-coordinate selection; dynamic RGB32 views also select stride and fetch consumed components. Raw/R64 and sparse accesses retain required range and residency work. Unused shaders emit no texel-view code. Runtime cost is unmeasured.
+     - No native-family threshold declared
      - On
      - vkd3d-proton requires both single-texel alignment promises for D3D12 device creation at the supported 16-byte native alignment; only shaders accessing texel-buffer views pay the adjustment cost.
      - vkd3d-proton v3.1 rejects D3D12 device creation when either single-texel alignment promise is absent at 16-byte alignment, making all D3D12 feature levels unavailable.
@@ -119,6 +133,7 @@
      - Whole-primitive rejection from cull distances written by the final pre-raster shader.
        Controls: ``shaderCullDistance``, ``maxCullDistances``.
      - native mesh / compute capture. Mesh shaders use native primitive rejection. Ordinary producers writing cull distances use capture and an all-vertex negative test per plane before clipping; each tested vertex loads one scalar distance, and testing stops at the first nonnegative or NaN value. No cull output selects no cull capture. GPU time is unmeasured.
+     - No native-family threshold declared
      - On
      - DXVK requires shaderCullDistance for translator device creation; capture is selected only by actual final-producer cull output.
      - DXVK cannot create its D3D device without shaderCullDistance; Vulkan cull-distance shader support is unavailable.
@@ -127,6 +142,7 @@
      - Face-local cube sampling without filtering across cube faces.
        Controls: ``VK_EXT_non_seamless_cube_map``, ``nonSeamlessCubeMap``.
      - shader ALU / texture sampling. Dynamic cube samples use the shared sampler-emulation function constant; the false specialization retains native cube sampling. Actual non-seamless use projects to a 2D-array face sample with quotient-rule gradients.
+     - No native-family threshold declared
      - Off
      - Disabling has no established D3D shader-model, feature-level or translator device-creation loss; content requiring legacy non-seamless cube sampling can opt in.
      - No established D3D shader-model or feature-level reduction or translator device-creation loss; DXVK rejects content requesting non-seamless cube sampling.
@@ -135,6 +151,7 @@
      - Sparse-buffer residency checks and standard-shaped 3D sparse image adaptation.
        Controls: ``sparseResidencyBuffer``, ``sparseResidencyImage3D``, ``sparseResidencyStandard3DBlockShape``.
      - native placement / software address and volume translation. Native placement and mapping remain native. The scalar buffer page-status helper emits three 64-bit metadata loads, two byte-status loads, bounds checks and a conditional branch, in addition to directory/range lookup and the resource access. Standard-shaped 3D accesses translate coordinates and select page storage, with copies or blits on relevant operations. Unused shader operations emit no translation. Per-use GPU time is unmeasured.
+     - No native-family threshold declared
      - On
      - DXVK requires sparse buffer residency for tiled resources; removing it can lower the D3D feature-level ceiling. Translation is selected by actual sparse resources and shader interfaces.
      - Sparse buffer residency and sparse 3D image residency are unavailable, including standard-shaped 3D blocks; DXVK tiled-resource tiers and feature levels requiring them are unavailable. Native sparse binding, aliasing, 2D residency and native texture residency status remain available when supported.
@@ -143,6 +160,7 @@
      - Exact out-of-bounds buffer and image access behavior and null descriptors.
        Controls: ``VK_EXT_robustness2``, ``VK_KHR_robustness2``, ``robustBufferAccess2``, ``robustImageAccess2``, ``nullDescriptor``, ``robustStorageBufferAccessSizeAlignment``, ``robustUniformBufferAccessSizeAlignment``.
      - native access / bounds and null guards. Selected bounded buffer loads use bounds predicates and zero/default selection; selected image and null accesses use guards. Unused operations emit no checks. Runtime cost is unmeasured.
+     - No native-family threshold declared
      - On
      - DXVK 2.x/3.x requires VK_EXT_robustness2 and nullDescriptor for device creation and uses robustBufferAccess2/robustImageAccess2; vkd3d-proton also requires nullDescriptor. Required buffer bounds and null semantics remain enabled.
      - DXVK 2.x/3.x and vkd3d-proton device creation fails when required nullDescriptor/robustness2 support is hidden. Both extension aliases and their three features are hidden; core robustness and pipeline robustness remain available.
@@ -151,6 +169,7 @@
      - Zero initialization of shader workgroup memory when requested by the shader.
        Controls: ``VK_KHR_zero_initialize_workgroup_memory``, ``shaderZeroInitializeWorkgroupMemory``.
      - threadgroup stores / barrier. A requested nonempty shared allocation is rounded to 16 bytes and cooperatively cleared with native stores followed by a workgroup barrier. No clear or barrier is emitted without the shader zero-init flag and nonzero shared size. Runtime cost is unmeasured.
+     - No native-family threshold declared
      - On
      - Workgroup initialization is required by translator shader semantics; retain it for DXVK/vkd3d device creation and shader translation. Shaders without requested shared initialization emit no zeroing stores or barriers.
      - DXVK/vkd3d device creation fails when required workgroup-zero support is unavailable; the extension and promoted shaderZeroInitializeWorkgroupMemory feature are hidden. Allocation zero initialization and robustness are unchanged.
@@ -159,6 +178,7 @@
      - Exact and alternate-representation depth bias after primitive clipping.
        Controls: ``VK_EXT_depth_bias_control``, ``depthBiasControl``, ``leastRepresentableValueForceUnormRepresentation``, ``floatRepresentation``, ``depthBiasExact``.
      - native default / geometry capture and replay. Default format-dependent bias uses Metal state. Selected exact or alternate representations capture geometry, run shared polygon compute and replay rasterization after clipping. Static disabled/default-bias pipelines retain native shaders; dynamic factors can retain capture/native siblings. Runtime cost is unmeasured.
+     - No native-family threshold declared
      - Off
      - DXVK and vkd3d-proton treat depth-bias control as optional; disabling it does not lower their shader model or feature level or prevent device creation.
      - No D3D shader-model, feature-level or translator-device-creation loss in DXVK or vkd3d-proton; exact and alternate-representation Vulkan depth bias is unavailable and translators retain their default bias path.
@@ -167,6 +187,7 @@
      - Binary64 floating-point arithmetic and comparisons.
        Controls: ``shaderFloat64``, ``shaderFmaFloat64``, ``shaderSignedZeroInfNanPreserveFloat64``, ``shaderDenormPreserveFloat64``, ``shaderDenormFlushToZeroFloat64``, ``shaderRoundingModeRTEFloat64``, ``shaderRoundingModeRTZFloat64``.
      - software binary64. Only actual FP64 operations are lowered to integer and FP32 algorithms; equality uses branchless 32-bit integer operations. FP32 and integer-only shaders emit no FP64 code. Runtime cost is unmeasured.
+     - No native-family threshold declared
      - Off
      - Double precision is an optional D3D11/D3D12 capability; the pinned DXVK and vkd3d-proton SM/FL and device-creation gates do not require it, and Apple family 8 has no native binary64 ALU.
      - D3D11/D3D12 double-precision capabilities and FP64 shader creation are unavailable; the pinned translator SM/FL limits and ordinary device creation are unchanged. Integer64 support is independent.
@@ -175,6 +196,7 @@
      - Generated graphics and compute sequences with push-data and vertex/index-buffer tokens.
        Controls: ``VK_EXT_device_generated_commands``, ``deviceGeneratedCommands``, ``dynamicGeneratedPipelineLayout``, ``maxIndirectPipelineCount``, ``maxIndirectShaderObjectCount``, ``maxIndirectSequenceCount``, ``maxIndirectCommandsTokenCount``, ``maxIndirectCommandsTokenOffset``, ``maxIndirectCommandsIndirectStride``, ``supportedIndirectCommandsInputModes``, ``supportedIndirectCommandsShaderStages``, ``supportedIndirectCommandsShaderStagesPipelineBinding``, ``supportedIndirectCommandsShaderStagesShaderBinding``, ``deviceGeneratedCommandsTransformFeedback``, ``deviceGeneratedCommandsMultiDrawIndirectCount``.
      - GPU token expansion / native Metal ICB. Used sequences snapshot token bytes and expand root, draw and vertex-input data on the GPU before native ICB execution. Native expansion and command encoding share one dispatch per 512-sequence slice; graphics crosses from compute to render. Poly stages retain their own expansion. The shared runtime library is compiled only for generated-command or indirect-count execution; application shaders gain no DGC MSL.
+     - No native-family threshold declared
      - On
      - Keeps state-changing D3D12 ExecuteIndirect signatures working where vkd3d-proton has no complete fallback; unused DGC adds no application-shader MSL or GPU preprocessing.
      - ExecuteIndirect tier 1.1 is unavailable; vkd3d-proton can skip state-changing indirect signatures without a DGC template. No shader-model or feature-level reduction or device-creation rejection is established for DGC alone.
@@ -183,6 +205,7 @@
      - GPU-counted ordinary multi-draw indirect commands.
        Controls: ``VK_KHR_draw_indirect_count``, ``VK_AMD_draw_indirect_count``, ``drawIndirectCount``.
      - GPU count filtering / native Metal ICB. Large native batches expand active draw records and encode ICB commands in one dispatch per 512-draw slice. Other selected routes filter indirect arguments on the GPU and retain their own stage work. Counts remain GPU-resident. No count command adds application-shader MSL. The shared maxDrawIndirectCount limit also serves native fixed-count draws and is retained.
+     - No native-family threshold declared
      - On
      - Preserves D3D12 counter-backed ExecuteIndirect and predication semantics; vkd3d-proton returns without executing these commands if drawIndirectCount is unavailable.
      - Counter-buffer and fallback-predicated ExecuteIndirect commands are skipped by vkd3d-proton. Its reported shader model and feature level can remain unchanged and no device-creation rejection is established; those reports do not provide the missing command semantics.
@@ -191,6 +214,7 @@
      - Fragment barycentric coordinates and per-vertex inputs.
        Controls: ``VK_KHR_fragment_shader_barycentric``, ``fragmentShaderBarycentric``, ``triStripVertexOrderIndependentOfProvokingVertex``.
      - native interpolation / corner transport. Legal center-only coordinates use native barycentric_coord. A representative float4 corner interpolation emits 4 fragment input reads and 20 scalar arithmetic assignments; its producer emits 155 temporary assignments versus 3 for the ordinary producer. Exact or reordered coordinates retain corner transport. These are emitted MSL counts; GPU timing is unmeasured.
+     - No native-family threshold declared
      - On
      - Preserves SM 6.1 barycentric shader support and the barycentric requirement of vkd3d-proton mesh shaders, which are required for feature level 12.2.
      - Without a translator fallback, SV_Barycentrics shaders are unavailable and vkd3d-proton normally disables mesh shaders; this prevents feature level 12.2 when its other requirements are met. The maximum reported shader model is not independently reduced by this entry.
@@ -199,6 +223,7 @@
      - Minimum and maximum sampler filtering on Apple8 and Apple9 GPUs.
        Controls: ``VK_EXT_sampler_filter_minmax``, ``samplerFilterMinmax``, ``filterMinmaxSingleComponentFormats``, ``filterMinmaxImageComponentMapping``, ``VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT``.
      - native Apple10 / software filter footprints. Apple10 uses native sampler reduction. Apple8 and Apple9 reduce up to 2^dimensions point taps per filtered mip, with up to two mip footprints and additional anisotropic footprints. Immutable MIN/MAX helpers omit weighted-result dispatch and inline internal taps; ordinary weighted sampling keeps its native path.
+     - No native-family threshold declared
      - On
      - DXVK uses min/max filtering for tiled-resource tier 2, which is required for D3D feature level 12_0; only samplers selecting reduction perform software taps.
      - Disabling min/max filtering can lower DXVK tiled-resource support below tier 2 and remove D3D feature level 12_0.
@@ -207,6 +232,7 @@
      - Descriptor heap addressing and shared image, buffer and sampler metadata.
        Controls: ``VK_EXT_descriptor_heap``, ``descriptorHeap``, ``descriptorHeapCaptureReplay``, ``samplerHeapAlignment``, ``resourceHeapAlignment``, ``maxSamplerHeapSize``, ``maxResourceHeapSize``, ``samplerDescriptorSize``, ``imageDescriptorSize``, ``bufferDescriptorSize``, ``samplerDescriptorAlignment``, ``imageDescriptorAlignment``, ``bufferDescriptorAlignment``, ``maxPushDataSize``, ``maxDescriptorHeapEmbeddedSamplers``, ``samplerYcbcrConversionCount``.
      - native resource handles / descriptor indirection. In emitted non-sparse, unrobust signatures, a buffer access uses one 8-byte heap-root load and one 16-byte packet load; a sampled texture/sampler pair uses two 8-byte heap-root loads plus one 8-byte sampler-metadata pointer load before shared decoding. Unused set shaders emit no heap access. GPU latency and relative speed are unmeasured.
+     - No native-family threshold declared
      - Off
      - Pinned DXVK and vkd3d-proton retain conventional descriptor binding, device creation and D3D SM/FL without this optional interface; no relative speedup is claimed.
      - Pinned DXVK/vkd3d-proton device creation and D3D SM/FL are unchanged; the Vulkan heap interface and vkd3d experimental work graphs are unavailable, and byte-offset views require descriptor-buffer support.
@@ -215,6 +241,7 @@
      - Explicit zero contents for requested device-memory allocations and ZERO_INITIALIZED images.
        Controls: ``VK_EXT_zero_initialize_device_memory``, ``zeroInitializeDeviceMemory``.
      - host clear / native Metal blit. Each flagged allocation clears the whole BO with CPU stores or a Metal buffer fill and completion wait. ZERO_INITIALIZED images use unoptimized storage to preserve zero bits. No shader instructions are added.
+     - No native-family threshold declared
      - Off
      - DXVK 3.1.1 and vkd3d-proton 3.1 do not require this allocation extension for D3D shader models, feature levels or device creation; vkd3d-proton retains its resource-clearing path.
      - D3D shader-model, feature-level and translator device-creation support remain; explicit Vulkan zero-initialized allocation requests and ZERO_INITIALIZED image layout are unavailable.
@@ -223,6 +250,7 @@
      - Restricted-depth storage views of native 3D textures.
        Controls: ``VK_EXT_image_sliced_view_of_3d``, ``imageSlicedViewOf3D``.
      - native texture / shader address adaptation. Selected 3D storage operations load slice bounds and adjust or reject Z coordinates; image-size queries replace the depth result. The native texture operation is retained. Sparse descriptors can add query-record loads. Runtime timing is unmeasured.
+     - No native-family threshold declared
      - On
      - Preserve restricted-depth D3D Texture3D UAV semantics: the pinned vkd3d-proton fallback uses the full depth and is not equivalent, so disabling is not established safe for the required D3D view contract.
      - D3D Texture3D FirstWSlice/WSize UAV semantics are lost; vkd3d-proton reports an unhandled depth view and uses the full depth while its reported SM/FL and device creation remain unchanged.
@@ -231,6 +259,7 @@
      - Single-layer image dimension alias guarantees.
        Controls: ``VK_KHR_maintenance11``, ``maintenance11``.
      - native views / typed descriptor selection. Native Metal plain and array views share the existing backing; selected shader accesses choose the appropriate typed descriptor address. Representative array storage load lowering adds one descriptor load and four pre-optimization ALU operations. Runtime timing is unmeasured.
+     - No native-family threshold declared
      - On
      - Preserve D3D single-layer dimension reinterpretation: the pinned vkd3d-proton legacy natural-view path has no maintenance11 guarantee or established equivalent native Metal argument-type fallback.
      - D3D single-layer 2D/2D-array descriptor reinterpretation loses its maintenance11 guarantee even though reported SM/FL and device creation are unchanged; DXVK uploads fall back to the graphics queue.
@@ -239,6 +268,7 @@
      - Multiple layers in uncompressed block-compatible views of compressed images.
        Controls: ``blockTexelViewCompatibleMultipleLayers``.
      - native per-layer views / layer and raster adaptation. Native per-layer views share backing; selected shader accesses select a layer descriptor. Cube filtering may add taps and layered attachments may use retained raster readers. Representative array-load lowering adds five descriptor or record loads and 37 pre-optimization ALU operations. Runtime timing is unmeasured.
+     - No native-family threshold declared
      - Off
      - DXVK has a per-layer compressed-upload fallback and does not use this optional maintenance6 property to choose D3D SM/FL or require device creation.
      - Reported D3D SM/FL and translator device creation are unchanged; public multi-layer raw block views are unavailable and DXVK uses per-layer uploads. Other maintenance6 guarantees and internal copy paths remain available.
@@ -247,6 +277,7 @@
      - Transform-feedback buffer output, geometry streams and stream queries.
        Controls: ``VK_EXT_transform_feedback``, ``VK_EXT_primitives_generated_query``, ``transformFeedback``, ``geometryStreams``, ``primitivesGeneratedQuery``, ``primitivesGeneratedQueryWithRasterizerDiscard``, ``primitivesGeneratedQueryWithNonZeroStreams``, ``maxTransformFeedbackStreams``, ``maxTransformFeedbackBuffers``, ``maxTransformFeedbackBufferSize``, ``maxTransformFeedbackStreamDataSize``, ``maxTransformFeedbackBufferDataSize``, ``maxTransformFeedbackBufferDataStride``, ``transformFeedbackQueries``, ``transformFeedbackStreamsLinesTriangles``, ``transformFeedbackRasterizationStreamSelect``, ``transformFeedbackDraw``, ``transformFeedbackPreservesTriangleFanProvokingVertex``.
      - compute / buffer output. Active feedback captures producer output, checks buffer room and writes enabled components and counters. A family-8 point-GS vec4 output adds 16 emitted MSL assignment/store sites to the raster sibling and a 115-site report program. These are static source sites, not native instruction counts; replay/report dispatch depends on actual use.
+     - No native-family threshold declared
      - On
      - vkd3d-proton requires transform-feedback queries for device creation, and D3D11 stream output requires the implemented output path.
      - vkd3d-proton rejects devices without transformFeedbackQueries; D3D11 stream output and dependent generated-primitive queries are unavailable.
@@ -255,6 +286,7 @@
      - Generated-primitive queries and the shared transform-feedback stream-query reports.
        Controls: ``VK_EXT_primitives_generated_query``, ``primitivesGeneratedQuery``, ``primitivesGeneratedQueryWithRasterizerDiscard``, ``primitivesGeneratedQueryWithNonZeroStreams``, ``transformFeedbackQueries``.
      - compute / counter reports. Active queries execute counter/report work without per-draw CPU readback. Family-8 emitted GS reports contain 33 assignment/store sites; VS/TES helper programs contain 82, or 190 with restart counting. Query-capable GS pipelines retain report MSL before query use; native report compilation and dispatch are lazy. Counts are static MSL sites, not native instructions.
+     - No native-family threshold declared
      - On
      - The shared report path supplies transformFeedbackQueries, which vkd3d-proton requires for device creation.
      - Generated-primitive queries and shared XFB stream-query reports are unavailable; clearing transformFeedbackQueries prevents vkd3d-proton device creation.
@@ -263,6 +295,7 @@
      - Triangle conservative overestimation, degenerate coverage and fully-covered fragment input.
        Controls: ``VK_EXT_conservative_rasterization``, ``extendedDynamicState3ConservativeRasterizationMode``, ``extendedDynamicState3ExtraPrimitiveOverestimationSize``, ``primitiveOverestimationSize``, ``maxExtraPrimitiveOverestimationSize``, ``extraPrimitiveOverestimationSizeGranularity``, ``primitiveUnderestimation``, ``conservativePointAndLineRasterization``, ``degenerateTrianglesRasterized``, ``degenerateLinesRasterized``, ``fullyCoveredFragmentShaderInputVariable``, ``conservativeRasterizationPostDepthCoverage``.
      - compute / raster expansion / fragment prolog. Enabled mode captures original vertices, expands coverage and reconstructs original interpolation in the fragment prolog. Family-8 support kernels contain 1935 clip, 1466 prepare, 45 output-setup and 175 output assignment/store sites; these are static MSL sites, not per-fragment native instruction counts. FullyCovered adds edge tests when read; static disabled mode emits ordinary VS/FS code.
+     - No native-family threshold declared
      - On
      - Conservative rasterization tier 1 is required for D3D12 feature level 12_1; the implementation also supplies higher-tier coverage behavior.
      - D3D12 conservative rasterization is unavailable, preventing feature levels 12_1 and 12_2; DXVK reports no D3D11 conservative-rasterization tier.
@@ -271,6 +304,7 @@
      - Rendering to single-sampled attachments with an implicit multisample color or depth/stencil attachment.
        Controls: ``VK_EXT_multisampled_render_to_single_sampled``, ``multisampledRenderToSingleSampled``.
      - native tile resolve / load expansion. Eligible whole-frame color passes use tile storage and native resolve with no expansion shader. LOAD, suspended or split passes retain private multisample backing and expand single-sample contents; unsupported native resolve modes use the shared meta path.
+     - No native-family threshold declared
      - Off
      - This optional extension has translator fallbacks; LOAD expansion can add a full attachment pass without raising a D3D shader model or feature level.
      - The extension and its feature are hidden; ANGLE uses its multisample fallback. D3D shader-model and feature-level reporting are unchanged.
@@ -279,6 +313,7 @@
      - Storage reads, writes and atomics on multisampled color images.
        Controls: ``shaderStorageImageMultisample``, ``storageImageSampleCounts``.
      - sample-plane storage / native attachment conversion. Storage operations select a single-sample plane. Attachment and input-attachment consumers convert exact samples to or from the native multisample image. Sampled multisample shaders retain a table-or-native selection when the feature is enabled; single-sampled shaders are unchanged.
+     - No native-family threshold declared
      - Off
      - Writable multisample textures are optional in vkd3d-proton and do not raise its base shader model or feature level; disabling them retains native MSAA sampling without sample-plane selection.
      - D3D12 WriteableMSAATexturesSupported becomes false; vkd3d-proton base shader-model, feature-level and device-creation requirements are unchanged. Ordinary MSAA and multisampled local reads remain available.

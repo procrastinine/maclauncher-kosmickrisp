@@ -18,7 +18,7 @@ kk_emulation_token(const char *begin, size_t length, const char *name)
 }
 
 void
-kk_emulation_apply(const char *value,
+kk_emulation_apply(const char *value, unsigned apple_family,
                     struct vk_device_extension_table *extensions,
                     struct vk_features *features,
                     struct vk_properties *properties)
@@ -74,7 +74,10 @@ kk_emulation_apply(const char *value,
       cursor = *end ? end + 1 : end;
    }
    for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i) {
-      if (!enabled[i]) kk_emulation_disable(i, extensions, features, properties);
+      bool native = kk_emulation_native_from[i] &&
+                    kk_emulation_native_from[i] <= apple_family;
+      if (!enabled[i] && !native)
+         kk_emulation_disable(i, extensions, features, properties);
    }
    for (unsigned i = 0; i < VK_DEVICE_EXTENSION_COUNT; ++i) {
       if (hidden[i]) {

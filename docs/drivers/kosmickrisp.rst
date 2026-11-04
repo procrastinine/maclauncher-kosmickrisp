@@ -145,6 +145,9 @@ The table lists each entry's emulated behavior, cost, performance default,
 the reason for that default, the effect of disabling it, and the token that
 enables it in performance mode.
 
+Native-family thresholds and the relationship to Metal capabilities are described
+in :doc:`kosmickrisp/apple-gpu-families`.
+
 .. include:: kosmickrisp/emulation.rst
 
 Building
