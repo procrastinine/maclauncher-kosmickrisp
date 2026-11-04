@@ -304,6 +304,7 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
    cmd->pending_barrier = (struct kk_barrier_scope){0};
    cmd->closed_encoder_stages = 0;
    cmd->render_pass_begun = false;
+   cmd->partial_pass_store_unordered = false;
    cmd->encoder_occlusion = false;
    cmd->transient_candidate = false;
    cmd->transient_preflight_done = false;
@@ -651,6 +652,13 @@ cs_get_compute_internal(struct kk_cmd_buffer *cmd, bool preserve_pipeline)
       cmd->compute_bound_table = NULL;
       if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL))
          kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_COMPUTE_ENCODER_BEGIN, 0);
+      if (cmd->partial_pass_store_unordered) {
+         cmd->pending_barrier.src |= MTL_STAGE_FRAGMENT | MTL_STAGE_TILE;
+         cmd->pending_barrier.dst |= MTL_STAGE_DISPATCH | MTL_STAGE_BLIT;
+         cmd->pending_barrier.visibility =
+            MAX2(cmd->pending_barrier.visibility, MTL_VISIBILITY_DEVICE);
+         cmd->partial_pass_store_unordered = false;
+      }
       apply_pending_barrier(cmd, cmd->metal.compute);
       kk_cmd_bind_compute_arguments(cmd, cmd->metal.compute, cmd->argument_table);
       kk_encoder_update_debug(cmd, cmd->metal.compute);

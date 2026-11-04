@@ -484,6 +484,10 @@ struct kk_cmd_buffer {
    /* A render pass has begun in this command buffer. kk_begin_rendering
     * orders a later partial-area pass behind the earlier passes. */
    bool render_pass_begun;
+   /* A partial-area pass ended unordered since the last compute encoder
+    * started. Its whole-tile store can reach pixels outside its render area,
+    * so the next compute encoder (copies, clears, dispatches) waits for it. */
+   bool partial_pass_store_unordered;
    bool encoder_occlusion;
    /* Recorded once, immutable until reset. Ordinary commands use the inline
     * native handle; split Mesh commands use the existing parts allocation. */

@@ -758,10 +758,16 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
 
    /* A logical pass end has no implicit dependency on the next pass.
     * Internal resolves still consume these attachment writes. */
-   if (need_meta_resolve)
+   if (need_meta_resolve) {
       cs_end(cmd);
-   else
+   } else {
       cs_end_unordered(cmd);
+      /* A partial-area pass stored whole tiles, including pixels outside its
+       * render area that a later copy or dispatch may write without a
+       * barrier. The next compute encoder waits for this store. */
+      cmd->partial_pass_store_unordered |=
+         !render->rendering_to_whole_framebuffer;
+   }
    kk_render_pass_release(cmd, cmd->state.gfx.render_pass_descriptor);
    cmd->state.gfx.render_pass_descriptor = NULL;
 
