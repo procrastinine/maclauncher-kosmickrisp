@@ -27,6 +27,8 @@ struct kk_sync_timeline {
    /* Completion queries must not free this sync while its signal publisher
     * still accesses it after the GPU may have completed the native signal. */
    mtx_t publish_mutex;
+   /* A status poll must not wait for a publisher or retire its storage. */
+   uint32_t publishers;
    /* Shared opaque payloads can outlive their creating device. Only blocked
     * calls register their current device for publication notification. */
    mtx_t pending_mutex;
@@ -55,6 +57,24 @@ kk_sync_mark_pending(struct kk_sync_timeline *sync, uint64_t value)
       }
       old = previous;
    }
+}
+
+/* Enter before the mutex. The pending lock covers the final guard update
+ * and is also taken by destruction, preserving the blocking wait barrier. */
+static inline void
+kk_sync_publish_begin(struct kk_sync_timeline *sync)
+{
+   p_atomic_inc(&sync->publishers);
+   mtx_lock(&sync->publish_mutex);
+}
+
+static inline void
+kk_sync_publish_end(struct kk_sync_timeline *sync)
+{
+   mtx_lock(&sync->pending_mutex);
+   mtx_unlock(&sync->publish_mutex);
+   p_atomic_dec(&sync->publishers);
+   mtx_unlock(&sync->pending_mutex);
 }
 
 extern const struct vk_sync_type kk_sync_type;

@@ -58,13 +58,18 @@ kk_sync_pending_init(struct kk_sync_timeline *sync)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    list_inithead(&sync->pending_waits);
    p_atomic_set(&sync->pending_waiters, 0);
+   p_atomic_set(&sync->publishers, 0);
    return VK_SUCCESS;
 }
 
 void
 kk_sync_pending_finish(struct kk_sync_timeline *sync)
 {
+   /* A blocking completion query may pass publish_mutex while the publisher
+    * retires its atomic guard. Join that final storage access here. */
+   mtx_lock(&sync->pending_mutex);
    assert(list_is_empty(&sync->pending_waits));
+   mtx_unlock(&sync->pending_mutex);
    mtx_destroy(&sync->pending_mutex);
 }
 
@@ -130,10 +135,10 @@ kk_timeline_signal(struct vk_device *device, struct vk_sync *sync,
 {
    struct kk_sync_timeline *timeline =
       container_of(sync, struct kk_sync_timeline, base);
-   mtx_lock(&timeline->publish_mutex);
+   kk_sync_publish_begin(timeline);
    mtl_shared_event_set_signaled_value(timeline->mtl_handle, value);
    kk_sync_mark_pending(timeline, value);
-   mtx_unlock(&timeline->publish_mutex);
+   kk_sync_publish_end(timeline);
    return vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
 }
 
@@ -156,6 +161,27 @@ kk_timeline_wait_impl(struct vk_device *device, struct vk_sync *sync,
 {
    struct kk_sync_timeline *timeline =
       container_of(sync, struct kk_sync_timeline, base);
+
+   /* Status queries observe completion without asking Metal to wait or
+    * blocking behind a preempted signal publisher. Committed is not completed.
+    * Read the event before the publisher guard: a successful result must see
+    * both GPU completion and the publisher's final storage access. */
+   if (abs_timeout_ns == 0) {
+      if (vk_device_is_lost(device))
+         return VK_ERROR_DEVICE_LOST;
+      bool ready;
+      if (wait_flags & VK_SYNC_WAIT_PENDING) {
+         ready = p_atomic_read(&timeline->pending_value) >= wait_value;
+      } else {
+         uint64_t completed =
+            mtl_shared_event_get_signaled_value(timeline->mtl_handle);
+         ready = completed >= wait_value &&
+                 p_atomic_read(&timeline->publishers) == 0;
+      }
+      if (vk_device_is_lost(device))
+         return VK_ERROR_DEVICE_LOST;
+      return ready ? VK_SUCCESS : VK_TIMEOUT;
+   }
 
    if (wait_flags & VK_SYNC_WAIT_PENDING) {
       if (vk_device_is_lost(device))

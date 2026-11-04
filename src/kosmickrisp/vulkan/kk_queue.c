@@ -447,11 +447,11 @@ kk_queue_submit_internal(struct vk_queue *vk_queue, struct vk_queue_submit *subm
       struct vk_sync_signal *signal = &submit->signals[i];
       struct kk_sync_timeline *sync =
          container_of(signal->sync, struct kk_sync_timeline, base);
-      mtx_lock(&sync->publish_mutex);
+      kk_sync_publish_begin(sync);
       mtl_signal_event(queue->mtl_handle, sync->mtl_handle,
                        signal->signal_value);
       kk_sync_mark_pending(sync, signal->signal_value);
-      mtx_unlock(&sync->publish_mutex);
+      kk_sync_publish_end(sync);
    }
 
    return VK_SUCCESS;
