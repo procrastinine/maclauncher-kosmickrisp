@@ -1,5 +1,5 @@
 # macOS Apple M2 Max, Vulkan CTS 1.4.7.1.
 # Recorded failures are unresolved defects, not exclusions from execution.
 
-# Software binary64 graphics subgroup reduction: arm64 and x86_64.
-dEQP-VK.subgroups.arithmetic.graphics.subgroupadd_dvec3,Fail
+# Dedicated TES subgroup cases are NotSupported while TES is not advertised.
+# Other graphics stages and compute retain their ordinary CTS assertions.
