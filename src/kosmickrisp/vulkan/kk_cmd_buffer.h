@@ -610,6 +610,15 @@ void kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
 
 void kk_cmd_write(struct kk_cmd_buffer *cmd, struct libkk_imm_write write);
 
+static inline bool
+kk_dependency_info_is_empty(const VkDependencyInfo *dependency)
+{
+   return dependency->pNext == NULL && dependency->dependencyFlags == 0 &&
+          dependency->memoryBarrierCount == 0 &&
+          dependency->bufferMemoryBarrierCount == 0 &&
+          dependency->imageMemoryBarrierCount == 0;
+}
+
 void kk_cmd_buffer_set_label(struct kk_cmd_buffer *cb, const char *label);
 
 

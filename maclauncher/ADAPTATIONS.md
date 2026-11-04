@@ -118,7 +118,7 @@ Implementation: [kk_cmd_buffer.h](../src/kosmickrisp/vulkan/kk_cmd_buffer.h), [k
 
 Vulkan contract: Apply synchronization2 event dependencies through pipeline barriers.
 
-Applies every VkDependencyInfo through kk_CmdPipelineBarrier2, preserving shared attachment stores, encoder splits, compute barriers and event status. SYNC_FD and ordinary synchronization remain upstream.
+Event waits use the shared pipeline-barrier path, preserving attachment stores, encoder splits and event status. Within a compute encoder, nonempty dependencies at one event-wait point share one full dispatch/blit barrier; an entirely empty wait emits none. Graphics dependencies retain their individual attachment and encoder decisions. SYNC_FD and ordinary synchronization remain unchanged.
 
 Scope: synchronization2 event waits. Device support and operation restrictions are defined by the linked implementation.
 
@@ -864,7 +864,7 @@ Implementation: [kk_sampler.h](../src/kosmickrisp/vulkan/kk_sampler.h), [kk_samp
 
 Vulkan contract: `VK_KHR_external_memory_fd`.
 
-Adds owning OPAQUE_FD memory backed by shared no-copy buffers, including compatible single-layer two-dimensional external color images. Ordinary resources retain their existing allocation and encoding paths.
+Adds owning OPAQUE_FD memory backed by shared no-copy buffers, including compatible single-layer two-dimensional external color images. Ordinary resources retain their existing allocation and encoding paths. Allocation parameters are parsed in one shared pass, and FD-backed images select their shared linear layout before considering native layout optimization. FD metadata and native-buffer associations exist only for external allocations.
 
 Scope: ordinary heap allocation, Metal and host imports, resource binding and encoding. Device support and operation restrictions are defined by the linked implementation.
 

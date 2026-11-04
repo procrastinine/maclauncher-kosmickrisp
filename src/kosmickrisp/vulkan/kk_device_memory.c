@@ -89,11 +89,9 @@ kk_fd_dedicated_description(const VkMemoryAllocateInfo *info, uint64_t out[12])
 static VkResult
 kk_allocate_fd_memory(struct kk_device *dev, const VkMemoryAllocateInfo *info,
                       const VkImportMemoryFdInfoKHR *import,
-                      struct kk_device_memory *mem)
+                      uint64_t page_size, struct kk_device_memory *mem)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
-   uint64_t page_size;
-   os_get_page_size(&page_size);
    if (!info->allocationSize || info->allocationSize > pdev->info.max_buffer_size ||
        KK_FD_PAYLOAD_OFFSET % page_size)
       return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
@@ -358,10 +356,31 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
    VK_FROM_HANDLE(kk_device, dev, device);
    struct kk_device_memory *mem;
    VkResult result = VK_SUCCESS;
-   const VkImportMemoryMetalHandleInfoEXT *metal_info = vk_find_struct_const(
-      pAllocateInfo->pNext, IMPORT_MEMORY_METAL_HANDLE_INFO_EXT);
-   const VkImportMemoryHostPointerInfoEXT *host_info = vk_find_struct_const(
-      pAllocateInfo->pNext, IMPORT_MEMORY_HOST_POINTER_INFO_EXT);
+   const VkImportMemoryMetalHandleInfoEXT *metal_info = NULL;
+   const VkImportMemoryHostPointerInfoEXT *host_info = NULL;
+   const VkImportMemoryFdInfoKHR *fd_info = NULL;
+   const VkMemoryPriorityAllocateInfoEXT *priority_info = NULL;
+
+   /* Parse allocation parameters once for all backing types. In particular,
+    * ordinary allocations need no separate external-FD extension-chain walk. */
+   vk_foreach_struct_const(sType, info, pAllocateInfo->pNext) {
+      switch (sType) {
+      case VK_STRUCTURE_TYPE_IMPORT_MEMORY_METAL_HANDLE_INFO_EXT:
+         metal_info = info;
+         break;
+      case VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT:
+         host_info = info;
+         break;
+      case VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR:
+         fd_info = info;
+         break;
+      case VK_STRUCTURE_TYPE_MEMORY_PRIORITY_ALLOCATE_INFO_EXT:
+         priority_info = info;
+         break;
+      default:
+         break;
+      }
+   }
 
    struct kk_physical_device *pdev = kk_device_physical(dev);
    VkMemoryPropertyFlags properties =
@@ -379,8 +398,6 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
    if (!mem)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   const VkImportMemoryFdInfoKHR *fd_info =
-      vk_find_struct_const(pAllocateInfo->pNext, IMPORT_MEMORY_FD_INFO_KHR);
    if ((fd_info && fd_info->handleType) ||
        (mem->vk.export_handle_types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT)) {
       if ((metal_info && metal_info->handleType) ||
@@ -389,7 +406,7 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
          result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
          goto fail_alloc;
       }
-      result = kk_allocate_fd_memory(dev, pAllocateInfo, fd_info, mem);
+      result = kk_allocate_fd_memory(dev, pAllocateInfo, fd_info, alignment, mem);
       if (result != VK_SUCCESS)
          goto fail_alloc;
       goto set_priority;
@@ -482,12 +499,8 @@ fail_import:
    }
 
 set_priority:
-   {
-      const VkMemoryPriorityAllocateInfoEXT *priority_info =
-         vk_find_struct_const(pAllocateInfo->pNext, MEMORY_PRIORITY_ALLOCATE_INFO_EXT);
-      kk_device_memory_set_priority(dev, mem,
-                                    priority_info ? priority_info->priority : 0.5f);
-   }
+   kk_device_memory_set_priority(dev, mem,
+                                 priority_info ? priority_info->priority : 0.5f);
 
    *pMem = kk_device_memory_to_handle(mem);
 

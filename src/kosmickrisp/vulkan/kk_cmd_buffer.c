@@ -680,11 +680,7 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
     * entirely empty dependency needs neither an encoder barrier nor a render
     * pass restart. Keep extension chains and dependency flags on the existing
     * path, and preserve barriers with stage scopes but empty access masks. */
-   if (pDependencyInfo->pNext == NULL &&
-       pDependencyInfo->dependencyFlags == 0 &&
-       pDependencyInfo->memoryBarrierCount == 0 &&
-       pDependencyInfo->bufferMemoryBarrierCount == 0 &&
-       pDependencyInfo->imageMemoryBarrierCount == 0)
+   if (kk_dependency_info_is_empty(pDependencyInfo))
       return;
 
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
