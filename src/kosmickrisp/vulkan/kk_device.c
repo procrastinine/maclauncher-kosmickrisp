@@ -6,6 +6,7 @@
  */
 
 #include "kk_device.h"
+#include "kk_bo.h"
 #include "kk_sparse.h"
 #include "kk_descriptor_set.h"
 #include "kk_dgc.h"
@@ -362,6 +363,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
 
    /* We need to initialize the device residency set before any bo is created. */
    simple_mtx_init(&dev->residency_set.mutex, mtx_plain);
+   list_inithead(&dev->residency_set.allocations);
    dev->residency_set.handle = mtl_new_residency_set(dev->mtl_handle);
    if (dev->residency_set.handle == NULL)
       goto fail_compiler;
@@ -534,6 +536,50 @@ kk_GetDeviceProcAddr(VkDevice _device, const char *pName)
 {
    VK_FROM_HANDLE(kk_device, device, _device);
    return kk_device_get_proc_addr(device, pName);
+}
+
+static mtl_allocation *
+kk_bo_allocation(struct kk_bo *bo)
+{
+   return bo->mtl_handle ? (mtl_allocation *)bo->mtl_handle
+                         : (mtl_allocation *)bo->map;
+}
+
+void
+kk_device_add_bo_to_residency_set(struct kk_device *dev, struct kk_bo *bo)
+{
+   mtl_allocation *allocation = kk_bo_allocation(bo);
+   simple_mtx_lock(&dev->residency_set.mutex);
+   list_inithead(&bo->residency_alias_link);
+   if (mtl_residency_set_contains_allocation(dev->residency_set.handle,
+                                             allocation)) {
+      /* Only imported native aliases need a lookup; ordinary new allocations
+       * take the constant-time path and allocate no reference-count record. */
+      list_for_each_entry(struct kk_bo, alias, &dev->residency_set.allocations,
+                          residency_link) {
+         if (kk_bo_allocation(alias) == allocation) {
+            list_addtail(&bo->residency_alias_link, &alias->residency_alias_link);
+            break;
+         }
+      }
+   } else {
+      mtl_residency_set_add_allocation(dev->residency_set.handle, allocation);
+   }
+   list_addtail(&bo->residency_link, &dev->residency_set.allocations);
+   simple_mtx_unlock(&dev->residency_set.mutex);
+}
+
+void
+kk_device_remove_bo_from_residency_set(struct kk_device *dev, struct kk_bo *bo)
+{
+   simple_mtx_lock(&dev->residency_set.mutex);
+   bool last_alias = list_is_empty(&bo->residency_alias_link);
+   list_del(&bo->residency_alias_link);
+   list_del(&bo->residency_link);
+   if (last_alias)
+      mtl_residency_set_remove_allocation(dev->residency_set.handle,
+                                          kk_bo_allocation(bo));
+   simple_mtx_unlock(&dev->residency_set.mutex);
 }
 
 void

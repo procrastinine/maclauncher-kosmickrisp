@@ -76,7 +76,7 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
        MTL_RESOURCE_STORAGE_MODE_SHARED)
       bo->cpu = mtl_get_contents(map);
 
-   kk_device_add_heap_to_residency_set(dev, handle);
+   kk_device_add_bo_to_residency_set(dev, bo);
 
    *bo_out = bo;
    return result;
@@ -94,10 +94,7 @@ kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
 {
    /* We may only have a mapped buffer, for example if the memory was imported
     * from a host pointer */
-   if (bo->mtl_handle)
-      kk_device_remove_heap_from_residency_set(dev, bo->mtl_handle);
-   else
-      kk_device_remove_buffer_from_residency_set(dev, bo->map);
+   kk_device_remove_bo_from_residency_set(dev, bo);
 
    mtl_release(bo->map);
 

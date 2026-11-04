@@ -8,6 +8,7 @@
 #define KK_BO_H 1
 
 #include "kosmickrisp/bridge/mtl_types.h"
+#include "util/list.h"
 
 #include "vulkan/vulkan_core.h"
 
@@ -23,6 +24,8 @@ struct kk_bo {
    uint64_t size_B;
    uint64_t gpu; // GPU address
    void *cpu;    // CPU address
+   struct list_head residency_link;
+   struct list_head residency_alias_link;
 };
 
 struct kk_ptr {

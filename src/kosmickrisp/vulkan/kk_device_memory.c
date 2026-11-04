@@ -172,12 +172,13 @@ fail_import:
       }
       if (import_metal) {
          mem->bo->size_B = mtl_heap_get_size(mem->bo->mtl_handle);
-         kk_device_add_heap_to_residency_set(dev, mem->bo->mtl_handle);
+
       } else {
          mem->bo->size_B = mtl_buffer_get_length(mem->bo->map);
-         kk_device_add_buffer_to_residency_set(dev, mem->bo->map);
+
       }
 
+      kk_device_add_bo_to_residency_set(dev, mem->bo);
       mem->bo->gpu = mtl_buffer_get_gpu_address(mem->bo->map);
       if (host_visible)
          mem->bo->cpu = mtl_get_contents(mem->bo->map);

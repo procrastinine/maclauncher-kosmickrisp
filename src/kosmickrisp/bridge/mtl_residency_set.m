@@ -50,6 +50,14 @@ mtl_residency_set_remove_allocation(mtl_residency_set *residency_set,
    }
 }
 
+bool
+mtl_residency_set_contains_allocation(mtl_residency_set *residency_set,
+                                      mtl_allocation *allocation)
+{
+   return [(id<MTLResidencySet>)residency_set
+      containsAllocation:(id<MTLAllocation>)allocation];
+}
+
 void
 mtl_residency_set_commit(mtl_residency_set *residency_set)
 {

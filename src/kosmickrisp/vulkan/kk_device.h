@@ -35,6 +35,7 @@ struct vk_pipeline_cache;
 struct kk_residency_set {
    simple_mtx_t mutex;
    mtl_residency_set *handle;
+   struct list_head allocations;
 };
 
 struct mtl_sampler_packed {
@@ -142,6 +143,8 @@ VkResult kk_device_init_meta(struct kk_device *dev);
 void kk_device_finish_meta(struct kk_device *dev);
 VkResult kk_device_init_lib(struct kk_device *dev);
 void kk_device_finish_lib(struct kk_device *dev);
+void kk_device_add_bo_to_residency_set(struct kk_device *dev, struct kk_bo *bo);
+void kk_device_remove_bo_from_residency_set(struct kk_device *dev, struct kk_bo *bo);
 void kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap);
 void kk_device_remove_heap_from_residency_set(struct kk_device *dev,
                                               mtl_heap *heap);
