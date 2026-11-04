@@ -297,6 +297,26 @@ kk_mesh_bind_parameters(struct kk_cmd_buffer *cmd, mtl_argument_table *table,
    return true;
 }
 
+/* Native unsliced Task and Mesh shaders read only the statistic addresses
+ * from their parameters. While no statistic is active, the draws of a command
+ * buffer share one zero block instead of uploading their own. */
+static bool
+kk_mesh_bind_native_parameters(struct kk_cmd_buffer *cmd, mtl_argument_table *table,
+                               const struct kk_mesh_params *params)
+{
+   if (params->task_statistic || params->mesh_statistic || params->primitive_statistic)
+      return kk_mesh_bind_parameters(cmd, table, params);
+   if (!cmd->state.gfx.mesh_idle_params) {
+      const struct kk_mesh_params idle = {0};
+      struct kk_ptr gpu = kk_pool_upload(cmd, &idle, sizeof(idle), 8);
+      if (!gpu.gpu)
+         return false;
+      cmd->state.gfx.mesh_idle_params = gpu.gpu;
+   }
+   mtl_set_address(table, cmd->state.gfx.mesh_idle_params, KK_ARGUMENT_MESH_PARAMETERS);
+   return true;
+}
+
 static bool
 kk_mesh_bind_draw(struct kk_cmd_buffer *cmd, mtl_argument_table *table,
                     uint32_t draw_id)
@@ -435,7 +455,7 @@ kk_draw_mesh_unsliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          p.max_draw_count = cmd->mesh_chunk.groups;
       }
       if (!virtual) {
-         if (params_needed && !kk_mesh_bind_parameters(cmd, table, &p))
+         if (params_needed && !kk_mesh_bind_native_parameters(cmd, table, &p))
             return;
          if (count || cmd->state.cond_render.enabled) {
             struct kk_ptr b = kk_pool_alloc(cmd, sizeof(struct kk_mesh_batch), 8);
@@ -868,6 +888,9 @@ kk_draw_mesh_one_view(struct kk_cmd_buffer *cmd, struct mtl_size direct,
       uint32_t width = MIN2(maximum, KK_MESH_MAX_DIMENSION);
       uint64_t physical = width ? (uint64_t)width * DIV_ROUND_UP(maximum, width) : 0;
       if (!retained && physical <= physical_span) {
+         if (KK_DEBUG(MSL))
+            fprintf(stderr, "mesh route: unsliced task=%u bound=%u virtual=%u count=%u\n",
+               info->has_task, info->task_grid_bound, virtual, count != 0);
          kk_draw_mesh_unsliced(cmd, direct, indirect, count, draw_count, stride, force_virtual);
          return;
       }
@@ -878,11 +901,17 @@ kk_draw_mesh_one_view(struct kk_cmd_buffer *cmd, struct mtl_size direct,
       if (info->has_task)
          span /= MAX2(info->task_grid_bound, 1u);
       if (!retained && !indirect && groups <= span) {
+         if (KK_DEBUG(MSL))
+            fprintf(stderr, "mesh route: unsliced task=%u bound=%u virtual=%u count=%u\n",
+               info->has_task, info->task_grid_bound, virtual, count != 0);
          kk_draw_mesh_unsliced(cmd, direct, indirect, count, draw_count, stride, force_virtual);
          return;
       }
       slices = DIV_ROUND_UP(groups, span);
    }
+   if (KK_DEBUG(MSL))
+      fprintf(stderr, "mesh route: sliced task=%u bound=%u virtual=%u indirect=%u count=%u retained=%u slices=%u\n",
+         info->has_task, info->task_grid_bound, virtual, indirect != 0, count != 0, retained, slices);
    kk_draw_mesh_sliced(cmd, direct, indirect, count, draw_count, stride,
                          virtual, span, slices);
 }

@@ -292,6 +292,8 @@ struct kk_graphics_state {
    uint64_t mesh_native_batch, mesh_native_slices;
    uint64_t mesh_retained_outputs, mesh_retained_output_bytes;
    uint64_t mesh_per_draw_address;
+   /* Zero mesh parameters shared by native draws while no query is active. */
+   uint64_t mesh_idle_params;
    struct kk_mesh_retained_consumer mesh_retained_consumer;
    bool polygon_points;
    bool poly_replay_active;
