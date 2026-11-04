@@ -291,7 +291,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    const bool layered_bc = kk_layered_bc_rendering_info_requested(pRenderingInfo);
    /* Per-layer physical passes cannot use whole-pass memoryless retention.
     * Reuse the existing private commitment path for paired transient views. */
-   if (p_atomic_read(&dev->has_lazy_memory)) {
+   if (p_atomic_read(&dev->live_lazy_allocations)) {
       const bool transient_safe = cmd->transient_safe;
       cmd->transient_safe &= !layered_bc;
       VkResult result = kk_transient_prepare_rendering(cmd, pRenderingInfo);
@@ -751,7 +751,7 @@ kk_CmdBeginCustomResolveEXT(
    };
 
    kk_CmdEndRendering2KHR(commandBuffer, &end_info);
-   kk_CmdBeginRendering(commandBuffer, &rendering_info);
+   kk_begin_rendering(commandBuffer, &rendering_info);
 }
 
 VKAPI_ATTR void VKAPI_CALL

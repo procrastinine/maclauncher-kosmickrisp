@@ -19,10 +19,8 @@ kk_image_plane_is_committed(const struct kk_image_plane *plane)
 }
 
 mtl_texture *
-kk_image_plane_render_base(const struct kk_image_plane *plane)
+kk_image_plane_memoryless_render_base(const struct kk_image_plane *plane)
 {
-   if (!plane->memoryless)
-      return plane->mtl_handle;
    simple_mtx_lock(&plane->mem->transient_mutex);
    mtl_texture *texture = plane->private_handle ?: plane->mtl_handle;
    simple_mtx_unlock(&plane->mem->transient_mutex);
@@ -174,12 +172,10 @@ kk_transient_prepare_rendering(struct kk_cmd_buffer *cmd,
 }
 
 mtl_texture *
-kk_transient_render_texture(const struct kk_image_view *view)
+kk_transient_memoryless_render_texture(const struct kk_image_view *view)
 {
    const struct kk_image *image = container_of(view->vk.image, struct kk_image, vk);
    const struct kk_image_plane *plane = &image->planes[0];
-   if (!plane->memoryless)
-      return view->planes[0].mtl_handle_render;
    simple_mtx_lock(&plane->mem->transient_mutex);
    mtl_texture *texture = view->planes[0].transient_private ?:
       view->planes[0].mtl_handle_render;

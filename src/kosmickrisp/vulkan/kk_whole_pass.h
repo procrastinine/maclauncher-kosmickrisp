@@ -47,7 +47,7 @@ static void
 kk_whole_pass_save(struct kk_cmd_buffer *cmd, const VkRenderingInfo *info)
 {
    struct kk_whole_pass_state *pass = &cmd->whole_pass;
-   memset(pass, 0, sizeof(*pass));
+   pass->suspended = false;
    pass->area = info->renderArea;
    pass->layers = info->layerCount;
    pass->view_mask = info->viewMask;
@@ -148,8 +148,8 @@ kk_whole_pass_end_rendering(VkCommandBuffer commandBuffer)
    kk_whole_pass_end_rendering2(commandBuffer, &info);
 }
 
-bool
-kk_whole_pass_local_barrier(const VkDependencyInfo *dep)
+enum kk_whole_pass_barrier_scope
+kk_whole_pass_classify_barrier(const VkDependencyInfo *dep)
 {
    const VkPipelineStageFlags2 stages =
       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
@@ -164,22 +164,28 @@ kk_whole_pass_local_barrier(const VkDependencyInfo *dep)
       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
    if (!(dep->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT) ||
        dep->bufferMemoryBarrierCount)
-      return false;
+      return KK_WHOLE_PASS_BARRIER_NONE;
+   bool attachment_only = true;
    for (uint32_t i = 0; i < dep->memoryBarrierCount; i++) {
       const VkMemoryBarrier2 *b = &dep->pMemoryBarriers[i];
+      attachment_only &= !((b->srcStageMask | b->dstStageMask) &
+                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
       if (((b->srcStageMask | b->dstStageMask) & ~stages) ||
           ((kk_whole_pass_attachment_access(b->srcAccessMask, b->srcStageMask) |
             kk_whole_pass_attachment_access(b->dstAccessMask, b->dstStageMask)) & ~access))
-         return false;
+         return KK_WHOLE_PASS_BARRIER_NONE;
    }
    for (uint32_t i = 0; i < dep->imageMemoryBarrierCount; i++) {
       const VkImageMemoryBarrier2 *b = &dep->pImageMemoryBarriers[i];
+      attachment_only &= !((b->srcStageMask | b->dstStageMask) &
+                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
       if (((b->srcStageMask | b->dstStageMask) & ~stages) ||
           ((kk_whole_pass_attachment_access(b->srcAccessMask, b->srcStageMask) |
             kk_whole_pass_attachment_access(b->dstAccessMask, b->dstStageMask)) & ~access))
-         return false;
+         return KK_WHOLE_PASS_BARRIER_NONE;
    }
-   return true;
+   return KK_WHOLE_PASS_BARRIER_LOCAL |
+          (attachment_only ? KK_WHOLE_PASS_BARRIER_ATTACHMENT : 0);
 }
 
 void
@@ -218,43 +224,26 @@ kk_whole_pass_command_boundary(struct kk_cmd_buffer *cmd)
 bool
 kk_whole_pass_attachment_barrier(const VkDependencyInfo *dep)
 {
-   if (!kk_whole_pass_local_barrier(dep))
-      return false;
-   const VkPipelineStageFlags2 stages =
-      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-      VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-      VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-   for (uint32_t i = 0; i < dep->memoryBarrierCount; i++) {
-      const VkMemoryBarrier2 *b = &dep->pMemoryBarriers[i];
-      if ((b->srcStageMask | b->dstStageMask) & ~stages)
-         return false;
-   }
-   for (uint32_t i = 0; i < dep->imageMemoryBarrierCount; i++) {
-      const VkImageMemoryBarrier2 *b = &dep->pImageMemoryBarriers[i];
-      if ((b->srcStageMask | b->dstStageMask) & ~stages)
-         return false;
-   }
-   return true;
+   return kk_whole_pass_classify_barrier(dep) & KK_WHOLE_PASS_BARRIER_ATTACHMENT;
 }
 
-/* Bind into an isolated state snapshot through Mesa's ordinary pipeline ops.
- * Only fixed native rasterization can prove that no later draw restarts. */
+/* Inspect immutable pipeline state without binding shaders, descriptors or
+ * a scratch command buffer. Only fixed native rasterization proves safety. */
 static bool
-kk_whole_pass_pipeline_native(struct kk_device *dev, VkPipeline handle)
+kk_whole_pass_pipeline_native(VkPipeline handle)
 {
    VK_FROM_HANDLE(vk_pipeline, pipeline, handle);
    if (pipeline->bind_point != VK_PIPELINE_BIND_POINT_GRAPHICS ||
        pipeline->stages & ~(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT))
       return false;
-   struct kk_cmd_buffer plan = {0};
-   plan.vk.base.device = &dev->vk;
-   vk_dynamic_graphics_state_init(&plan.vk.dynamic_graphics_state);
-   plan.vk.dynamic_graphics_state.vi = &plan.state.gfx._dynamic_vi;
-   plan.vk.dynamic_graphics_state.ms.sample_locations = &plan.state.gfx._dynamic_sl;
-   pipeline->ops->cmd_bind(&plan.vk, pipeline);
-   const struct vk_dynamic_graphics_state *dyn = &plan.vk.dynamic_graphics_state;
-   const struct kk_shader *vs = plan.state.shaders[MESA_SHADER_VERTEX];
-   const struct kk_shader *fs = plan.state.shaders[MESA_SHADER_FRAGMENT];
+   const struct vk_dynamic_graphics_state *dyn =
+      vk_pipeline_get_dynamic_graphics_state(pipeline);
+   if (!dyn)
+      return false;
+   const struct vk_shader *vk_vs = vk_pipeline_get_shader(pipeline, MESA_SHADER_VERTEX);
+   const struct vk_shader *vk_fs = vk_pipeline_get_shader(pipeline, MESA_SHADER_FRAGMENT);
+   const struct kk_shader *vs = vk_vs ? container_of(vk_vs, struct kk_shader, vk) : NULL;
+   const struct kk_shader *fs = vk_fs ? container_of(vk_fs, struct kk_shader, vk) : NULL;
    if (!vs || vs->info.has_geometry || (fs && fs->info.fs.emulates_per_vertex_inputs) ||
        !BITSET_TEST(dyn->set, MESA_VK_DYNAMIC_IA_PRIMITIVE_TOPOLOGY) ||
        !BITSET_TEST(dyn->set, MESA_VK_DYNAMIC_RS_POLYGON_MODE) ||
@@ -263,6 +252,7 @@ kk_whole_pass_pipeline_native(struct kk_device *dev, VkPipeline handle)
        dyn->rs.polygon_mode != VK_POLYGON_MODE_FILL ||
        dyn->rs.depth_bias.enable || dyn->ms.sample_locations_enable ||
        (fs && fs->info.fs.uses_flat_varyings &&
+        BITSET_TEST(dyn->set, MESA_VK_DYNAMIC_RS_PROVOKING_VERTEX) &&
         dyn->rs.provoking_vertex != VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT))
       return false;
    /* MS Bresenham lines change the pass's sample locations at the first draw. */
@@ -286,7 +276,7 @@ bool
 kk_whole_pass_transient_safe(struct kk_device *dev,
                              struct vk_command_buffer **commands, uint32_t count)
 {
-   if (!p_atomic_read(&dev->has_lazy_memory))
+   if (!p_atomic_read(&dev->live_lazy_allocations))
       return false;
    VkPipeline last_pipeline = VK_NULL_HANDLE;
    bool last_pipeline_native = false;
@@ -316,7 +306,7 @@ kk_whole_pass_transient_safe(struct kk_device *dev,
          case VK_CMD_BIND_PIPELINE:
             if (last_pipeline != entry->u.bind_pipeline.pipeline) {
                last_pipeline = entry->u.bind_pipeline.pipeline;
-               last_pipeline_native = kk_whole_pass_pipeline_native(dev, last_pipeline);
+               last_pipeline_native = kk_whole_pass_pipeline_native(last_pipeline);
             }
             pipeline_native = last_pipeline_native;
             if (!pipeline_native)

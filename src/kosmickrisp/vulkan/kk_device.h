@@ -123,7 +123,8 @@ struct kk_device {
     * commands due to Metal limitations */
    struct vk_device_dispatch_table exposed_dispatch_table;
 
-   bool has_lazy_memory;
+   /* Published only after successful lazy allocation, retired on free. */
+   uint32_t live_lazy_allocations;
    PFN_vkCmdBeginRendering whole_pass_begin_rendering;
    PFN_vkCmdEndRendering2KHR whole_pass_end_rendering;
 

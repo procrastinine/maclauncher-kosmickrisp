@@ -408,6 +408,10 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
    if (!mem)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
+   /* Lazy attachments and standard sparse-3D page aliases share this lock.
+    * The initializer needs no native mutex until its first lock operation. */
+   mem->transient_mutex = (simple_mtx_t)SIMPLE_MTX_INITIALIZER;
+
    if ((fd_info && fd_info->handleType) ||
        (mem->vk.export_handle_types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT)) {
       if ((metal_info && metal_info->handleType) ||
@@ -423,10 +427,6 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
    }
 
    mem->lazy = properties & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
-   if (mem->lazy) {
-      simple_mtx_init(&mem->transient_mutex, mtx_plain);
-      p_atomic_set(&dev->has_lazy_memory, true);
-   }
 
    bool import_metal = metal_info && metal_info->handleType;
    bool import_host = host_info && host_info->handleType;
@@ -512,13 +512,15 @@ set_priority:
    kk_device_memory_set_priority(dev, mem,
                                  priority_info ? priority_info->priority : 0.5f);
 
+   /* Only successful live allocations can require transient scans. */
+   if (mem->lazy)
+      p_atomic_inc(&dev->live_lazy_allocations);
    *pMem = kk_device_memory_to_handle(mem);
 
    return VK_SUCCESS;
 
 fail_alloc:
-   if (mem->lazy)
-      simple_mtx_destroy(&mem->transient_mutex);
+   simple_mtx_destroy(&mem->transient_mutex);
    vk_device_memory_destroy(&dev->vk, pAllocator, &mem->vk);
    return result;
 }
@@ -543,7 +545,8 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
    if (mem->bo)
       kk_destroy_bo(dev, mem->bo);
    if (mem->lazy)
-      simple_mtx_destroy(&mem->transient_mutex);
+      p_atomic_dec(&dev->live_lazy_allocations);
+   simple_mtx_destroy(&mem->transient_mutex);
 
    vk_device_memory_destroy(&dev->vk, pAllocator, &mem->vk);
 }

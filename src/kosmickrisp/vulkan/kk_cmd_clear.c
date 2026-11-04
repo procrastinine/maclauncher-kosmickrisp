@@ -121,7 +121,7 @@ clear_image(struct kk_cmd_buffer *cmd, struct kk_image *image,
          if (ranges[r].aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT)
             render.pStencilAttachment = &vk_att;
 
-         kk_CmdBeginRendering(kk_cmd_buffer_to_handle(cmd), &render);
+         kk_begin_rendering(kk_cmd_buffer_to_handle(cmd), &render);
 
          static const VkRenderingEndInfoKHR end_info = {
             .sType = VK_STRUCTURE_TYPE_RENDERING_END_INFO_KHR,

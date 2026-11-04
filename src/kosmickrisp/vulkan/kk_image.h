@@ -73,8 +73,16 @@ kk_image_is_standard_3d(const struct kk_image *image)
    return image->sparse && image->sparse->standard_3d;
 }
 
-mtl_texture *kk_image_plane_render_base(const struct kk_image_plane *);
+mtl_texture *kk_image_plane_memoryless_render_base(const struct kk_image_plane *);
 bool kk_image_plane_is_committed(const struct kk_image_plane *);
+
+static inline mtl_texture *
+kk_image_plane_render_base(const struct kk_image_plane *plane)
+{
+   if (!plane->memoryless)
+      return plane->mtl_handle;
+   return kk_image_plane_memoryless_render_base(plane);
+}
 
 #define kk_foreach_slice(ndx, image, subresource_member)                       \
    for (uint32_t ndx = region->subresource_member.baseArrayLayer;              \
@@ -160,7 +168,7 @@ mtl_texture *kk_image_plane_create_texture(struct kk_image_plane *plane,
 struct kk_cmd_buffer;
 struct kk_image_view;
 VkResult kk_transient_prepare_rendering(struct kk_cmd_buffer *, const VkRenderingInfo *);
-mtl_texture *kk_transient_render_texture(const struct kk_image_view *);
+mtl_texture *kk_transient_memoryless_render_texture(const struct kk_image_view *);
 VkResult kk_image_plane_require_private(struct kk_device *, struct kk_image_plane *);
 void kk_image_set_label(struct kk_image *image, const char *label);
 

@@ -254,7 +254,8 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
 
    memset(&cmd->state, 0, sizeof(cmd->state));
    cmd->uses_heap = false;
-   memset(&cmd->whole_pass, 0, sizeof(cmd->whole_pass));
+   /* Snapshot fields are read only while a saved scope is suspended. */
+   cmd->whole_pass.suspended = false;
    cmd->deferred_render_chain = false;
    cmd->pending_barrier = (struct kk_barrier_scope){0};
    cmd->closed_encoder_stages = 0;
@@ -777,7 +778,9 @@ cmd_pipeline_barrier(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
    struct kk_barrier_scope scope = {0};
    kk_barrier_scope_add_dependency(&scope, dep);
    if (cmd->metal.render) {
-      const bool local = kk_whole_pass_local_barrier(dep);
+      const enum kk_whole_pass_barrier_scope attachment_scope =
+         kk_whole_pass_classify_barrier(dep);
+      const bool local = attachment_scope & KK_WHOLE_PASS_BARRIER_LOCAL;
       if (kk_barrier_requires_encoder_split(cmd, dep) ||
           (cmd->state.gfx.render.samples > 1 && !local)) {
          kk_apply_attachment_store_ops(cmd, true);
@@ -786,7 +789,7 @@ cmd_pipeline_barrier(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
          cs_start_render(cmd);
          return;
       }
-      if (kk_whole_pass_attachment_barrier(dep))
+      if (attachment_scope & KK_WHOLE_PASS_BARRIER_ATTACHMENT)
          return;
    }
    emit_scoped_barrier(cmd, scope);

@@ -657,7 +657,13 @@ kk_begin_rendering(VkCommandBuffer, const VkRenderingInfo *);
 void kk_whole_pass_flush_suspended(struct kk_cmd_buffer *cmd);
 VkAccessFlags2 kk_whole_pass_attachment_access(VkAccessFlags2, VkPipelineStageFlags2);
 bool kk_whole_pass_attachment_barrier(const VkDependencyInfo *dep);
-bool kk_whole_pass_local_barrier(const VkDependencyInfo *dep);
+enum kk_whole_pass_barrier_scope {
+   KK_WHOLE_PASS_BARRIER_NONE = 0,
+   KK_WHOLE_PASS_BARRIER_LOCAL = 1,
+   KK_WHOLE_PASS_BARRIER_ATTACHMENT = 2,
+};
+enum kk_whole_pass_barrier_scope
+kk_whole_pass_classify_barrier(const VkDependencyInfo *dep);
 void kk_init_rendering_locations(struct kk_cmd_buffer *cmd, const VkRenderingInfo *info);
 VKAPI_ATTR void VKAPI_CALL kk_whole_pass_begin_rendering(VkCommandBuffer, const VkRenderingInfo *);
 VKAPI_ATTR void VKAPI_CALL kk_whole_pass_end_rendering(VkCommandBuffer);

@@ -35,6 +35,7 @@ struct nir_shader_compiler_options;
 struct spirv_to_nir_options;
 struct vk_command_buffer;
 struct vk_device;
+struct vk_dynamic_graphics_state;
 
 #ifdef __cplusplus
 extern "C" {
@@ -225,6 +226,11 @@ vk_pipeline_get_shader(struct vk_pipeline *pipeline,
 
    return pipeline->ops->get_shader(pipeline, stage);
 }
+
+/* Immutable state bound by the common graphics pipeline, or NULL for a
+ * library/custom pipeline. Dynamic fields remain unset. */
+const struct vk_dynamic_graphics_state *
+vk_pipeline_get_dynamic_graphics_state(const struct vk_pipeline *pipeline);
 
 void
 vk_cmd_unbind_pipelines_for_stages(struct vk_command_buffer *cmd_buffer,

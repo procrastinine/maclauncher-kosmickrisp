@@ -9,6 +9,7 @@
 #define KK_IMAGE_VIEW_H 1
 
 #include "kk_private.h"
+#include "kk_image.h"
 
 #include "kosmickrisp/bridge/mtl_types.h"
 
@@ -63,6 +64,15 @@ struct kk_image_view {
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(kk_image_view, vk.base, VkImageView,
                                VK_OBJECT_TYPE_IMAGE_VIEW)
+
+static inline mtl_texture *
+kk_transient_render_texture(const struct kk_image_view *view)
+{
+   const struct kk_image *image = container_of(view->vk.image, struct kk_image, vk);
+   if (!image->planes[0].memoryless)
+      return view->planes[0].mtl_handle_render;
+   return kk_transient_memoryless_render_texture(view);
+}
 
 VkResult kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
                             const VkImageViewCreateInfo *pCreateInfo);

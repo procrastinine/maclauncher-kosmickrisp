@@ -2033,6 +2033,18 @@ static const struct vk_pipeline_ops vk_graphics_pipeline_ops = {
    .get_shader = vk_graphics_pipeline_get_shader,
 };
 
+const struct vk_dynamic_graphics_state *
+vk_pipeline_get_dynamic_graphics_state(const struct vk_pipeline *pipeline)
+{
+   if (pipeline->ops != &vk_graphics_pipeline_ops ||
+       (pipeline->flags & VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR))
+      return NULL;
+
+   const struct vk_graphics_pipeline *gfx =
+      container_of(pipeline, const struct vk_graphics_pipeline, base);
+   return &gfx->linked.dynamic;
+}
+
 static VkResult
 vk_create_graphics_pipeline(struct vk_device *device,
                             struct vk_pipeline_cache *cache,
