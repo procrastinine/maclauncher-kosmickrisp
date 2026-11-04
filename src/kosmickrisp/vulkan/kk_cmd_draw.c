@@ -2735,12 +2735,8 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_shader *vs = cmd->state.gfx.shader;
-   bool conservative = vs->info.conservative && dyn->rs.conservative_mode ==
-      VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT;
-   if (conservative != gfx->conservative) {
-      gfx->conservative = conservative;
-      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
-   }
+   if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_CONSERVATIVE_MODE))
+      kk_cmd_buffer_update_conservative(cmd, vs);
    bool point = kk_polygon_expansion_active(cmd);
    if (point && BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE))
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORTS);

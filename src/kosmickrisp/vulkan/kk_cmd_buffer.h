@@ -504,6 +504,21 @@ void kk_meta_resolve_rendering(struct kk_cmd_buffer *cmd,
 struct kk_ptr kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size,
                             uint32_t alignment);
 
+/* Shader eligibility is compiled once. Refresh the selector at bind or on a
+ * conservative-mode state change, never by re-evaluating every draw. */
+static inline void
+kk_cmd_buffer_update_conservative(struct kk_cmd_buffer *cmd,
+                                 const struct kk_shader *shader)
+{
+   struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
+   bool active = shader->info.conservative && dyn->rs.conservative_mode ==
+      VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT;
+   if (active != cmd->state.gfx.conservative) {
+      cmd->state.gfx.conservative = active;
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
+   }
+}
+
 struct kk_ptr kk_pool_upload(struct kk_cmd_buffer *cmd, const void *data,
                              uint32_t size, uint32_t alignment);
 

@@ -3102,6 +3102,7 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
       return;
    if (!shader) return;
    cmd->state.gfx.shader = shader;
+   kk_cmd_buffer_update_conservative(cmd, shader);
 
    struct kk_descriptor_state *desc = &cmd->state.gfx.descriptors;
    desc->root_dirty |= shader->info.descriptor_heap != desc->descriptor_heap || shader->info.push_size > desc->push_size;
