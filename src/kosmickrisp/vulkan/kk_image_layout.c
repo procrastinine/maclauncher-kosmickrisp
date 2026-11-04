@@ -315,8 +315,16 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
                                     image->create_flags, format),
       initial_layout) &&
       !(image->compr_flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
+   /* Atomic usage adds shader writes, which make a placement sparse texture
+    * sparse tier 1. A 1D/2D sparse image reaches atomics only through
+    * storage usage, so without it the texture stays tier 2. */
+   const bool sparse_2d_without_storage =
+      (image->create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&
+      image->image_type != VK_IMAGE_TYPE_3D &&
+      !(usage & VK_IMAGE_USAGE_STORAGE_BIT);
    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(
-      usage, requires_format_view, supported_format->atomic);
+      usage, requires_format_view,
+      supported_format->atomic && !sparse_2d_without_storage);
    layout->block_texel_view_compatible =
       (image->create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) != 0;
    layout->format.pipe = kk_format_backing(format);

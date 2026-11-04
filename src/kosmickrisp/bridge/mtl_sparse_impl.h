@@ -94,9 +94,13 @@ mtl_new_sparse_texture(mtl_device *device, const struct kk_image_layout *layout)
       MTLTextureDescriptor *desc = [mtl_new_texture_descriptor(layout) autorelease];
       desc.resourceOptions = MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked;
       desc.placementSparsePageSize = MTLSparsePageSize64;
-      /* Shader writes select tier 1, including when Vulkan only samples the image. */
+      /* Shader writes select sparse tier 1. Tier 1 residency feedback is
+       * wrong for 2D tiles that are not square (2- and 8-byte texels), so
+       * 2D textures add shader writes only when Vulkan usage needs them and
+       * otherwise remain tier 2. 3D textures keep tier 1. */
       const struct kk_va_format *format = kk_get_va_format(layout->format.pipe);
-      if (format->write) desc.usage |= MTLTextureUsageShaderWrite;
+      if (format->write && layout->type == MTL_TEXTURE_TYPE_3D)
+         desc.usage |= MTLTextureUsageShaderWrite;
       return [(id<MTLDevice>)device newTextureWithDescriptor:desc];
    }
 }
