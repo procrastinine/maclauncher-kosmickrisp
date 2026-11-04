@@ -27,7 +27,7 @@ static char kk_counter_heap_lifetime_key;
 - (void)dealloc
 {
    @autoreleasepool {
-      @synchronized ([MTLCaptureManager sharedCaptureManager]) {
+      @synchronized ([KKCounterHeapLifetime class]) {
          assert(kk_live_timestamp_heaps > 0);
          --kk_live_timestamp_heaps;
       }
@@ -62,12 +62,12 @@ bool
 mtl_start_gpu_capture(mtl_device *device, const char *directory)
 {
    @autoreleasepool {
-      MTLCaptureManager *manager = [MTLCaptureManager sharedCaptureManager];
-      @synchronized (manager) {
+      @synchronized ([KKCounterHeapLifetime class]) {
          if (kk_live_timestamp_heaps) {
             fprintf(stderr, "KosmicKrisp: Metal GPU capture unavailable while timestamp counter heaps are live\n");
             return false;
          }
+         MTLCaptureManager *manager = [MTLCaptureManager sharedCaptureManager];
          if (manager.isCapturing) return kk_capture_owner == device;
          MTLCaptureDescriptor *desc = [[MTLCaptureDescriptor new] autorelease];
          desc.captureObject = (id<MTLDevice>)device;
@@ -93,10 +93,9 @@ void
 mtl_stop_gpu_capture(mtl_device *device)
 {
    @autoreleasepool {
-      MTLCaptureManager *manager = [MTLCaptureManager sharedCaptureManager];
-      @synchronized (manager) {
+      @synchronized ([KKCounterHeapLifetime class]) {
          if (kk_capture_owner != device) return;
-         [manager stopCapture];
+         [[MTLCaptureManager sharedCaptureManager] stopCapture];
          kk_capture_owner = NULL;
       }
    }
@@ -285,10 +284,9 @@ mtl_counter_heap *
 mtl_new_timestamp_counter_heap(mtl_device *dev, uint32_t count)
 {
    @autoreleasepool {
-      MTLCaptureManager *manager = [MTLCaptureManager sharedCaptureManager];
-      @synchronized (manager) {
-         if (manager.isCapturing) {
-            [manager stopCapture];
+      @synchronized ([KKCounterHeapLifetime class]) {
+         if (kk_capture_owner) {
+            [[MTLCaptureManager sharedCaptureManager] stopCapture];
             kk_capture_owner = NULL;
             fprintf(stderr, "KosmicKrisp: Metal GPU capture ended to preserve timestamp queries\n");
          }

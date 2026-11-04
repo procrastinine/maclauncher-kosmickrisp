@@ -770,6 +770,8 @@ GPU captures and timestamps
 
 Metal GPU captures cannot contain timestamp counter heaps. A capture requested
 while such a heap is live is declined with a diagnostic. Allocating a timestamp
-heap ends an active capture before creating the heap. Vulkan timestamp queries
-and encoder timing retain their real counter values. Each device ends only
-its own capture.
+heap ends an active driver-controlled capture before creating the heap. Vulkan
+timestamp queries and encoder timing retain their real counter values. Explicit
+capture termination and device destruction end only the requesting device's
+owned capture. Ordinary heap and device lifetimes do not initialize Metal's
+capture manager.
