@@ -62,10 +62,10 @@
    * - ``mesh_shader``
      - Off
      - Off
-     - Off
-     - Off
-     - Off
-     - Off Apple7-11: native direct mesh exists from Apple7, but virtual task grids, slicing and retained output remain software on all families. Apple9 indirect mesh hardware is not a family-selected replacement for these paths.
+     - On
+     - On
+     - On
+     - Off Apple7-8: Metal mesh stages run without hardware mesh shading, and every mesh workgroup also stages its outputs in threadgroup memory. On Apple9-11: direct mesh-only draws and task pipelines with a provable emitted grid of at most 1024 use one native object and mesh render call with the same output staging; task pipelines without that bound run task batches as compute, and indirect, count and larger direct draws add a slice-filter compute pass, each splitting the render pass.
    * - ``polygon_points``
      - On
      - On
