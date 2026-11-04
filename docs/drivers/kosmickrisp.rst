@@ -512,7 +512,11 @@ input and an XXH3-64 checksum of it, whether or not its build has run, so
 Pipeline cache data whose compiler input does not match its checksum is
 rejected, and the pipeline compiles from SPIR-V. A pipeline restored from that
 data in a creation that cannot defer, such as one with creation feedback,
-restores the stored translation or translates during creation.
+restores the stored translation, or translates during creation and stores the
+translation. A pipeline whose build did not run in its process, for example
+because the pipeline or device was destroyed first, has no stored translation
+in a later process: binding it there before its build runs translates and
+compiles it on the binding thread, unless it was predicted.
 
 A translation failure in a build is recorded in the Mesa disk cache under a
 checksum of the compiler input. Later creations of that input, fresh or from

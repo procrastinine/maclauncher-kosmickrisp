@@ -395,14 +395,20 @@ kk_lazy_compute_deserialize(struct kk_device *dev, struct blob_reader *blob,
       /* Restores the stored translation when there is one; otherwise
        * translates now. Both compile the native pipeline now. */
       struct disk_cache *disk = dev->vk.physical->disk_cache;
+      cache_key key;
       if (disk) {
-         cache_key key;
          kk_lazy_compute_key(disk, recipe, size, modes, key);
          if (kk_lazy_compute_restore(dev, disk, key, alloc, &shader) != VK_SUCCESS)
             shader = NULL;
       }
-      if (!shader)
+      if (!shader) {
          result = kk_recipe_compile(dev, recipe, size, required_modes, modes, modes, alloc, &shader);
+         /* Later creations and builds of this recipe restore it. */
+         if (result == VK_SUCCESS && disk && shader->info.stage == MESA_SHADER_COMPUTE &&
+             shader->msl_data[MESA_SHADER_COMPUTE].code && !shader->info.indirect_bindable &&
+             !shader->embedded_sampler_count)
+            kk_lazy_compute_store(dev, disk, key, shader);
+      }
    }
    if (result != VK_SUCCESS) {
       if (state) {
