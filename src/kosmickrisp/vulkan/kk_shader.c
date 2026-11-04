@@ -119,6 +119,8 @@ kk_vi_is_static(const struct vk_graphics_pipeline_state *state)
 
 #include "kk_barycentric_shader.h"
 
+static bool kk_conservative_possible(const struct vk_graphics_pipeline_state *state);
+
 struct kk_vs_key {
    bool is_points;
    bool dynamic_vi;
@@ -248,6 +250,10 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       KK_FEAT_COUNT, kk_make_feature_key(enabled_features),
    };
    _mesa_blake3_update(&blake3_ctx, &feature_key, sizeof(feature_key));
+   if (kk_conservative_possible(state)) {
+      uint32_t conservative = BITFIELD_BIT(KK_FEAT_CONSERVATIVE_RASTER);
+      _mesa_blake3_update(&blake3_ctx, &conservative, sizeof(conservative));
+   }
 
    /* Representation changes whether a Poly raster pipeline is required.
     * Keep ordinary pipeline cache keys while separating controlled pipelines. */
@@ -938,6 +944,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    }
    if (shader->info.stage == MESA_SHADER_VERTEX) {
       mtl_release(pipe->gfx.polygon_render);
+      mtl_release(pipe->gfx.conservative_render);
       mtl_release(pipe->gfx.polygon_capture);
       mtl_release(pipe->gfx.polygon_xfb);
    }
@@ -1135,6 +1142,7 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
 }
 
 #include "kk_polygon_nir.h"
+#include "kk_conservative_nir.h"
 #include "kk_polygon_scalar_io.h"
 
 static VkResult
@@ -1151,6 +1159,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    if (!opts)
       opts = &defaults;
    const struct kk_per_vertex_map *per_vertex_map = opts->per_vertex_map;
+   nir_shader *conservative_fs = nir->info.stage == MESA_SHADER_FRAGMENT ? opts->conservative_fs : NULL;
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
    struct kk_shader *shader;
@@ -1164,6 +1173,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
+   shader->info.conservative = kk_conservative_possible(state);
    gather_shader_info(shader, nir, state);
    kk_barycentric_shader_info(shader, per_vertex_map);
    if (stage == MESA_SHADER_FRAGMENT && kk_polygon_possible(dev, state)) {
@@ -1172,7 +1182,14 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       nir_shader_intrinsics_pass(point_fs, kk_polygon_point_coord,
                                  nir_metadata_control_flow, NULL);
       shader->info.polygon_point = true;
-      kk_compile_msl(pdev, point_fs, state, &shader->polygon[3]);
+      if (kk_polygon_regular_possible(dev, state))
+         kk_compile_msl(pdev, point_fs, state, &shader->polygon[3]);
+      else
+         ralloc_free(point_fs);
+      if (conservative_fs) {
+         kk_conservative_lower_fs(conservative_fs, &prev_stage->info.polygon);
+         kk_compile_msl(pdev, conservative_fs, state, &shader->polygon[5]);
+      }
    }
 
    unsigned num_cull_distances =
@@ -1281,7 +1298,16 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          NIR_PASS(_, point_vs, kk_nir_lower_polygon_scalar_outputs);
          NIR_PASS(_, point_vs, msl_nir_vs_io_types);
          NIR_PASS(_, point_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
-         kk_compile_msl(pdev, point_vs, state, &shader->polygon[2]);
+         if (kk_polygon_regular_possible(dev, state))
+            kk_compile_msl(pdev, point_vs, state, &shader->polygon[2]);
+         else
+            ralloc_free(point_vs);
+         if (shader->info.conservative) {
+            nir_shader *conservative_vs = kk_conservative_vertex_shader(nir->options);
+            NIR_PASS(_, conservative_vs, msl_nir_vs_io_types);
+            NIR_PASS(_, conservative_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
+            kk_compile_msl(pdev, conservative_vs, state, &shader->polygon[4]);
+         }
          nir_shader *programs[] = {capture, capture_xfb};
          for (unsigned i = 0; i < ARRAY_SIZE(programs); ++i) {
             if (!programs[i]) continue;
@@ -1649,6 +1675,8 @@ gather_graphics_pipeline_create_info(
       info->vs.additional_stages_bits |= BITFIELD_BIT(stage);
       if (stage == MESA_SHADER_FRAGMENT && info->polygon_point)
          kk_msl_copy(&vs->polygon[3], &s->polygon[3]);
+      if (stage == MESA_SHADER_FRAGMENT && info->conservative)
+         kk_msl_copy(&vs->polygon[5], &s->polygon[5]);
 
       if (s->info.stage == MESA_SHADER_TESS_CTRL)
          info->vs.tess_local_thread_size = s->info.tess.tcs_output_patch_size;
@@ -1656,6 +1684,8 @@ gather_graphics_pipeline_create_info(
       if (s->info.stage == MESA_SHADER_GEOMETRY) {
          kk_msl_copy(&vs->gs_main, &s->gs_main);
          info->polygon_point = s->info.polygon_point;
+         info->conservative = s->info.conservative;
+         if (info->conservative) kk_msl_copy(&vs->polygon[4], &s->polygon[4]);
          info->polygon = s->info.polygon;
          if (info->polygon_point) {
             for (unsigned j = 0; j < 3; ++j)
@@ -1705,7 +1735,7 @@ gather_graphics_pipeline_create_info(
 }
 
 static VkResult
-kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs, bool polygon)
+kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
 {
    struct kk_physical_device *pdev = kk_device_physical(device);
 
@@ -1750,7 +1780,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
       if (result != VK_SUCCESS) return result;
    }
    }
-   const struct msl_compile_data *vs_data = polygon ? &vs->polygon[2] : &vs->msl_data[vs_stage];
+   const struct msl_compile_data *vs_data = polygon ? &vs->polygon[2 * polygon] : &vs->msl_data[vs_stage];
    mtl_library *vertex_library = mtl_new_library(
       device->mtl_compiler_handle, vs_data->code, pdev->info.msl_version,
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
@@ -1761,7 +1791,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
       mtl_new_library_function_descriptor(vertex_library,
                                           vs_data->entrypoint_name);
 
-   const struct msl_compile_data *fs_data = polygon ? &vs->polygon[3] : &vs->msl_data[MESA_SHADER_FRAGMENT];
+   const struct msl_compile_data *fs_data = polygon ? &vs->polygon[2 * polygon + 1] : &vs->msl_data[MESA_SHADER_FRAGMENT];
    mtl_library *fragment_library = mtl_new_library(
       device->mtl_compiler_handle, fs_data->code, pdev->info.msl_version,
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
@@ -1782,7 +1812,8 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
 
    /* Layered rendering in Metal requires setting primitive topology class */
    mtl_render_pipeline_descriptor_set_input_primitive_topology(
-      pipeline_descriptor, polygon ? MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED : vs->info.vs.topology);
+      pipeline_descriptor, polygon == 2 ? MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE :
+         polygon ? MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED : vs->info.vs.topology);
 
    /* If color attachments are reordered there might be unused / invalid gaps
     * in the array so need to check them all, not just first
@@ -1811,7 +1842,8 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
 
    mtl_render_pipeline_state *render =
       mtl_new_render_pipeline(device->mtl_compiler_handle, pipeline_descriptor);
-   if (polygon) pipe->gfx.polygon_render = render;
+   if (polygon == 2) pipe->gfx.conservative_render = render;
+   else if (polygon) pipe->gfx.polygon_render = render;
    else pipe->gfx.render = render;
    if (render == NULL)
       result = VK_ERROR_INVALID_SHADER_NV;
@@ -1854,7 +1886,10 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
                                            &vs->pipeline.gfx.polygon_xfb);
       if (result != VK_SUCCESS) return result;
    }
-   result = kk_compile_graphics_pipeline_native(device, vs, true);
+   if (vs->polygon[2].code)
+      result = kk_compile_graphics_pipeline_native(device, vs, true);
+   if (result == VK_SUCCESS && vs->info.conservative)
+      result = kk_compile_graphics_pipeline_native(device, vs, 2);
    return result == VK_SUCCESS ? kk_dgc_eager_graphics_pipeline(device, vs) : result;
 }
 
@@ -2057,6 +2092,9 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
    nir_opt_varyings_bulk(nir_shaders, total_shaders, true, UINT32_MAX,
                          UINT32_MAX, nir_opts, NULL);
 
+   nir_shader *conservative_fs = kk_conservative_possible(state) &&
+      nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT
+      ? nir_shader_clone(NULL, nir_shaders[total_shaders - 1u]) : NULL;
    struct kk_per_vertex_map per_vertex_map = {0};
    if (state && total_shaders >= 2u &&
        nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT &&
@@ -2078,6 +2116,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
 
    const struct kk_compile_options compile_options = {
       .per_vertex_map = &per_vertex_map,
+      .conservative_fs = conservative_fs,
    };
    for (uint32_t i = 0; i < total_shaders; i++) {
       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;

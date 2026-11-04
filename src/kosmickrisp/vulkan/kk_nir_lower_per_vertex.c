@@ -5,6 +5,7 @@
 #include "kk_nir_lower_per_vertex.h"
 
 #include "kk_cmd_buffer.h"
+#include "kk_nir_vertex_triplet.h"
 #include "kk_debug.h"
 
 #include "nir_builder.h"
@@ -294,12 +295,9 @@ load_buffer_corner_values(nir_builder *b, nir_intrinsic_instr *intr,
                         .io_semantics.num_slots = 1u));
    unsigned offset = nir_intrinsic_component(intr) * 4u;
    for (unsigned v = 0; v < 3; ++v) {
-      nir_def *value = nir_build_load_global(
-         b, intr->def.num_components, 32,
-         nir_iadd_imm(b, addr, buffer_offset(map, location, v) + offset),
-         .align_mul = 4u);
-      values[v] = intr->def.bit_size == 32 ? value :
-         nir_u2uN(b, value, intr->def.bit_size);
+      values[v] = kk_nir_load_primitive_corner(b, addr,
+         buffer_offset(map, location, v) + offset,
+         intr->def.num_components, intr->def.bit_size);
    }
 }
 

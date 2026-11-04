@@ -146,6 +146,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .EXT_host_image_copy = true,
       .EXT_index_type_uint8 = true,
       .EXT_line_rasterization = true,
+      .EXT_conservative_rasterization = true,
       .EXT_pipeline_robustness = true,
       .EXT_vertex_attribute_divisor = true,
 
@@ -516,6 +517,8 @@ kk_get_device_features(
       .extendedDynamicState3DepthClipNegativeOneToOne = true,
       .extendedDynamicState3LineRasterizationMode = true,
       .extendedDynamicState3PolygonMode = true,
+      .extendedDynamicState3ConservativeRasterizationMode = true,
+      .extendedDynamicState3ExtraPrimitiveOverestimationSize = true,
       .extendedDynamicState3ProvokingVertexMode = true,
       .extendedDynamicState3SampleLocationsEnable = true,
       .extendedDynamicState3TessellationDomainOrigin = true,
@@ -600,6 +603,15 @@ kk_get_device_properties(
                               : 4000;
 
    *properties = (struct vk_properties){
+      .primitiveOverestimationSize = 1.0f / 256.0f,
+      .maxExtraPrimitiveOverestimationSize = 0.0f,
+      .extraPrimitiveOverestimationSizeGranularity = 0.0f,
+      .primitiveUnderestimation = false,
+      .conservativePointAndLineRasterization = false,
+      .degenerateTrianglesRasterized = false,
+      .degenerateLinesRasterized = false,
+      .fullyCoveredFragmentShaderInputVariable = false,
+      .conservativeRasterizationPostDepthCoverage = false,
       .apiVersion = kk_get_vk_version(),
       .driverVersion = vk_get_driver_version(),
       .vendorID =

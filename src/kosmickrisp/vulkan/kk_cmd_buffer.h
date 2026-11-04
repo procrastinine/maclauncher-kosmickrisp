@@ -172,6 +172,7 @@ enum kk_dirty {
 
 struct kk_graphics_state {
    bool polygon_points;
+   bool conservative;
    uint64_t polygon_capture;
    struct kk_rendering_state render;
    struct kk_descriptor_state descriptors;

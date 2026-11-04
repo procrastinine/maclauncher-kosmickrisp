@@ -11,6 +11,7 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "kk_conservative.h"
 #include "kk_dgc.h"
 #include "kosmickrisp/libkk/kk_tess_grid.h"
 #include "kk_format.h"
@@ -1045,7 +1046,7 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
        IS_DIRTY(MS_RASTERIZATION_SAMPLES)) {
       struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
       mtl_render_pipeline_state *pipeline =
-         kk_attachment_pipeline(cmd, vs, gfx->polygon_points);
+         kk_attachment_pipeline(cmd, vs, gfx->conservative ? 2 : gfx->polygon_points);
       if (!pipeline)
          return;
       mtl_render_set_pipeline_state(enc, pipeline);
@@ -1473,7 +1474,19 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          point.viewport[i][2] = vp->width; point.viewport[i][3] = vp->height;
          point.viewport[i][4] = vp->minDepth; point.viewport[i][5] = vp->maxDepth;
       }
-      params.capture = gfx->polygon_capture = kk_pool_upload(cmd, &point, sizeof(point), 8).gpu;
+      if (gfx->conservative) {
+         struct kk_conservative_params conservative = {
+            .polygon = point,
+            .extra_size = dyn->rs.extra_primitive_overestimation_size,
+            .samples = MAX2(dyn->ms.rasterization_samples, 1),
+            .sample_mask = dyn->ms.sample_mask,
+            .canonical_locations = cmd->state.shaders[MESA_SHADER_VERTEX]->info.conservative_canonical_outputs,
+         };
+         params.capture = gfx->polygon_capture =
+            kk_pool_upload(cmd, &conservative, sizeof(conservative), 8).gpu;
+      } else {
+         params.capture = gfx->polygon_capture = kk_pool_upload(cmd, &point, sizeof(point), 8).gpu;
+      }
    }
    return kk_pool_upload(cmd, &params, sizeof(params), 8).gpu;
 }
@@ -2567,8 +2580,14 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    bool controlled_bias = dyn->rs.depth_bias.enable &&
       (dyn->rs.depth_bias.exact || dyn->rs.depth_bias.representation !=
          VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
-   bool point = vs->info.polygon_point &&
-      (dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT || controlled_bias);
+   bool conservative = vs->info.conservative && dyn->rs.conservative_mode ==
+      VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT;
+   if (conservative != gfx->conservative) {
+      gfx->conservative = conservative;
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
+   }
+   bool point = conservative || (vs->info.polygon_point &&
+      (dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT || controlled_bias));
    if (point && BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE))
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORTS);
    if (point != gfx->polygon_points) {
@@ -2598,7 +2617,8 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    kk_update_ia_statistics(cmd, data);
 
    struct kk_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
-   bool emulates_per_vertex = fs && fs->info.fs.emulates_per_vertex_inputs;
+   bool emulates_per_vertex = fs && fs->info.fs.emulates_per_vertex_inputs &&
+      !gfx->conservative;
    bool per_vertex = !tess && !geom && emulates_per_vertex;
 
    /* Unroll geometry. Skip draw if we fail. The per-vertex emulation issues

@@ -7,7 +7,7 @@
 struct kk_attachment_variant {
    struct kk_attachment_variant *next;
    enum mtl_pixel_format formats[MAX_DRAW_BUFFERS];
-   bool polygon;
+   unsigned polygon;
    uint32_t samples;
    bool indirect;
    mtl_render_pipeline_state *pipeline;
@@ -15,7 +15,7 @@ struct kk_attachment_variant {
 
 struct kk_attachment_pipelines {
    simple_mtx_t mutex;
-   mtl_render_pipeline_descriptor *descriptor[2];
+   mtl_render_pipeline_descriptor *descriptor[3];
    mtl_depth_stencil_state *depth_stencil[4];
    struct kk_attachment_variant *variants;
 };
@@ -90,10 +90,11 @@ kk_attachment_pipelines_finish(struct kk_shader *shader)
 
 static mtl_render_pipeline_state *
 kk_attachment_pipeline_for_formats(struct kk_device *device,
-   struct kk_shader *shader, bool polygon, const enum mtl_pixel_format *formats,
+   struct kk_shader *shader, unsigned polygon, const enum mtl_pixel_format *formats,
    bool indirect, VkResult *error, uint32_t samples)
 {
-   mtl_render_pipeline_state *original = polygon ? shader->pipeline.gfx.polygon_render
+   mtl_render_pipeline_state *original = polygon == 2 ? shader->pipeline.gfx.conservative_render
+      : polygon ? shader->pipeline.gfx.polygon_render
                                                 : shader->pipeline.gfx.render;
    struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
    if (!cache) {
@@ -154,7 +155,7 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
 }
 mtl_render_pipeline_state *
 kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
-                       bool polygon)
+                       unsigned polygon)
 {
    const struct kk_rendering_state *render = &cmd->state.gfx.render;
    enum mtl_pixel_format formats[MAX_DRAW_BUFFERS] = {0};

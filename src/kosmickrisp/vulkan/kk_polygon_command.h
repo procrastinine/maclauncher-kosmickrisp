@@ -50,9 +50,16 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    struct kk_grid triangles = kk_grid_indirect_local(capture +
       offsetof(struct poly_geometry_capture, clip_grid));
    libkk_polygon_clip(cmd, triangles, true, geometry_params, kk_heap(cmd));
+   if (gfx->conservative)
+      libkk_conservative_prepare(cmd, triangles, true, geometry_params, kk_heap(cmd));
    libkk_polygon_prefix_sum(cmd, kk_grid_1d(1024), true, geometry_params);
-   libkk_polygon_output_setup(cmd, kk_grid_1d(1), true, geometry_params, kk_heap(cmd));
-   libkk_polygon_output(cmd, triangles, true, geometry_params);
+   if (gfx->conservative) {
+      libkk_conservative_output_setup(cmd, kk_grid_1d(1), true, geometry_params, kk_heap(cmd));
+      libkk_conservative_output(cmd, triangles, true, geometry_params);
+   } else {
+      libkk_polygon_output_setup(cmd, kk_grid_1d(1), true, geometry_params, kk_heap(cmd));
+      libkk_polygon_output(cmd, triangles, true, geometry_params);
+   }
    return (struct kk_draw_data){
       .primitive_type = dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE ?
          MTL_PRIMITIVE_TYPE_LINE : MTL_PRIMITIVE_TYPE_TRIANGLE,

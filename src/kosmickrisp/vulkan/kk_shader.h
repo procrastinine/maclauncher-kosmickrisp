@@ -29,6 +29,7 @@ enum kk_feature_bit {
    KK_FEAT_IMAGE_VIEW_MIN_LOD,
    KK_FEAT_PIPELINE_STATISTICS,
    KK_FEAT_SAMPLER_MINMAX,
+   KK_FEAT_CONSERVATIVE_RASTER,
    KK_FEAT_COUNT,
 };
 
@@ -73,6 +74,8 @@ struct kk_shader_info {
    bool has_geometry;
    bool api_geometry;
    bool polygon_point;
+   bool conservative;
+   uint64_t conservative_canonical_outputs;
    struct poly_gs_capture_info polygon;
    struct poly_gs_info geometry;
    uint8_t gs_aux_mask;
@@ -154,6 +157,7 @@ struct kk_pipeline_handles {
       struct {
          mtl_render_pipeline_state *render;
          mtl_render_pipeline_state *polygon_render;
+         mtl_render_pipeline_state *conservative_render;
          mtl_compute_pipeline_state *polygon_capture;
          mtl_compute_pipeline_state *polygon_xfb;
          /* VS, TCS, TES and the GS compute pass at most run before the render
@@ -183,7 +187,7 @@ struct kk_shader {
    /* Compute pass of a GS. Its rasterization VS is in
     * msl_data[MESA_SHADER_GEOMETRY]. */
    struct msl_compile_data gs_main;
-   struct msl_compile_data polygon[4];
+   struct msl_compile_data polygon[6];
    struct msl_compile_data gs_aux[2];
 };
 
@@ -241,7 +245,7 @@ VkResult kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
                                struct kk_shader **shader_out);
 
 mtl_render_pipeline_state *kk_attachment_pipeline(struct kk_cmd_buffer *cmd,
-   struct kk_shader *shader, bool polygon);
+   struct kk_shader *shader, unsigned polygon);
 mtl_depth_stencil_state *kk_attachment_depth_stencil(struct kk_cmd_buffer *cmd,
    struct kk_shader *shader);
 

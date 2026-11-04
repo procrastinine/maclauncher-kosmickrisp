@@ -324,3 +324,5 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
       output[packed] = (uint4)(front, 0, 0, 0);
    }
 }
+
+#include "kk_conservative.cl"
