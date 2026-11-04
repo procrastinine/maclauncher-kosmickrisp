@@ -4103,7 +4103,19 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       assert(op == nir_intrinsic_image_deref_store ||
              op == nir_intrinsic_image_heap_store);
       intrin->num_components = 4;
-      intrin->src[3] = nir_src_for_ssa(nir_pad_vec4(&b->nb, value->def));
+      nir_def *texel = value->def;
+      const struct glsl_type *texel_type = value->type;
+      if (vtn_get_value_type(b, value_id)->is_long_vector) {
+         /* A long-vector texel is a scalar array. Components past the
+          * fourth are ignored, as for any texel wider than the format. */
+         nir_def *components[4];
+         unsigned count = MIN2(glsl_get_length(value->type), 4);
+         for (unsigned i = 0; i < count; i++)
+            components[i] = value->elems[i]->def;
+         texel = nir_vec(&b->nb, components, count);
+         texel_type = glsl_without_array(value->type);
+      }
+      intrin->src[3] = nir_src_for_ssa(nir_pad_vec4(&b->nb, texel));
       /* Only OpImageWrite can support a lod parameter if
        * SPV_AMD_shader_image_load_store_lod is used but the current NIR
        * intrinsics definition for atomics requires us to set it for
@@ -4112,7 +4124,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       intrin->src[4] = nir_src_for_ssa(image.lod);
 
       nir_alu_type src_type =
-         get_image_type(b, nir_get_nir_type_for_glsl_type(value->type), operands);
+         get_image_type(b, nir_get_nir_type_for_glsl_type(texel_type), operands);
       nir_intrinsic_set_src_type(intrin, src_type);
       break;
    }
