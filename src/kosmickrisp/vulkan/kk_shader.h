@@ -114,6 +114,7 @@ struct kk_mesh_shader_info {
    bool flat_heap;
    bool projected_basis;
    uint32_t max_primitives;
+   uint32_t gs_max_objects; /* Bounded internal GS object grid, zero for API Mesh. */
    bool queries;
    bool sliced;
    bool retained_capture, retained_reader;
@@ -124,7 +125,7 @@ struct kk_mesh_shader_info {
 };
 
 /* Serialized info may change within padding without changing sizeof. */
-#define KK_SHADER_INFO_CACHE_VERSION 4u
+#define KK_SHADER_INFO_CACHE_VERSION 5u
 
 struct kk_shader_info {
    bool interlock_envelope;
@@ -306,8 +307,9 @@ struct kk_shader {
    uint64_t embedded_sampler_table;
    struct kk_sparse_shader_state *sparse;
    struct kk_shader *sparse_base; /* Weak: base owns every immutable variant. */
-   /* Immutable vk.stage selects fragment, compute or Task/Mesh state. */
+   /* Immutable vk.stage selects vertex, fragment, compute or Task/Mesh state. */
    union {
+      struct kk_shader *gs_mesh; /* Vertex-owned internal Mesh alternative. */
       struct kk_vrs_source *vrs_source;
       mtl_compute_pipeline_state *dgc_compute;
       struct kk_mesh_shader_state *mesh;

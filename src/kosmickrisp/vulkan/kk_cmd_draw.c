@@ -2822,6 +2822,7 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
 #include "kk_dgc_mesh_draw.h"
 
 #include "kk_barycentric_draw.h"
+#include "kk_gs_mesh_command.h"
 
 static void
 kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
@@ -2938,16 +2939,25 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       if (per_vertex)
          kk_prepare_per_vertex_draw(cmd, data, i, per_vertex_draws, &draw_data);
 
-      if (data->upload_mask || cmd->interlock_heap_active)
-         kk_upload_per_draw_data(cmd, data->upload_mask |
-            (cmd->interlock_heap_active ? BITFIELD_BIT(MESA_SHADER_GEOMETRY) : 0), i + gfx->indirect_draw_id, &draw_data,
-                                 gs_restart);
-
-      if (tess)
-         draw_data = kk_launch_tess(cmd, draw_data);
       if (geom) {
+         if (vs->gs_mesh &&
+             kk_draw_gs_mesh(cmd, vs, data, &draw_data, i + gfx->indirect_draw_id))
+            continue;
+         if (data->upload_mask || cmd->interlock_heap_active)
+            kk_upload_per_draw_data(cmd, data->upload_mask |
+               (cmd->interlock_heap_active ? BITFIELD_BIT(MESA_SHADER_GEOMETRY) : 0),
+               i + gfx->indirect_draw_id, &draw_data, gs_restart);
+         if (tess)
+            draw_data = kk_launch_tess(cmd, draw_data);
          draw_data = kk_launch_gs_prerast(cmd, data, draw_data, gs_restart);
          kk_finish_geometry_statistics(cmd);
+      } else {
+         if (data->upload_mask || cmd->interlock_heap_active)
+            kk_upload_per_draw_data(cmd, data->upload_mask |
+               (cmd->interlock_heap_active ? BITFIELD_BIT(MESA_SHADER_GEOMETRY) : 0),
+               i + gfx->indirect_draw_id, &draw_data, gs_restart);
+         if (tess)
+            draw_data = kk_launch_tess(cmd, draw_data);
       }
       if (per_vertex_gs &&
           !kk_prepare_gs_per_vertex_draw(cmd, data, &draw_data))

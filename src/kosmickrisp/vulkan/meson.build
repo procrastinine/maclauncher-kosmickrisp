@@ -201,6 +201,8 @@ libkk = static_library(
   'kk',
   [
     kk_files,
+    # Internal GS object/mesh lowering uses the existing Poly NIR builders.
+    libpoly_shaders[1],
     kk_entrypoints,
     sha1_h,
   ],

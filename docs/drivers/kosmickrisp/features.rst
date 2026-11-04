@@ -33,9 +33,9 @@ Feature table
      - Performance mode
      - Direct3D effect when off
    * - ``geometryShader``, ``shaderTessellationAndGeometryPointSize``
-     - Emulated: the geometry stage runs as a compute pass, and its output is
-       drawn from memory.
-     - None listed; emulated on all families.
+     - Native object/mesh for bounded raster-only linked vertex and geometry
+       shaders. Other geometry draws use compute and draw from memory.
+     - Apple7 for the bounded object/mesh route.
      - —
      - Always
      - —
@@ -809,8 +809,19 @@ KosmicKrisp emulates each of them:
 - **Transform feedback**: vertices are captured through the compute geometry
   path and written to the feedback buffers. Feedback queries and
   draw-from-feedback use small compute kernels.
-- **Geometry shaders**: the geometry stage runs as a compute pass, and its
-  output is drawn from memory.
+- **Geometry shaders**: bounded direct draws with linked vertex and geometry
+  shaders use native object and mesh stages on Apple7 and later families.
+  One object group evaluates the input primitive's vertices, and one child
+  mesh group executes each geometry invocation. Geometry strips become
+  explicit point, line or triangle lists with preserved strip parity and
+  provoking values. Declared output counts and the complete linked output
+  footprint must fit 256 mesh vertices, 512 primitives, 16 KiB mesh output
+  and 16 KiB object payload. Grid and aggregate output bounds also apply.
+  Indirect draws, tessellation, adjacency, primitive restart, shader memory
+  writes or atomics, subgroup-sensitive programs, active transform feedback,
+  nonzero streams, geometry reports and retained geometry consumers use the
+  existing compute path. These routes use the same geometry capability;
+  internal object/mesh use is independent of the Vulkan mesh-shader controls.
 - **Custom border colors**: Metal provides transparent black, opaque black and
   opaque white (Apple7). Other colors are substituted in the shader, and
   ``VK_EXT_custom_border_color`` and ``VK_EXT_border_color_swizzle`` are

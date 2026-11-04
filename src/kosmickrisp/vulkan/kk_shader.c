@@ -1176,6 +1176,8 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
 
    if (shader->info.stage == MESA_SHADER_COMPUTE && shader->pipeline.compute.pending)
       kk_async_compute_shader_finish(shader);
+   if (shader->vk.stage == MESA_SHADER_VERTEX && shader->gs_mesh)
+      kk_shader_destroy(vk_dev, shader->gs_mesh, pAllocator);
    kk_shader_embedded_samplers_finish(dev, shader);
    const bool mesh_stage = kk_shader_stage_has_mesh_info(shader->vk.stage);
    kk_sparse_shader_finish(shader);
@@ -1496,6 +1498,8 @@ kk_compile_msl(struct kk_device *dev, nir_shader *nir,
 
 #include "kk_conservative_nir.h"
 #include "kk_polygon_scalar_io.h"
+#include "kosmickrisp/libkk/kk_gs_mesh.h"
+#include "kk_gs_mesh_nir.h"
 #include "kk_poly_layer_replay_nir.h"
 #include "kk_poly_retained_raster_types.h"
 #include "kk_poly_layer_multiview_nir.h"
@@ -2616,6 +2620,7 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
 #include "kk_geometry_reports.h"
 
 struct kk_lazy_polygon {
+   bool gs_mesh;
    util_once_flag once;
    VkResult result;
    struct kk_device *device;
@@ -2790,7 +2795,11 @@ static void
 kk_compile_polygon_once(const void *data)
 {
    struct kk_lazy_polygon *lazy = (struct kk_lazy_polygon *)data;
-   lazy->result = kk_compile_polygon_siblings(lazy->device, lazy->shader);
+   if (lazy->gs_mesh)
+      lazy->result = kk_compile_mesh_pipeline(lazy->device, lazy->shader, false,
+                                            &lazy->shader->pipeline);
+   else
+      lazy->result = kk_compile_polygon_siblings(lazy->device, lazy->shader);
 }
 
 VkResult
@@ -2815,8 +2824,18 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
       if (result != VK_SUCCESS)
          return result;
    }
-   if (vs->info.stage == MESA_SHADER_MESH)
-      return kk_compile_mesh_pipeline(device, vs, false, &vs->pipeline);
+   if (vs->info.stage == MESA_SHADER_MESH) {
+      if (!vs->info.api_geometry)
+         return kk_compile_mesh_pipeline(device, vs, false, &vs->pipeline);
+      vs->lazy_polygon = calloc(1, sizeof(*vs->lazy_polygon));
+      if (!vs->lazy_polygon)
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      vs->lazy_polygon->once = (util_once_flag)UTIL_ONCE_FLAG_INIT;
+      vs->lazy_polygon->device = device;
+      vs->lazy_polygon->shader = vs;
+      vs->lazy_polygon->gs_mesh = true;
+      return VK_SUCCESS;
+   }
    const bool siblings = vs->info.polygon_point || vs->info.poly_layer_replay ||
                          vs->info.interlock_envelope;
    /* Other routes consume pre-render programs as part of their ordinary
@@ -2840,6 +2859,62 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
          return result;
    }
    return kk_dgc_eager_graphics_pipeline(device, vs);
+}
+
+/* Build only from the already linked original stages. This alternative owns
+ * its native handles/source; recording may still select the compute parent. */
+static VkResult
+kk_compile_gs_mesh(struct kk_device *dev, nir_shader *vs, nir_shader *gs,
+                   nir_shader *fs,
+                   const struct vk_graphics_pipeline_state *state,
+                   const struct vk_pipeline_robustness_state *robustness,
+                   const struct kk_per_vertex_map *map,
+                   const VkAllocationCallbacks *alloc, struct kk_shader **out)
+{
+   *out = NULL;
+   struct kk_gs_mesh_layout layout;
+   enum mesa_prim input = vk_topology_to_mesa(state->ia->primitive_topology);
+   if (mesa_prim_has_adjacency(input) || input == MESA_PRIM_PATCHES ||
+       input == MESA_PRIM_LINE_LOOP ||
+       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_IA_PRIMITIVE_TOPOLOGY) ||
+       !kk_gs_mesh_layout(vs, gs, fs,
+                          kk_device_physical(dev)->info.gpu_apple_family, map,
+                          &layout))
+      return VK_SUCCESS;
+   nir_shader *n[3] = {nir_shader_clone(NULL, vs), nir_shader_clone(NULL, gs),
+                       nir_shader_clone(NULL, fs)};
+   kk_lower_vs_vbo(n[0], state, robustness);
+   kk_gs_mesh_lower_vs(n[0], &layout, input);
+   kk_gs_mesh_lower_gs(n[1], &layout, state);
+   for (unsigned i = 0; i < 2; i++) {
+      NIR_PASS(_, n[i], nir_opt_dce);
+      NIR_PASS(_, n[i], kk_nir_lower_descriptors, false, robustness, 0, NULL);
+   }
+   struct kk_shader *s[3] = {NULL, NULL, NULL};
+   const struct kk_compile_options options = {0};
+   VkResult result = VK_SUCCESS;
+   for (unsigned i = 0; i < 3; i++) {
+      result = kk_compile_shader(dev, n[i], i ? s[i - 1] : NULL, robustness,
+                                 state, &options, alloc, &s[i]);
+      n[i] = NULL;
+      if (result != VK_SUCCESS)
+         goto done;
+   }
+   gather_graphics_pipeline_create_info(state, s, 3);
+   s[1]->info.api_geometry = true;
+   s[1]->mesh->info.gs_max_objects = layout.max_objects;
+   result = kk_compile_graphics_pipeline(dev, s[1]);
+   if (result == VK_SUCCESS) {
+      *out = s[1];
+      s[1] = NULL;
+   }
+done:
+   for (unsigned i = 0; i < 3; i++) {
+      ralloc_free(n[i]);
+      if (s[i])
+         kk_shader_destroy(&dev->vk, s[i], alloc);
+   }
+   return result;
 }
 
 static bool
@@ -3352,6 +3427,39 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       .geometry_reports = features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS),
       .conservative_fs = conservative_fs,
    };
+   struct kk_shader *gs_mesh = NULL;
+   /* Ordinary VS/FS never enters this branch or allocates alternate state. */
+   if (explicit_geometry && !tess && total_shaders == 3 &&
+       nir_shaders[0]->info.stage == MESA_SHADER_VERTEX &&
+       nir_shaders[1]->info.stage == MESA_SHADER_GEOMETRY && !pixel_envelope &&
+       !poly_layer_replay && !state->mv->view_mask &&
+       !(infos[0].flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT) &&
+       !sparse_modes) {
+      /* Embedded sampler ownership and indirect executable binding remain
+       * with their existing compute executable in this bounded route. */
+      bool supported_bindings = true;
+      for (unsigned i = 0; i < shader_count; ++i)
+         supported_bindings &= !infos[i].embedded_sampler_count &&
+            !(infos[i].flags & (VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT |
+                               VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT));
+      if (supported_bindings)
+         result = kk_compile_gs_mesh(dev, nir_shaders[0], nir_shaders[1],
+                                  nir_shaders[2], state, vertex_robustness,
+                                  &per_vertex_map, pAllocator, &gs_mesh);
+      if (result != VK_SUCCESS) {
+         for (unsigned i = 0; i < total_shaders; i++)
+            ralloc_free(nir_shaders[i]);
+         ralloc_free(conservative_fs);
+         ralloc_free(retained_fs);
+         ralloc_free(native_pair[0]);
+         ralloc_free(native_pair[1]);
+         if (linked)
+            blob_finish(&linked_producer);
+         memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
+         return result;
+      }
+   }
+
    for (uint32_t i = 0; i < total_shaders; i++) {
       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
       struct kk_compile_options stage_options = compile_options;
@@ -3362,6 +3470,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       result =
          kk_compile_shader(dev, nir_shaders[i], prev_stage, vertex_robustness,
                            state, &stage_options, pAllocator, &shaders[i]);
+      if (i == 0 && result == VK_SUCCESS && gs_mesh) {
+         shaders[0]->gs_mesh = gs_mesh;
+         gs_mesh = NULL;
+      }
       if (result == VK_SUCCESS) {
          for (uint32_t input = 0; input < shader_count; ++input) {
             if (infos[input].stage != shaders[i]->vk.stage) continue;
@@ -3376,6 +3488,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       }
 
       if (result != VK_SUCCESS) {
+         if (gs_mesh) kk_shader_destroy(&dev->vk, gs_mesh, pAllocator);
          /* Clean up all the shaders before this point */
          for (uint32_t j = 0; j < i; j++)
             kk_shader_destroy(&dev->vk, shaders[j], pAllocator);
@@ -3566,6 +3679,11 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
       kk_vrs_source_serialize(shader->info.stage == MESA_SHADER_FRAGMENT
                                 ? shader->vrs_source : NULL, blob);
    kk_interlock_shader_serialize(shader, blob);
+   if (shader->info.stage == MESA_SHADER_VERTEX && shader->info.api_geometry) {
+      blob_write_uint8(blob, shader->gs_mesh != NULL);
+      if (shader->gs_mesh && !kk_shader_serialize_native(vk_dev, &shader->gs_mesh->vk, blob))
+         return false;
+   }
    return !blob->out_of_memory;
 }
 
@@ -3608,10 +3726,10 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
 #include "kk_fragment_shading_rate_cache_impl.h"
 
 static VkResult
-kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
+kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader *blob,
                       uint32_t binary_version,
                       const VkAllocationCallbacks *pAllocator,
-                      struct vk_shader **shader_out)
+                      struct vk_shader **shader_out, bool internal_mesh)
 {
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
@@ -3624,7 +3742,15 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
    struct kk_mesh_shader_info mesh_info;
    if (!blob->overrun && kk_shader_stage_has_mesh_info(info.stage))
       blob_copy_bytes(blob, &mesh_info, sizeof(mesh_info));
-   if (blob->overrun)
+   if (blob->overrun ||
+       (internal_mesh &&
+        (info.stage != MESA_SHADER_MESH || !info.api_geometry ||
+         !mesh_info.gs_max_objects || !mesh_info.has_task ||
+         mesh_info.local_size.x != 1 || mesh_info.local_size.y != 1 ||
+         mesh_info.local_size.z != 1 || mesh_info.task_local_size.x != 1 ||
+         mesh_info.task_local_size.y != 1 || mesh_info.task_local_size.z != 1 ||
+         mesh_info.max_vertices > 256 || mesh_info.max_primitives > 512 ||
+         mesh_info.task_grid_bound > KK_MESH_NATIVE_GROUPS)))
       return vk_error(dev, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
 
    struct kk_shader *shader = vk_shader_zalloc(
@@ -3686,6 +3812,22 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
    }
    result = kk_interlock_shader_deserialize(shader, blob);
    if (result != VK_SUCCESS) goto fail;
+   if (info.stage == MESA_SHADER_VERTEX && info.api_geometry) {
+      uint8_t present = blob_read_uint8(blob);
+      if (present > 1 || blob->overrun) {
+         result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
+         goto fail;
+      }
+      if (present) {
+         struct vk_shader *child = NULL;
+         result = kk_deserialize_shader_native_inner(vk_dev, blob, binary_version,
+                                                     pAllocator, &child, true);
+         if (result != VK_SUCCESS)
+            goto fail;
+         shader->gs_mesh = container_of(child, struct kk_shader, vk);
+      }
+   }
+
    kk_shader_sampler_info(shader);
    if (info.stage == MESA_SHADER_COMPUTE) {
       uint32_t local_size_threads = shader->info.cs.local_size.x *
@@ -3711,6 +3853,14 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
 fail:
    kk_shader_destroy(&dev->vk, shader, pAllocator);
    return vk_error(dev, result);
+}
+
+static VkResult
+kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
+   uint32_t binary_version, const VkAllocationCallbacks *alloc,
+   struct vk_shader **out)
+{
+   return kk_deserialize_shader_native_inner(vk_dev, blob, binary_version, alloc, out, false);
 }
 
 static void
