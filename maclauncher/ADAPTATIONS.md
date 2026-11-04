@@ -198,6 +198,12 @@ Consumers: vkd3d-proton, DXVK.
 
 Implementation: [kk_nir_lower_per_vertex.c](../src/kosmickrisp/vulkan/kk_nir_lower_per_vertex.c), [kk_nir_lower_per_vertex.h](../src/kosmickrisp/vulkan/kk_nir_lower_per_vertex.h), [kk_canonical_per_vertex.h](../src/kosmickrisp/vulkan/kk_canonical_per_vertex.h), [kk_barycentric_shader.h](../src/kosmickrisp/vulkan/kk_barycentric_shader.h).
 
+### Cull-distance capture loads
+
+Ordinary producers writing cull distances reject complete primitives before clipping. Each tested vertex loads only the current scalar distance. A nonnegative or NaN distance stops testing that plane; rejection stops at the first plane negative at every vertex. Native mesh primitive rejection remains available.
+
+Implementation: [kk_polygon.cl](../src/kosmickrisp/libkk/kk_polygon.cl).
+
 ### Scalar clip and cull varyings in generated polygon vertex shaders
 
 Vulkan contract: Scalar clip and cull varyings in generated polygon vertex shaders.

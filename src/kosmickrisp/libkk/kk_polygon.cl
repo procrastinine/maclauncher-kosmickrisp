@@ -126,7 +126,8 @@ polygon_cull_primitive(global struct poly_geometry_capture *p,
       bool culled = true;
       for (uint v = 0; v < p->primitive_vertices; ++v) {
          global uint4 *input = polygon_vertex(p, invocation, stream, vertices[v]);
-         if (!(as_float4(input[slot])[c % 4] < 0.0f)) {
+         /* Load only this plane; a vector load requires dynamic lane selection. */
+         if (!(((global float *)input)[slot * 4 + c % 4] < 0.0f)) {
             culled = false;
             break;
          }

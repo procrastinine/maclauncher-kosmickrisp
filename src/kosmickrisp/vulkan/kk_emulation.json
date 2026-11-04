@@ -270,5 +270,21 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires both single-texel alignment promises for D3D12 device creation at the supported 16-byte native alignment; only shaders accessing texel-buffer views pay the adjustment cost.",
     "off_consequence": "vkd3d-proton v3.1 rejects D3D12 device creation when either single-texel alignment promise is absent at 16-byte alignment, making all D3D12 feature levels unavailable."
+  },
+  {
+    "name": "cull_distance",
+    "description": "Whole-primitive rejection from cull distances written by the final pre-raster shader.",
+    "cost_class": "native mesh / compute capture",
+    "cost_note": "Mesh shaders use native primitive rejection. Ordinary producers writing cull distances use capture and an all-vertex negative test per plane before clipping; each tested vertex loads one scalar distance, and testing stops at the first nonnegative or NaN value. No cull output selects no cull capture. GPU time is unmeasured.",
+    "extensions": [],
+    "features": [
+      "shaderCullDistance"
+    ],
+    "properties": [
+      "maxCullDistances"
+    ],
+    "performance": true,
+    "performance_reason": "DXVK requires shaderCullDistance for translator device creation; capture is selected only by actual final-producer cull output.",
+    "off_consequence": "DXVK cannot create its D3D device without shaderCullDistance; Vulkan cull-distance shader support is unavailable."
   }
 ]
