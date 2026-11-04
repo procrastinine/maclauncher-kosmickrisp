@@ -658,6 +658,19 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
 {
    VK_FROM_HANDLE(vk_pipeline_layout, pipeline_layout, info->layout);
 
+   /* A repeated ordinary bind without dynamic descriptors changes neither
+    * root addresses nor layout-derived offset slots. Preserve pending dirty
+    * state and push descriptors exactly as on the general path. */
+   if (info->descriptorSetCount == 1 && info->dynamicOffsetCount == 0 &&
+       pipeline_layout->set_layouts[info->firstSet] != NULL &&
+       vk_to_kk_descriptor_set_layout(
+          pipeline_layout->set_layouts[info->firstSet])->vk.dynamic_descriptor_count == 0) {
+      VK_FROM_HANDLE(kk_descriptor_set, set, info->pDescriptorSets[0]);
+      if (set != NULL && desc->sets[info->firstSet] == set)
+         return;
+   }
+
+
    /* From the Vulkan 1.3.275 spec:
     *
     *    "When binding a descriptor set (see Descriptor Set Binding) to
@@ -675,12 +688,17 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
    uint8_t dyn_buffer_start =
       pipeline_layout->dynamic_descriptor_offset[info->firstSet];
 
+   bool root_changed = false;
    uint32_t next_dyn_offset = 0;
    for (uint32_t i = 0; i < info->descriptorSetCount; ++i) {
       unsigned s = i + info->firstSet;
       VK_FROM_HANDLE(kk_descriptor_set, set, info->pDescriptorSets[i]);
 
       if (desc->sets[s] != set) {
+         const uint64_t addr = set ? set->addr : 0;
+         const uint32_t size = set ? set->size : 0;
+         root_changed |= desc->root.sets[s] != addr ||
+                         desc->set_sizes[s] != size;
          if (set != NULL) {
             desc->root.sets[s] = set->addr;
             desc->set_sizes[s] = set->size;
@@ -703,7 +721,13 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
                  j++) {
                struct kk_buffer_address addr = set->dynamic_buffers[j];
                addr.base_addr += info->pDynamicOffsets[next_dyn_offset + j];
-               desc->root.dynamic_buffers[dyn_buffer_start + j] = addr;
+               struct kk_buffer_address *previous =
+                  &desc->root.dynamic_buffers[dyn_buffer_start + j];
+               if (previous->base_addr != addr.base_addr ||
+                   previous->size != addr.size || previous->zero != addr.zero) {
+                  *previous = addr;
+                  root_changed = true;
+               }
             }
             next_dyn_offset += set->layout->vk.dynamic_descriptor_count;
          }
@@ -716,7 +740,10 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
    assert(dyn_buffer_start <= KK_MAX_DYNAMIC_BUFFERS);
    assert(next_dyn_offset <= info->dynamicOffsetCount);
 
-   desc->root_dirty = true;
+   /* Dynamic offsets are compared in their layout-derived slots, so
+    * incompatible layouts still update every affected root address. Preserve
+    * dirty state from pushes, pipeline changes and earlier binds. */
+   desc->root_dirty |= root_changed;
 }
 
 VKAPI_ATTR void VKAPI_CALL
