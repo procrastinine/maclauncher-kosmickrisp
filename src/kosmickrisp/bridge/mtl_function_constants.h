@@ -4,6 +4,41 @@
 #include <Metal/MTL4MeshRenderPipeline.h>
 #include <Metal/MTL4TileRenderPipeline.h>
 
+/* Every specialization owns a snapshot of all values over a named library
+ * function. Copying the values preserves their native types and indices. */
+static bool
+kk_named_library_function(MTL4FunctionDescriptor *function)
+{
+   if (![function isKindOfClass:[MTL4LibraryFunctionDescriptor class]])
+      return false;
+   MTL4LibraryFunctionDescriptor *source = (id)function;
+   return source.library && source.name.length;
+}
+
+/* Returns +1; callers may extend its private values before publishing it. */
+static MTL4SpecializedFunctionDescriptor *
+kk_new_function_specialization(MTL4FunctionDescriptor *function)
+{
+   MTLFunctionConstantValues *values = nil;
+   if ([function isKindOfClass:[MTL4SpecializedFunctionDescriptor class]]) {
+      MTL4SpecializedFunctionDescriptor *previous = (id)function;
+      function = previous.functionDescriptor;
+      values = previous.constantValues;
+      if (!values) return nil;
+   }
+   if (!kk_named_library_function(function)) return nil;
+   MTL4SpecializedFunctionDescriptor *specialized =
+      [MTL4SpecializedFunctionDescriptor new];
+   specialized.functionDescriptor = function;
+   /* The SDK copy property gives each caller independent mutable storage. */
+   specialized.constantValues = values ?: [[MTLFunctionConstantValues new] autorelease];
+   if (!specialized.functionDescriptor || !specialized.constantValues) {
+      [specialized release];
+      return nil;
+   }
+   return specialized;
+}
+
 static MTL4FunctionDescriptor *
 kk_prepare_function_constants(MTL4FunctionDescriptor *descriptor, bool *valid)
 {
@@ -11,9 +46,10 @@ kk_prepare_function_constants(MTL4FunctionDescriptor *descriptor, bool *valid)
       return nil;
    if ([descriptor isKindOfClass:[MTL4SpecializedFunctionDescriptor class]]) {
       MTL4SpecializedFunctionDescriptor *specialized = (id)descriptor;
-      if (specialized.functionDescriptor && specialized.constantValues)
-         return descriptor; /* Preserve the caller's exact value chain. */
-      fprintf(stderr, "Metal function specialization is missing its source or values\n");
+      if (kk_named_library_function(specialized.functionDescriptor) &&
+          specialized.constantValues)
+         return descriptor;
+      fprintf(stderr, "Metal function specialization requires a named library source and values\n");
       *valid = false;
       return nil;
    }
@@ -68,9 +104,8 @@ kk_prepare_function_constants(MTL4FunctionDescriptor *descriptor, bool *valid)
       return nil;
    }
    MTL4SpecializedFunctionDescriptor *prepared =
-      [[MTL4SpecializedFunctionDescriptor new] autorelease];
-   prepared.functionDescriptor = descriptor;
-   prepared.constantValues = values;
+      [kk_new_function_specialization(descriptor) autorelease];
+   if (!prepared) { *valid = false; return nil; }
    return prepared;
 }
 

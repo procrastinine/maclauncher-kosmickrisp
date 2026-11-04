@@ -380,13 +380,9 @@ mtl_specialize_function_uint64(mtl_function_descriptor *function,
                                uint32_t index, uint64_t value)
 {
    @autoreleasepool {
-      MTLFunctionConstantValues *values = [[MTLFunctionConstantValues new] autorelease];
-      if (!values)
-         return NULL;
-      [values setConstantValue:&value type:MTLDataTypeULong atIndex:index];
-      MTL4SpecializedFunctionDescriptor *desc = [MTL4SpecializedFunctionDescriptor new];
-      desc.functionDescriptor = (MTL4FunctionDescriptor *)function;
-      desc.constantValues = values;
+      MTL4SpecializedFunctionDescriptor *desc =
+         kk_new_function_specialization((id)function);
+      [desc.constantValues setConstantValue:&value type:MTLDataTypeULong atIndex:index];
       return (mtl_function_descriptor *)desc;
    }
 }
@@ -396,15 +392,10 @@ mtl_specialize_pipeline_statistics(mtl_function_descriptor *function)
 {
    @autoreleasepool {
       bool enabled = true;
-      MTLFunctionConstantValues *values =
-         [[MTLFunctionConstantValues new] autorelease];
-      [values setConstantValue:&enabled type:MTLDataTypeBool
-                       atIndex:KK_FUNCTION_CONSTANT_PIPELINE_STATISTICS];
       MTL4SpecializedFunctionDescriptor *specialized =
-         [MTL4SpecializedFunctionDescriptor new];
-      /* Wrap rather than replace existing color or other specializations. */
-      specialized.functionDescriptor = (MTL4FunctionDescriptor *)function;
-      specialized.constantValues = values;
+         kk_new_function_specialization((id)function);
+      [specialized.constantValues setConstantValue:&enabled type:MTLDataTypeBool
+                       atIndex:KK_FUNCTION_CONSTANT_PIPELINE_STATISTICS];
       return specialized;
    }
 }
@@ -417,6 +408,7 @@ mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
          [(MTL4RenderPipelineDescriptor *)descriptor copy];
       mtl_function_descriptor *fragment = mtl_specialize_pipeline_statistics(
          (mtl_function_descriptor *)copy.fragmentFunctionDescriptor);
+      if (!fragment) { [copy release]; return NULL; }
       copy.fragmentFunctionDescriptor = (MTL4FunctionDescriptor *)fragment;
       [(id)fragment release];
       return copy;
@@ -427,16 +419,10 @@ mtl_function_descriptor *
 mtl_specialize_sampler_emulation(mtl_function_descriptor *function, bool enabled)
 {
    @autoreleasepool {
-      if (!function) return NULL;
-      MTLFunctionConstantValues *values =
-         [[MTLFunctionConstantValues new] autorelease];
-      if (!values) return NULL;
-      [values setConstantValue:&enabled type:MTLDataTypeBool
-                       atIndex:KK_FUNCTION_CONSTANT_SAMPLER_EMULATION];
       MTL4SpecializedFunctionDescriptor *desc =
-         [MTL4SpecializedFunctionDescriptor new];
-      desc.functionDescriptor = (MTL4FunctionDescriptor *)function;
-      desc.constantValues = values;
+         kk_new_function_specialization((id)function);
+      [desc.constantValues setConstantValue:&enabled type:MTLDataTypeBool
+                       atIndex:KK_FUNCTION_CONSTANT_SAMPLER_EMULATION];
       return (void *)desc;
    }
 }
@@ -630,16 +616,15 @@ mtl_new_render_pipeline_for_raster_attachments(mtl_compiler *compiler,
       if (topology != MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED)
          copy.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)topology;
       if (framebuffer_reads) {
-         MTLFunctionConstantValues *values = [[MTLFunctionConstantValues new] autorelease];
+         MTL4SpecializedFunctionDescriptor *fragment =
+            kk_new_function_specialization(copy.fragmentFunctionDescriptor);
+         if (!fragment) { [copy release]; return NULL; }
          for (uint32_t i = 0; i < count; ++i) {
             bool active = formats[i] != MTL_PIXEL_FORMAT_INVALID;
-            [values setConstantValue:&active type:MTLDataTypeBool atIndex:i];
+            [fragment.constantValues setConstantValue:&active type:MTLDataTypeBool atIndex:i];
          }
-         MTL4SpecializedFunctionDescriptor *fragment =
-            [[MTL4SpecializedFunctionDescriptor new] autorelease];
-         fragment.functionDescriptor = copy.fragmentFunctionDescriptor;
-         fragment.constantValues = values;
          copy.fragmentFunctionDescriptor = fragment;
+         [fragment release];
       }
       for (uint32_t i = 0; i < count; ++i) {
          copy.colorAttachments[i].pixelFormat = (MTLPixelFormat)formats[i];
