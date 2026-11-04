@@ -26,11 +26,21 @@ struct kk_sampled_image_descriptor {
    uint16_t image_min_lod_fp16;
    uint16_t image_min_lod_uint16;
 
-   uint16_t pad_to_64_bits;
+   uint16_t sampler_mipmap_mode;
    uint32_t border[4];
-   uint64_t pad_to_power_2[3];
+   uint16_t sampler_query_lod_bias_fp16;
+   uint16_t sampler_pad[3];
+   uint64_t pad_to_power_2[2];
 };
 
+static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_fp16) == 18,
+              "image minimum LOD retains its upstream field");
+static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_uint16) == 20,
+              "integer image minimum LOD retains its upstream field");
+static_assert(offsetof(struct kk_sampled_image_descriptor, sampler_mipmap_mode) == 22,
+              "mipmap mode occupies the upstream alignment padding");
+static_assert(offsetof(struct kk_sampled_image_descriptor, sampler_query_lod_bias_fp16) == 40,
+              "query bias occupies the upstream tail padding");
 static_assert(sizeof(struct kk_sampled_image_descriptor) == 64,
               "kk_sampled_image_descriptor has no holes");
 

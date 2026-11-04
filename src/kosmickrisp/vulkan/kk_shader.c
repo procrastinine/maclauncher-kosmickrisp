@@ -25,6 +25,7 @@
 #include "nir_lower_blend.h"
 
 #include "poly/nir/poly_nir.h"
+#include "kosmickrisp/compiler/msl_compute_derivatives.h"
 #include "poly/geometry.h"
 #include "kk_statistics_nir.h"
 
@@ -824,6 +825,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
    if (features & BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR))
       NIR_PASS(_, nir, kk_nir_lower_null_images);
 
+   kk_lower_compute_derivatives(nir);
    NIR_PASS(_, nir, nir_lower_global_vars_to_local);
 }
 

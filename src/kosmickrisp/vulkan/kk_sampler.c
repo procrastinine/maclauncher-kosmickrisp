@@ -249,6 +249,8 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
    }
 
    /* LOD data passed in the descriptor set */
+   sampler->query_lod_bias_fp16 = _mesa_float_to_half(pCreateInfo->mipLodBias);
+   sampler->mipmap_mode = pCreateInfo->mipmapMode;
    sampler->lod_min_fp16 = _mesa_float_to_half(pCreateInfo->minLod);
    sampler->lod_max_fp16 = _mesa_float_to_half(pCreateInfo->maxLod);
 

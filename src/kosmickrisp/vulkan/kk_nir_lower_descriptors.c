@@ -651,6 +651,19 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
 
       nir_tex_instr_add_src(tex, nir_tex_src_min_lod, lod_min);
       nir_tex_instr_add_src(tex, nir_tex_src_max_lod_kk, lod_max);
+      if (b->shader->info.stage == MESA_SHADER_COMPUTE &&
+          b->shader->info.derivative_group == DERIVATIVE_GROUP_LINEAR) {
+         nir_deref_instr *s = nir_src_as_deref(nir_src_for_ssa(sampler));
+         nir_def *bias = load_resource_deref_desc(b, 1, 16, s,
+            plane_offset_B + offsetof(struct kk_sampled_image_descriptor,
+                                      sampler_query_lod_bias_fp16), ctx);
+         nir_def *mode = load_resource_deref_desc(b, 1, 16, s,
+            plane_offset_B + offsetof(struct kk_sampled_image_descriptor,
+                                      sampler_mipmap_mode), ctx);
+         nir_tex_instr_add_src(tex, nir_tex_src_backend1,
+            nir_vec4(b, nir_u2u32(b, bias), nir_u2u32(b, mode),
+                      nir_imm_int(b, 0), nir_imm_int(b, 0)));
+      }
    }
 
    return true;

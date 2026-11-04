@@ -28,6 +28,8 @@ struct kk_sampler {
    uint16_t lod_bias_fp16;
    uint16_t lod_min_fp16;
    uint16_t lod_max_fp16;
+   uint16_t query_lod_bias_fp16;
+   uint16_t mipmap_mode;
 
    struct {
       struct kk_rc_sampler *hw;
