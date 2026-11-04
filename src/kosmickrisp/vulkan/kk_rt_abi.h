@@ -29,6 +29,7 @@ enum kk_rt_action {
    KK_RT_CANDIDATE,
    KK_RT_REPORT_DONE,
    KK_RT_TRAVERSAL_DONE,
+   KK_RT_EXECUTE,
 };
 struct kk_rt_cps_context {
    KK_RT_ABI_U64 root;

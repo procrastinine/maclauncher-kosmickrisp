@@ -190,6 +190,17 @@ prepare_call(nir_builder *b, nir_intrinsic_instr *in, void *unused)
       if (unused) return false;
       store_field(b, action, nir_imm_int(b, KK_RT_CALLABLE));
       break;
+   case nir_intrinsic_hit_object_execute_shader: {
+      /* The hit object lives in this invocation's explicit frame, which
+       * stays allocated while the call runs. */
+      nir_def *address = nir_unpack_64_2x32(b, nir_u2u64(b, in->src[0].ssa));
+      store_field(b, hit_object_lo, nir_channel(b, address, 0));
+      store_field(b, hit_object_hi, nir_channel(b, address, 1));
+      store_field(b, action, nir_imm_int(b, KK_RT_EXECUTE));
+      nir_execute_callable(b, nir_imm_int(b, 0), in->src[1].ssa);
+      nir_instr_remove(&in->instr);
+      return true;
+   }
    case nir_intrinsic_report_ray_intersection: {
       store_field(b, action, nir_imm_int(b, KK_RT_REPORT));
       store_field(b, report_t, in->src[0].ssa);
@@ -260,8 +271,12 @@ lower_part(nir_builder *b, nir_intrinsic_instr *in, void *unused)
       /* prepare_call already selected REPORT or CALLABLE before suspension.
        * Report never publishes a fabricated application callable index. */
       store_field(b, callable_index, in->src[0].ssa);
-      /* REPORT does not replace the active procedural shader's payload. */
-      nir_push_if(b, nir_ieq_imm(b, load_field(b, action, 1, 32), KK_RT_CALLABLE));
+      /* Only CALLABLE and EXECUTE carry a payload. REPORT keeps the active
+       * procedural shader's payload, and the traversal program's CANDIDATE
+       * and REPORT_DONE suspensions keep the trace's payload. */
+      nir_def *kind = load_field(b, action, 1, 32);
+      nir_push_if(b, nir_ior(b, nir_ieq_imm(b, kind, KK_RT_CALLABLE),
+                                nir_ieq_imm(b, kind, KK_RT_EXECUTE)));
       store_field(b, payload, nir_u2u64(b, in->src[1].ssa));
       nir_pop_if(b, NULL);
       break;
