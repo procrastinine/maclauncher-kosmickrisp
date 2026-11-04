@@ -44,6 +44,10 @@ void mtl_render_pass_descriptor_get_info(mtl_render_pass_descriptor *descriptor,
                                           struct mtl_render_pass_info *info);
 
 mtl_render_pass_descriptor *mtl_new_render_pass_descriptor(void);
+/* Recycle only inactive attachments; preserve the descriptor's child objects. */
+void mtl_render_pass_descriptor_reuse(mtl_render_pass_descriptor *descriptor,
+   uint8_t old_colors, uint8_t new_colors, bool old_depth, bool new_depth,
+   bool old_stencil, bool new_stencil, mtl_buffer *visibility);
 
 mtl_render_pass_attachment_descriptor *
 mtl_render_pass_descriptor_get_color_attachment(

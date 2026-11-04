@@ -296,7 +296,7 @@ static void kk_dgc_preprocess_inner(
       return;
    if (!kk_dgc_encode(cmd, cs_get_compute(cmd), parameters, p.maximum, 0))
       return;
-   mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
+   kk_cmd_bind_compute_arguments(cmd, cmd->metal.compute, cmd->argument_table);
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
 }
 
@@ -437,7 +437,7 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
       if (!kk_dgc_encode(cmd, cs_get_compute(cmd), parameters, count, poly ? 1 : 2))
          break;
       if (poly) {
-         mtl_compute_set_argument_table(cmd->metal.compute,
+         kk_cmd_bind_compute_arguments(cmd, cmd->metal.compute,
                                         cmd->argument_table);
          for (uint32_t i = 0; i < count; ++i) {
             uint64_t record = scratch + (uint64_t)i * p.record_stride;
@@ -470,7 +470,7 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
    }
    if (!compute) kk_dgc_set_graphics_indirect(cmd, false);
    if (cmd->metal.compute)
-      mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
+      kk_cmd_bind_compute_arguments(cmd, cmd->metal.compute, cmd->argument_table);
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
 }
 #include "kk_dgc_pipeline_execute.h"
@@ -639,7 +639,7 @@ uint64_t kk_dgc_offset_count(struct kk_cmd_buffer *cmd, uint64_t address,
       return 0;
    if (!kk_dgc_encode(cmd, cs_get_compute(cmd), parameters, 1, 3))
       return 0;
-   mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
+   kk_cmd_bind_compute_arguments(cmd, cmd->metal.compute, cmd->argument_table);
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
    return p.output;
 }

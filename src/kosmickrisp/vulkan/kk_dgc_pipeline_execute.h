@@ -184,6 +184,6 @@ restore:
       kk_dgc_set_graphics_indirect(cmd, false);
    }
    desc->root_dirty = true;
-   if (cmd->metal.compute) mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
+   if (cmd->metal.compute) kk_cmd_bind_compute_arguments(cmd, cmd->metal.compute, cmd->argument_table);
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
 }

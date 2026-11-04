@@ -8,7 +8,7 @@ kk_layered_bc_refresh_attachments(struct kk_cmd_buffer *cmd, bool force_load)
 {
    struct kk_rendering_state *render = &cmd->state.gfx.render;
    mtl_render_pass_descriptor *descriptor = cmd->state.gfx.render_pass_descriptor;
-   kk_set_color_attachments(descriptor, render, &cmd->vk.dynamic_graphics_state,
+   kk_set_color_attachments(cmd, descriptor, render, &cmd->vk.dynamic_graphics_state,
                             force_load, render->rendering_to_whole_framebuffer, true);
    const struct kk_attachment *attachments[] = {&render->depth_att,
                                                &render->stencil_att};
@@ -16,8 +16,8 @@ kk_layered_bc_refresh_attachments(struct kk_cmd_buffer *cmd, bool force_load)
       const struct kk_attachment *attachment = attachments[i];
       if (!attachment->iview) continue;
       mtl_render_pass_attachment_descriptor *at = i == 0 ?
-         mtl_render_pass_descriptor_get_depth_attachment(descriptor) :
-         mtl_render_pass_descriptor_get_stencil_attachment(descriptor);
+         kk_render_pass_depth(cmd, descriptor) :
+         kk_render_pass_stencil(cmd, descriptor);
       bool resolve = kk_attachment_do_renderpass_resolve(attachment,
          render->rendering_to_whole_framebuffer,
          i == 0 ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_STENCIL_BIT);

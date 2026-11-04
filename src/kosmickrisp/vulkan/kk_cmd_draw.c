@@ -9,6 +9,7 @@
 
 #include "kk_entrypoints.h"
 #include "kk_perf.h"
+#include "kk_render_pass_cache.h"
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
@@ -170,16 +171,19 @@ kk_fill_common_attachment_description(
    if (render->layered_bc)
       kk_layered_bc_attachment_description(descriptor, info, render, false);
 
+   if (!attach_resolve_texture)
+      mtl_render_pass_attachment_descriptor_set_resolve_texture(descriptor, NULL);
+
    if (attach_resolve_texture) {
       mtl_render_pass_attachment_descriptor_set_resolve_texture(
          descriptor, kk_transient_render_texture(info->resolve_iview));
 
-      if (!info->resolve_iview->planes[0].render_is_view) {
-         mtl_render_pass_attachment_descriptor_set_resolve_level(
-            descriptor, info->resolve_iview->vk.base_mip_level);
-         mtl_render_pass_attachment_descriptor_set_resolve_slice(
-            descriptor, info->resolve_iview->vk.base_array_layer);
-      }
+      bool view = info->resolve_iview->planes[0].render_is_view;
+      mtl_render_pass_attachment_descriptor_set_resolve_level(
+         descriptor, view ? 0 : info->resolve_iview->vk.base_mip_level);
+      mtl_render_pass_attachment_descriptor_set_resolve_slice(
+         descriptor, view ? 0 : info->resolve_iview->vk.base_array_layer);
+      mtl_render_pass_attachment_descriptor_set_resolve_depth_plane(descriptor, 0);
       if (render->layered_bc)
          kk_layered_bc_attachment_description(descriptor, info, render, true);
    }
@@ -224,7 +228,8 @@ vk_clear_color_value_to_mtl_clear_color(union VkClearColorValue color,
 }
 
 static void
-kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
+kk_set_color_attachments(struct kk_cmd_buffer *cmd,
+                         mtl_render_pass_descriptor *pass_descriptor,
                          struct kk_rendering_state *render,
                          const struct vk_dynamic_graphics_state *dyn,
                          bool force_attachment_load,
@@ -236,7 +241,7 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
    if (clear_previous) {
       for (uint32_t i = 0; i < ARRAY_SIZE(render->color_att); i++) {
          mtl_render_pass_attachment_descriptor *attachment_descriptor =
-            mtl_render_pass_descriptor_get_color_attachment(pass_descriptor, i);
+            kk_render_pass_color(cmd, pass_descriptor, i);
          kk_clear_common_attachment_description(attachment_descriptor);
       }
    }
@@ -250,8 +255,7 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
          continue;
       }
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
-         mtl_render_pass_descriptor_get_color_attachment(pass_descriptor,
-                                                         logical_index);
+         kk_render_pass_color(cmd, pass_descriptor, logical_index);
 
       assert(iview->plane_count ==
              1); /* TODO_KOSMICKRISP Handle multiplanar images? */
@@ -373,8 +377,24 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    kk_init_rendering_locations(cmd, pRenderingInfo);
 
    kk_cmd_buffer_dirty_render_pass(cmd);
-   mtl_render_pass_descriptor *pass_descriptor =
-      mtl_new_render_pass_descriptor();
+   struct kk_perf_encoder_scope descriptor_scope
+      __attribute__((cleanup(kk_perf_encoder_scope_cleanup)));
+   descriptor_scope.perf = dev->perf;
+   if (unlikely(descriptor_scope.perf)) {
+      kk_perf_encoder_scope_begin(&descriptor_scope, KK_PERF_SETUP_DESCRIPTOR);
+   }
+   uint8_t color_mask = 0;
+   for (unsigned i = 0; i < render->color_att_count; ++i)
+      if (render->color_att[i].iview &&
+          dyn->cal.color_map[i] != MESA_VK_ATTACHMENT_UNUSED)
+         color_mask |= 1u << dyn->cal.color_map[i];
+   mtl_render_pass_descriptor *pass_descriptor = kk_render_pass_acquire(cmd,
+      color_mask, render->depth_att.iview != NULL, render->stencil_att.iview != NULL,
+      cmd->uses_occlusion_queries ? dev->occlusion_queries.bo->map : NULL);
+   if (!pass_descriptor) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return;
+   }
 
    /* Framebufferless rendering, need to set pass_descriptors
     * renderTargetWidth/Height to non-0 values and defaultRasterSampleCount.
@@ -434,7 +454,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    render->force_attachment_store =
       !is_whole_framebuffer || (render->flags & VK_RENDERING_SUSPENDING_BIT);
 
-   kk_set_color_attachments(pass_descriptor, render, dyn, force_attachment_load,
+   kk_set_color_attachments(cmd, pass_descriptor, render, dyn, force_attachment_load,
                             is_whole_framebuffer, false);
 
    if (render->depth_att.iview) {
@@ -447,7 +467,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
          &render->depth_att, is_whole_framebuffer, VK_IMAGE_ASPECT_DEPTH_BIT);
 
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
-         mtl_render_pass_descriptor_get_depth_attachment(pass_descriptor);
+         kk_render_pass_depth(cmd, pass_descriptor);
       enum mtl_load_action load_action = kk_fill_common_attachment_description(
          attachment_descriptor, &render->depth_att, render, force_attachment_load,
          renderpass_resolve);
@@ -476,7 +496,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
          VK_IMAGE_ASPECT_STENCIL_BIT);
 
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
-         mtl_render_pass_descriptor_get_stencil_attachment(pass_descriptor);
+         kk_render_pass_stencil(cmd, pass_descriptor);
       enum mtl_load_action load_action = kk_fill_common_attachment_description(
          attachment_descriptor, &render->stencil_att, render, force_attachment_load,
          renderpass_resolve);
@@ -504,6 +524,10 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    /* Rendering with no attachments requires pushing the start of the render
     * pass to first pipeline binding to know sample count. */
    cmd->state.gfx.render_pass_descriptor = pass_descriptor;
+   if (unlikely(descriptor_scope.perf)) {
+      kk_perf_encoder_scope_end(&descriptor_scope);
+      descriptor_scope.perf = NULL;
+   }
    if (!no_framebuffer && !kk_layered_bc_start_rendering(cmd, force_attachment_load))
       return;
 
@@ -520,7 +544,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
                                     force_attachment_load) == MTL_LOAD_ACTION_LOAD)
          continue;
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
-         mtl_render_pass_descriptor_get_color_attachment(pass_descriptor, i);
+         kk_render_pass_color(cmd, pass_descriptor, i);
       mtl_render_pass_attachment_descriptor_set_load_action(
          attachment_descriptor, MTL_LOAD_ACTION_LOAD);
    }
@@ -528,7 +552,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
        kk_attachment_load_action(&render->depth_att, force_attachment_load) !=
           MTL_LOAD_ACTION_LOAD) {
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
-         mtl_render_pass_descriptor_get_depth_attachment(pass_descriptor);
+         kk_render_pass_depth(cmd, pass_descriptor);
       mtl_render_pass_attachment_descriptor_set_load_action(
          attachment_descriptor, MTL_LOAD_ACTION_LOAD);
    }
@@ -536,7 +560,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
        kk_attachment_load_action(&render->stencil_att, force_attachment_load) !=
           MTL_LOAD_ACTION_LOAD) {
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
-         mtl_render_pass_descriptor_get_stencil_attachment(pass_descriptor);
+         kk_render_pass_stencil(cmd, pass_descriptor);
       mtl_render_pass_attachment_descriptor_set_load_action(
          attachment_descriptor, MTL_LOAD_ACTION_LOAD);
    }
@@ -710,7 +734,7 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
       cs_end(cmd);
    else
       cs_end_unordered(cmd);
-   mtl_release(cmd->state.gfx.render_pass_descriptor);
+   kk_render_pass_release(cmd, cmd->state.gfx.render_pass_descriptor);
    cmd->state.gfx.render_pass_descriptor = NULL;
 
    if (!render->msrtss && (render->flags &
@@ -1083,7 +1107,7 @@ kk_flush_render_pass(struct kk_cmd_buffer *cmd)
          kk_apply_attachment_store_ops(cmd, true);
 
          kk_set_color_attachments(
-            cmd->state.gfx.render_pass_descriptor, render, dyn, true,
+            cmd, cmd->state.gfx.render_pass_descriptor, render, dyn, true,
             cmd->state.gfx.render.rendering_to_whole_framebuffer, true);
          needs_restart = true;
          color_attachment_map_changed = true;

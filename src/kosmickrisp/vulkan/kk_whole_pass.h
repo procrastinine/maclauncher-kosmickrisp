@@ -199,8 +199,10 @@ kk_whole_pass_command_boundary(struct kk_cmd_buffer *cmd)
       cmd->vk.dynamic_graphics_state.rp.attachments;
    const uint32_t view_mask = cmd->vk.dynamic_graphics_state.rp.view_mask;
    const bool uses_heap = cmd->uses_heap;
-   if (!keep_render)
+   if (!keep_render) {
       cs_end(cmd);
+      kk_render_pass_release(cmd, descriptor);
+   }
    kk_cmd_release_dynamic_ds_state(cmd);
    kk_descriptor_state_fini(cmd, &cmd->state.gfx.descriptors);
    kk_descriptor_state_fini(cmd, &cmd->state.cs.descriptors);

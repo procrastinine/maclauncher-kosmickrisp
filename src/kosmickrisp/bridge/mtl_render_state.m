@@ -28,6 +28,34 @@ mtl_new_render_pass_descriptor(void)
    });
 }
 
+static void
+mtl_clear_recycled_attachment(MTLRenderPassAttachmentDescriptor *attachment)
+{
+   if (attachment.texture) attachment.texture = nil;
+   if (attachment.resolveTexture) attachment.resolveTexture = nil;
+}
+
+void
+mtl_render_pass_descriptor_reuse(mtl_render_pass_descriptor *descriptor,
+   uint8_t old_colors, uint8_t new_colors, bool old_depth, bool new_depth,
+   bool old_stencil, bool new_stencil, mtl_buffer *visibility)
+{
+   KK_MTL_REPLAY_POOL({
+      MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+      for (unsigned i = 0; i < 8; ++i)
+         if ((old_colors & ~new_colors) & (1u << i))
+            mtl_clear_recycled_attachment(desc.colorAttachments[i]);
+      if (old_depth && !new_depth)
+         mtl_clear_recycled_attachment(desc.depthAttachment);
+      if (old_stencil && !new_stencil)
+         mtl_clear_recycled_attachment(desc.stencilAttachment);
+      if ([desc getSamplePositions:NULL count:0])
+         [desc setSamplePositions:NULL count:0];
+      if (desc.visibilityResultBuffer != (id<MTLBuffer>)visibility)
+         desc.visibilityResultBuffer = (id<MTLBuffer>)visibility;
+   });
+}
+
 static struct mtl_render_pass_attachment_info
 mtl_render_pass_attachment_get_info(MTLRenderPassAttachmentDescriptor *attachment)
 {
@@ -106,13 +134,17 @@ mtl_render_pass_attachment_descriptor_set_common(
    KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc =
          (MTLRenderPassAttachmentDescriptor *)descriptor;
-      desc.texture = (id<MTLTexture>)texture;
-      if (set_subresource) {
-         desc.level = level;
-         desc.slice = slice;
-      }
-      desc.loadAction = (MTLLoadAction)load_action;
-      desc.storeAction = MTLStoreActionUnknown;
+      if (desc.texture != (id<MTLTexture>)texture)
+         desc.texture = (id<MTLTexture>)texture;
+      level = set_subresource ? level : 0;
+      slice = set_subresource ? slice : 0;
+      if (desc.level != level) desc.level = level;
+      if (desc.slice != slice) desc.slice = slice;
+      if (desc.depthPlane) desc.depthPlane = 0;
+      if (desc.loadAction != (MTLLoadAction)load_action)
+         desc.loadAction = (MTLLoadAction)load_action;
+      if (desc.storeAction != MTLStoreActionUnknown)
+         desc.storeAction = MTLStoreActionUnknown;
    });
 }
 
@@ -122,7 +154,8 @@ mtl_render_pass_attachment_descriptor_set_texture(
 {
    KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
-      desc.texture = (id<MTLTexture>)texture;
+      if (desc.texture != (id<MTLTexture>)texture)
+         desc.texture = (id<MTLTexture>)texture;
    });
 }
 
@@ -153,7 +186,8 @@ mtl_render_pass_attachment_descriptor_set_load_action(
 {
    KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
-      desc.loadAction = (MTLLoadAction)action;
+      if (desc.loadAction != (MTLLoadAction)action)
+         desc.loadAction = (MTLLoadAction)action;
    });
 }
 
@@ -164,7 +198,8 @@ mtl_render_pass_attachment_descriptor_set_store_action(
 {
    KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
-      desc.storeAction = (MTLStoreAction)action;
+      if (desc.storeAction != (MTLStoreAction)action)
+         desc.storeAction = (MTLStoreAction)action;
    });
 }
 
@@ -225,7 +260,8 @@ mtl_render_pass_attachment_descriptor_set_resolve_texture(mtl_render_pass_attach
 {
    KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
-      desc.resolveTexture = resolve_texture;
+      if (desc.resolveTexture != resolve_texture)
+         desc.resolveTexture = resolve_texture;
    });
 }
 
@@ -235,7 +271,8 @@ mtl_render_pass_attachment_descriptor_set_resolve_level(mtl_render_pass_attachme
 {
    KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
-      desc.resolveLevel = resolve_level;
+      if (desc.resolveLevel != resolve_level)
+         desc.resolveLevel = resolve_level;
    });
 }
 
@@ -245,7 +282,8 @@ mtl_render_pass_attachment_descriptor_set_resolve_slice(mtl_render_pass_attachme
 {
    KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
-      desc.resolveSlice = resolve_slice;
+      if (desc.resolveSlice != resolve_slice)
+         desc.resolveSlice = resolve_slice;
    });
 }
 
@@ -255,7 +293,8 @@ mtl_render_pass_attachment_descriptor_set_resolve_depth_plane(mtl_render_pass_at
 {
    KK_MTL_REPLAY_POOL({
       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
-      desc.resolveDepthPlane = resolve_depth_plane;
+      if (desc.resolveDepthPlane != resolve_depth_plane)
+         desc.resolveDepthPlane = resolve_depth_plane;
    });
 }
 
@@ -265,7 +304,8 @@ mtl_render_pass_descriptor_set_render_target_array_length(mtl_render_pass_descri
 {
    KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
-      desc.renderTargetArrayLength = length;
+      if (desc.renderTargetArrayLength != length)
+         desc.renderTargetArrayLength = length;
    });
 }
 
@@ -275,7 +315,8 @@ mtl_render_pass_descriptor_set_render_target_width(mtl_render_pass_descriptor *d
 {
    KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
-      desc.renderTargetWidth = width;
+      if (desc.renderTargetWidth != width)
+         desc.renderTargetWidth = width;
    });
 }
 
@@ -285,7 +326,8 @@ mtl_render_pass_descriptor_set_render_target_height(mtl_render_pass_descriptor *
 {
    KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
-      desc.renderTargetHeight = height;
+      if (desc.renderTargetHeight != height)
+         desc.renderTargetHeight = height;
    });
 }
 
@@ -295,7 +337,8 @@ mtl_render_pass_descriptor_set_default_raster_sample_count(mtl_render_pass_descr
 {
    KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
-      desc.defaultRasterSampleCount = sample_count;
+      if (desc.defaultRasterSampleCount != sample_count)
+         desc.defaultRasterSampleCount = sample_count;
    });
 }
 
@@ -326,7 +369,8 @@ mtl_render_pass_descriptor_set_visibility_buffer(mtl_render_pass_descriptor *des
    KK_MTL_REPLAY_POOL({
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       id<MTLBuffer> buffer = (id<MTLBuffer>)visibility_buffer;
-      desc.visibilityResultBuffer = buffer;
+      if (desc.visibilityResultBuffer != buffer)
+         desc.visibilityResultBuffer = buffer;
    });
 }
 

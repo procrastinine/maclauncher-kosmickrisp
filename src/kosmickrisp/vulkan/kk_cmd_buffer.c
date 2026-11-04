@@ -8,6 +8,7 @@
 #include "kk_cmd_buffer.h"
 #include "kk_dispatch_cmd.h"
 #include "kk_perf.h"
+#include "kk_render_pass_cache.h"
 #include "kk_scene.h"
 #include "kosmickrisp-rt-commands.h"
 #include "kk_depth_stencil_state.h"
@@ -56,6 +57,8 @@ static void
 kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
 {
    struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+
+   kk_render_pass_cache_reset(cmd);
 
    /* Internal views must go before their command-owned backing images. */
    vk_meta_object_list_reset(&dev->vk, &cmd->vk.meta_objects);
@@ -182,6 +185,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
 
    kk_cmd_release_resources(dev, cmd);
+   kk_render_pass_cache_finish(cmd);
    util_dynarray_fini(&cmd->large_bos);
    util_dynarray_fini(&cmd->dgc_commands);
    util_dynarray_fini(&cmd->mesh_command_buffers);
@@ -498,6 +502,23 @@ apply_pending_barrier(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
 }
 
 void
+kk_cmd_bind_compute_arguments(struct kk_cmd_buffer *cmd,
+   mtl_compute_encoder *encoder, mtl_argument_table *table)
+{
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   bool tracked = encoder == cmd->metal.compute;
+   if (tracked && cmd->compute_bound_table == table) {
+      if (unlikely(dev->perf))
+         kk_perf_add(dev->perf, KK_PERF_SETUP_BIND_SKIPPED, 0);
+      return;
+   }
+   KK_PERF_ENCODER_SCOPE(dev, KK_PERF_SETUP_BINDS, binds);
+   mtl_compute_set_argument_table(encoder, table);
+   if (tracked)
+      cmd->compute_bound_table = table;
+}
+
+void
 cs_start_render(struct kk_cmd_buffer *cmd)
 {
    KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_SETUP, setup);
@@ -517,8 +538,11 @@ cs_start_render(struct kk_cmd_buffer *cmd)
    if (state->render.writable_msaa_attachments || state->render.writable_msaa_inputs)
       kk_writable_msaa_prepare_render(cmd);
 
-   cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
-      cmd->metal.cmd_buf, state->render_pass_descriptor);
+   {
+      KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_SETUP_ENCODER, create);
+      cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
+         cmd->metal.cmd_buf, state->render_pass_descriptor);
+   }
    if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL)) {
       kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_RENDER_ENCODER_BEGIN, 0);
       kk_perf_render_begin(kk_cmd_buffer_device(cmd)->perf, cmd->metal.render,
@@ -540,12 +564,14 @@ cs_start_render(struct kk_cmd_buffer *cmd)
    if (view_mask == 0u) {
       layer_ids[count++] = 0;
    }
-   mtl_set_vertex_amplification_count(cmd->metal.render, layer_ids, count);
-
-   /* Argument table won't ever change */
-   mtl_render_set_argument_table(
-      cmd->metal.render, cmd->argument_table,
-      MTL_RENDER_STAGE_VERTEX | MTL_RENDER_STAGE_FRAGMENT);
+   {
+      KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_SETUP_BINDS, binds);
+      mtl_set_vertex_amplification_count(cmd->metal.render, layer_ids, count);
+      /* Fresh encoders have no table state, even when Metal reuses a pointer.
+       * Bind once here; graphics state invalidation remains per encoder. */
+      mtl_render_set_argument_table(cmd->metal.render, cmd->argument_table,
+         MTL_RENDER_STAGE_VERTEX | MTL_RENDER_STAGE_FRAGMENT);
+   }
 
    kk_cmd_buffer_invalidate_gfx_encoder(cmd);
 }
@@ -580,11 +606,15 @@ cs_get_compute_internal(struct kk_cmd_buffer *cmd, bool preserve_pipeline)
 
    if (cmd->metal.compute == NULL) {
       cmd->state.cs.bound_pipeline = NULL;
-      cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
+      {
+         KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_SETUP_ENCODER, create);
+         cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
+      }
+      cmd->compute_bound_table = NULL;
       if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL))
          kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_COMPUTE_ENCODER_BEGIN, 0);
       apply_pending_barrier(cmd, cmd->metal.compute);
-      mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
+      kk_cmd_bind_compute_arguments(cmd, cmd->metal.compute, cmd->argument_table);
       kk_encoder_update_debug(cmd, cmd->metal.compute);
    }
 
@@ -611,6 +641,8 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
             enum mtl_stages stages, bool ordered)
 {
    KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_END, end);
+   if (encoder == cmd->metal.compute)
+      cmd->compute_bound_table = NULL;
    const bool resolves =
       util_dynarray_num_elements(&cmd->ts_resolves, struct kk_ts_resolve) > 0;
    const bool occlusion =

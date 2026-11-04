@@ -408,6 +408,15 @@ struct kk_whole_pass_state {
    VkSampleCountFlagBits implicit_samples;
 };
 
+/* A leased descriptor may be retained by suspended rendering or meta state. */
+#define KK_RENDER_PASS_CACHE_SIZE 4
+struct kk_render_pass_cache {
+   mtl_render_pass_descriptor *descriptor;
+   mtl_render_pass_attachment_descriptor *color[KK_MAX_RTS], *depth, *stencil;
+   uint8_t color_mask;
+   bool leased;
+};
+
 struct kk_cmd_buffer {
    struct vk_command_buffer vk;
    struct kk_queue *scene_queue;
@@ -436,6 +445,8 @@ struct kk_cmd_buffer {
       mtl_compute_encoder *compute;
    } metal;
    /* Survives generic graphics-state resets and suspended render chains. */
+   struct kk_render_pass_cache render_pass_cache[KK_RENDER_PASS_CACHE_SIZE];
+   mtl_argument_table *compute_bound_table;
    struct kk_barrier_scope pending_barrier;
    enum mtl_stages closed_encoder_stages;
    bool encoder_occlusion;
@@ -554,6 +565,8 @@ bool kk_mesh_split_command_buffer(struct kk_cmd_buffer *cmd);
 VkResult kk_cmd_buffer_defer_native_recording(struct kk_cmd_buffer *cmd);
 VkResult kk_cmd_buffer_record_occlusion_query(struct kk_cmd_buffer *cmd);
 VkResult kk_cmd_buffer_resume_native_recording(struct kk_cmd_buffer *cmd);
+void kk_cmd_bind_compute_arguments(struct kk_cmd_buffer *cmd,
+   mtl_compute_encoder *encoder, mtl_argument_table *table);
 void kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd,
                                         uint64_t addr);
 
