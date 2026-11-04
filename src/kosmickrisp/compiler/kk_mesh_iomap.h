@@ -213,10 +213,11 @@ kk_mesh_io_blocks(struct nir_to_msl_ctx *ctx)
       ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
       ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT);
    ctx->mesh.retained_vertex_stride = kk_mesh_native_layout(ctx,
-      written & ~s->info.per_primitive_outputs, true);
+      kk_mesh_native_vertex_outputs(s, written & ~s->info.per_primitive_outputs), true);
    ctx->mesh.retained_primitive_stride = kk_mesh_native_layout(ctx,
       written & s->info.per_primitive_outputs, false);
-   kk_mesh_io_block(ctx, "MeshVertex", written & ~s->info.per_primitive_outputs, true, false);
+   kk_mesh_io_block(ctx, "MeshVertex",
+      kk_mesh_native_vertex_outputs(s, written & ~s->info.per_primitive_outputs), true, false);
    kk_mesh_io_block(ctx, "MeshPrimitive", written & s->info.per_primitive_outputs, false, false);
    kk_mesh_io_block(ctx, "MeshVertexStorage", written & ~s->info.per_primitive_outputs, true, true);
    kk_mesh_io_block(ctx, "MeshPrimitiveStorage", written & s->info.per_primitive_outputs, false, true);

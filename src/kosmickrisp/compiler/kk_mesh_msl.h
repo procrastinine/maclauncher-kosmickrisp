@@ -111,6 +111,8 @@ kk_mesh_emit_copy_members(struct nir_to_msl_ctx *ctx, bool primitive)
       ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
       ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT);
    mask &= primitive ? s->info.per_primitive_outputs : ~s->info.per_primitive_outputs;
+   if (!primitive)
+      mask = kk_mesh_native_vertex_outputs(s, mask);
    if (ctx->mesh.flat_heap)
       mask &= ~((BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1)) &
                 ~BITFIELD64_MASK(VARYING_SLOT_VAR0));

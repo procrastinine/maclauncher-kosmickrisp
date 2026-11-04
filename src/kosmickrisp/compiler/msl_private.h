@@ -22,6 +22,16 @@ struct io_slot_info {
    bool mesh_primitive;
 };
 
+/* Metal accepts [[point_size]] only in point-topology Mesh vertices. Other
+ * topologies keep the shader's PointSize writes in threadgroup storage and
+ * leave it out of the native vertex record. */
+static inline uint64_t
+kk_mesh_native_vertex_outputs(const nir_shader *s, uint64_t mask)
+{
+   return s->info.mesh.primitive_type == MESA_PRIM_POINTS ? mask :
+      mask & ~VARYING_BIT_PSIZ;
+}
+
 struct kk_mesh_msl_info {
    bool queries;
    uint32_t retained_vertex_stride, retained_primitive_stride;
