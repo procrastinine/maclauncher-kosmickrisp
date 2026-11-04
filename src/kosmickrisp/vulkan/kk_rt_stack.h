@@ -83,9 +83,22 @@ kk_rt_u64_add(KK_RT_U64 a, KK_RT_U64 b, KK_RT_THREAD KK_RT_U64 *out)
 static inline bool
 kk_rt_u64_mul(KK_RT_U64 a, KK_RT_U64 b, KK_RT_THREAD KK_RT_U64 *out)
 {
-   if (b && a > ~(KK_RT_U64)0 / b)
+   /* Keep the partial products at 32x32 bits. The division-based overflow
+    * idiom becomes a 64-bit multiply-with-overflow operation that the Apple8
+    * Metal backend cannot legalize. Each sum below is bounded to 34 bits. */
+   KK_RT_U32 a_lo = (KK_RT_U32)a, a_hi = (KK_RT_U32)(a >> 32);
+   KK_RT_U32 b_lo = (KK_RT_U32)b, b_hi = (KK_RT_U32)(b >> 32);
+   if (a_hi && b_hi)
       return false;
-   *out = a * b;
+   KK_RT_U64 low = (KK_RT_U64)a_lo * b_lo;
+   KK_RT_U64 cross0 = (KK_RT_U64)a_hi * b_lo;
+   KK_RT_U64 cross1 = (KK_RT_U64)a_lo * b_hi;
+   if ((cross0 | cross1) >> 32)
+      return false;
+   KK_RT_U64 high = (low >> 32) + (KK_RT_U32)cross0 + (KK_RT_U32)cross1;
+   if (high >> 32)
+      return false;
+   *out = (high << 32) | (KK_RT_U32)low;
    return true;
 }
 
