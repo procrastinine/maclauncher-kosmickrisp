@@ -52,6 +52,7 @@ struct kk_device_info {
    uint32_t rgb32_texel_alignment[3]; /* Metal RGB32Uint, Sint, Float. */
    bool supports_32bit_msaa;
    bool supports_query_texture_lod;
+   bool supports_bc_texture_compression;
 };
 
 struct kk_env_settings {

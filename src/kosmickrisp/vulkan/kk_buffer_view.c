@@ -42,6 +42,8 @@ kk_get_buffer_format_features(struct kk_physical_device *pdev,
 
    if (p_format == PIPE_FORMAT_NONE)
       return 0;
+   if (!pdev->info.supports_bc_texture_compression && kk_format_is_bc(p_format))
+      return 0;
 
    if (p_format == PIPE_FORMAT_R64_UINT || p_format == PIPE_FORMAT_R64_SINT)
       return pdev->info.gpu_apple_family < 8 ? 0 :

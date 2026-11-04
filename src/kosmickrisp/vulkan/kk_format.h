@@ -57,6 +57,14 @@ kk_format_is_rgb32(enum pipe_format format)
           format == PIPE_FORMAT_R32G32B32_SINT;
 }
 
+static inline bool
+kk_format_is_bc(enum pipe_format format)
+{
+   const enum util_format_layout layout = util_format_description(format)->layout;
+   return layout == UTIL_FORMAT_LAYOUT_S3TC || layout == UTIL_FORMAT_LAYOUT_RGTC ||
+          layout == UTIL_FORMAT_LAYOUT_BPTC;
+}
+
 static inline enum pipe_format
 kk_format_backing(enum pipe_format format)
 {

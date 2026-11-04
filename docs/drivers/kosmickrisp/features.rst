@@ -649,9 +649,10 @@ Feature table
    * - Compressed and packed formats: ``textureCompressionBC``,
        ``textureCompressionETC2``, ``textureCompressionASTC_LDR``,
        ``VK_EXT_texture_compression_astc_hdr``, ``VK_EXT_4444_formats``
-     - Native: some packed formats use texture swizzles.
+     - Native: some packed formats use texture swizzles. BC capabilities and
+       format reports follow the device's ``supportsBCTextureCompression``.
      - Apple2 for ASTC and ETC/EAC, Apple9 for BC (some Apple7 and Apple8
-       devices); native on all families.
+       devices); BC support is queried from the device.
      - —
      - Always
      - —

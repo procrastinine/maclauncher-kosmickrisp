@@ -39,6 +39,8 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
    enum pipe_format p_format = vk_format_to_pipe_format(vk_format);
    if (p_format == PIPE_FORMAT_NONE)
       return 0;
+   if (!pdev->info.supports_bc_texture_compression && kk_format_is_bc(p_format))
+      return 0;
 
    /* Optimal RGB32 images use RGBA32 backing. Linear host memory must
     * retain Vulkan's packed RGB layout and cannot alias that representation. */

@@ -48,6 +48,12 @@ mtl_device_get_registry_id(mtl_device *dev)
 }
 
 bool
+mtl_device_supports_bc_texture_compression(mtl_device *dev)
+{
+   return false;
+}
+
+bool
 mtl_device_supports_sample_count(mtl_device *dev, uint32_t sample_count)
 {
    return false;

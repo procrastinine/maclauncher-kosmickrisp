@@ -339,7 +339,7 @@ kk_get_device_features(
       .primitivesGeneratedQueryWithRasterizerDiscard = true,
       .primitivesGeneratedQueryWithNonZeroStreams = true,
       .textureCompressionASTC_LDR = true,
-      .textureCompressionBC = true,
+      .textureCompressionBC = pdev->info.supports_bc_texture_compression,
       .textureCompressionETC2 = true,
       .vertexPipelineStoresAndAtomics = true,
       .variableMultisampleRate = true,
@@ -1350,6 +1350,8 @@ get_metal_limits(struct kk_physical_device *pdev)
 
    pdev->info.supports_query_texture_lod =
       mtl_device_supports_query_texture_lod(pdev->mtl_dev_handle);
+   pdev->info.supports_bc_texture_compression =
+      mtl_device_supports_bc_texture_compression(pdev->mtl_dev_handle);
    pdev->info.supports_32bit_msaa =
       mtl_device_supports_32bit_msaa(pdev->mtl_dev_handle);
    pdev->info.supported_sample_counts = VK_SAMPLE_COUNT_1_BIT;
