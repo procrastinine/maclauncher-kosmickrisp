@@ -14,7 +14,7 @@ struct lower_ia_state {
    const struct vk_input_attachment_location_state *ial;
    const struct vk_color_attachment_location_state *cal;
    const struct vk_render_pass_state *rp;
-   bool interlock_shadow_samples;
+   bool interlock_shadow_samples, mesh_shadow, depth_bounds_shadow;
 };
 
 #include "msl_attachment_samples.h"
@@ -41,7 +41,7 @@ msl_nir_lower_frag_input_attachments(nir_shader *nir,
                                      const struct lower_ia_state *state)
 {
    return nir_shader_intrinsics_pass(nir, lower_input_attachment,
-      nir_metadata_control_flow,
+      state->depth_bounds_shadow ? nir_metadata_none : nir_metadata_control_flow,
       (void *)state);
 }
 
@@ -49,7 +49,7 @@ void
 msl_nir_lower_input_attachments(
    nir_shader *nir, const struct vk_input_attachment_location_state *ial,
    const struct vk_color_attachment_location_state *cal,
-   const struct vk_render_pass_state *rp, bool interlock_shadow_samples)
+   const struct vk_render_pass_state *rp, bool interlock_shadow_samples, bool mesh_shadow, bool depth_bounds_shadow)
 {
    assert(nir->info.stage == MESA_SHADER_FRAGMENT);
 
@@ -59,6 +59,8 @@ msl_nir_lower_input_attachments(
          .cal = cal,
          .rp = rp,
          .interlock_shadow_samples = interlock_shadow_samples,
+         .mesh_shadow = mesh_shadow,
+         .depth_bounds_shadow = depth_bounds_shadow,
       };
       NIR_PASS(_, nir, msl_nir_lower_frag_input_attachments, &state);
    }

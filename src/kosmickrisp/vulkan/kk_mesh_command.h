@@ -935,5 +935,61 @@ kk_CmdDrawMeshTasksIndirectCountEXT(VkCommandBuffer commandBuffer, VkBuffer buff
       vk_buffer_address(&c->vk, countOffset), maxDrawCount, stride, false);
 }
 
+/* Installed only on a device that enabled software bounds. All devices that
+ * do not use the feature retain the original Mesh entry points above. */
+static int
+kk_depth_bounds_mesh_begin(VkCommandBuffer commandBuffer)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   if (!cmd->state.gfx.shader->info.depth_bounds_emulation)
+      return 0;
+   if (!kk_mesh_retained_transaction_begin(cmd, kk_depth_bounds_record_mesh_batch, NULL)) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
+      return -1;
+   }
+   return 1;
+}
+
+static void VKAPI_CALL
+kk_depth_bounds_draw_mesh(VkCommandBuffer commandBuffer, uint32_t x, uint32_t y, uint32_t z)
+{
+   if (!(x && y && z)) return;
+   int selected = kk_depth_bounds_mesh_begin(commandBuffer);
+   if (selected < 0) return;
+   kk_CmdDrawMeshTasksEXT(commandBuffer, x, y, z);
+   if (selected) kk_mesh_retained_transaction_end(kk_cmd_buffer_from_handle(commandBuffer));
+}
+
+static void VKAPI_CALL
+kk_depth_bounds_draw_mesh_indirect(VkCommandBuffer commandBuffer, VkBuffer buffer,
+   VkDeviceSize offset, uint32_t drawCount, uint32_t stride)
+{
+   if (!drawCount) return;
+   int selected = kk_depth_bounds_mesh_begin(commandBuffer);
+   if (selected < 0) return;
+   kk_CmdDrawMeshTasksIndirectEXT(commandBuffer, buffer, offset, drawCount, stride);
+   if (selected) kk_mesh_retained_transaction_end(kk_cmd_buffer_from_handle(commandBuffer));
+}
+
+static void VKAPI_CALL
+kk_depth_bounds_draw_mesh_indirect_count(VkCommandBuffer commandBuffer, VkBuffer buffer,
+   VkDeviceSize offset, VkBuffer countBuffer, VkDeviceSize countOffset,
+   uint32_t maxDrawCount, uint32_t stride)
+{
+   if (!maxDrawCount) return;
+   int selected = kk_depth_bounds_mesh_begin(commandBuffer);
+   if (selected < 0) return;
+   kk_CmdDrawMeshTasksIndirectCountEXT(commandBuffer, buffer, offset,
+      countBuffer, countOffset, maxDrawCount, stride);
+   if (selected) kk_mesh_retained_transaction_end(kk_cmd_buffer_from_handle(commandBuffer));
+}
+
+void
+kk_depth_bounds_init_dispatch(struct kk_device *dev)
+{
+   dev->vk.dispatch_table.CmdDrawMeshTasksEXT = kk_depth_bounds_draw_mesh;
+   dev->vk.dispatch_table.CmdDrawMeshTasksIndirectEXT = kk_depth_bounds_draw_mesh_indirect;
+   dev->vk.dispatch_table.CmdDrawMeshTasksIndirectCountEXT = kk_depth_bounds_draw_mesh_indirect_count;
+}
 
 #endif

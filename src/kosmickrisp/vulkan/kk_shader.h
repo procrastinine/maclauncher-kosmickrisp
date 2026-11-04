@@ -126,10 +126,11 @@ struct kk_mesh_shader_info {
 };
 
 /* Serialized info may change within padding without changing sizeof. */
-#define KK_SHADER_INFO_CACHE_VERSION 5u
+#define KK_SHADER_INFO_CACHE_VERSION 6u
 
 struct kk_shader_info {
    bool interlock_envelope;
+   bool depth_bounds_emulation;
    mesa_shader_stage stage;
    bool uses_per_draw_data;
    bool uses_sampler_emulation;

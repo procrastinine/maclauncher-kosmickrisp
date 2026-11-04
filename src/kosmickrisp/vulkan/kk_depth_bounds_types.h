@@ -4,8 +4,8 @@
 #include <stdint.h>
 #include "kk_interlock_envelope.h"
 
-/* Extended transactions carry runtime input mappings. The ordinary shared
- * envelope retains its original upload size. */
+/* Only an emulated-bounds packet carries the runtime input mapping. The
+ * ordinary shared envelope retains its original upload size. */
 struct kk_depth_bounds_envelope {
    struct kk_interlock_envelope base;
    uint32_t input_depth_index, input_stencil_index;

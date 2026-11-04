@@ -4,18 +4,48 @@
 #include "kk_device.h"
 #include "kk_physical_device.h"
 #include "vk_graphics_state.h"
-#include "kk_depth_bounds_types.h"
 
 struct kk_interlock_envelope;
+void kk_depth_bounds_init_dispatch(struct kk_device *dev);
+struct kk_cmd_buffer;
+struct kk_mesh_retained_batch;
+struct kk_depth_stencil_snapshot;
 struct kk_rendering_state;
 void kk_depth_bounds_set_transaction_inputs(struct kk_interlock_envelope *,
    const struct vk_input_attachment_location_state *, const struct kk_rendering_state *);
-/* Bounds support follows the cached native family capability. Shared DS
- * transactions serialize command state independently of feature exposure. */
+VkResult kk_depth_bounds_record_mesh_batch(struct kk_cmd_buffer *,
+   const struct kk_mesh_retained_batch *, void *);
+/* Internal fragment stage table context. Original application per-draw state
+ * keeps its original address, independently of the GPU job's storage key. */
+#include "kk_depth_bounds_types.h"
+VkResult kk_depth_bounds_mesh_capture_pipeline(struct kk_cmd_buffer *,
+   const struct kk_mesh_retained_batch *, mtl_render_pipeline_state **);
+VkResult kk_depth_bounds_mesh_capture_job(struct kk_cmd_buffer *,
+   const struct kk_mesh_retained_batch *, const struct kk_depth_stencil_snapshot *,
+   uint64_t env, uint64_t job, mtl_argument_table *fragment_table);
+
+/* The public feature may include emulation later; native selectors must remain
+ * tied to the physical operation, rather than to that public feature bit. */
 static inline bool
 kk_depth_bounds_native(const struct kk_physical_device *pdev)
 {
    return pdev->info.gpu_apple_family >= 10;
+}
+
+static inline bool
+kk_depth_bounds_emulated(const struct kk_device *dev)
+{
+   return dev->vk.enabled_features.depthBounds &&
+      !kk_depth_bounds_native(kk_device_physical(dev));
+}
+
+static inline bool
+kk_depth_bounds_pipeline(const struct kk_device *dev,
+                          const struct vk_graphics_pipeline_state *state)
+{
+   return kk_depth_bounds_emulated(dev) && state &&
+      ((state->ds && state->ds->depth.bounds_test.enable) ||
+       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE));
 }
 
 /* Also accepts snapshot->ds and snapshot->tested_aspects. Copies state into
