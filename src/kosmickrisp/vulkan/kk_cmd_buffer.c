@@ -7,6 +7,7 @@
 
 #include "kk_cmd_buffer.h"
 #include "kk_perf.h"
+#include "kk_scene.h"
 #include "kk_depth_stencil_state.h"
 #include "kk_interlock_submit.h"
 #include "kk_interlock_heap.h"
@@ -99,6 +100,7 @@ end_recording(struct kk_cmd_buffer *cmd)
 static void
 kk_release_command_allocators(struct kk_cmd_buffer *cmd)
 {
+   kk_scene_reset(cmd);
    struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
 
    /* Native buffers must return their recorded storage before reset
@@ -362,6 +364,10 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
+   /* Native scene callbacks need the actual submission queue. The
+    * existing replay pool preserves order and owns each execution's storage. */
+   if (kk_scene_needs_submit(cmd))
+      cmd->enqueue_commands = true;
    if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY &&
        cmd->vk.record_result == VK_SUCCESS) {
       struct vk_command_buffer *source = &cmd->vk;

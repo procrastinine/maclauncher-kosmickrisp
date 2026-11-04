@@ -58,6 +58,7 @@ kk_files = files(
   'kk_buffer.c',
   'kk_cmd_buffer.h',
   'kk_cmd_buffer.c',
+  'kk_scene.m',
   'kk_cmd_clear.c',
   'kk_cmd_copy.c',
   'kk_cmd_dispatch.c',

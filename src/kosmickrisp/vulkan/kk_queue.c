@@ -8,6 +8,7 @@
 #include "kk_queue.h"
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "kk_scene.h"
 #include "kk_device.h"
 #include "kk_entrypoints.h"
 #include "kk_physical_device.h"
@@ -105,7 +106,7 @@ kk_queue_gpu_range(void *data, uint64_t frame, double start, double end,
 }
 
 static VkResult
-kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
+kk_queue_commit_native(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
                 mtl_feedback_handler_callback callback, void *user_data)
 {
    assert(kk_cmd_buffer_has_work(cmd));
@@ -165,6 +166,24 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
    return VK_SUCCESS;
 }
 
+/* Detach flight storage before native submission: feedback may run before
+ * commit returns. The original pool/retirement callback runs after feedback. */
+static VkResult
+kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
+                mtl_feedback_handler_callback callback, void *data)
+{
+   struct kk_scene_submission *scene;
+   VkResult result = kk_scene_submission_begin(queue, cmd, callback, data, &scene);
+   if (result != VK_SUCCESS) return result;
+   bool deferred = cmd->interlock_segments != NULL;
+   result = kk_queue_commit_native(queue, cmd,
+      scene ? kk_scene_submission_feedback : callback, scene ? scene : data);
+   if (result != VK_SUCCESS) kk_scene_submission_failed(scene);
+   else if (!deferred) kk_scene_submission_committed(scene, queue);
+   kk_scene_submission_release(scene); /* caller handoff */
+   return result;
+}
+
 #include "kk_sparse_queue.h"
 
 static VkResult
@@ -203,6 +222,7 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
    if (result != VK_SUCCESS)
       goto release;
 
+   rerecord->scene_queue = queue;
    /* Eligibility belongs to the complete immutable recorded command list.
     * Combining command-buffer summaries avoids rebinding every pipeline on
     * each submission, including unrelated trailing command buffers. */

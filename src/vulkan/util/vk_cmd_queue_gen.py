@@ -106,6 +106,7 @@ enum vk_cmd_type {
 #endif // ${c.guard}
 % endif
 % endfor
+   VK_CMD_DRIVER,
    VK_CMD_TYPE_COUNT,
 };
 
@@ -135,6 +136,9 @@ struct vk_cmd_queue_entry {
    struct list_head cmd_link;
    enum vk_cmd_type type;
    union {
+      /* Internal native operation in the same ordered command IR. Its driver
+       * owns recording data; ordinary generated Vulkan commands are unchanged. */
+      struct { void *data; void (*execute)(VkCommandBuffer, void *); } driver;
 % for c in commands:
 % if len(c.params) <= 1:
 <% continue %>
@@ -234,6 +238,7 @@ const char *vk_cmd_queue_type_names[] = {
 #endif // ${c.guard}
 % endif
 % endfor
+   "VK_CMD_DRIVER",
 };
 
 size_t vk_cmd_queue_type_sizes[] = {
@@ -249,6 +254,7 @@ size_t vk_cmd_queue_type_sizes[] = {
 #endif // ${c.guard}
 % endif
 % endfor
+   sizeof(struct vk_cmd_queue_entry),
 };
 
 /* From the application's perspective, the vk_cmd_queue_entry can outlive the
@@ -446,6 +452,9 @@ vk_cmd_queue_execute(struct vk_cmd_queue *queue,
 {
    list_for_each_entry(struct vk_cmd_queue_entry, cmd, &queue->cmds, cmd_link) {
       switch (cmd->type) {
+      case VK_CMD_DRIVER:
+         cmd->u.driver.execute(commandBuffer, cmd->u.driver.data);
+         break;
 % for c in commands:
 % if c.guard is not None:
 #ifdef ${c.guard}

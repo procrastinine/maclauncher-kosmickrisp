@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_interlock_submit.h"
+#include "kk_scene.h"
 #include "kk_interlock_heap.h"
 #include "kk_device.h"
 #include "kk_queue.h"
@@ -114,6 +115,7 @@ struct kk_interlock_packet {
    atomic_int error;
    _Atomic(mtl_feedback_handler_callback) completed;
    void *callback_data;
+   struct kk_scene_submission *scene_submission;
    struct kk_device *device;
    struct kk_queue *queue;
    struct kk_interlock_queue *owner;
@@ -202,6 +204,7 @@ kk_interlock_packet_unref(struct kk_interlock_packet *p)
 {
    if (atomic_fetch_sub_explicit(&p->references, 1, memory_order_acq_rel) != 1)
       return;
+   kk_scene_submission_release(p->scene_submission);
    struct kk_device *dev = p->device;
    struct kk_interlock_registry *registry = dev->interlock_registry;
    struct kk_interlock_queue *owner = p->owner;
@@ -363,6 +366,7 @@ kk_interlock_stage_resume(struct kk_queue *queue, void *data, bool cancelled)
          mtl_commit_options_add_feedback_handler(options,
             kk_interlock_packet_tail_completed, p);
          mtl_command_queue_commit(queue->mtl_handle, p->tail, p->tail_count, options);
+         kk_scene_submission_committed(p->scene_submission, queue);
          kk_interlock_signal_drawables(p);
          mtl_release(options);
       }
@@ -466,6 +470,7 @@ kk_interlock_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
    atomic_init(&p->drawables_waited, false);
    atomic_init(&p->drawables_signalled, false);
    p->callback_data = data;
+   p->scene_submission = kk_scene_submission_acquire(callback, data);
    p->device = dev;
    p->queue = queue;
    p->count = count;

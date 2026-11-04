@@ -1754,6 +1754,12 @@ Consumers: Vulkan submission replay.
 
 Implementation: [kk_queue.c](../src/kosmickrisp/vulkan/kk_queue.c).
 
+### Recorded native scene operations
+
+Optional scene operation API3 records on the producer's actual device and Metal4 queue. Each execution retains its resolved image subresources and stable result storage through submission, completion, failure or abandonment. Shape queries and resource preparation use the selected common provider; recording success alone does not fulfill an output. API1/API2 layouts and the EncodingV2 payload remain unchanged.
+
+Implementation: [kk_scene.m](../src/kosmickrisp/vulkan/kk_scene.m), [scene operation contract](SCENE_OPERATIONS.md).
+
 ## Detailed specifications
 
 * [ATOMIC INT64](reference/KOSMICKRISP_ATOMIC_INT64.md)
