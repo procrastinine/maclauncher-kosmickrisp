@@ -530,6 +530,11 @@ reuses storage for the next batch. At most 32 overflow draws are recorded at a
 time. Indirect Task inputs are captured on the GPU in submission order;
 command recording does not read application indirect buffers on the CPU.
 
+Native Mesh draws larger than one physical span of 2,097,152 Mesh groups run
+as indirect slices; with a Task shader, the span counts each Task group's child
+bound. Each slice gets its own render encoder, which stores the attachments and
+reloads them for the next slice.
+
 Shader compilation
 ******************
 

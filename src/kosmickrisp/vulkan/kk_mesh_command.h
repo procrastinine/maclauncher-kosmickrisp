@@ -686,6 +686,19 @@ kk_mesh_render_retained(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *c
    mtl_set_address(table, 0, KK_ARGUMENT_POLY_LAYER_REPLAY);
 }
 
+/* End the open render encoder with stores; the next cs_get_render reopens
+ * the pass with loads (BeginRendering switched its descriptor to LOAD). */
+static void
+kk_mesh_close_render_encoder(struct kk_cmd_buffer *cmd)
+{
+   if (!cmd->metal.render)
+      return;
+   kk_apply_attachment_store_ops(cmd, true);
+   cs_end(cmd);
+   kk_cmd_buffer_invalidate_gfx_encoder(cmd);
+   cmd->state.gfx.need_to_start_render_pass = true;
+}
+
 static void
 kk_mesh_render_slices(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *pipe,
                         mtl_argument_table *table, uint64_t grids,
@@ -709,7 +722,21 @@ kk_mesh_render_slices(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *pip
       return;
    }
    if (!cmd->state.gfx.shader->mesh->info.flat_heap) {
-      kk_mesh_render_slices_native(cmd, pipe, table, grids, parameters, slice_count, virtual);
+      if (virtual || slice_count == 1) {
+         kk_mesh_render_slices_native(cmd, pipe, table, grids, parameters, slice_count, virtual);
+         return;
+      }
+      /* A native multi-slice grid fills every slice but the last with span
+       * threadgroups. Each slice gets its own render encoder, so one encoder
+       * never bins more than one slice of geometry. Back-to-back passes with
+       * two full slices (4M points) faulted the GPU on Apple8. The restart
+       * loads the attachments and is ordered behind the closed encoder. */
+      for (uint32_t i = 0; i < slice_count; ++i) {
+         if (i) kk_mesh_close_render_encoder(cmd);
+         kk_mesh_render_slices_native(cmd, pipe, table,
+            grids + (uint64_t)i * 3u * sizeof(uint32_t),
+            parameters + (uint64_t)i * sizeof(struct kk_mesh_params), 1, false);
+      }
       return;
    }
    for (uint32_t i = 0; i < slice_count; ++i) {
