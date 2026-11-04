@@ -483,7 +483,11 @@ os_get_available_system_memory(uint64_t *size)
       return false;
    }
 
-   *size = ((uint64_t)vm_stats.free_count + (uint64_t)vm_stats.inactive_count) * PAGE_SIZE;
+   /* Host statistics count kernel pages. An x86_64 process translated by
+    * Rosetta has a 4 KiB PAGE_SIZE on a 16 KiB-page kernel, so PAGE_SIZE
+    * would report a quarter of the free memory. */
+   *size = ((uint64_t)vm_stats.free_count + (uint64_t)vm_stats.inactive_count) *
+           vm_kernel_page_size;
    return true;
 #else
    return false;

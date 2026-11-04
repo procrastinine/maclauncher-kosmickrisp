@@ -507,6 +507,17 @@ Stage durations are nested elapsed wall times on the calling thread. They do
 not measure compiler-service CPU usage or attribute asynchronous callback work
 on other threads. Diagnostic logging, source hashing and timing add overhead.
 
+Memory heap and budget
+**********************
+
+The driver reports one device-local memory heap. Its size is the Metal device's
+recommended maximum working set size. ``VK_EXT_memory_budget`` reports the Metal
+device's current allocated size as the heap's usage. The budget is that usage
+plus 90% of the system's free and inactive memory, limited to the heap size and
+rounded down to a whole MiB. Free and inactive memory is counted in kernel
+pages, so an x86_64 process translated by Rosetta reports the same budget as an
+arm64 process.
+
 Mesh dispatch
 *************
 
