@@ -33,6 +33,7 @@ lower(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    switch (intr->intrinsic) {
    case nir_intrinsic_global_atomic:
    case nir_intrinsic_global_atomic_swap:
+   case nir_intrinsic_global_atomic_cmpxchg_weak_kk:
    case nir_intrinsic_image_atomic:
    case nir_intrinsic_image_atomic_swap:
    case nir_intrinsic_bindless_image_atomic:

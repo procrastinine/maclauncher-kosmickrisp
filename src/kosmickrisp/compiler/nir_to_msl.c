@@ -944,6 +944,7 @@ instrinsic_needs_dest_type(nir_intrinsic_instr *instr)
    if (op == nir_intrinsic_decl_reg || op == nir_intrinsic_load_reg ||
        /* Atomic swaps have a custom codegen */
        op == nir_intrinsic_global_atomic_swap ||
+       op == nir_intrinsic_global_atomic_cmpxchg_weak_kk ||
        op == nir_intrinsic_shared_atomic_swap ||
        op == nir_intrinsic_bindless_image_atomic_swap)
       return false;
@@ -1867,6 +1868,16 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
    }
    case nir_intrinsic_global_atomic:
       atomic_to_msl(ctx, instr, "device", false);
+      break;
+   case nir_intrinsic_global_atomic_cmpxchg_weak_kk:
+      P_IND(ctx, "uint ta%u = ", instr->def.index);
+      src_to_msl(ctx, &instr->src[1]);
+      P(ctx, "; bool tb%u = atomic_compare_exchange_weak_explicit((device atomic_uint*)", instr->def.index);
+      src_to_msl(ctx, &instr->src[0]);
+      P(ctx, ", &ta%u, ", instr->def.index);
+      src_to_msl(ctx, &instr->src[2]);
+      P(ctx, ", memory_order_relaxed, memory_order_relaxed); uint2 t%u = uint2(ta%u, uint(tb%u));\n",
+        instr->def.index, instr->def.index, instr->def.index);
       break;
    case nir_intrinsic_global_atomic_swap:
       atomic_swap_to_msl(ctx, instr, "device", false);

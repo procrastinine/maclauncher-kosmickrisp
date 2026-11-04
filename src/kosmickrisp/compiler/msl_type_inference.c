@@ -334,6 +334,11 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       set_type(types, &instr->src[0], TYPE_UINT);
       break;
 
+   case nir_intrinsic_global_atomic_cmpxchg_weak_kk:
+      set_type(types, &instr->def, TYPE_UINT);
+      for (unsigned i = 0; i < 3; ++i)
+         set_type(types, &instr->src[i], TYPE_UINT);
+      break;
    case nir_intrinsic_global_atomic:
    case nir_intrinsic_global_atomic_swap:
    case nir_intrinsic_shared_atomic:

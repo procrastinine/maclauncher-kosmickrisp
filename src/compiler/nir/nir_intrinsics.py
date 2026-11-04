@@ -3355,6 +3355,12 @@ intrinsic("is_null_descriptor", src_comp=[-1], dest_comp=1, flags=[CAN_ELIMINATE
 
 # KosmicKrisp-specific intrinsics
 
+# Native weak 32-bit device CAS: (observed value, success as u32).
+# The success bit is required by bounded ownership protocols: a spurious
+# failure can leave the observed value equal to the compare operand.
+intrinsic("global_atomic_cmpxchg_weak_kk", src_comp=[1, 1, 1], dest_comp=2,
+          bit_sizes=[32], indices=[ACCESS])
+
 # Represents a pointer to the start of an argument buffer at the
 # given binding
 load("buffer_ptr_kk", [], [BINDING], [CAN_ELIMINATE, CAN_REORDER])

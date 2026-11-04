@@ -829,9 +829,9 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
                                       nir_uge_imm(b, age, FSR_SLOT_AGE));
          nir_push_if(b, free_slot);
          {
-            nir_def *seen = nir_global_atomic_swap(b, 32, addr, old, ctx->tag,
-                                                   .atomic_op = nir_atomic_op_cmpxchg);
-            nir_push_if(b, nir_ieq(b, seen, old));
+            nir_def *result = nir_global_atomic_cmpxchg_weak_kk(b, addr, old, ctx->tag);
+            nir_def *seen = nir_channel(b, result, 0);
+            nir_push_if(b, nir_ine_imm(b, nir_channel(b, result, 1), 0));
             {
                nir_store_var(b, slot, addr, 1);
                nir_jump(b, nir_jump_break);
@@ -879,12 +879,13 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
             nir_def *claimed = nir_bcsel(b, nir_load_var(b, won), nir_imm_int(b, 0x10),
                                          nir_imm_int(b, 0));
             nir_def *next = nir_ior(b, nir_bcsel(b, mine, w, key), nir_ior(b, own, claimed));
-            nir_def *seen = nir_global_atomic_swap(b, 32, paddr, w, next,
-                                                   .atomic_op = nir_atomic_op_cmpxchg);
+            nir_def *result = nir_global_atomic_cmpxchg_weak_kk(b, paddr, w, next);
+            nir_def *seen = nir_channel(b, result, 0);
+            nir_def *success = nir_ine_imm(b, nir_channel(b, result, 1), 0);
             nir_store_var(b, word, seen, 1);
             nir_def *t = nir_iadd_imm(b, nir_load_var(b, tries), 1);
             nir_store_var(b, tries, t, 1);
-            nir_break_if(b, nir_ior(b, nir_ieq(b, seen, w),
+            nir_break_if(b, nir_ior(b, success,
                                     nir_uge_imm(b, t, FSR_PRESENCE_TRIES)));
          }
          nir_pop_loop(b, NULL);
