@@ -671,5 +671,22 @@
     "performance": false,
     "performance_reason": "This optional extension has translator fallbacks; LOAD expansion can add a full attachment pass without raising a D3D shader model or feature level.",
     "off_consequence": "The extension and its feature are hidden; ANGLE uses its multisample fallback. D3D shader-model and feature-level reporting are unchanged."
+  },
+  {
+    "name": "writable_msaa",
+    "description": "Storage reads, writes and atomics on multisampled color images.",
+    "cost_class": "sample-plane storage / native attachment conversion",
+    "cost_note": "Storage operations select a single-sample plane. Attachment and input-attachment consumers convert exact samples to or from the native multisample image. Sampled multisample shaders retain a table-or-native selection when the feature is enabled; single-sampled shaders are unchanged.",
+    "extensions": [],
+    "features": [
+      "shaderStorageImageMultisample"
+    ],
+    "properties": [],
+    "property_bits": {
+      "storageImageSampleCounts": "VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT"
+    },
+    "performance": false,
+    "performance_reason": "Writable multisample textures are optional in vkd3d-proton and do not raise its base shader model or feature level; disabling them retains native MSAA sampling without sample-plane selection.",
+    "off_consequence": "D3D12 WriteableMSAATexturesSupported becomes false; vkd3d-proton base shader-model, feature-level and device-creation requirements are unchanged. Ordinary MSAA and multisampled local reads remain available."
   }
 ]

@@ -418,9 +418,13 @@ kk_GetPhysicalDeviceImageFormatProperties2(
       if (caps->msaa && (!integer32 || pdev->info.supports_32bit_msaa))
          sampleCounts = pdev->info.supported_sample_counts;
    }
-   if (all_usage & VK_IMAGE_USAGE_STORAGE_BIT)
-      sampleCounts &= VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT |
-                      VK_SAMPLE_COUNT_4_BIT;
+   if (all_usage & VK_IMAGE_USAGE_STORAGE_BIT) {
+      const VkSampleCountFlags storage_samples =
+         pdev->vk.supported_features.shaderStorageImageMultisample
+            ? VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT
+            : VK_SAMPLE_COUNT_1_BIT;
+      sampleCounts &= storage_samples;
+   }
 
    if (create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
       sampleCounts = VK_SAMPLE_COUNT_1_BIT;
