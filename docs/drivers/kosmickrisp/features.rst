@@ -185,6 +185,8 @@ Feature table
        ``extendedDynamicState3ProvokingVertexMode``
      - Native with emulated cases: when the last vertex is provoking and the
        fragment shader has flat inputs, a compute pass reorders the vertices.
+       A Mesh pipeline with a static last-vertex mode writes each triangle's
+       and line's indices with the last vertex first.
      - None listed; first-vertex mode native on all families.
      - —
      - Always

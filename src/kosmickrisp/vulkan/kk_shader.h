@@ -132,7 +132,7 @@ struct kk_mesh_shader_info {
 };
 
 /* Serialized info may change within padding without changing sizeof. */
-#define KK_SHADER_INFO_CACHE_VERSION 11u
+#define KK_SHADER_INFO_CACHE_VERSION 12u
 
 enum kk_gpl_shader_kind {
    KK_GPL_NONE,

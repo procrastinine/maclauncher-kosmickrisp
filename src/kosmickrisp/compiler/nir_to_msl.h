@@ -22,8 +22,9 @@ struct kk_mesh_msl_options {
    uint32_t view_mask, view_index_offset;
    bool flat_heap, projected_basis;
    unsigned flat_heap_offset;
-   /* Static last-vertex provoking: each triangle's indices rotate so the
-    * provoking vertex comes first, as Metal takes flat values from it. */
+   /* Static last-vertex provoking: each triangle's indices rotate and each
+    * line's swap so the provoking vertex comes first, as Metal takes flat
+    * values from it. */
    bool provoking_last;
    /* Triangle output that can be drawn in VK_POLYGON_MODE_POINT carries the
     * point reader entry. */
