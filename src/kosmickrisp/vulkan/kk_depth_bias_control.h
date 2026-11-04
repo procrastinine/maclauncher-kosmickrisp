@@ -34,6 +34,16 @@ kk_depth_bias_control_flags(bool enabled, bool alternate,
       (factors ? KK_DEPTH_BIAS_DYNAMIC_FACTORS : 0);
 }
 
+/* Mesh alternate representations use retained input capture and the shared
+ * depth/stencil transaction. FORMAT-only devices keep their native path. */
+static inline bool
+kk_mesh_depth_bias_pipeline(bool enabled, bool alternate,
+   const struct vk_graphics_pipeline_state *state)
+{
+   return state && (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT) &&
+      kk_depth_bias_control_flags(enabled, alternate, state);
+}
+
 static inline bool
 kk_depth_bias_control_active(uint8_t flags,
    const struct vk_rasterization_state *rs)

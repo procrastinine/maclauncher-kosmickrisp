@@ -82,8 +82,16 @@ kk_depth_bounds_mesh_capture_job(struct kk_cmd_buffer *cmd,
       return result;
    /* Every use of the reusable Mesh arena is encoded inside its callback.
     * Binding ORIGINAL again performs no test or DS update by itself. */
+   const struct vk_rasterization_state *rs = &cmd->vk.dynamic_graphics_state.rs;
+   const bool alternate_bias = rs->depth_bias.enable &&
+      rs->depth_bias.representation != VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT;
+   if (alternate_bias)
+      mtl_set_depth_bias(batch->encoder, 0, 0, 0);
    result = kk_mesh_retained_raster_replay_job(cmd, batch, parameters,
       pipeline, fragment_table);
+   if (alternate_bias)
+      mtl_set_depth_bias(batch->encoder, rs->depth_bias.constant_factor,
+         rs->depth_bias.slope_factor, rs->depth_bias.clamp);
    VkResult restored = kk_cmd_bind_depth_stencil(snapshot, KK_DEPTH_STENCIL_ORIGINAL);
    return result == VK_SUCCESS ? restored : result;
 }

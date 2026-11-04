@@ -5127,9 +5127,17 @@ kk_depth_bounds_route(struct kk_cmd_buffer *cmd)
 {
    struct kk_shader *last = cmd->state.gfx.shader;
    if (last && last->sparse_base) last = last->sparse_base;
-   if (!last || !last->bounds_route ||
-       last->info.depth_bounds_emulation ==
-       cmd->vk.dynamic_graphics_state.ds.depth.bounds_test.enable)
+   if (!last || !last->bounds_route)
+      return;
+   bool transaction = kk_depth_bounds_emulated(kk_cmd_buffer_device(cmd)) &&
+      cmd->vk.dynamic_graphics_state.ds.depth.bounds_test.enable;
+   if (last->info.stage == MESA_SHADER_MESH) {
+      const struct kk_shader *controlled = last->info.depth_bounds_emulation ?
+         last : last->bounds_route;
+      transaction |= kk_depth_bias_control_active(controlled->info.depth_bias_control,
+         &cmd->vk.dynamic_graphics_state.rs);
+   }
+   if (last->info.depth_bounds_emulation == transaction)
       return;
    static const mesa_shader_stage stages[] = {
       MESA_SHADER_TASK, MESA_SHADER_MESH, MESA_SHADER_VERTEX, MESA_SHADER_TESS_CTRL,

@@ -211,6 +211,11 @@ kk_interlock_compile_fragment(struct kk_device *dev, struct kk_shader *owner,
    unsigned max_samples = 1u << (util_last_bit(counts) - 1u);
    nir_builder capture = kk_interlock_capture_shader(original->options,
       &render, max_samples, NULL);
+   if (mesh && kk_mesh_depth_bias_pipeline(dev->vk.enabled_features.depthBiasControl,
+          dev->vk.enabled_features.leastRepresentableValueForceUnormRepresentation ||
+          dev->vk.enabled_features.floatRepresentation, state))
+      nir_shader_intrinsics_pass(capture.shader, kk_depth_bounds_mesh_bias,
+         nir_metadata_control_flow, NULL);
    kk_interlock_compile_program(dev, shader, KK_INTERLOCK_CAPTURE,
       capture.shader, state, robustness);
 

@@ -509,6 +509,16 @@ kk_compile_shaders_bounds_routes(struct vk_device *device, uint32_t count,
    }
    struct vk_graphics_pipeline_state state = *graphics;
    struct vk_depth_stencil_state ds;
+   struct vk_rasterization_state rs;
+   if (kk_mesh_depth_bias_pipeline(features->depthBiasControl,
+          features->leastRepresentableValueForceUnormRepresentation ||
+          features->floatRepresentation, graphics)) {
+      rs = *graphics->rs;
+      rs.depth_bias.representation = VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT;
+      state.rs = &rs;
+      BITSET_CLEAR(state.dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_ENABLE);
+      BITSET_CLEAR(state.dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_FACTORS);
+   }
    BITSET_CLEAR(state.dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE);
    if (graphics->ds) {
       ds = *graphics->ds;

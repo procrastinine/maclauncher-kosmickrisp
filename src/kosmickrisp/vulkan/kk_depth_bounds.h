@@ -4,6 +4,7 @@
 #include "kk_device.h"
 #include "kk_physical_device.h"
 #include "vk_graphics_state.h"
+#include "kk_depth_bias_control.h"
 
 struct kk_interlock_envelope;
 void kk_depth_bounds_init_dispatch(struct kk_device *dev);
@@ -39,6 +40,15 @@ kk_depth_bounds_emulated(const struct kk_device *dev)
       !kk_depth_bounds_native(kk_device_physical(dev));
 }
 
+static inline bool
+kk_mesh_depth_bias_device(const struct kk_device *dev)
+{
+   return dev->vk.enabled_features.meshShader &&
+      dev->vk.enabled_features.depthBiasControl &&
+      (dev->vk.enabled_features.leastRepresentableValueForceUnormRepresentation ||
+       dev->vk.enabled_features.floatRepresentation);
+}
+
 /* A pipeline that enables the test statically or makes the enable dynamic
  * selects the transaction. Pipeline hashing uses the same selection. */
 static inline bool
@@ -46,6 +56,10 @@ kk_depth_bounds_selected(const struct kk_physical_device *pdev,
                          const struct vk_features *enabled,
                          const struct vk_graphics_pipeline_state *state)
 {
+   if (kk_mesh_depth_bias_pipeline(enabled->depthBiasControl,
+          enabled->leastRepresentableValueForceUnormRepresentation ||
+          enabled->floatRepresentation, state))
+      return true;
    return enabled->depthBounds && !kk_depth_bounds_native(pdev) && state &&
       ((state->ds && state->ds->depth.bounds_test.enable) ||
        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE));
@@ -57,6 +71,11 @@ static inline bool
 kk_depth_bounds_dynamic_enable(const struct kk_device *dev,
                                const struct vk_graphics_pipeline_state *state)
 {
+   if (kk_mesh_depth_bias_pipeline(dev->vk.enabled_features.depthBiasControl,
+          dev->vk.enabled_features.leastRepresentableValueForceUnormRepresentation ||
+          dev->vk.enabled_features.floatRepresentation, state))
+      return kk_depth_bias_control_flags(true, true, state) &
+         (KK_DEPTH_BIAS_DYNAMIC_ENABLE | KK_DEPTH_BIAS_DYNAMIC_FACTORS);
    return state && kk_depth_bounds_emulated(dev) &&
       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE);
 }

@@ -9,9 +9,9 @@ kk_interlock_device_init(struct kk_device *dev)
    if (!dev->vk.enabled_features.fragmentShaderSampleInterlock &&
        !dev->vk.enabled_features.fragmentShaderPixelInterlock &&
        !dev->vk.enabled_features.fragmentShaderShadingRateInterlock &&
-       !kk_depth_bounds_emulated(dev))
+       !kk_depth_bounds_emulated(dev) && !kk_mesh_depth_bias_device(dev))
       return VK_SUCCESS;
-   if (kk_depth_bounds_emulated(dev))
+   if (kk_depth_bounds_emulated(dev) || kk_mesh_depth_bias_device(dev))
       kk_depth_bounds_init_dispatch(dev);
    /* One tile of pixel/sample guard words avoids a single contended address.
     * Atomic values are internal; aliased tiles never communicate app data. */

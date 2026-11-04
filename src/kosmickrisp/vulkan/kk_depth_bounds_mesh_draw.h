@@ -41,6 +41,18 @@ kk_depth_bounds_record_mesh_batch(struct kk_cmd_buffer *cmd,
                if (result != VK_SUCCESS) return result;
                storage = p->storage;
                struct kk_interlock_envelope *env = p->env;
+               const struct vk_rasterization_state *rs = &cmd->vk.dynamic_graphics_state.rs;
+               env->geometry.depth_bias_enable = rs->depth_bias.enable;
+               env->geometry.depth_bias_representation = rs->depth_bias.representation;
+               env->geometry.depth_bias_constant = rs->depth_bias.constant_factor;
+               env->geometry.depth_bias_slope = rs->depth_bias.slope_factor;
+               env->geometry.depth_bias_clamp = rs->depth_bias.clamp;
+               VkFormat depth_format = gfx->render.depth_att.vk_format;
+               env->geometry.depth_is_float = depth_format == VK_FORMAT_D32_SFLOAT ||
+                  depth_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
+               env->geometry.depth_mantissa_bits = env->geometry.depth_is_float ? 23 :
+                  depth_format == VK_FORMAT_D16_UNORM ||
+                  depth_format == VK_FORMAT_D16_UNORM_S8_UINT ? 16 : 24;
                uint32_t count = MIN2(p->batch_size, maximum - base);
                env->tile_x = x; env->tile_y = y;
                env->tile_width = ALIGN_POT(MIN2(p->tile_size, env->width - x), 2);
