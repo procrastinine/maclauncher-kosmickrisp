@@ -95,6 +95,8 @@ kk_layered_bc_view_init(struct kk_device *dev, struct kk_image_view *view)
       }
    }
    const float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0f);
+   const uint16_t min_lod_fp16 = needs_sampled ? _mesa_float_to_half(min_lod) : 0;
+   const uint16_t min_lod_uint16 = min_lod;
    struct kk_image *image = container_of(view->vk.image, struct kk_image, vk);
    struct kk_image_plane *plane = &image->planes[0];
    const struct kk_va_format *format = kk_get_va_format(view->planes[0].format);
@@ -145,21 +147,24 @@ kk_layered_bc_view_init(struct kk_device *dev, struct kk_image_view *view)
       if (layer->sampled) {
          sampled[l].image_gpu_resource_id = mtl_texture_get_gpu_resource_id(layer->sampled);
          sampled[l].aux_resource_id = sampled[l].image_gpu_resource_id;
-         sampled[l].image_min_lod_fp16 = _mesa_float_to_half(min_lod);
-         sampled[l].image_min_lod_uint16 = min_lod;
+         sampled[l].image_min_lod_fp16 = min_lod_fp16;
+         sampled[l].image_min_lod_uint16 = min_lod_uint16;
       }
       if (layer->storage) {
-         /* Raw linear arrays share M11's plain-handle atomic workaround.
-          * Both IDs refer to this same physical one-layer alias. */
-         struct kk_view_layout plain = selected;
-         plain.view_type = VK_IMAGE_VIEW_TYPE_2D;
-         entry->storage_plain = mtl_new_texture_view_with(layer->storage, &plain);
-         if (!entry->storage_plain)
-            return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
-         storage[l].image_gpu_resource_id =
-            mtl_texture_get_gpu_resource_id(entry->storage_plain);
-         storage[l].image_array_gpu_resource_id =
-            mtl_texture_get_gpu_resource_id(layer->storage);
+         const uint64_t array_id = mtl_texture_get_gpu_resource_id(layer->storage);
+         storage[l].image_gpu_resource_id = array_id;
+         storage[l].image_array_gpu_resource_id = array_id;
+         /* Only atomic-capable formats need M11's plain-handle workaround.
+          * Other storage operations already use the native array handle. */
+         if (format->atomic) {
+            struct kk_view_layout plain = selected;
+            plain.view_type = VK_IMAGE_VIEW_TYPE_2D;
+            entry->storage_plain = mtl_new_texture_view_with(layer->storage, &plain);
+            if (!entry->storage_plain)
+               return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+            storage[l].image_gpu_resource_id =
+               mtl_texture_get_gpu_resource_id(entry->storage_plain);
+         }
       }
    }
    /* Each table ends with a real all-zero null descriptor. Rejected layers

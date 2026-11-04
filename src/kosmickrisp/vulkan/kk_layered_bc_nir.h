@@ -116,7 +116,9 @@ kk_layered_bc_instruction(nir_builder *b, nir_instr *instr, void *data)
    }
    if (instr->type != nir_instr_type_tex) return false;
    nir_tex_instr *tex = nir_instr_as_tex(instr);
-   if (!tex->is_array ||
+   /* Comparison-capable formats here are depth formats, which cannot be
+    * block views of compressed color images. Keep their native descriptor. */
+   if (tex->is_shadow || !tex->is_array ||
        (tex->sampler_dim != GLSL_SAMPLER_DIM_2D &&
         tex->sampler_dim != GLSL_SAMPLER_DIM_SUBPASS))
       return false;
