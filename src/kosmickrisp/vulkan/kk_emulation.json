@@ -427,5 +427,22 @@
     "performance": true,
     "performance_reason": "Keeps state-changing D3D12 ExecuteIndirect signatures working where vkd3d-proton has no complete fallback; unused DGC adds no application-shader MSL or GPU preprocessing.",
     "off_consequence": "ExecuteIndirect tier 1.1 is unavailable; vkd3d-proton can skip state-changing indirect signatures without a DGC template. No shader-model or feature-level reduction or device-creation rejection is established for DGC alone."
+  },
+  {
+    "name": "draw_indirect_count",
+    "description": "GPU-counted ordinary multi-draw indirect commands.",
+    "cost_class": "GPU count filtering / native Metal ICB",
+    "cost_note": "Large native batches expand active draw records and encode ICB commands in one dispatch per 512-draw slice. Other selected routes filter indirect arguments on the GPU and retain their own stage work. Counts remain GPU-resident. No count command adds application-shader MSL. The shared maxDrawIndirectCount limit also serves native fixed-count draws and is retained.",
+    "extensions": [
+      "VK_KHR_draw_indirect_count",
+      "VK_AMD_draw_indirect_count"
+    ],
+    "features": [
+      "drawIndirectCount"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "Preserves D3D12 counter-backed ExecuteIndirect and predication semantics; vkd3d-proton returns without executing these commands if drawIndirectCount is unavailable.",
+    "off_consequence": "Counter-buffer and fallback-predicated ExecuteIndirect commands are skipped by vkd3d-proton. Its reported shader model and feature level can remain unchanged and no device-creation rejection is established; those reports do not provide the missing command semantics."
   }
 ]
