@@ -461,19 +461,20 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    render->force_attachment_store =
       !is_whole_framebuffer || (render->flags & VK_RENDERING_SUSPENDING_BIT);
 
-   /* vk_meta records one render pass per region with no dependency between
-    * them, and a pass end is unordered. A later meta pass that loads its
-    * attachments must see the earlier passes' stores: Metal orders untracked
-    * passes only through barriers. Applied when the render encoder starts. */
-   if (cmd->meta_passes) {
-      if (cmd->meta_passes > 1 && force_attachment_load) {
-         cmd->pending_barrier.src |= MTL_STAGE_FRAGMENT | MTL_STAGE_TILE;
-         cmd->pending_barrier.dst |= MTL_STAGE_FRAGMENT | MTL_STAGE_TILE;
-         cmd->pending_barrier.visibility =
-            MAX2(cmd->pending_barrier.visibility, MTL_VISIBILITY_DEVICE);
-      }
-      cmd->meta_passes = 2;
+   /* A partial-area pass loads and stores whole tiles, including pixels
+    * outside its render area. Vulkan needs no barrier between passes that
+    * write disjoint areas of one attachment (atlas tiles; vk_meta records one
+    * such pass per blit or resolve region), and a pass end is unordered, so
+    * an earlier pass may still be storing those pixels. Order a partial-area
+    * pass behind the earlier passes of this command buffer; the barrier is
+    * applied when its render encoder starts. Full-area passes stay unordered. */
+   if (!is_whole_framebuffer && cmd->render_pass_begun) {
+      cmd->pending_barrier.src |= MTL_STAGE_FRAGMENT | MTL_STAGE_TILE;
+      cmd->pending_barrier.dst |= MTL_STAGE_FRAGMENT | MTL_STAGE_TILE;
+      cmd->pending_barrier.visibility =
+         MAX2(cmd->pending_barrier.visibility, MTL_VISIBILITY_DEVICE);
    }
+   cmd->render_pass_begun = true;
 
    kk_set_color_attachments(cmd, pass_descriptor, render, dyn, force_attachment_load,
                             is_whole_framebuffer, false);

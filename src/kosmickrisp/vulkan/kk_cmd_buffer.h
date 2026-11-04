@@ -482,10 +482,9 @@ struct kk_cmd_buffer {
    mtl_argument_table *compute_bound_table;
    struct kk_barrier_scope pending_barrier;
    enum mtl_stages closed_encoder_stages;
-   /* Graphics meta operation in progress: 0 none, 1 before its first render
-    * pass, 2 after it. kk_begin_rendering orders later meta passes that load
-    * their attachments behind the earlier ones. */
-   uint8_t meta_passes;
+   /* A render pass has begun in this command buffer. kk_begin_rendering
+    * orders a later partial-area pass behind the earlier passes. */
+   bool render_pass_begun;
    bool encoder_occlusion;
    /* Recorded once, immutable until reset. Ordinary commands use the inline
     * native handle; split Mesh commands use the existing parts allocation. */

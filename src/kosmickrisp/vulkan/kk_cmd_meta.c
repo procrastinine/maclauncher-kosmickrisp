@@ -96,7 +96,6 @@ struct kk_meta_save {
    struct kk_addr_range vb0;
    struct kk_buffer_address desc0_set_addr;
    bool has_push_desc0;
-   uint8_t meta_passes;
    uint8_t push[VK_META_PUSH_CONSTANTS_SIZE];
 };
 
@@ -128,8 +127,6 @@ kk_meta_begin(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
       cmd->state.gfx.occlusion.mode = MTL_VISIBILITY_RESULT_MODE_DISABLED;
       cmd->state.gfx.dirty |= KK_DIRTY_OCCLUSION;
       desc->root_dirty = true;
-      save->meta_passes = cmd->meta_passes;
-      cmd->meta_passes = 1;
    } else {
       save->shaders[MESA_SHADER_COMPUTE] =
          cmd->state.shaders[MESA_SHADER_COMPUTE];
@@ -183,7 +180,6 @@ kk_meta_end(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
    }
 
    if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
-      cmd->meta_passes = save->meta_passes;
       /* Restore the dynamic state */
       assert(save->dynamic.vi == &cmd->state.gfx._dynamic_vi);
       assert(save->dynamic.ms.sample_locations == &cmd->state.gfx._dynamic_sl);
