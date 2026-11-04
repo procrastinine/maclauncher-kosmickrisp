@@ -285,10 +285,10 @@
    * - ``zero_initialize_device_memory``
      - Explicit zero contents for requested device-memory allocations and ZERO_INITIALIZED images.
        Controls: ``VK_EXT_zero_initialize_device_memory``, ``zeroInitializeDeviceMemory``.
-     - host clear / native Metal blit. Each flagged allocation clears the whole BO with CPU stores or a Metal buffer fill and completion wait. ZERO_INITIALIZED images use unoptimized storage to preserve zero bits. No shader instructions are added.
+     - host clear / native Metal blit. Flagged allocations clear the backing BO with CPU stores or a native Metal fill and completion wait. Leaving the initial ZERO_INITIALIZED image layout initializes optimized images with a native attachment clear or bounded zero-buffer blits. Uncompressed images retain their ordinary lossless-compression eligibility; block-compressed zero images retain raw native storage. No shader instructions or draw work are added.
      - No Apple family
-     - Off
-     - DXVK 3.1.1 and vkd3d-proton 3.1 do not require this allocation extension for D3D shader models, feature levels or device creation; vkd3d-proton retains its resource-clearing path.
+     - On
+     - vkd3d-proton can request explicit zero allocation for committed resources while uncompressed images retain optimized storage. Work is restricted to requested allocation initialization and the initial image-layout transition.
      - D3D shader-model, feature-level and translator device-creation support remain; explicit Vulkan zero-initialized allocation requests and ZERO_INITIALIZED image layout are unavailable.
      - ``performance,+zero_initialize_device_memory``
    * - ``sliced_3d_views``

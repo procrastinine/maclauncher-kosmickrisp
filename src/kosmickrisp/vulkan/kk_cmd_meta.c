@@ -16,6 +16,8 @@
 #include "kk_physical_device.h"
 #include "kk_image.h"
 #include "kk_image_view.h"
+#include "kk_format.h"
+#include "kk_zero_init.h"
 #include "kk-writable-msaa.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -407,3 +409,5 @@ kk_meta_expand_msrtss(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
 
 #include "kk-writable-msaa-meta.h"
 #include "kk_standard_sparse_3d_meta.h"
+
+#include "kk_zero_init_image.h"

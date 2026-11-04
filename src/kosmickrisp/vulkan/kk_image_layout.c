@@ -314,7 +314,7 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
    layout->optimized_layout = !external_fd && kk_zero_init_optimized_layout(
       kk_image_layout_can_optimize(pdev, usage, image->tiling,
                                     image->create_flags, format),
-      initial_layout) &&
+      initial_layout, util_format_is_compressed(format)) &&
       !(image->compr_flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
    /* Atomic usage adds shader writes, which make a placement sparse texture
     * sparse tier 1. A 1D/2D sparse image reaches atomics only through
@@ -340,6 +340,13 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
    layout->swizzle.blue = supported_format->unswizzle.blue;
    layout->swizzle.alpha = supported_format->unswizzle.alpha;
    layout->sample_count_sa = image->samples;
+   /* A zero-initialized multisample image needs a native load-action clear.
+    * This immutable usage belongs in both the requirements and creation path.
+    * Single-sampled images can use native buffer blits without added usage.
+    */
+   if (initial_layout == VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT &&
+       layout->optimized_layout && image->samples > 1)
+      layout->usage |= MTL_TEXTURE_USAGE_RENDER_TARGET;
 
    /*
     * Metal requires adding MTL_TEXTURE_USAGE_PIXEL_FORMAT_VIEW if we are going

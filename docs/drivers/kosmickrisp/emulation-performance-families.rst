@@ -221,12 +221,12 @@
      - On
      - On Apple7-11: Actual heap users load heap roots and descriptor packets through native resource handles. Descriptor-set shaders add no heap access, and device enablement alone does not defer command recording.
    * - ``zero_initialize_device_memory``
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off Apple7-11: Each flagged allocation clears the whole BO with CPU stores or a Metal buffer fill and completion wait. ZERO_INITIALIZED images use unoptimized storage to preserve zero bits. No shader instructions are added.
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: explicit allocation clearing and one-time native image initialization preserve uncompressed image optimization. Block-compressed zero images keep raw native zero blocks; no additional shader or draw operations.
    * - ``sliced_3d_views``
      - On
      - On

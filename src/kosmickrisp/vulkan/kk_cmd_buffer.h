@@ -498,6 +498,7 @@ struct kk_cmd_buffer {
       uint32_t groups, base, draw, maximum;
       struct kk_mesh_exact_batch exact;
    } mesh_chunk;
+   VkBuffer zero_image_upload; /* Meta-owned; valid until command-buffer reset. */
    /* Pending timestamp resolves (struct kk_ts_resolve), flushed at cs_end. */
    bool writable_msaa_meta;
    uint32_t writable_msaa_render_attachments;
@@ -657,6 +658,8 @@ void kk_meta_expand_msrtss(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
 
 void kk_meta_resolve_rendering(struct kk_cmd_buffer *cmd,
                                const VkRenderingInfo *pRenderingInfo);
+
+void kk_zero_init_image(struct kk_cmd_buffer *cmd, struct kk_image *image);
 
 struct kk_ptr kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size,
                             uint32_t alignment);

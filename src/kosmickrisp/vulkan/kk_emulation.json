@@ -855,7 +855,7 @@
     "name": "zero_initialize_device_memory",
     "description": "Explicit zero contents for requested device-memory allocations and ZERO_INITIALIZED images.",
     "cost_class": "host clear / native Metal blit",
-    "cost_note": "Each flagged allocation clears the whole BO with CPU stores or a Metal buffer fill and completion wait. ZERO_INITIALIZED images use unoptimized storage to preserve zero bits. No shader instructions are added.",
+    "cost_note": "Flagged allocations clear the backing BO with CPU stores or a native Metal fill and completion wait. Leaving the initial ZERO_INITIALIZED image layout initializes optimized images with a native attachment clear or bounded zero-buffer blits. Uncompressed images retain their ordinary lossless-compression eligibility; block-compressed zero images retain raw native storage. No shader instructions or draw work are added.",
     "extensions": [
       "VK_EXT_zero_initialize_device_memory"
     ],
@@ -863,12 +863,18 @@
       "zeroInitializeDeviceMemory"
     ],
     "properties": [],
-    "performance": false,
-    "performance_reason": "DXVK 3.1.1 and vkd3d-proton 3.1 do not require this allocation extension for D3D shader models, feature levels or device creation; vkd3d-proton retains its resource-clearing path.",
+    "performance": true,
+    "performance_reason": "vkd3d-proton can request explicit zero allocation for committed resources while uncompressed images retain optimized storage. Work is restricted to requested allocation initialization and the initial image-layout transition.",
     "off_consequence": "D3D shader-model, feature-level and translator device-creation support remain; explicit Vulkan zero-initialized allocation requests and ZERO_INITIALIZED image layout are unavailable.",
     "native_from": null,
-    "performance_families": [],
-    "family_cost_note": "Off Apple7-11: Each flagged allocation clears the whole BO with CPU stores or a Metal buffer fill and completion wait. ZERO_INITIALIZED images use unoptimized storage to preserve zero bits. No shader instructions are added."
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: explicit allocation clearing and one-time native image initialization preserve uncompressed image optimization. Block-compressed zero images keep raw native zero blocks; no additional shader or draw operations."
   },
   {
     "name": "sliced_3d_views",

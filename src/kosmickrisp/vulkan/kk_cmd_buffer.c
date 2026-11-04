@@ -96,6 +96,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    util_dynarray_foreach(&cmd->submit_drawables, void *, drawable)
       mtl_release(*drawable);
    util_dynarray_clear(&cmd->submit_drawables);
+   cmd->zero_image_upload = VK_NULL_HANDLE;
    kk_temporal_cmd_reset(cmd);
 }
 
@@ -1055,6 +1056,16 @@ kk_cmd_pipeline_barriers(struct kk_cmd_buffer *cmd, uint32_t count,
    } else {
       for (uint32_t i = 0; i < count; ++i)
          cmd_pipeline_barrier(cmd, &dependencies[i]);
+   }
+   for (uint32_t i = 0; i < count; ++i) {
+      const VkDependencyInfo *dep = &dependencies[i];
+      for (uint32_t j = 0; j < dep->imageMemoryBarrierCount; ++j) {
+         const VkImageMemoryBarrier2 *barrier = &dep->pImageMemoryBarriers[j];
+         if (unlikely(barrier->oldLayout == VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT)) {
+            VK_FROM_HANDLE(kk_image, image, barrier->image);
+            kk_zero_init_image(cmd, image);
+         }
+      }
    }
 }
 
