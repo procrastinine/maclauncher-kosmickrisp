@@ -30,8 +30,8 @@ struct kk_mesh_pass {
 };
 
 /* Only CPU state setters may be evaluated ahead of the captured draw span.
- * GPU writes, barriers, nested render scopes and unknown operations remain
- * in their original execution order through the ordinary path. */
+ * Admitted dependencies replay in place. GPU writes and dependencies on
+ * indirect inputs retain their original ordered path. */
 static bool
 kk_mesh_pass_state_command(enum vk_cmd_type type)
 {
@@ -154,13 +154,160 @@ kk_mesh_pass_queue(struct vk_cmd_queue *queue, struct vk_cmd_queue_entry *entrie
    for (uint32_t i = 0; i < count; ++i) list_addtail(&entries[i].cmd_link, &queue->cmds);
 }
 
+static void
+kk_mesh_pass_condition(struct kk_conditional_rendering_state *conditional,
+   const struct vk_cmd_queue_entry *e)
+{
+   if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING2_EXT) {
+      const VkConditionalRenderingBeginInfo2EXT *info=e->u.begin_conditional_rendering2_ext.conditional_rendering_begin;
+      conditional->address=info->addressRange.address;
+      conditional->inverted=!!(info->flags&VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT);
+      conditional->enabled=true;
+   } else if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING_EXT) {
+      const VkConditionalRenderingBeginInfoEXT *info=e->u.begin_conditional_rendering_ext.conditional_rendering_begin;
+      conditional->address=vk_buffer_address(&kk_buffer_from_handle(info->buffer)->vk,info->offset);
+      conditional->inverted=!!(info->flags&VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT);
+      conditional->enabled=true;
+   } else if (e->type == VK_CMD_END_CONDITIONAL_RENDERING_EXT) conditional->enabled=false;
+}
+
+/* These ranges describe Vulkan indirect and conditional reads, not the
+ * internal compute implementation's shader access class. */
+static bool
+kk_mesh_pass_ranges_overlap(uint64_t a, uint64_t size_a, uint64_t b, uint64_t size_b)
+{
+   return size_a && size_b && (a <= b ? b - a < size_a : a - b < size_b);
+}
+
+static bool
+kk_mesh_pass_grid_overlap(uint64_t address, uint64_t size,
+   const struct kk_mesh_pass_call *call)
+{
+   if (!call->grid || !call->maximum || !size) return false;
+   if (!call->stride)
+      return kk_mesh_pass_ranges_overlap(address, size, call->grid, 12);
+   uint64_t index = address > call->grid ? (address - call->grid) / call->stride : 0;
+   if (index >= call->maximum) return false;
+   uint64_t offset = index * call->stride;
+   if (offset > UINT64_MAX - call->grid) return true;
+   uint64_t grid = call->grid + offset;
+   if (kk_mesh_pass_ranges_overlap(address, size, grid, 12)) return true;
+   return ++index < call->maximum && (grid > UINT64_MAX - call->stride ||
+      kk_mesh_pass_ranges_overlap(address, size, grid + call->stride, 12));
+}
+
+static bool
+kk_mesh_pass_dependency_reads_inputs(struct kk_mesh_pass *p, uint32_t first,
+   struct kk_conditional_rendering_state conditional, VkAccessFlags2 access,
+   VkBuffer buffer, uint64_t offset, uint64_t size)
+{
+   const VkAccessFlags2 indirect = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT |
+                                  VK_ACCESS_2_MEMORY_READ_BIT;
+   const VkAccessFlags2 predicate = VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT |
+                                   VK_ACCESS_2_MEMORY_READ_BIT;
+   if (!(access & (indirect | predicate))) return false;
+   uint64_t address = 0;
+   if (buffer) {
+      const struct kk_buffer *b = kk_buffer_from_handle(buffer);
+      if (offset > b->vk.size || (size != VK_WHOLE_SIZE && size > b->vk.size - offset))
+         return true;
+      address = vk_buffer_address(&b->vk, offset);
+      size = vk_buffer_range(&b->vk, offset, size);
+   }
+   for (uint32_t i = first; i + 1 < p->entry_count; ++i) {
+      const struct vk_cmd_queue_entry *e = &p->entries[i];
+      kk_mesh_pass_condition(&conditional, e);
+      struct kk_mesh_pass_call call;
+      if (!kk_mesh_pass_call_info(e, &call) || !call.maximum) continue;
+      if (access & indirect) {
+         if (call.grid && (!buffer || kk_mesh_pass_grid_overlap(address, size, &call)))
+            return true;
+         if (call.count && (!buffer || kk_mesh_pass_ranges_overlap(address, size, call.count, 4)))
+            return true;
+      }
+      if ((access & predicate) && conditional.enabled && conditional.address &&
+          (!buffer || kk_mesh_pass_ranges_overlap(address, size, conditional.address, 4)))
+         return true;
+   }
+   return false;
+}
+
+static bool
+kk_mesh_pass_dependency_safe(struct kk_mesh_pass *p, uint32_t first,
+   struct kk_conditional_rendering_state conditional, const VkDependencyInfo *info)
+{
+   if (info->pNext) return false;
+   for (uint32_t i = 0; i < info->memoryBarrierCount; ++i) {
+      const VkMemoryBarrier2 *b = &info->pMemoryBarriers[i];
+      if (b->pNext || kk_mesh_pass_dependency_reads_inputs(p, first, conditional,
+          b->dstAccessMask, VK_NULL_HANDLE, 0, 0)) return false;
+   }
+   for (uint32_t i = 0; i < info->bufferMemoryBarrierCount; ++i) {
+      const VkBufferMemoryBarrier2 *b = &info->pBufferMemoryBarriers[i];
+      if (b->pNext || kk_mesh_pass_dependency_reads_inputs(p, first, conditional,
+          b->dstAccessMask, b->buffer, b->offset, b->size)) return false;
+   }
+   for (uint32_t i = 0; i < info->imageMemoryBarrierCount; ++i)
+      if (info->pImageMemoryBarriers[i].pNext) return false;
+   return true;
+}
+
+static bool
+kk_mesh_pass_legacy_dependency_safe(struct kk_mesh_pass *p, uint32_t first,
+   struct kk_conditional_rendering_state conditional, uint32_t memory_count,
+   const VkMemoryBarrier *memory, uint32_t buffer_count,
+   const VkBufferMemoryBarrier *buffers, uint32_t image_count,
+   const VkImageMemoryBarrier *images)
+{
+   for (uint32_t i = 0; i < memory_count; ++i)
+      if (memory[i].pNext || kk_mesh_pass_dependency_reads_inputs(p, first, conditional,
+          memory[i].dstAccessMask, VK_NULL_HANDLE, 0, 0)) return false;
+   for (uint32_t i = 0; i < buffer_count; ++i)
+      if (buffers[i].pNext || kk_mesh_pass_dependency_reads_inputs(p, first, conditional,
+          buffers[i].dstAccessMask, buffers[i].buffer, buffers[i].offset, buffers[i].size)) return false;
+   for (uint32_t i = 0; i < image_count; ++i)
+      if (images[i].pNext) return false;
+   return true;
+}
+
+static bool
+kk_mesh_pass_barrier_safe(struct kk_mesh_pass *p, uint32_t at,
+   struct kk_conditional_rendering_state conditional)
+{
+   const struct vk_cmd_queue_entry *e = &p->entries[at];
+   switch (e->type) {
+   case VK_CMD_PIPELINE_BARRIER2:
+      return kk_mesh_pass_dependency_safe(p, at + 1, conditional,
+         e->u.pipeline_barrier2.dependency_info);
+   case VK_CMD_WAIT_EVENTS2:
+      for (uint32_t i = 0; i < e->u.wait_events2.event_count; ++i)
+         if (!kk_mesh_pass_dependency_safe(p, at + 1, conditional,
+             &e->u.wait_events2.dependency_infos[i])) return false;
+      return true;
+   case VK_CMD_PIPELINE_BARRIER: {
+      const struct vk_cmd_pipeline_barrier *b = &e->u.pipeline_barrier;
+      return kk_mesh_pass_legacy_dependency_safe(p, at + 1, conditional,
+         b->memory_barrier_count, b->memory_barriers, b->buffer_memory_barrier_count,
+         b->buffer_memory_barriers, b->image_memory_barrier_count, b->image_memory_barriers);
+   }
+   case VK_CMD_WAIT_EVENTS: {
+      const struct vk_cmd_wait_events *b = &e->u.wait_events;
+      return kk_mesh_pass_legacy_dependency_safe(p, at + 1, conditional,
+         b->memory_barrier_count, b->memory_barriers, b->buffer_memory_barrier_count,
+         b->buffer_memory_barriers, b->image_memory_barrier_count, b->image_memory_barriers);
+   }
+   default: return false;
+   }
+}
+
 /* Classify without invoking native methods or changing application state. */
 static bool
 kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
 {
    const struct kk_shader *mesh = cmd->state.shaders[MESA_SHADER_MESH];
    uint64_t inputs = 0; bool indirect = false, only_mesh = true, direct_conditional = false;
-   bool conditional = cmd->state.cond_render.enabled; unsigned queries = 0;
+   struct kk_conditional_rendering_state conditional = cmd->state.cond_render;
+   unsigned queries = 0;
    if (cmd->metal.render) return false;
    if (p->entries[0].type == VK_CMD_BEGIN_RENDERING) {
       if (p->entries[0].u.begin_rendering.rendering_info->flags &
@@ -182,17 +329,18 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
          const struct vk_shader *shader = vk_pipeline_get_shader(pipeline, MESA_SHADER_MESH);
          mesh = shader ? container_of(shader, struct kk_shader, vk) : NULL;
       }
-      if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING_EXT ||
-          e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING2_EXT) conditional = true;
-      else if (e->type == VK_CMD_END_CONDITIONAL_RENDERING_EXT) conditional = false;
+      kk_mesh_pass_condition(&conditional, e);
       struct kk_mesh_pass_call call;
       if (kk_mesh_pass_call_info(e, &call)) {
          if (!call.maximum) continue;
          if (!kk_mesh_pass_native_shader(mesh)) return false;
          inputs += call.maximum; indirect |= call.grid != 0;
          only_mesh &= !mesh->mesh->info.has_task;
-         direct_conditional |= !call.grid && conditional;
+         direct_conditional |= !call.grid && conditional.enabled;
 
+      } else if (e->type == VK_CMD_PIPELINE_BARRIER || e->type == VK_CMD_PIPELINE_BARRIER2 ||
+                 e->type == VK_CMD_WAIT_EVENTS || e->type == VK_CMD_WAIT_EVENTS2) {
+         if (!kk_mesh_pass_barrier_safe(p, i, conditional)) return false;
       } else if (e->type == VK_CMD_CLEAR_ATTACHMENTS) {
          /* Attachment writes do not publish indirect buffers. */
       } else if (e->type == VK_CMD_BEGIN_QUERY || e->type == VK_CMD_BEGIN_QUERY_INDEXED_EXT) {
@@ -388,22 +536,7 @@ kk_mesh_pass_draw(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    cmd->mesh_prepared_grid=NULL; cmd->state.cond_render=conditional;
 }
 
-static void
-kk_mesh_pass_condition(struct kk_conditional_rendering_state *conditional,
-   const struct vk_cmd_queue_entry *e)
-{
-   if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING2_EXT) {
-      const VkConditionalRenderingBeginInfo2EXT *info=e->u.begin_conditional_rendering2_ext.conditional_rendering_begin;
-      conditional->address=info->addressRange.address;
-      conditional->inverted=!!(info->flags&VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT);
-      conditional->enabled=true;
-   } else if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING_EXT) {
-      const VkConditionalRenderingBeginInfoEXT *info=e->u.begin_conditional_rendering_ext.conditional_rendering_begin;
-      conditional->address=vk_buffer_address(&kk_buffer_from_handle(info->buffer)->vk,info->offset);
-      conditional->inverted=!!(info->flags&VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT);
-      conditional->enabled=true;
-   } else if (e->type == VK_CMD_END_CONDITIONAL_RENDERING_EXT) conditional->enabled=false;
-}
+
 
 static bool
 kk_mesh_pass_build_calls(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p, bool advance)
