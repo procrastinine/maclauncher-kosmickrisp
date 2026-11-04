@@ -1510,6 +1510,9 @@ kk_parse_environment_options(struct kk_physical_device *pdev)
    if (pdev->info.gpu_apple_family < 9) {
       settings->disabled_workarounds |= BITFIELD64_BIT(18);
    }
+   if (pdev->info.gpu_apple_family >= 9) {
+      settings->disabled_workarounds |= BITFIELD64_BIT(10);
+   }
 }
 
 VkResult
