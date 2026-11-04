@@ -99,3 +99,10 @@ mtl_new_render_pipeline(mtl_compiler *compiler,
 {
    return NULL;
 }
+
+void
+mtl_render_pipeline_descriptor_copy_linking(
+   mtl_render_pipeline_descriptor *copy, mtl_render_pipeline_descriptor *source)
+{
+   /* Copies pipeline-linking state. */
+}

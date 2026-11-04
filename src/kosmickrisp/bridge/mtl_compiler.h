@@ -70,4 +70,7 @@ mtl_render_pipeline_state *mtl_new_render_pipeline_for_attachments(
    const enum mtl_pixel_format *formats, uint32_t count, uint32_t disabled,
    uint32_t samples);
 
+void mtl_render_pipeline_descriptor_copy_linking(
+   mtl_render_pipeline_descriptor *copy, mtl_render_pipeline_descriptor *source);
+
 #endif /* MTL_COMPILER_H */

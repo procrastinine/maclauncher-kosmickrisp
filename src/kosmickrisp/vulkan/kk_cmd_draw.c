@@ -11,6 +11,7 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "kk_dgc.h"
 #include "kosmickrisp/libkk/kk_tess_grid.h"
 #include "kk_format.h"
 #include "kk_image_view.h"
@@ -1109,8 +1110,11 @@ kk_heap(struct kk_cmd_buffer *cmd)
        * since this path is only taken by tessellation, GS and unroll, which
        * already force a compute encoder break */
       mtl_compute_encoder *encoder = cs_get_compute(cmd);
-      kk_cmd_write(cmd, (struct libkk_imm_write){
-                           addr + offsetof(struct poly_heap, bottom), 0});
+      if (cmd->state.gfx.generated_heap_floor) {
+         libkk_dgc_reserve_heap(cmd, kk_grid_1d(1), true, addr, cmd->state.gfx.generated_heap_floor);
+      } else {
+         kk_cmd_write(cmd, (struct libkk_imm_write){addr + offsetof(struct poly_heap, bottom), 0});
+      }
 
       /* Ensure heap is set to 0 before we allocate anything. */
       mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
@@ -2524,7 +2528,7 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
 
    if (data->indirect) {
       uint64_t addr =
-         data->indirect_command.addr + draw_id * data->indirect_command.stride;
+         data->indirect_command.addr + (uint64_t)draw_id * data->indirect_command.stride;
       draw.grid = kk_grid_indirect(addr);
    } else if (data->indexed) {
       VkDrawIndexedIndirectCommand draw_cmd = data->indexed_draws[draw_id];
@@ -2645,7 +2649,7 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
          kk_prepare_per_vertex_draw(cmd, data, i, per_vertex_draws, &draw_data);
 
       if (data->upload_mask)
-         kk_upload_per_draw_data(cmd, data->upload_mask, i, &draw_data,
+         kk_upload_per_draw_data(cmd, data->upload_mask, i + gfx->indirect_draw_id, &draw_data,
                                  gs_restart);
 
       if (tess)
@@ -2890,6 +2894,9 @@ kk_CmdDrawMultiIndexedEXT(VkCommandBuffer commandBuffer, uint32_t drawCount,
    ralloc_free(data);
 }
 
+#include "kk_dgc_poly.h"
+#include "kk_dgc_indirect.h"
+
 VKAPI_ATTR void VKAPI_CALL
 kk_CmdDrawIndirect2KHR(VkCommandBuffer commandBuffer,
                        const VkDrawIndirect2InfoKHR *pInfo)
@@ -2916,7 +2923,10 @@ kk_CmdDrawIndirect2KHR(VkCommandBuffer commandBuffer,
       .indirect_command.stride = pInfo->addressRange.stride,
    };
 
-   kk_draw(cmd, &data);
+   if (data.draw_count > 4096)
+      kk_draw_large_indirect(cmd, &data);
+   else
+      kk_draw(cmd, &data);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -2948,8 +2958,21 @@ kk_CmdDrawIndexedIndirect2KHR(VkCommandBuffer commandBuffer,
       .indirect_command.stride = pInfo->addressRange.stride,
    };
 
-   kk_draw(cmd, &data);
+   if (data.draw_count > 4096)
+      kk_draw_large_indirect(cmd, &data);
+   else
+      kk_draw(cmd, &data);
 }
+
+/* DGC uses the same pipeline, attachment and dynamic state flush as draws. */
+void kk_dgc_flush_graphics(struct kk_cmd_buffer *cmd) { kk_flush_gfx_state(cmd); }
+bool kk_dgc_prepare_graphics_root(struct kk_cmd_buffer *allocator,
+   struct kk_cmd_buffer *state, struct kk_root_descriptor_table *root)
+{
+   return kk_prepare_vertex_input(allocator, &state->state.gfx,
+      &state->vk.dynamic_graphics_state, state->state.shaders[MESA_SHADER_VERTEX], root);
+}
+uint32_t kk_dgc_primitive(struct kk_cmd_buffer *cmd) { return mesa_prim_to_mtl_primitive_type(vk_topology_to_mesa(cmd->vk.dynamic_graphics_state.ia.primitive_topology)); }
 
 VKAPI_ATTR void VKAPI_CALL
 kk_CmdDrawIndirectCount2KHR(VkCommandBuffer commandBuffer,
@@ -2959,6 +2982,19 @@ kk_CmdDrawIndirectCount2KHR(VkCommandBuffer commandBuffer,
       return;
 
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+
+   if (pInfo->maxDrawCount >= 1024 &&
+       !cmd->state.shaders[MESA_SHADER_TESS_EVAL] && !kk_geometry_shader(cmd) &&
+       cmd->vk.dynamic_graphics_state.rs.polygon_mode == VK_POLYGON_MODE_FILL &&
+       !cmd->state.gfx.xfb_enabled && !cmd->state.pipeline_statistics &&
+       !cmd->state.gfx.primitives_query[0] &&
+       (!false || (cmd->state.gfx.index.bytes_per_index >= 2 &&
+        !cmd->vk.dynamic_graphics_state.ia.primitive_restart_enable)) &&
+       !mesa_prim_has_adjacency(vk_topology_to_mesa(cmd->vk.dynamic_graphics_state.ia.primitive_topology)) &&
+       cmd->vk.dynamic_graphics_state.ia.primitive_topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+      kk_dgc_draw_indirect_count(cmd,pInfo,false);
+      return;
+   }
 
    const struct vk_dynamic_graphics_state *dyn =
       &cmd->vk.dynamic_graphics_state;
@@ -2979,7 +3015,10 @@ kk_CmdDrawIndirectCount2KHR(VkCommandBuffer commandBuffer,
       .indirect_command.stride = pInfo->addressRange.stride,
    };
 
-   kk_draw(cmd, &data);
+   if (data.draw_count > 4096)
+      kk_draw_large_indirect(cmd, &data);
+   else
+      kk_draw(cmd, &data);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -2990,6 +3029,19 @@ kk_CmdDrawIndexedIndirectCount2KHR(VkCommandBuffer commandBuffer,
       return;
 
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+
+   if (pInfo->maxDrawCount >= 1024 &&
+       !cmd->state.shaders[MESA_SHADER_TESS_EVAL] && !kk_geometry_shader(cmd) &&
+       cmd->vk.dynamic_graphics_state.rs.polygon_mode == VK_POLYGON_MODE_FILL &&
+       !cmd->state.gfx.xfb_enabled && !cmd->state.pipeline_statistics &&
+       !cmd->state.gfx.primitives_query[0] &&
+       (!true || (cmd->state.gfx.index.bytes_per_index >= 2 &&
+        !cmd->vk.dynamic_graphics_state.ia.primitive_restart_enable)) &&
+       !mesa_prim_has_adjacency(vk_topology_to_mesa(cmd->vk.dynamic_graphics_state.ia.primitive_topology)) &&
+       cmd->vk.dynamic_graphics_state.ia.primitive_topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+      kk_dgc_draw_indirect_count(cmd,pInfo,true);
+      return;
+   }
 
    const struct vk_dynamic_graphics_state *dyn =
       &cmd->vk.dynamic_graphics_state;
@@ -3013,7 +3065,10 @@ kk_CmdDrawIndexedIndirectCount2KHR(VkCommandBuffer commandBuffer,
       .indirect_command.stride = pInfo->addressRange.stride,
    };
 
-   kk_draw(cmd, &data);
+   if (data.draw_count > 4096)
+      kk_draw_large_indirect(cmd, &data);
+   else
+      kk_draw(cmd, &data);
 }
 
 VKAPI_ATTR void VKAPI_CALL

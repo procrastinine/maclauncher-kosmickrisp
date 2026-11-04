@@ -6,6 +6,7 @@
  */
 
 #include "kk_device.h"
+#include "kk_dgc.h"
 
 #include "kk_buffer.h"
 #include "kk_buffer_view.h"
@@ -350,7 +351,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       result = kk_alloc_bo(dev, &dev->vk.base, 65536 * sizeof(uint32_t), 64,
                            &dev->atomic64_locks);
       if (result != VK_SUCCESS) {
-         kk_device_finish_lib(dev);
+         kk_dgc_finish(dev);
+   kk_device_finish_lib(dev);
          goto fail_sampler_heap;
       }
       memset(dev->atomic64_locks->cpu, 0, 65536 * sizeof(uint32_t));
@@ -362,11 +364,18 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       mtl_start_gpu_capture(dev->mtl_handle, capture_directory);
    }
 
+   if (dev->vk.enabled_features.deviceGeneratedCommands && !kk_dgc_init(dev)) {
+      result = VK_ERROR_INITIALIZATION_FAILED;
+      kk_dgc_finish(dev);
+   kk_device_finish_lib(dev);
+      goto fail_sampler_heap;
+   }
    *pDevice = kk_device_to_handle(dev);
 
    return VK_SUCCESS;
 
 fail_lib:
+   kk_dgc_finish(dev);
    kk_device_finish_lib(dev);
 fail_sampler_heap:
    kk_destroy_sampler_heap(dev, &dev->samplers);
@@ -414,6 +423,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    /* Meta first since it may destroy Vulkan objects */
    kk_device_finish_meta(dev);
+   kk_dgc_finish(dev);
    kk_device_finish_lib(dev);
    kk_interlock_device_finish(dev);
    kk_query_table_finish(dev, &dev->occlusion_queries);

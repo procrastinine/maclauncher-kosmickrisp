@@ -68,6 +68,8 @@ struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
    uint32_t push_size;
+   bool dgc_replay;
+   bool indirect_bindable;
    bool has_geometry;
    bool api_geometry;
    bool polygon_point;
@@ -174,6 +176,7 @@ struct kk_shader {
    struct vk_shader vk;
 
    struct kk_attachment_pipelines *attachment_pipelines;
+   mtl_compute_pipeline_state *dgc_compute;
    struct kk_pipeline_handles pipeline;
    struct kk_shader_info info;
    struct msl_compile_data msl_data[MESA_SHADER_STAGES];

@@ -80,6 +80,7 @@ struct kk_precompiled_cache {
 struct kk_device {
    struct vk_device vk;
 
+   struct kk_dgc_metal *dgc;
    mtl_device *mtl_handle;
    mtl_compiler *mtl_compiler_handle;
 

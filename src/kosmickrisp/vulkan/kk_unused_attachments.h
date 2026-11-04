@@ -9,6 +9,7 @@ struct kk_attachment_variant {
    enum mtl_pixel_format formats[MAX_DRAW_BUFFERS];
    bool polygon;
    uint32_t samples;
+   bool indirect;
    mtl_render_pipeline_state *pipeline;
 };
 
@@ -87,32 +88,27 @@ kk_attachment_pipelines_finish(struct kk_shader *shader)
    free(cache);
 }
 
-mtl_render_pipeline_state *
-kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
-                       bool polygon)
+static mtl_render_pipeline_state *
+kk_attachment_pipeline_for_formats(struct kk_device *device,
+   struct kk_shader *shader, bool polygon, const enum mtl_pixel_format *formats,
+   bool indirect, VkResult *error, uint32_t samples)
 {
    mtl_render_pipeline_state *original = polygon ? shader->pipeline.gfx.polygon_render
                                                 : shader->pipeline.gfx.render;
    struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
-   if (!cache)
-      return original;
-
-   const struct kk_rendering_state *render = &cmd->state.gfx.render;
-   enum mtl_pixel_format formats[MAX_DRAW_BUFFERS] = {0};
-   for (unsigned i = 0; i < render->color_att_count; ++i) {
-      unsigned location = render->color_map[i];
-      if (location < MAX_DRAW_BUFFERS && render->color_att[i].iview)
-         formats[location] = vk_format_to_mtl_pixel_format(render->color_att[i].vk_format);
+   if (!cache) {
+      if (indirect) *error = VK_ERROR_OUT_OF_HOST_MEMORY;
+      return indirect ? NULL : original;
    }
-   uint32_t samples = MAX2(cmd->vk.dynamic_graphics_state.ms.rasterization_samples, 1);
-   if (samples == shader->info.vs.sample_count &&
-       !memcmp(formats, shader->info.vs.rt_formats, sizeof(formats)))
+
+   if (!indirect && samples == shader->info.vs.sample_count &&
+       !memcmp(formats, shader->info.vs.rt_formats, sizeof(shader->info.vs.rt_formats)))
       return original;
 
    simple_mtx_lock(&cache->mutex);
    for (struct kk_attachment_variant *v = cache->variants; v; v = v->next) {
-      if (v->polygon == polygon && v->samples == samples &&
-          !memcmp(v->formats, formats, sizeof(formats))) {
+      if (v->polygon == polygon && v->indirect == indirect && v->samples == samples &&
+          !memcmp(v->formats, formats, sizeof(shader->info.vs.rt_formats))) {
          simple_mtx_unlock(&cache->mutex);
          return v->pipeline;
       }
@@ -126,13 +122,24 @@ kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
              formats[i] == MTL_PIXEL_FORMAT_INVALID)
             disabled |= BITFIELD_BIT(i);
       }
+      mtl_render_pipeline_descriptor *descriptor = indirect
+         ? kk_dgc_render_descriptor(cache->descriptor[polygon])
+         : mtl_retain(cache->descriptor[polygon]);
+      if (!descriptor) {
+         free(variant);
+         simple_mtx_unlock(&cache->mutex);
+         *error = VK_ERROR_OUT_OF_HOST_MEMORY;
+         return NULL;
+      }
       variant->pipeline = mtl_new_render_pipeline_for_attachments(
-         kk_cmd_buffer_device(cmd)->mtl_compiler_handle,
-         cache->descriptor[polygon], formats, MAX_DRAW_BUFFERS, disabled, samples);
+         device->mtl_compiler_handle,
+         descriptor, formats, MAX_DRAW_BUFFERS, disabled, samples);
+      mtl_release(descriptor);
       result = VK_ERROR_INVALID_SHADER_NV;
       if (variant->pipeline) {
-         memcpy(variant->formats, formats, sizeof(formats));
+         memcpy(variant->formats, formats, sizeof(shader->info.vs.rt_formats));
          variant->polygon = polygon;
+         variant->indirect = indirect;
          variant->samples = samples;
          variant->next = cache->variants;
          cache->variants = variant;
@@ -142,7 +149,45 @@ kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
       free(variant);
    }
    simple_mtx_unlock(&cache->mutex);
-   vk_command_buffer_set_error(&cmd->vk, result);
+   *error = result;
    return NULL;
 }
+mtl_render_pipeline_state *
+kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
+                       bool polygon)
+{
+   const struct kk_rendering_state *render = &cmd->state.gfx.render;
+   enum mtl_pixel_format formats[MAX_DRAW_BUFFERS] = {0};
+   for (unsigned i = 0; i < render->color_att_count; ++i) {
+      unsigned location = render->color_map[i];
+      if (location < MAX_DRAW_BUFFERS && render->color_att[i].iview)
+         formats[location] = vk_format_to_mtl_pixel_format(render->color_att[i].vk_format);
+   }
+   uint32_t samples = MAX2(cmd->vk.dynamic_graphics_state.ms.rasterization_samples, 1);
+   VkResult error = VK_SUCCESS;
+   mtl_render_pipeline_state *pipeline = kk_attachment_pipeline_for_formats(
+      kk_cmd_buffer_device(cmd), shader, polygon, formats,
+      cmd->state.gfx.dgc_icb, &error, samples);
+   if (!pipeline)
+      vk_command_buffer_set_error(&cmd->vk, error);
+   return pipeline;
+}
+
+VkResult
+kk_dgc_eager_graphics_pipeline(struct kk_device *device, struct kk_shader *shader)
+{
+   if (!shader->info.indirect_bindable || shader->info.dgc_replay ||
+       shader->info.vs.dynamic_vi)
+      return VK_SUCCESS;
+   for (unsigned polygon = 0; polygon < 2; ++polygon) {
+      struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
+      if (!cache || !cache->descriptor[polygon]) continue;
+      VkResult error = VK_SUCCESS;
+      if (!kk_attachment_pipeline_for_formats(device, shader, polygon,
+             shader->info.vs.rt_formats, true, &error, shader->info.vs.sample_count))
+         return error;
+   }
+   return VK_SUCCESS;
+}
+
 #endif

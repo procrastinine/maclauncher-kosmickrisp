@@ -223,3 +223,10 @@ mtl_new_render_pipeline_for_attachments(mtl_compiler *compiler,
       return pipeline;
    }
 }
+
+void
+mtl_render_pipeline_descriptor_copy_linking(
+   mtl_render_pipeline_descriptor *copy, mtl_render_pipeline_descriptor *source)
+{
+   /* Copies pipeline-linking state. */
+}

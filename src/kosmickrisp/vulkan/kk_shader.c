@@ -37,7 +37,9 @@
 #include "vk_nir_convert_ycbcr.h"
 #include "vk_pipeline.h"
 #include "kk_image_view.h"
+#include "kk_dgc.h"
 #include "kk_unused_attachments.h"
+#include "kk_dgc_pipeline.h"
 
 static const nir_shader_compiler_options *
 kk_get_nir_options(struct vk_physical_device *vk_pdev, mesa_shader_stage stage,
@@ -891,6 +893,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
 {
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
+   mtl_release(shader->dgc_compute);
    kk_attachment_pipelines_finish(shader);
    struct kk_pipeline_handles *pipe = &shader->pipeline;
 
@@ -1429,10 +1432,10 @@ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
 }
 
 static VkResult
-kk_compile_compute_pipeline(struct kk_device *device,
+kk_compile_compute_pipeline_mode(struct kk_device *device,
                             const struct msl_compile_data *data,
                             uint32_t local_size_threads,
-                            mtl_compute_pipeline_state **pipe)
+                            mtl_compute_pipeline_state **pipe, bool indirect)
 {
    struct kk_physical_device *pdev = kk_device_physical(device);
 
@@ -1444,8 +1447,11 @@ kk_compile_compute_pipeline(struct kk_device *device,
 
    mtl_function_descriptor *function =
       mtl_new_library_function_descriptor(library, data->entrypoint_name);
-   mtl_compute_pipeline_state *pipeline = mtl_new_compute_pipeline_state(
-      device->mtl_compiler_handle, function, local_size_threads);
+   mtl_compute_pipeline_state *pipeline = indirect
+      ? kk_dgc_new_compute_pipeline_state(device->mtl_compiler_handle, function,
+                                           local_size_threads)
+      : mtl_new_compute_pipeline_state(device->mtl_compiler_handle, function,
+                                        local_size_threads);
    mtl_release(function);
    mtl_release(library);
 
@@ -1455,6 +1461,22 @@ kk_compile_compute_pipeline(struct kk_device *device,
    *pipe = pipeline;
 
    return VK_SUCCESS;
+}
+
+static VkResult
+kk_compile_compute_pipeline(struct kk_device *device,
+                            const struct msl_compile_data *data,
+                            uint32_t threads, mtl_compute_pipeline_state **pipe)
+{
+   return kk_compile_compute_pipeline_mode(device, data, threads, pipe, false);
+}
+
+VkResult
+kk_compile_indirect_compute_pipeline(struct kk_device *device,
+   const struct msl_compile_data *data, uint32_t threads,
+   mtl_compute_pipeline_state **pipe)
+{
+   return kk_compile_compute_pipeline_mode(device, data, threads, pipe, true);
 }
 
 static mtl_depth_stencil_state *
@@ -1794,8 +1816,10 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    if (render == NULL)
       result = VK_ERROR_INVALID_SHADER_NV;
 
-   if (render && (device->vk.enabled_features.dynamicRenderingUnusedAttachments ||
-                  device->vk.enabled_features.extendedDynamicState3RasterizationSamples)) {
+   if (render && ((device->vk.enabled_features.dynamicRenderingUnusedAttachments ||
+                  device->vk.enabled_features.extendedDynamicState3RasterizationSamples) ||
+       device->vk.enabled_features.deviceGeneratedCommands ||
+       device->vk.enabled_features.drawIndirectCount)) {
       if (!vs->attachment_pipelines) {
          vs->attachment_pipelines = calloc(1, sizeof(*vs->attachment_pipelines));
          if (!vs->attachment_pipelines)
@@ -1820,7 +1844,8 @@ static VkResult
 kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
 {
    VkResult result = kk_compile_graphics_pipeline_native(device, vs, false);
-   if (result != VK_SUCCESS || !vs->info.polygon_point) return result;
+   if (result != VK_SUCCESS || !vs->info.polygon_point)
+      return result == VK_SUCCESS ? kk_dgc_eager_graphics_pipeline(device, vs) : result;
    result = kk_compile_compute_pipeline(device, &vs->polygon[0], KK_POLY_WG_SIZE,
                                         &vs->pipeline.gfx.polygon_capture);
    if (result != VK_SUCCESS) return result;
@@ -1829,7 +1854,8 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
                                            &vs->pipeline.gfx.polygon_xfb);
       if (result != VK_SUCCESS) return result;
    }
-   return kk_compile_graphics_pipeline_native(device, vs, true);
+   result = kk_compile_graphics_pipeline_native(device, vs, true);
+   return result == VK_SUCCESS ? kk_dgc_eager_graphics_pipeline(device, vs) : result;
 }
 
 static bool
@@ -1907,6 +1933,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
 
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */
+   bool dgc_replay = false;
    nir_shader *nir_shaders[shader_count + 2u];
    struct kk_shader *shaders[shader_count + 2u];
 
@@ -1919,6 +1946,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
    for (uint32_t i = 0u; i < shader_count; ++i) {
       const struct vk_shader_compile_info *info = &infos[i];
       nir_shader *nir = info->nir;
+      dgc_replay |= kk_dgc_shader_needs_replay(nir);
 
       /* Stages before the tessellator or a GS run as compute */
       bool emulated_stage =
@@ -2075,6 +2103,14 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
 
    /* Retain the stage-filtered layout extent in serialized shader info.
     * Graphics stages share one root, including stages lowered through Poly. */
+   for (uint32_t i = 0; i < total_shaders; ++i)
+      dgc_replay |= shaders[i]->info.stage == MESA_SHADER_FRAGMENT &&
+                    shaders[i]->info.fs.emulates_per_vertex_inputs;
+   for (uint32_t i = 0; i < total_shaders; ++i) {
+      shaders[i]->info.dgc_replay = dgc_replay;
+      shaders[i]->info.indirect_bindable =
+         infos[0].flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
+   }
    uint32_t push_size = 0;
    for (uint32_t i = 0; i < shader_count; ++i) {
       const struct vk_shader_compile_info *info = &infos[i];
@@ -2100,6 +2136,9 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
       result =
          kk_compile_compute_pipeline(dev, &s->msl_data[MESA_SHADER_COMPUTE],
                                      local_size_threads, &s->pipeline.cs);
+      if (result == VK_SUCCESS && s->info.indirect_bindable &&
+          !kk_dgc_get_compute_pipeline(dev, s))
+         result = VK_ERROR_INVALID_SHADER_NV;
    } else {
       gather_graphics_pipeline_create_info(state, shaders, total_shaders);
       shaders[0]->info.api_geometry = explicit_geometry;
@@ -2257,6 +2296,9 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
       result = kk_compile_compute_pipeline(
          dev, &shader->msl_data[MESA_SHADER_COMPUTE], local_size_threads,
          &shader->pipeline.cs);
+      if (result == VK_SUCCESS && shader->info.indirect_bindable &&
+          !kk_dgc_get_compute_pipeline(dev, shader))
+         result = VK_ERROR_INVALID_SHADER_NV;
    } else if (info.stage == MESA_SHADER_VERTEX) {
       result = kk_compile_graphics_pipeline(dev, shader);
    }

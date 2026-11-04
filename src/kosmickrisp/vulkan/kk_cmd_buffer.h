@@ -176,6 +176,10 @@ struct kk_graphics_state {
    struct kk_rendering_state render;
    struct kk_descriptor_state descriptors;
    struct kk_per_draw_data per_draw_data;
+   uint32_t indirect_draw_id;
+   bool dgc_icb;
+   uint64_t generated_root;
+   uint64_t generated_heap_floor;
    struct kk_addr_range xfb[POLY_MAX_SO_BUFFERS];
    uint64_t xfb_offsets;
    uint64_t xfb_query[POLY_MAX_VERTEX_STREAMS];
@@ -318,6 +322,7 @@ struct kk_cmd_buffer {
 
    /* Owned large BOs */
    struct util_dynarray large_bos;
+   struct util_dynarray dgc_commands;
 
    /* Does the command buffer use the geometry heap? */
    bool uses_heap;
@@ -400,6 +405,9 @@ struct kk_ptr kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size,
 
 struct kk_ptr kk_pool_upload(struct kk_cmd_buffer *cmd, const void *data,
                              uint32_t size, uint32_t alignment);
+
+uint64_t kk_upload_descriptor_root_data(struct kk_cmd_buffer *cmd,
+   const struct kk_root_descriptor_table *root, uint32_t size);
 
 uint64_t kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
                                    VkPipelineBindPoint bind_point);

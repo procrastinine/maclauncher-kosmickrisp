@@ -6,6 +6,7 @@
  */
 
 #include "kk_cmd_buffer.h"
+#include "kk_dgc.h"
 
 #include "kk_buffer.h"
 #include "kk_cmd_pool.h"
@@ -49,6 +50,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
       kk_FreeMemory(kk_device_to_handle(dev), image->memory, NULL);
    }
    util_dynarray_clear(&cmd->msrtss_images);
+   kk_dgc_release_commands(cmd);
    kk_cmd_release_dynamic_ds_state(cmd);
    kk_descriptor_state_fini(cmd, &cmd->state.gfx.descriptors);
    kk_descriptor_state_fini(cmd, &cmd->state.cs.descriptors);
@@ -101,6 +103,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
 
    kk_cmd_release_resources(dev, cmd);
    util_dynarray_fini(&cmd->large_bos);
+   util_dynarray_fini(&cmd->dgc_commands);
    util_dynarray_fini(&cmd->post_render_writes);
    util_dynarray_fini(&cmd->msrtss_images);
    util_dynarray_fini(&cmd->ts_resolves);
@@ -154,6 +157,7 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    }
 
    cmd->large_bos = UTIL_DYNARRAY_INIT;
+   cmd->dgc_commands = UTIL_DYNARRAY_INIT;
 
    cmd->vk.dynamic_graphics_state.vi = &cmd->state.gfx._dynamic_vi;
    cmd->vk.dynamic_graphics_state.ms.sample_locations =
@@ -789,25 +793,34 @@ kk_pool_upload(struct kk_cmd_buffer *cmd, const void *data, uint32_t size,
 }
 
 uint64_t
+kk_upload_descriptor_root_data(struct kk_cmd_buffer *cmd,
+   const struct kk_root_descriptor_table *root, uint32_t size)
+{
+   struct kk_ptr ptr = kk_pool_upload(cmd, root, size, 8u);
+   if (unlikely(!ptr.gpu)) return 0u;
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   ((struct kk_root_descriptor_table *)ptr.cpu)->addr =
+      dev->atomic64_locks ? dev->atomic64_locks->gpu : ptr.gpu;
+   return ptr.gpu;
+}
+
+uint64_t
 kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
                           VkPipelineBindPoint bind_point)
 {
    struct kk_descriptor_state *desc = kk_get_descriptors_state(cmd, bind_point);
    struct kk_root_descriptor_table *root = &desc->root;
+   if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS && cmd->state.gfx.generated_root) {
+      root->addr = cmd->state.gfx.generated_root;
+      desc->root_dirty = false;
+      return root->addr;
+   }
    uint32_t size = offsetof(struct kk_root_descriptor_table, push) + desc->push_size;
-   struct kk_ptr root_ptr = kk_pool_alloc(cmd, size, 8u);
-   if (unlikely(!root_ptr.gpu))
-      return 0u;
-
-   root->addr = root_ptr.gpu;
-
-   memcpy(root_ptr.cpu, root, size);
-   struct kk_device *dev = kk_cmd_buffer_device(cmd);
-   if (dev->atomic64_locks)
-      ((struct kk_root_descriptor_table *)root_ptr.cpu)->addr = dev->atomic64_locks->gpu;
+   uint64_t address = kk_upload_descriptor_root_data(cmd, root, size);
+   if (!address) return 0u;
+   root->addr = address;
    desc->root_dirty = false;
-
-   return root_ptr.gpu;
+   return address;
 }
 
 void
