@@ -16,6 +16,15 @@ bool kk_nir_vrs_split_application(nir_shader *nir);
 void kk_nir_vrs_flatten(nir_shader *nir);
 bool kk_nir_lower_linked_native_coarse_fragment(nir_shader *nir);
 uint32_t kk_nir_vrs_result_stride(nir_shader *nir);
+/* Invocation-local typed backup for the same-transaction fine epilogue.
+ * These compilation-clone functions contain no application call or external
+ * memory access. The caller supplies the original-pixel mask shift. */
+struct kk_vrs_local_outputs {
+   nir_function *save, *restore;
+   unsigned bytes;
+};
+bool kk_nir_vrs_local_outputs(nir_shader *, nir_variable *sample_shift,
+   unsigned samples, struct kk_vrs_local_outputs *);
 bool kk_nir_vrs_uses_per_draw(nir_shader *nir);
 void kk_nir_vrs_lower_fine_rate(nir_shader *nir);
 bool kk_nir_lower_linked_replay_fragment(nir_shader *nir, unsigned samples);

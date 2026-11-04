@@ -76,15 +76,20 @@ kk_interlock_capture_collect(nir_builder *b, nir_intrinsic_instr *intr,
    return false;
 }
 
-static void
-kk_interlock_capture_layout(nir_shader *program,
-                              struct kk_interlock_capture_nir *s)
+static inline void
+kk_interlock_capture_collect_layout(nir_shader *program,
+                                     struct kk_interlock_capture_nir *s)
 {
    memset(s, 0, sizeof(*s));
    nir_shader_intrinsics_pass(program, kk_interlock_capture_collect,
                                nir_metadata_all, s);
    s->interpolants |= (s->center & s->centroid) |
                       (s->center & s->sample) | (s->centroid & s->sample);
+}
+
+static inline void
+kk_interlock_capture_finish_layout(struct kk_interlock_capture_nir *s)
+{
    const uint64_t masks[] = {s->center, s->centroid, s->sample};
    for (unsigned kind = 0; kind < ARRAY_SIZE(masks); ++kind) {
       kk_interlock_quad_layout_init(&s->layout[kind], masks[kind],
@@ -92,6 +97,14 @@ kk_interlock_capture_layout(nir_shader *program,
       s->kind_offset[kind] = s->stride;
       s->stride += 4 * s->layout[kind].stride;
    }
+}
+
+static void
+kk_interlock_capture_layout(nir_shader *program,
+                              struct kk_interlock_capture_nir *s)
+{
+   kk_interlock_capture_collect_layout(program, s);
+   kk_interlock_capture_finish_layout(s);
 }
 
 static nir_def *

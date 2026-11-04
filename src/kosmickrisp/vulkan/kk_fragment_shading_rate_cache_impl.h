@@ -6,8 +6,9 @@
 #include "util/simple_mtx.h"
 #include "nir_serialize.h"
 #include "kosmickrisp/bridge/mtl_fragment_shading_rate.h"
+#include "kk_fragment_shading_rate_transaction_nir.h"
 
-#define KK_VRS_SOURCE_SCHEMA 15u
+#define KK_VRS_SOURCE_SCHEMA 16u
 #define KK_VRS_ARTIFACT_SCHEMA 3u
 #define KK_VRS_KEY_SIZE 48u
 struct kk_vrs_source {

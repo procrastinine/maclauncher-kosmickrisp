@@ -559,6 +559,43 @@ vrs_payload_layout(nir_shader *nir, struct vrs_payload_layout *layout)
    return true;
 }
 
+bool
+kk_nir_vrs_local_outputs(nir_shader *nir, nir_variable *sample_shift,
+   unsigned samples, struct kk_vrs_local_outputs *out)
+{
+   if (!nir || !out || nir->info.stage != MESA_SHADER_FRAGMENT ||
+       !sample_shift || sample_shift->data.mode != nir_var_shader_temp ||
+       !glsl_type_is_scalar(sample_shift->type) ||
+       glsl_get_base_type(sample_shift->type) != GLSL_TYPE_UINT ||
+       (samples != 1 && samples != 2 && samples != 4))
+      return false;
+   struct vrs_payload_layout layout;
+   if (!vrs_payload_layout(nir, &layout))
+      return false;
+   *out = (struct kk_vrs_local_outputs){
+      .save = nir_function_create(nir, "kk_vrs_save_outputs"),
+      .restore = nir_function_create(nir, "kk_vrs_restore_outputs"),
+   };
+   nir_builder save = nir_builder_create(nir_function_impl_create(out->save));
+   nir_builder restore = nir_builder_create(nir_function_impl_create(out->restore));
+   save.cursor = nir_before_cf_list(&save.impl->body);
+   restore.cursor = nir_before_cf_list(&restore.impl->body);
+   for (unsigned i = 0; i < layout.count; i++) {
+      const struct vrs_payload_output *o = &layout.outputs[i];
+      nir_variable *backup = nir_variable_create(nir, nir_var_shader_temp,
+         o->variable->type, "kk_vrs_saved_output");
+      nir_store_var(&save, backup, nir_load_var(&save, o->variable),
+         BITFIELD_MASK(o->components));
+      nir_def *value = nir_load_var(&restore, backup);
+      if (o->variable->data.location == FRAG_RESULT_SAMPLE_MASK)
+         value = nir_iand_imm(&restore, nir_ushr(&restore, value,
+            nir_load_var(&restore, sample_shift)), BITFIELD_MASK(samples));
+      nir_store_var(&restore, o->variable, value, BITFIELD_MASK(o->components));
+      out->bytes += o->components * (o->bits / 8);
+   }
+   return true;
+}
+
 static void
 vrs_store_payload(nir_builder *b, const struct vrs_payload_layout *layout,
                    nir_def *result)
