@@ -78,16 +78,35 @@ fsr_broadcast(nir_builder *b, struct fsr_ctx *ctx, nir_def *v)
 /* Value of an affine screen-space function at the lane position, from its
  * values at the hardware pixel centers. */
 static nir_def *
-fsr_extrapolate(nir_builder *b, struct fsr_ctx *ctx, nir_def *g)
+fsr_combine(nir_builder *b, struct fsr_ctx *ctx, nir_def *g, nir_def *h, nir_def *v)
 {
-   nir_def *h = nir_quad_swap_horizontal(b, g);
-   nir_def *v = nir_quad_swap_vertical(b, g);
    nir_def *gx = nir_bcsel(b, nir_ieq_imm(b, ctx->qx, 0), nir_fsub(b, h, g),
                            nir_fsub(b, g, h));
    nir_def *gy = nir_bcsel(b, nir_ieq_imm(b, ctx->qy, 0), nir_fsub(b, v, g),
                            nir_fsub(b, g, v));
    return nir_fadd(b, g, nir_fadd(b, nir_fmul(b, gx, ctx->dx),
                                   nir_fmul(b, gy, ctx->dy)));
+}
+
+static nir_def *
+fsr_extrapolate(nir_builder *b, struct fsr_ctx *ctx, nir_def *g)
+{
+   nir_def *h = nir_quad_swap_horizontal(b, g);
+   nir_def *v = nir_quad_swap_vertical(b, g);
+   return fsr_combine(b, ctx, g, h, v);
+}
+
+/* With the slot handshake, the neighbor values are read at the current
+ * cursor, before the handshake's atomics: a lane that does not run the
+ * sample has its atomics suppressed, and values read from it afterwards
+ * are not reliable. The combination is built at post. */
+static nir_def *
+fsr_extrapolate_at(nir_builder *b, struct fsr_ctx *ctx, nir_def *g, nir_cursor post)
+{
+   nir_def *h = nir_quad_swap_horizontal(b, g);
+   nir_def *v = nir_quad_swap_vertical(b, g);
+   b->cursor = post;
+   return fsr_combine(b, ctx, g, h, v);
 }
 
 /* Fragment-scale derivatives at the lane positions: solve the 2x2 system
@@ -127,6 +146,16 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
    const struct kk_fsr_lower_options *opts = ctx->opts;
    nir_def *frag = nir_load_frag_coord(b);
    nir_def *fcx = nir_channel(b, frag, 0), *fcy = nir_channel(b, frag, 1);
+   /* Neighbor depth and 1/W before the slot handshake (fsr_extrapolate_at). */
+   nir_def *fz = NULL, *fwv = NULL, *zh = NULL, *zv = NULL, *wh = NULL, *wv = NULL;
+   if (ctx->sample_group) {
+      fz = nir_channel(b, frag, 2);
+      fwv = nir_channel(b, frag, 3);
+      zh = nir_quad_swap_horizontal(b, fz);
+      zv = nir_quad_swap_vertical(b, fz);
+      wh = nir_quad_swap_horizontal(b, fwv);
+      wv = nir_quad_swap_vertical(b, fwv);
+   }
    nir_def *px = nir_f2u32(b, nir_ffloor(b, fcx));
    nir_def *py = nir_f2u32(b, nir_ffloor(b, fcy));
    ctx->qx = nir_iand_imm(b, px, 1);
@@ -244,9 +273,14 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
    ctx->inv_det = nir_frcp(b, nir_fsub(b, nir_fmul(b, ctx->dhx, ctx->dvy),
                                        nir_fmul(b, ctx->dhy, ctx->dvx)));
 
-   ctx->fw = fsr_extrapolate(b, ctx, nir_channel(b, frag, 3));
-   ctx->coord = nir_vec4(b, ctx->vx, ctx->vy,
-                         fsr_extrapolate(b, ctx, nir_channel(b, frag, 2)), ctx->fw);
+   if (ctx->sample_group) {
+      ctx->fw = fsr_combine(b, ctx, fwv, wh, wv);
+      ctx->coord = nir_vec4(b, ctx->vx, ctx->vy, fsr_combine(b, ctx, fz, zh, zv), ctx->fw);
+   } else {
+      ctx->fw = fsr_extrapolate(b, ctx, nir_channel(b, frag, 3));
+      ctx->coord = nir_vec4(b, ctx->vx, ctx->vy,
+                            fsr_extrapolate(b, ctx, nir_channel(b, frag, 2)), ctx->fw);
+   }
    ctx->top_end = nir_def_instr(ctx->coord);
 }
 
@@ -427,10 +461,14 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
          if (intr->intrinsic != nir_intrinsic_load_interpolated_input &&
              intr->intrinsic != nir_intrinsic_load_point_coord)
             continue;
-         b->cursor = nir_after_instr(ctx->top_end);
+         nir_cursor post = nir_after_instr(ctx->top_end);
+         /* With the slot handshake, loads and neighbor reads go before it. */
+         const bool pre = ctx->covered_store != NULL;
+         b->cursor = pre ? nir_before_instr(ctx->covered_store) : post;
          nir_def *value;
          if (intr->intrinsic == nir_intrinsic_load_point_coord) {
-            value = fsr_extrapolate(b, ctx, nir_load_point_coord(b));
+            value = pre ? fsr_extrapolate_at(b, ctx, nir_load_point_coord(b), post)
+                        : fsr_extrapolate(b, ctx, nir_load_point_coord(b));
          } else {
             nir_intrinsic_instr *bary = nir_src_as_intrinsic(intr->src[0]);
             nir_intrinsic_instr *new_bary =
@@ -447,10 +485,12 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
             if (v->bit_size != 32)
                v = nir_f2f32(b, v);
             if (nir_intrinsic_interp_mode(bary) == INTERP_MODE_NOPERSPECTIVE) {
-               value = fsr_extrapolate(b, ctx, v);
+               value = pre ? fsr_extrapolate_at(b, ctx, v, post) : fsr_extrapolate(b, ctx, v);
             } else {
                nir_def *w = nir_channel(b, nir_load_frag_coord(b), 3);
-               value = nir_fdiv(b, fsr_extrapolate(b, ctx, nir_fmul(b, v, w)), ctx->fw);
+               nir_def *vw = nir_fmul(b, v, w);
+               value = nir_fdiv(b, pre ? fsr_extrapolate_at(b, ctx, vw, post)
+                                       : fsr_extrapolate(b, ctx, vw), ctx->fw);
             }
             if (intr->def.bit_size != 32)
                value = nir_f2fN(b, value, intr->def.bit_size);
