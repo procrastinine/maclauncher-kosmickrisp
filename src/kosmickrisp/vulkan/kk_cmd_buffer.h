@@ -402,6 +402,7 @@ struct kk_cmd_buffer {
       /* Address of the binding 0 for when compute dispatches modify it.
        * We are trying to be nice to ourselves. */
       uint64_t root_addr;
+      mtl_argument_table *root_table;
       /* Only tracks graphics shaders since compute is always bound for now. */
       uint32_t dirty_shaders;
    } state;

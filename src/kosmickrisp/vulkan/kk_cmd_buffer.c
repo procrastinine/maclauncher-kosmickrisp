@@ -543,8 +543,14 @@ kk_mesh_split_command_buffer(struct kk_cmd_buffer *cmd)
 void
 kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd, uint64_t addr)
 {
+   /* Internal precompiled dispatches restore root_addr before returning.
+    * A detached interlock argument table still needs its own first bind. */
+   if (cmd->state.root_table == cmd->argument_table &&
+       cmd->state.root_addr == addr)
+      return;
    mtl_set_address(cmd->argument_table, addr, KK_ARGUMENT_ROOT);
    cmd->state.root_addr = addr;
+   cmd->state.root_table = cmd->argument_table;
 }
 
 /* Returns true if a render pass split is required. The main cases are:
