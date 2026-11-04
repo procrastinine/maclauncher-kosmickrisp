@@ -14,6 +14,18 @@
 #include "vk_util.h"
 
 #include <assert.h>
+#include <stdbool.h>
+
+/* Deferred compute builds run on compiler threads, where the application's
+ * debug messengers must not be called (under Wine they are PE callbacks).
+ * Code that a build runs reports errors with kk_error and kk_errorf, which
+ * return the result without logging during a build; the API thread that
+ * joins the build reports its result. */
+extern _Thread_local bool kk_compile_worker;
+#define kk_error(obj, error) \
+   (kk_compile_worker ? (error) : vk_error(obj, error))
+#define kk_errorf(obj, error, ...) \
+   (kk_compile_worker ? (error) : vk_errorf(obj, error, __VA_ARGS__))
 
 #define KK_MAX_SETS                      32
 #define KK_MAX_PUSH_SIZE                 4096

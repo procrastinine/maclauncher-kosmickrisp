@@ -2020,7 +2020,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
                              kk_shader_size(stage));
    if (shader == NULL) {
       ralloc_free(nir);
-      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return kk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
    kk_shader_init_mesh_state(shader, stage);
@@ -4473,7 +4473,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       ralloc_free(coarse_pair[0]);
       ralloc_free(coarse_pair[1]);
       memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
-      return vk_errorf(dev, VK_ERROR_UNKNOWN,
+      return kk_errorf(dev, VK_ERROR_UNKNOWN,
                        "Out of varying slots for barycentric emulation");
    }
 
@@ -4869,7 +4869,7 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
        (info.gpl_kind == KK_GPL_LIBRARY_SOURCE &&
         !(mesa_to_vk_shader_stage(info.stage) &
           (VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT))))
-      return vk_error(dev, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+      return kk_error(dev, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
    struct kk_mesh_shader_info mesh_info;
    if (!blob->overrun && info.gpl_kind != KK_GPL_LIBRARY_SOURCE &&
        kk_shader_stage_has_mesh_info(info.stage))
@@ -4883,12 +4883,12 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
          mesh_info.task_local_size.y != 1 || mesh_info.task_local_size.z != 1 ||
          mesh_info.max_vertices > 256 || mesh_info.max_primitives > 512 ||
          mesh_info.task_grid_bound > KK_MESH_NATIVE_GROUPS)))
-      return vk_error(dev, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+      return kk_error(dev, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
 
    struct kk_shader *shader = vk_shader_zalloc(
       &dev->vk, &kk_shader_ops, info.stage, pAllocator, kk_shader_size(info.stage));
    if (shader == NULL)
-      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return kk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    /* Cache incompatibility can fail before any source is accepted. Cleanup
     * must already know the actual stage owning that partial source. */
@@ -5003,7 +5003,7 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
 
 fail:
    kk_shader_destroy(&dev->vk, shader, pAllocator);
-   return vk_error(dev, result);
+   return kk_error(dev, result);
 }
 
 static VkResult

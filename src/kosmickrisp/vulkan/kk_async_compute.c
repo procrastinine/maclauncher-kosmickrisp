@@ -16,6 +16,7 @@
 #include <pthread.h>
 
 _Thread_local bool kk_defer_compute;
+_Thread_local bool kk_compile_worker;
 
 /* Deferred builds an application binds are remembered per application in the
  * Metal archive's disk namespace, by a digest of their source: the compiler
@@ -125,7 +126,12 @@ job_execute(void *data)
       job->scope.input_count = 1;
       job->scope.stage_mask = BITFIELD_BIT(MESA_SHADER_COMPUTE);
    }
-   job_result(job, job->compile(job->dev, job->shader));
+   /* Also when the join runs the build on the API thread: the join reports
+    * the result. */
+   kk_compile_worker = true;
+   VkResult result = job->compile(job->dev, job->shader);
+   kk_compile_worker = false;
+   job_result(job, result);
 }
 
 static void
@@ -507,6 +513,7 @@ join_shader(struct kk_shader *shader, const char *reason)
       return VK_ERROR_DEVICE_LOST;
    fprintf(stderr, "KosmicKrisp: compute pipeline %p failed native compilation (%d); first use cannot continue\n",
               (void *)shader, job->result);
+   vk_error(job->dev, job->result);
    return vk_device_set_lost(&job->dev->vk, "Asynchronous compute pipeline compilation failed (%d)", job->result);
 }
 
