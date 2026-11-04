@@ -452,6 +452,13 @@ kk_barrier_requires_encoder_split(struct kk_cmd_buffer *cmd,
       dst |= dep->pImageMemoryBarriers[i].dstAccessMask;
    }
 
+   const VkMemoryRangeBarriersInfoKHR *ranges = vk_find_struct_const(
+      dep->pNext, MEMORY_RANGE_BARRIERS_INFO_KHR);
+   for (uint32_t i = 0; ranges && i < ranges->memoryRangeBarrierCount; ++i) {
+      src |= ranges->pMemoryRangeBarriers[i].srcAccessMask;
+      dst |= ranges->pMemoryRangeBarriers[i].dstAccessMask;
+   }
+
    if (src & any_write_access)
       render->write_available = true;
    if (has_ds && (src & ds_write_access))

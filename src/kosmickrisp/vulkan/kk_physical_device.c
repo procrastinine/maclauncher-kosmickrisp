@@ -159,6 +159,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_maintenance8 = true,
       .KHR_maintenance9 = true,
       .KHR_maintenance10 = true,
+      .KHR_device_address_commands = true,
 #ifdef KK_USE_WSI_PLATFORM
       .KHR_present_id = true,
       .KHR_present_id2 = true,
@@ -409,6 +410,9 @@ kk_get_device_features(
 
       /* VK_KHR_maintenance10 */
       .maintenance10 = true,
+
+      /* VK_KHR_device_address_commands */
+      .deviceAddressCommands = true,
 
 #ifdef KK_USE_WSI_PLATFORM
       /* VK_KHR_present_id */

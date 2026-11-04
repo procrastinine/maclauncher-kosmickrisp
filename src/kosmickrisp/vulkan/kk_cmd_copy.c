@@ -20,24 +20,6 @@
 
 #include "util/format/u_format.h"
 
-VKAPI_ATTR void VKAPI_CALL
-kk_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
-                  const VkCopyBufferInfo2 *pCopyBufferInfo)
-{
-   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
-   VK_FROM_HANDLE(kk_buffer, src, pCopyBufferInfo->srcBuffer);
-   VK_FROM_HANDLE(kk_buffer, dst, pCopyBufferInfo->dstBuffer);
-
-   mtl_compute_encoder *encoder = cs_get_compute(cmd);
-   for (uint32_t i = 0; i < pCopyBufferInfo->regionCount; i++) {
-      const VkBufferCopy2 *region = &pCopyBufferInfo->pRegions[i];
-      mtl_copy_from_buffer_to_buffer(
-         encoder, src->metal.handle,
-         kk_buffer_mtl_offset(src, region->srcOffset), dst->metal.handle,
-         kk_buffer_mtl_offset(dst, region->dstOffset), region->size);
-   }
-}
-
 struct kk_buffer_image_copy_info {
    struct mtl_buffer_image_copy mtl_data;
    size_t buffer_slice_size_B;
@@ -424,3 +406,5 @@ kk_CmdCopyImage2(VkCommandBuffer commandBuffer,
       }
    }
 }
+
+#include "kk_address_copy.h"

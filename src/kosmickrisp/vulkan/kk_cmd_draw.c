@@ -3017,21 +3017,22 @@ kk_CmdDrawIndexedIndirectCount2KHR(VkCommandBuffer commandBuffer,
 }
 
 VKAPI_ATTR void VKAPI_CALL
-kk_CmdBindTransformFeedbackBuffersEXT(VkCommandBuffer commandBuffer,
-   uint32_t firstBinding, uint32_t bindingCount, const VkBuffer *pBuffers,
-   const VkDeviceSize *pOffsets, const VkDeviceSize *pSizes)
+kk_CmdBindTransformFeedbackBuffers2EXT(VkCommandBuffer commandBuffer,
+   uint32_t firstBinding, uint32_t bindingCount,
+   const VkBindTransformFeedbackBuffer2InfoEXT *bindings)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    for (unsigned i = 0; i < bindingCount; ++i) {
-      VK_FROM_HANDLE(kk_buffer, buffer, pBuffers[i]);
-      cmd->state.gfx.xfb[firstBinding + i] = kk_buffer_addr_range(buffer,
-         pOffsets[i], pSizes ? pSizes[i] : VK_WHOLE_SIZE);
+      cmd->state.gfx.xfb[firstBinding + i] = (struct kk_addr_range){
+         .addr = bindings[i].addressRange.address,
+         .range = bindings[i].addressRange.size,
+      };
    }
 }
 
 static void
 kk_begin_end_xfb(VkCommandBuffer commandBuffer, uint32_t first,
-   uint32_t count, const VkBuffer *buffers, const VkDeviceSize *offsets, bool begin)
+   uint32_t count, const VkBindTransformFeedbackBuffer2InfoEXT *buffers, bool begin)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    struct kk_graphics_state *gfx = &cmd->state.gfx;
@@ -3041,11 +3042,10 @@ kk_begin_end_xfb(VkCommandBuffer commandBuffer, uint32_t first,
    for (unsigned i = 0; i < (begin ? POLY_MAX_SO_BUFFERS : count); ++i) {
       unsigned slot = begin ? i : first + i;
       bool selected = slot >= first && slot - first < count && buffers &&
-                      buffers[slot - first] != VK_NULL_HANDLE;
+                      buffers[slot - first].addressRange.address != 0;
       uint64_t source = 0, destination = gfx->xfb_offsets + slot * 4;
       if (selected) {
-         VK_FROM_HANDLE(kk_buffer, buffer, buffers[slot - first]);
-         source = vk_buffer_address(&buffer->vk, offsets ? offsets[slot - first] : 0);
+         source = buffers[slot - first].addressRange.address;
       }
       if (!begin) {
          if (!selected) continue;
@@ -3056,29 +3056,29 @@ kk_begin_end_xfb(VkCommandBuffer commandBuffer, uint32_t first,
 }
 
 VKAPI_ATTR void VKAPI_CALL
-kk_CmdBeginTransformFeedbackEXT(VkCommandBuffer commandBuffer, uint32_t first,
-   uint32_t count, const VkBuffer *buffers, const VkDeviceSize *offsets)
+kk_CmdBeginTransformFeedback2EXT(VkCommandBuffer commandBuffer, uint32_t first,
+   uint32_t count, const VkBindTransformFeedbackBuffer2InfoEXT *buffers)
 {
-   kk_begin_end_xfb(commandBuffer, first, count, buffers, offsets, true);
+   kk_begin_end_xfb(commandBuffer, first, count, buffers, true);
 }
 
 VKAPI_ATTR void VKAPI_CALL
-kk_CmdEndTransformFeedbackEXT(VkCommandBuffer commandBuffer, uint32_t first,
-   uint32_t count, const VkBuffer *buffers, const VkDeviceSize *offsets)
+kk_CmdEndTransformFeedback2EXT(VkCommandBuffer commandBuffer, uint32_t first,
+   uint32_t count, const VkBindTransformFeedbackBuffer2InfoEXT *buffers)
 {
-   kk_begin_end_xfb(commandBuffer, first, count, buffers, offsets, false);
+   kk_begin_end_xfb(commandBuffer, first, count, buffers, false);
 }
 
 VKAPI_ATTR void VKAPI_CALL
-kk_CmdDrawIndirectByteCountEXT(VkCommandBuffer commandBuffer,
-   uint32_t instanceCount, uint32_t firstInstance, VkBuffer counterBuffer,
-   VkDeviceSize counterBufferOffset, uint32_t counterOffset, uint32_t vertexStride)
+kk_CmdDrawIndirectByteCount2EXT(VkCommandBuffer commandBuffer,
+   uint32_t instanceCount, uint32_t firstInstance,
+   const VkBindTransformFeedbackBuffer2InfoEXT *counter,
+   uint32_t counterOffset, uint32_t vertexStride)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
-   VK_FROM_HANDLE(kk_buffer, counter, counterBuffer);
    uint64_t draw = kk_pool_alloc(cmd, sizeof(VkDrawIndirectCommand), 4).gpu;
    libkk_xfb_draw(cmd, kk_grid_1d(1), true,
-      vk_buffer_address(&counter->vk, counterBufferOffset), draw,
+      counter->addressRange.address, draw,
       instanceCount, firstInstance, counterOffset, vertexStride);
    const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_draw_command data = {

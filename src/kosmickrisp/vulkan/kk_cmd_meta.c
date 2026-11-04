@@ -35,6 +35,7 @@ kk_cmd_bind_map_buffer(struct vk_command_buffer *vk_cmd,
    /* Need to retain since VkBuffers release the metal.handle too */
    mtl_retain(buf.buffer);
    buffer->metal.handle = buf.buffer;
+   buffer->metal.offset = buf.offset;
    buffer->vk.device_address = buf.gpu;
    *map_out = buf.cpu;
 
@@ -200,6 +201,19 @@ kk_meta_end(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
    cmd->state.cond_render = save->cond_render;
 
    memcpy(desc->root.push, save->push, sizeof(save->push));
+}
+
+VKAPI_ATTR void VKAPI_CALL
+kk_CmdCopyMemoryKHR(VkCommandBuffer commandBuffer,
+                    const VkCopyDeviceMemoryInfoKHR *info)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   struct kk_meta_save save;
+   kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_COMPUTE,
+                 "meta:vkCmdCopyMemoryKHR");
+   vk_meta_copy_memory(&cmd->vk, &dev->meta, info);
+   kk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_COMPUTE);
 }
 
 VKAPI_ATTR void VKAPI_CALL
