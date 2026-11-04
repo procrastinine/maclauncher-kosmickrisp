@@ -507,3 +507,11 @@ kk_SetDebugUtilsObjectNameEXT(VkDevice device,
 
    return VK_SUCCESS;
 }
+
+#if DETECT_OS_APPLE
+PUBLIC VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+vkGetDeviceProcAddr(VkDevice device, const char *name)
+{
+   return kk_GetDeviceProcAddr(device, name);
+}
+#endif
