@@ -341,5 +341,21 @@
     "performance": true,
     "performance_reason": "DXVK 2.x/3.x requires VK_EXT_robustness2 and nullDescriptor for device creation and uses robustBufferAccess2/robustImageAccess2; vkd3d-proton also requires nullDescriptor. Required buffer bounds and null semantics remain enabled.",
     "off_consequence": "DXVK 2.x/3.x and vkd3d-proton device creation fails when required nullDescriptor/robustness2 support is hidden. Both extension aliases and their three features are hidden; core robustness and pipeline robustness remain available."
+  },
+  {
+    "name": "workgroup_zero",
+    "description": "Zero initialization of shader workgroup memory when requested by the shader.",
+    "cost_class": "threadgroup stores / barrier",
+    "cost_note": "A requested nonempty shared allocation is rounded to 16 bytes and cooperatively cleared with native stores followed by a workgroup barrier. No clear or barrier is emitted without the shader zero-init flag and nonzero shared size. Runtime cost is unmeasured.",
+    "extensions": [
+      "VK_KHR_zero_initialize_workgroup_memory"
+    ],
+    "features": [
+      "shaderZeroInitializeWorkgroupMemory"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "Workgroup initialization is required by translator shader semantics; retain it for DXVK/vkd3d device creation and shader translation. Shaders without requested shared initialization emit no zeroing stores or barriers.",
+    "off_consequence": "DXVK/vkd3d device creation fails when required workgroup-zero support is unavailable; the extension and promoted shaderZeroInitializeWorkgroupMemory feature are hidden. Allocation zero initialization and robustness are unchanged."
   }
 ]
