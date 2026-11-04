@@ -1133,15 +1133,29 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
        * share a memory-writing invocation. Do not bypass their exchange. */
       force_fine = partial_mask;
       coarse &= !partial_mask || sample_exchange;
-      coarse &= !ms->sample_locations_enable ||
-                BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_LOCATIONS_ENABLE);
+      const bool sample_locations = ms->sample_locations_enable &&
+         !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_LOCATIONS_ENABLE);
+      force_fine |= sample_locations;
+      coarse &= !sample_locations || sample_exchange;
    }
    if (coarse && state && state->rs &&
-       !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_CONSERVATIVE_MODE))
-      coarse &= state->rs->conservative_mode ==
-                VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
+       !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_CONSERVATIVE_MODE)) {
+      const bool conservative = state->rs->conservative_mode !=
+         VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
+      force_fine |= conservative;
+      coarse &= !conservative || sample_exchange;
+   }
+   /* These properties require fine pixels, not separate memory side effects
+    * for every covered sample. Retain the sample exchange at a forced 1x1
+    * rate, including the depth, stencil and coverage outputs it publishes. */
+   if (sample_exchange &&
+       ((nir->info.outputs_written & (BITFIELD64_BIT(FRAG_RESULT_DEPTH) |
+                                      BITFIELD64_BIT(FRAG_RESULT_STENCIL) |
+                                      BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK))) ||
+        BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_MASK_IN)))
+      force_fine = true;
    if (coarse)
-      coarse = kk_nir_fsr_supported(nir);
+      coarse = kk_nir_fsr_supported(nir, force_fine);
    if (!coarse) {
       nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
       kk_nir_vrs_lower_fine_rate(nir);

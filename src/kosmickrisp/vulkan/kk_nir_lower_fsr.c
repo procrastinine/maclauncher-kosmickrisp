@@ -482,12 +482,13 @@ fsr_is_output(nir_intrinsic_instr *intr)
 }
 
 bool
-kk_nir_fsr_supported(nir_shader *nir)
+kk_nir_fsr_supported(nir_shader *nir, bool force_fine)
 {
    if (nir->info.fs.uses_sample_shading || nir->info.fs.uses_fbfetch_output ||
-       (nir->info.outputs_written & (BITFIELD64_BIT(FRAG_RESULT_DEPTH) |
-                                     BITFIELD64_BIT(FRAG_RESULT_STENCIL) |
-                                     BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK))) ||
+       (!force_fine &&
+        (nir->info.outputs_written & (BITFIELD64_BIT(FRAG_RESULT_DEPTH) |
+                                      BITFIELD64_BIT(FRAG_RESULT_STENCIL) |
+                                      BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK)))) ||
        nir->info.fs.sample_interlock_ordered || nir->info.fs.sample_interlock_unordered ||
        nir->info.fs.pixel_interlock_ordered || nir->info.fs.pixel_interlock_unordered)
       return false;
@@ -505,6 +506,9 @@ kk_nir_fsr_supported(nir_shader *nir)
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
          switch (intr->intrinsic) {
          case nir_intrinsic_load_sample_mask_in:
+            if (!force_fine)
+               return false;
+            break;
          case nir_intrinsic_load_sample_id:
          case nir_intrinsic_load_sample_pos:
          case nir_intrinsic_load_sample_pos_or_center:
