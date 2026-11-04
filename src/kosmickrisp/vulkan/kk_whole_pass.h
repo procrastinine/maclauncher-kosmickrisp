@@ -4,6 +4,7 @@
 #define KK_WHOLE_PASS_H
 #include "vk_pipeline.h"
 #include "kk_image_view.h"
+#include "kk_msrtss_state.h"
 
 VkAccessFlags2
 kk_whole_pass_attachment_access(VkAccessFlags2 access,
@@ -36,11 +37,7 @@ kk_whole_pass_attachment_access(VkAccessFlags2 access,
 static VkSampleCountFlagBits
 kk_whole_pass_implicit_samples(const VkRenderingInfo *info)
 {
-   const VkMultisampledRenderToSingleSampledInfoEXT *ms =
-      vk_find_struct_const(info->pNext,
-                           MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT);
-   return ms && ms->multisampledRenderToSingleSampledEnable
-             ? ms->rasterizationSamples : VK_SAMPLE_COUNT_1_BIT;
+   return kk_msrtss_samples(info);
 }
 
 static void
@@ -246,7 +243,13 @@ kk_whole_pass_pipeline_native(VkPipeline handle)
    const struct vk_shader *vk_fs = vk_pipeline_get_shader(pipeline, MESA_SHADER_FRAGMENT);
    const struct kk_shader *vs = vk_vs ? container_of(vk_vs, struct kk_shader, vk) : NULL;
    const struct kk_shader *fs = vk_fs ? container_of(vk_fs, struct kk_shader, vk) : NULL;
-   if (!vs || vs->info.has_geometry || (fs && fs->info.fs.emulates_per_vertex_inputs) ||
+   if (!vs || vs->info.has_geometry || vs->info.polygon_point ||
+       vs->info.conservative || vs->info.poly_layer_replay ||
+       vs->info.interlock_envelope || vs->info.depth_bounds_emulation ||
+       vs->interlock || vs->interlock_pipeline || vs->info.vs.fsr_coarse ||
+       (fs && (fs->info.fs.emulates_per_vertex_inputs ||
+               fs->info.interlock_envelope || fs->info.depth_bounds_emulation ||
+               fs->interlock || fs->interlock_pipeline)) ||
        !BITSET_TEST(dyn->set, MESA_VK_DYNAMIC_IA_PRIMITIVE_TOPOLOGY) ||
        !BITSET_TEST(dyn->set, MESA_VK_DYNAMIC_RS_POLYGON_MODE) ||
        !BITSET_TEST(dyn->set, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_ENABLE) ||
@@ -275,11 +278,8 @@ kk_whole_pass_writable_msaa(VkImageView handle)
 }
 
 bool
-kk_whole_pass_transient_safe(struct kk_device *dev,
-                             struct vk_command_buffer **commands, uint32_t count)
+kk_whole_pass_transient_safe(struct vk_command_buffer **commands, uint32_t count)
 {
-   if (!p_atomic_read(&dev->live_lazy_allocations))
-      return false;
    VkPipeline last_pipeline = VK_NULL_HANDLE;
    bool last_pipeline_native = false;
    for (uint32_t c = 0; c < count; c++) {

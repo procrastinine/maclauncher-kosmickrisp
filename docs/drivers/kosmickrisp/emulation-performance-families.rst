@@ -270,12 +270,12 @@
      - On
      - On Apple7-11 to retain FL12_1: selected conservative draws use capture/expansion; ordinary draws stay native. No family-native conservative path.
    * - ``msrtss``
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off Apple7-11: Eligible whole-frame color passes use tile storage and native resolve with no expansion shader. LOAD, suspended or split passes retain private multisample backing and expand single-sample contents; unsupported native resolve modes use the shared meta path.
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: Whole-pass native raster pipelines can use memoryless color storage and native resolve. LOAD, suspended, split and unsupported-resolve requests retain private backing or the shared meta path; ordinary passes do not acquire shader work.
    * - ``writable_msaa``
      - Off
      - Off

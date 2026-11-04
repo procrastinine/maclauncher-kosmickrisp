@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "kk_msrtss_state.h"
 // Legacy subpasses reach this same path through Mesa's render-pass lowering.
 #include "vk_meta.h"
 
@@ -21,13 +22,8 @@ kk_msrtss_tile_safe(struct kk_cmd_buffer *cmd,
                     const VkRenderingInfo *info,
                     const VkRenderingAttachmentInfo *att)
 {
-   const struct vk_features *features = &kk_cmd_buffer_device(cmd)->vk.enabled_features;
-   /* These software consumers can split a VS/FS encoder after pipeline
-    * classification. Their command-owned backing must remain persistent. */
-   if (features->depthBounds || features->fragmentShaderPixelInterlock ||
-       features->fragmentShaderSampleInterlock || features->pipelineFragmentShadingRate ||
-       features->primitiveFragmentShadingRate || features->attachmentFragmentShadingRate)
-      return false;
+   /* The completed command list rejects actual split-producing pipelines.
+    * Device feature enablement alone does not make a native pass unsafe. */
    if (!cmd->transient_preflight_done || !cmd->transient_safe ||
        (info->flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT)) ||
        (att->loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR &&
@@ -180,10 +176,8 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
                      const VkRenderingInfo *info)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
-   const VkMultisampledRenderToSingleSampledInfoEXT *msrtss =
-      vk_find_struct_const(info->pNext, MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT);
-   if (!msrtss || !msrtss->multisampledRenderToSingleSampledEnable ||
-       msrtss->rasterizationSamples == VK_SAMPLE_COUNT_1_BIT) {
+   const VkSampleCountFlagBits samples = kk_msrtss_samples(info);
+   if (samples == VK_SAMPLE_COUNT_1_BIT) {
       kk_begin_rendering(commandBuffer, info);
       return;
    }
@@ -228,7 +222,7 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
             ? &info->pColorAttachments[i] : att;
          const bool transient = kk_msrtss_tile_safe(cmd, src, info, original);
          VkResult result = kk_msrtss_image(cmd, src,
-            msrtss->rasterizationSamples, transient, &implicit[i]);
+            samples, transient, &implicit[i]);
          if (result != VK_SUCCESS) {
             vk_command_buffer_set_error(&cmd->vk, result);
             return;

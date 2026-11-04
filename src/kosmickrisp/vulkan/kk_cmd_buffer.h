@@ -777,7 +777,7 @@ void kk_cmd_buffer_set_label(struct kk_cmd_buffer *cb, const char *label);
 
 void kk_cmd_record_rendering_attachments(struct kk_cmd_buffer *,
                                           const VkRenderingInfo *);
-bool kk_whole_pass_transient_safe(struct kk_device *, struct vk_command_buffer **, uint32_t);
+bool kk_whole_pass_transient_safe(struct vk_command_buffer **, uint32_t);
 void kk_whole_pass_command_boundary(struct kk_cmd_buffer *cmd);
 VKAPI_ATTR void VKAPI_CALL
 kk_begin_rendering(VkCommandBuffer, const VkRenderingInfo *);

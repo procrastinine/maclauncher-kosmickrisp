@@ -1042,12 +1042,18 @@
       "multisampledRenderToSingleSampled"
     ],
     "properties": [],
-    "performance": false,
-    "performance_reason": "This optional extension has translator fallbacks; LOAD expansion can add a full attachment pass without raising a D3D shader model or feature level.",
+    "performance": true,
+    "performance_reason": "Only passes requesting implicit multisampling use this path. Eligible whole-frame color passes use tile storage and native resolve; other requests retain private backing and load expansion. Ordinary draws and shaders are unchanged.",
     "off_consequence": "The extension and its feature are hidden; ANGLE uses its multisample fallback. D3D shader-model and feature-level reporting are unchanged.",
     "native_from": null,
-    "performance_families": [],
-    "family_cost_note": "Off Apple7-11: Eligible whole-frame color passes use tile storage and native resolve with no expansion shader. LOAD, suspended or split passes retain private multisample backing and expand single-sample contents; unsupported native resolve modes use the shared meta path."
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Whole-pass native raster pipelines can use memoryless color storage and native resolve. LOAD, suspended, split and unsupported-resolve requests retain private backing or the shared meta path; ordinary passes do not acquire shader work."
   },
   {
     "name": "writable_msaa",

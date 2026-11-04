@@ -6,6 +6,7 @@
  */
 
 #include "kk_cmd_buffer.h"
+#include "kk_msrtss_state.h"
 #include "kk_dispatch_cmd.h"
 #include "kk_perf.h"
 #include "kk_render_pass_cache.h"
@@ -358,8 +359,17 @@ void
 kk_cmd_record_rendering_attachments(struct kk_cmd_buffer *cmd,
                                     const VkRenderingInfo *info)
 {
-   if (cmd->transient_candidate ||
-       !p_atomic_read(&kk_cmd_buffer_device(cmd)->live_lazy_allocations))
+   if (cmd->transient_candidate)
+      return;
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   /* Implicit MSAA backing is allocated during replay. Classify the actual
+    * request now, before that first lazy allocation exists. */
+   if (dev->vk.enabled_features.multisampledRenderToSingleSampled &&
+       kk_msrtss_samples(info) != VK_SAMPLE_COUNT_1_BIT) {
+      cmd->transient_candidate = true;
+      return;
+   }
+   if (!p_atomic_read(&dev->live_lazy_allocations))
       return;
    for (uint32_t i = 0; i < info->colorAttachmentCount; i++) {
       if (kk_cmd_attachment_memoryless(&info->pColorAttachments[i])) {
@@ -466,7 +476,7 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
       if (!cmd->transient_preflight_done) {
          struct vk_command_buffer *source = &cmd->vk;
          cmd->transient_safe = cmd->transient_candidate &&
-            kk_whole_pass_transient_safe(kk_cmd_buffer_device(cmd), &source, 1);
+            kk_whole_pass_transient_safe(&source, 1);
          cmd->transient_preflight_done = true;
       }
       if (!cmd->enqueue_commands && !cmd->deferred_render_chain)

@@ -350,8 +350,8 @@
        Controls: ``VK_EXT_multisampled_render_to_single_sampled``, ``multisampledRenderToSingleSampled``.
      - native tile resolve / load expansion. Eligible whole-frame color passes use tile storage and native resolve with no expansion shader. LOAD, suspended or split passes retain private multisample backing and expand single-sample contents; unsupported native resolve modes use the shared meta path.
      - No Apple family
-     - Off
-     - This optional extension has translator fallbacks; LOAD expansion can add a full attachment pass without raising a D3D shader model or feature level.
+     - On
+     - Only passes requesting implicit multisampling use this path. Eligible whole-frame color passes use tile storage and native resolve; other requests retain private backing and load expansion. Ordinary draws and shaders are unchanged.
      - The extension and its feature are hidden; ANGLE uses its multisample fallback. D3D shader-model and feature-level reporting are unchanged.
      - ``performance,+msrtss``
    * - ``writable_msaa``
