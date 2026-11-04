@@ -473,7 +473,10 @@ kk_lower_fs_blend(nir_shader *nir,
       opts.rt[i].format = PIPE_FORMAT_NONE;
    }
 
-   for (unsigned i = 0; i < ARRAY_SIZE(opts.rt); ++i) {
+   /* Only declared physical attachments have formats to map. Identity
+    * entries beyond this range may alias a live remapped output and must not
+    * overwrite its format before unused-output removal. */
+   for (unsigned i = 0; i < state->rp->color_attachment_count; ++i) {
       uint8_t logical_index = kk_get_logical_color_att_index(state, i);
       if (logical_index == MESA_VK_ATTACHMENT_UNUSED) {
          continue;
