@@ -8,7 +8,71 @@
 #include <time.h>
 #include <unistd.h>
 
-static char kk_archive_association;
+static char kk_archive_association, kk_library_hint_association;
+
+/* This is only a search hint. Metal still verifies every descriptor, including
+ * constants and state not represented here; a collision takes the normal walk. */
+static void
+kk_remember_library_hint(id library, MTL4LibraryDescriptor *descriptor)
+{
+   if (!library || !descriptor.source) return;
+   NSData *text = [descriptor.source dataUsingEncoding:NSUTF8StringEncoding];
+   blake3_hash digest;
+   _mesa_blake3_compute(text.bytes, text.length, digest);
+   NSArray *fields = @[[NSData dataWithBytes:digest length:sizeof(digest)],
+      @(descriptor.options.languageVersion), @(descriptor.options.mathMode),
+      @(descriptor.options.mathFloatingPointFunctions)];
+   NSData *key = [NSPropertyListSerialization dataWithPropertyList:fields
+      format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+   objc_setAssociatedObject(library, &kk_library_hint_association, key,
+                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static id
+kk_function_hint(MTL4FunctionDescriptor *function)
+{
+   if (!function) return @[];
+   if ([function isKindOfClass:[MTL4SpecializedFunctionDescriptor class]])
+      function = ((MTL4SpecializedFunctionDescriptor *)function).functionDescriptor;
+   if (![function isKindOfClass:[MTL4LibraryFunctionDescriptor class]]) return nil;
+   MTL4LibraryFunctionDescriptor *source = (id)function;
+   NSData *library = objc_getAssociatedObject(source.library, &kk_library_hint_association);
+   return library && source.name ? @[library, source.name] : nil;
+}
+
+static NSData *
+kk_pipeline_hint(MTL4PipelineDescriptor *descriptor)
+{
+   NSMutableArray *fields = [NSMutableArray arrayWithObject:@1];
+   if ([descriptor isKindOfClass:[MTL4ComputePipelineDescriptor class]]) {
+      MTL4ComputePipelineDescriptor *compute = (id)descriptor;
+      id function = kk_function_hint(compute.computeFunctionDescriptor);
+      if (!function) return nil;
+      [fields addObjectsFromArray:@[@"compute", function,
+         @(compute.maxTotalThreadsPerThreadgroup)]];
+   } else if ([descriptor isKindOfClass:[MTL4RenderPipelineDescriptor class]]) {
+      MTL4RenderPipelineDescriptor *render = (id)descriptor;
+      id vertex = kk_function_hint(render.vertexFunctionDescriptor);
+      id fragment = kk_function_hint(render.fragmentFunctionDescriptor);
+      if (!vertex || !fragment) return nil;
+      [fields addObjectsFromArray:@[@"render", vertex, fragment,
+         @(render.rasterSampleCount), @(render.inputPrimitiveTopology),
+         @(render.rasterizationEnabled), @(render.maxVertexAmplificationCount),
+         @(render.depthAttachmentPixelFormat), @(render.stencilAttachmentPixelFormat)]];
+      for (unsigned i = 0; i < 8; ++i)
+         [fields addObject:@[@(render.colorAttachments[i].pixelFormat),
+                             @(render.colorAttachments[i].writeMask)]];
+   } else {
+      /* Unclassified native paths keep the existing complete archive walk. */
+      return nil;
+   }
+   NSData *bytes = [NSPropertyListSerialization dataWithPropertyList:fields
+      format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+   if (!bytes) return nil;
+   blake3_hash digest;
+   _mesa_blake3_compute(bytes.bytes, bytes.length, digest);
+   return [NSData dataWithBytes:digest length:sizeof(digest)];
+}
 
 static uint64_t
 kk_archive_now(void)
@@ -96,6 +160,7 @@ kk_archive_temporary_path(void)
    pthread_rwlock_t capture_gate;
    dispatch_queue_t checkpoint_queue;
    NSMutableArray *pieces;
+   NSMutableDictionary *hints;
    KKArchivePiece *preferred;
    NSMutableArray *graphics_libraries;
    size_t graphics_source_bytes;
@@ -105,9 +170,9 @@ kk_archive_temporary_path(void)
 }
 - (id)initWithDevice:(id<MTLDevice>)dev operations:(const struct mtl_compiler_cache_ops *)ops data:(void *)data;
 - (void)load;
-- (NSArray *)candidates;
+- (NSArray *)candidates:(NSData *)hint;
 - (id<MTL4Archive>)archiveForPiece:(KKArchivePiece *)piece;
-- (void)recordHit:(KKArchivePiece *)piece;
+- (void)recordHit:(KKArchivePiece *)piece hint:(NSData *)hint;
 - (void)recordCompile;
 - (void)scheduleLocked;
 - (void)checkpoint:(BOOL)final;
@@ -125,6 +190,7 @@ kk_archive_temporary_path(void)
    operations = *ops;
    cache_data = data;
    pieces = [[NSMutableArray alloc] init];
+   hints = [NSMutableDictionary new];
    MTL4PipelineDataSetSerializerDescriptor *desc = [[MTL4PipelineDataSetSerializerDescriptor new] autorelease];
    desc.configuration = MTL4PipelineDataSetSerializerConfigurationCaptureBinaries;
    serializer = [dev newPipelineDataSetSerializerWithDescriptor:desc];
@@ -157,14 +223,19 @@ kk_archive_temporary_path(void)
    });
 }
 
-- (NSArray *)candidates
+- (NSArray *)candidates:(NSData *)hint
 {
    [self load];
    @synchronized(self) {
       NSMutableArray *result = [NSMutableArray arrayWithCapacity:pieces.count];
-      if (preferred) [result addObject:preferred];
+      NSData *identity = hint ? hints[hint] : nil;
+      KKArchivePiece *hinted = nil;
+      for (KKArchivePiece *piece in pieces)
+         if ([piece->identity isEqual:identity]) { hinted = piece; break; }
+      if (hinted) [result addObject:hinted];
+      if (preferred && preferred != hinted) [result addObject:preferred];
       for (KKArchivePiece *piece in [pieces reverseObjectEnumerator])
-         if (piece != preferred) [result addObject:piece];
+         if (piece != preferred && piece != hinted) [result addObject:piece];
       return [[result copy] autorelease];
    }
 }
@@ -189,10 +260,11 @@ kk_archive_temporary_path(void)
    return piece->archive;
 }
 
-- (void)recordHit:(KKArchivePiece *)piece
+- (void)recordHit:(KKArchivePiece *)piece hint:(NSData *)hint
 {
    @synchronized(self) {
       stats.hits++;
+      if (hint) hints[hint] = piece->identity;
       if (preferred != piece) {
          [preferred release];
          preferred = [piece retain];
@@ -316,6 +388,7 @@ kk_archive_temporary_path(void)
    [graphics_libraries release];
    [preferred release];
    [pieces release];
+   [hints release];
    [serializer release];
    [device release];
    if (checkpoint_queue) dispatch_release(checkpoint_queue);
@@ -409,6 +482,7 @@ kk_graphics_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool ve
    @try {
       NSError *error = nil;
       result = [(id<MTL4Compiler>)compiler newLibraryWithDescriptor:desc error:&error];
+      if (cache) kk_remember_library_hint(result, desc);
       if (!result)
          fprintf(stderr, "Failed to create MTLLibrary: %s\n",
                  error.localizedDescription.UTF8String ?: "Unknown Metal error");
@@ -465,13 +539,14 @@ kk_archive_compute(mtl_compiler *compiler, MTL4ComputePipelineDescriptor *descri
    KKPipelineArchive *cache = kk_compiler_archive(compiler);
    if (!cache) return nil;
    @synchronized(cache) { cache->stats.requests++; }
-   for (KKArchivePiece *piece in [cache candidates]) {
+   NSData *hint = kk_pipeline_hint(descriptor);
+   for (KKArchivePiece *piece in [cache candidates:hint]) {
       id<MTL4Archive> archive = [cache archiveForPiece:piece];
       if (!archive) continue;
       @synchronized(cache) { cache->stats.lookups++; }
       NSError *error = nil;
       id<MTLComputePipelineState> state = [archive newComputePipelineStateWithDescriptor:descriptor error:&error];
-      if (state) { [cache recordHit:piece]; return state; }
+      if (state) { [cache recordHit:piece hint:hint]; return state; }
    }
    return nil;
 }
@@ -482,13 +557,14 @@ kk_archive_render(mtl_compiler *compiler, MTL4PipelineDescriptor *descriptor)
    KKPipelineArchive *cache = kk_compiler_archive(compiler);
    if (!cache) return nil;
    @synchronized(cache) { cache->stats.requests++; }
-   for (KKArchivePiece *piece in [cache candidates]) {
+   NSData *hint = kk_pipeline_hint(descriptor);
+   for (KKArchivePiece *piece in [cache candidates:hint]) {
       id<MTL4Archive> archive = [cache archiveForPiece:piece];
       if (!archive) continue;
       @synchronized(cache) { cache->stats.lookups++; }
       NSError *error = nil;
       id<MTLRenderPipelineState> state = [archive newRenderPipelineStateWithDescriptor:descriptor error:&error];
-      if (state) { [cache recordHit:piece]; return state; }
+      if (state) { [cache recordHit:piece hint:hint]; return state; }
    }
    return nil;
 }

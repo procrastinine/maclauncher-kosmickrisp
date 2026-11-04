@@ -393,6 +393,7 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
          mtl_library_descriptor(src, msl_version, math_mode, math_fp_fns);
       NSError *error = nil;
       id<MTLLibrary> lib = [comp newLibraryWithDescriptor:desc error:&error];
+      if (kk_compiler_archive(compiler)) kk_remember_library_hint(lib, desc);
       if (lib == nil)
          fprintf(stderr, "Failed to create MTLLibrary: %s\n",
                  error.localizedDescription.UTF8String ?: "Unknown Metal error");
