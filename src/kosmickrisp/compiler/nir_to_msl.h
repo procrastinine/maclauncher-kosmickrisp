@@ -20,6 +20,12 @@ struct nir_to_msl_options {
    void *mem_ctx;
    uint64_t disabled_workarounds;
    bool mesh_queries;
+   uint32_t *mesh_retained_strides;
+   uint32_t *mesh_retained_fields;
+   uint32_t mesh_view_mask, mesh_view_index_offset;
+   bool mesh_flat_heap;
+   bool mesh_projected_basis;
+   unsigned mesh_flat_heap_offset;
 
    /* Required to correctly declare fragment outputs. Shader may contain
     * shrinked writes which can lead to writting less components than the ones

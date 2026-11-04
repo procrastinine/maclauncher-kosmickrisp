@@ -33,12 +33,28 @@ enum kk_feature_bit {
    KK_FEAT_NON_SEAMLESS_CUBE,
    KK_FEAT_SPARSE_BUFFER,
    KK_FEAT_SPARSE_REPLAY,
+   KK_FEAT_MESH_QUERIES,
    KK_FEAT_COUNT,
 };
 
 typedef uint32_t kk_feature_key;
 static_assert(KK_FEAT_COUNT <= sizeof(kk_feature_key) * CHAR_BIT,
               "shader feature bits fit the shader-cache key");
+
+#include "kosmickrisp/libkk/kk_mesh_types.h"
+#include "kk_mesh_pipeline_api.h"
+
+enum kk_pipeline_kind {
+   KK_PIPELINE_MAIN,
+   KK_PIPELINE_POLYGON,
+   KK_PIPELINE_CONSERVATIVE,
+   KK_PIPELINE_MESH_VIRTUAL,
+   KK_PIPELINE_MESH_SLICED,
+   KK_PIPELINE_MESH_VIRTUAL_SLICED,
+   KK_PIPELINE_MESH_CAPTURE,
+   KK_PIPELINE_MESH_READER,
+   KK_PIPELINE_KIND_COUNT,
+};
 
 struct kk_cmd_buffer;
 struct kk_sparse_shader_state;
@@ -69,9 +85,30 @@ kk_tess_info_merge(struct kk_tess_info a, struct kk_tess_info b)
    return out;
 }
 
+struct kk_mesh_shader_info {
+   struct mtl_size local_size;
+   struct mtl_size task_local_size;
+   uint32_t payload_size;
+   uint32_t task_payload_size;
+   uint32_t task_grid_bound;
+   enum mesa_prim primitive;
+   bool has_task;
+   bool flat_heap;
+   bool projected_basis;
+   uint32_t max_primitives;
+   bool queries;
+   bool sliced;
+   bool retained_capture, retained_reader;
+   uint32_t max_vertices;
+   uint32_t retained_strides[2];
+   struct kk_mesh_retained_field retained_fields[KK_MESH_RETAINED_FIELD_COUNT];
+   uint32_t view_mask;
+};
+
 struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
+   struct kk_mesh_shader_info mesh;
    bool has_framebuffer_reads;
    uint32_t push_size;
    bool descriptor_heap;
@@ -190,8 +227,12 @@ struct kk_shader {
    struct kk_attachment_pipelines *attachment_pipelines;
    mtl_compute_pipeline_state *dgc_compute;
    struct kk_pipeline_handles pipeline;
+   struct kk_pipeline_handles *mesh_virtual;
+   struct kk_pipeline_handles *mesh_sliced[2];
+   struct kk_pipeline_handles *mesh_retained[2];
+   struct kk_mesh_fragment_program *mesh_fragment;
    struct kk_shader_info info;
-   struct msl_compile_data msl_data[MESA_SHADER_STAGES];
+   struct msl_compile_data msl_data[MESA_ALL_SHADER_STAGES];
    /* Compute pass of a GS. Its rasterization VS is in
     * msl_data[MESA_SHADER_GEOMETRY]. */
    struct msl_compile_data gs_main;
@@ -201,6 +242,14 @@ struct kk_shader {
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,
                                VK_OBJECT_TYPE_SHADER_EXT);
+
+VkResult kk_mesh_get_pipeline(struct kk_device *dev, struct kk_shader *shader,
+   bool force_virtual, struct kk_pipeline_handles **out);
+
+VkResult kk_mesh_get_sliced_pipeline(struct kk_device *dev, struct kk_shader *shader,
+   bool virtual, struct kk_pipeline_handles **out);
+void kk_mesh_release_pipeline(struct kk_device *dev, struct kk_shader *shader,
+   struct kk_pipeline_handles *pipe, unsigned kind);
 
 extern const struct vk_device_shader_ops kk_device_shader_ops;
 void kk_sparse_shader_finish(struct kk_shader *shader);
@@ -271,7 +320,7 @@ VkResult kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
                                struct kk_shader **shader_out);
 
 mtl_render_pipeline_state *kk_attachment_pipeline(struct kk_cmd_buffer *cmd,
-   struct kk_shader *shader, unsigned polygon);
+   struct kk_shader *shader, unsigned kind);
 mtl_depth_stencil_state *kk_attachment_depth_stencil(struct kk_cmd_buffer *cmd,
    struct kk_shader *shader);
 

@@ -203,6 +203,13 @@ enum kk_dirty {
 };
 
 struct kk_graphics_state {
+   struct kk_shader *shader;
+   uint64_t mesh_primitives_query;
+   uint64_t mesh_payloads, mesh_records, mesh_batch, mesh_slices;
+   uint64_t mesh_native_batch, mesh_native_slices;
+   uint64_t mesh_retained_outputs, mesh_retained_output_bytes;
+   uint64_t mesh_per_draw_address;
+   struct kk_mesh_retained_consumer mesh_retained_consumer;
    bool polygon_points;
    bool conservative;
    uint64_t polygon_capture;
@@ -337,6 +344,9 @@ struct kk_cmd_buffer {
       mtl_render_encoder *render;
       mtl_compute_encoder *compute;
    } metal;
+   struct util_dynarray mesh_command_buffers;
+   struct util_dynarray mesh_allocators;
+   uint32_t mesh_batches_in_part, mesh_draws_in_part;
    /* Pending timestamp resolves (struct kk_ts_resolve), flushed at cs_end. */
    struct util_dynarray msrtss_images;
    struct util_dynarray ts_resolves;
@@ -349,6 +359,7 @@ struct kk_cmd_buffer {
    void *drawable;
    struct util_dynarray submit_drawables;
    mtl_argument_table *argument_table;
+   mtl_argument_table *mesh_table;
 
    struct {
       struct kk_graphics_state gfx;
@@ -357,7 +368,7 @@ struct kk_cmd_buffer {
       uint64_t pipeline_statistics;
       VkQueryPipelineStatisticFlags pipeline_statistics_flags;
       struct kk_conditional_rendering_state cond_render;
-      struct kk_shader *shaders[MESA_SHADER_STAGES];
+      struct kk_shader *shaders[MESA_ALL_SHADER_STAGES];
       /* Address of the binding 0 for when compute dispatches modify it.
        * We are trying to be nice to ourselves. */
       uint64_t root_addr;
@@ -418,6 +429,7 @@ void cs_start_render(struct kk_cmd_buffer *cmd);
 mtl_render_encoder *cs_get_render(struct kk_cmd_buffer *cmd);
 mtl_compute_encoder *cs_get_compute(struct kk_cmd_buffer *cmd);
 void cs_end(struct kk_cmd_buffer *cmd);
+bool kk_mesh_split_command_buffer(struct kk_cmd_buffer *cmd);
 void kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd,
                                         uint64_t addr);
 

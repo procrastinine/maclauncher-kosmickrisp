@@ -16,6 +16,7 @@ if host_machine.system() == 'darwin'
     'mtl_command_buffer.m',
     'mtl_command_queue.m',
     'mtl_compiler.m',
+    'mtl_mesh.m',
     'mtl_device.m',
     'mtl_encoder.m',
     'mtl_heap.m',

@@ -63,7 +63,8 @@ kk_native_interface_components(nir_shader *fs, nir_shader *prev, uint8_t *out_wi
             break;
          default: break;
          }
-         bool flat = intr->intrinsic == nir_intrinsic_load_input;
+         bool flat = intr->intrinsic == nir_intrinsic_load_input ||
+                     intr->intrinsic == nir_intrinsic_load_per_primitive_input;
          if (!flat && intr->intrinsic != nir_intrinsic_load_interpolated_input &&
              !is_per_vertex_input(intr))
             continue;
@@ -94,7 +95,11 @@ kk_native_interface_components(nir_shader *fs, nir_shader *prev, uint8_t *out_wi
          }
       }
    }
-   unsigned components = sample_id + sample_mask + front_face +
+   /* Native mesh position contributes three additional packed interface
+    * components on the measured Apple mesh path (124 generic reports127).
+    * This is transport pressure, not a reduction of Vulkan output limits. */
+   unsigned mesh_position = prev && prev->info.stage == MESA_SHADER_MESH ? 3u : 0u;
+   unsigned components = mesh_position + sample_id + sample_mask + front_face +
       (primitive_id && !width[VARYING_SLOT_PRIMITIVE_ID]) +
       (layer && !width[VARYING_SLOT_LAYER]) + subgroup_size + subgroup_invocation +
       2 * point_coord + 3 * (barycentric[0] + barycentric[1]) +
@@ -177,7 +182,8 @@ gather_flat_locations(nir_function_impl *impl, struct kk_per_vertex_map *map)
          if (instr->type != nir_instr_type_intrinsic)
             continue;
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-         if (intr->intrinsic != nir_intrinsic_load_input)
+         if (intr->intrinsic != nir_intrinsic_load_input &&
+             intr->intrinsic != nir_intrinsic_load_per_primitive_input)
             continue;
          unsigned location = io_location(intr, 0);
          if (!(emulated & BITFIELD64_BIT(location)))
@@ -200,6 +206,9 @@ alloc_slot(uint64_t *used, uint8_t *slot)
 }
 
 #include "kk_canonical_per_vertex.h"
+
+static nir_def *load_per_draw(nir_builder *, unsigned, unsigned);
+#include "kk_canonical_projected.h"
 
 static nir_def *
 load_per_vertex_value(nir_builder *b, nir_intrinsic_instr *intr,
@@ -233,6 +242,8 @@ static nir_def *
 load_barycentric_value(nir_builder *b, nir_intrinsic_instr *intr,
                        const struct kk_per_vertex_map *map)
 {
+   if (map->projected_basis)
+      return kk_canonical_projected_weights(b, intr);
    enum glsl_interp_mode mode = nir_intrinsic_interp_mode(intr);
    bool linear = mode == INTERP_MODE_NOPERSPECTIVE;
    if (!linear)
@@ -274,10 +285,10 @@ static unsigned
 buffer_offset(const struct kk_per_vertex_map *map, unsigned location,
               unsigned corner)
 {
-   unsigned count = map->canonical_heap ? KK_CANONICAL_VARYING_COUNT
-                                        : util_bitcount64(map->locations);
-   unsigned index = map->canonical_heap ? location - VARYING_SLOT_VAR0
-      : util_bitcount64(map->locations & BITFIELD64_MASK(location));
+   if (map->canonical_heap)
+      return kk_canonical_buffer_offset(location, corner);
+   unsigned count = util_bitcount64(map->locations);
+   unsigned index = util_bitcount64(map->locations & BITFIELD64_MASK(location));
    return (corner * count + index) * 16u;
 }
 
@@ -342,7 +353,8 @@ make_buffer_interface_room(nir_shader *fs, nir_shader *prev,
             continue;
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
          bool interpolated = intr->intrinsic == nir_intrinsic_load_interpolated_input;
-         if (!interpolated && intr->intrinsic != nir_intrinsic_load_input)
+         if (!interpolated && intr->intrinsic != nir_intrinsic_load_input &&
+             intr->intrinsic != nir_intrinsic_load_per_primitive_input)
             continue;
          unsigned location = io_location(intr, interpolated ? 1 : 0);
          uint64_t bit = BITFIELD64_BIT(location);
@@ -387,7 +399,8 @@ load_buffered_input(nir_builder *b, nir_intrinsic_instr *intr,
    if (original->intrinsic == nir_intrinsic_load_barycentric_sample)
       interpolation = nir_load_barycentric_at_sample(
          b, 32, nir_load_sample_id(b), .interp_mode = mode);
-   nir_def *weights = nir_load_interpolated_input(
+   nir_def *weights = map->projected_basis ?
+      kk_canonical_projected_weights(b, original) : nir_load_interpolated_input(
       b, 3, 32, interpolation, nir_imm_int(b, 0), .dest_type = nir_type_float32,
       .io_semantics.location = map->barycentric_slot[mode == INTERP_MODE_NOPERSPECTIVE],
       .io_semantics.num_slots = 1);
@@ -405,6 +418,7 @@ kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev, bool force,
    bool full_interface = kk_nir_needs_interface_packing(fs, prev);
    if (!force && !full_interface)
       return nir_no_progress(impl);
+   bool projected = map->projected_basis;
    memset(map, 0, sizeof(*map));
    bool uses_barycentric[2] = {false, false};
    nir_foreach_block(block, impl) {
@@ -475,6 +489,10 @@ kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev, bool force,
 
    }
 
+   if (projected) {
+      map->projected_basis = true;
+      map->barycentric_slot[0] = map->barycentric_slot[1] = KK_CANONICAL_PROJECTED_POINT;
+   }
    nir_builder b = nir_builder_create(impl);
    nir_foreach_block(block, impl) {
       nir_foreach_instr_safe(instr, block) {
@@ -488,9 +506,10 @@ kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev, bool force,
          } else if (is_per_vertex_input(intr)) {
             nir_def_replace(&intr->def, load_per_vertex_value(&b, intr, map));
          } else if ((intr->intrinsic == nir_intrinsic_load_input ||
+                     intr->intrinsic == nir_intrinsic_load_per_primitive_input ||
                      intr->intrinsic == nir_intrinsic_load_interpolated_input) &&
                     (map->buffered_locations & BITFIELD64_BIT(io_location(intr,
-                       intr->intrinsic == nir_intrinsic_load_input ? 0 : 1)))) {
+                       intr->intrinsic == nir_intrinsic_load_interpolated_input ? 1 : 0)))) {
             nir_def_replace(&intr->def, load_buffered_input(&b, intr, map));
          } else if (is_barycentric_coord(intr)) {
             nir_def_replace(&intr->def, load_barycentric_value(&b, intr, map));
@@ -596,7 +615,11 @@ make_corner_template(nir_shader *nir, nir_function_impl *impl,
             nir_def_replace(&intr->def, load_param(nir, instr, 0));
          } else if (intr->intrinsic == nir_intrinsic_store_output) {
             unsigned location = io_location(intr, 1);
-            if ((map->locations & BITFIELD64_BIT(location)) && map->buffer) {
+            if (map->projected_basis && location == VARYING_SLOT_POS) {
+               nir_builder b = nir_builder_at(nir_before_instr(instr));
+               kk_canonical_store_corner(&b, intr, corner, load_param(nir, instr, 2));
+               nir_instr_remove(instr);
+            } else if ((map->locations & BITFIELD64_BIT(location)) && map->buffer) {
                nir_def *buffer = load_param(nir, instr, 2);
                nir_builder b = nir_builder_at(nir_before_instr(instr));
                nir_def *value = intr->src[0].ssa;
@@ -672,6 +695,9 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
    if (map && map->canonical_heap) {
       nir_shader_gather_info(nir, impl);
       kk_canonical_map_init(&canonical);
+      canonical.projected_basis = map->projected_basis;
+      if (canonical.projected_basis)
+         canonical.barycentric_slot[0] = canonical.barycentric_slot[1] = KK_CANONICAL_PROJECTED_POINT;
       canonical.locations = nir->info.outputs_written & kk_canonical_generic_mask();
       map = &canonical;
    }
@@ -800,6 +826,10 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
          if (intr->intrinsic == nir_intrinsic_load_vertex_id &&
              &intr->def != hw_vertex_load) {
             nir_def_replace(&intr->def, own_index);
+         } else if (map->projected_basis && intr->intrinsic == nir_intrinsic_store_output &&
+                    io_location(intr, 1) == VARYING_SLOT_POS) {
+            nir_builder carrier = nir_builder_at(nir_before_instr(instr));
+            kk_canonical_store_position(&carrier, intr, KK_CANONICAL_PROJECTED_POINT);
          } else if (intr->intrinsic == nir_intrinsic_store_output &&
                     ((map->locations | map->flat_locations | map->unused_locations) &
                      BITFIELD64_BIT(io_location(intr, 1)))) {
@@ -818,7 +848,7 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
    if (map->buffer && map->locations) {
       unsigned count = map->canonical_heap ? KK_CANONICAL_VARYING_COUNT
                                            : util_bitcount64(map->locations);
-      unsigned size = 3u * count * 16u;
+      unsigned size = map->projected_basis ? kk_canonical_projected_buffer_size() : 3u * count * 16u;
       nir_def *heap = load_per_draw(&b, 64, per_draw_offset(per_vertex_heap));
       nir_push_if(&b, nir_iand(&b, nir_ieq_imm(&b, corner, 0),
                                nir_ine_imm(&b, heap, 0)));
@@ -850,7 +880,7 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
                              nir_b2f32(&b, nir_ieq_imm(&b, corner, 1)),
                              nir_b2f32(&b, nir_ieq_imm(&b, corner, 2)));
    for (unsigned i = 0u; i < 2u; ++i) {
-      if (!map->barycentric_slot[i])
+      if (!map->barycentric_slot[i] || map->projected_basis)
          continue;
       nir_store_output(&b, basis, nir_imm_int(&b, 0), .base = 0u, .range = 1u,
                        .write_mask = 0x7, .component = 0u,
@@ -873,4 +903,27 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
    nir_progress(true, impl, nir_metadata_none);
    nir_shader_gather_info(nir, impl);
    return true;
+}
+
+/* Mesh outputs are already staged after its collective body. Flat interfaces
+ * need the shared address packet, without the VS producer's corner replay. */
+bool
+kk_nir_lower_mesh_flat_inputs(nir_shader *fs, nir_shader *mesh,
+                              struct kk_per_vertex_map *map)
+{
+   assert(mesh->info.stage == MESA_SHADER_MESH);
+   if (!kk_nir_needs_interface_packing(fs, mesh))
+      return false;
+   nir_foreach_block(block, nir_shader_get_entrypoint(fs)) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         if (is_barycentric_coord(intr) || is_per_vertex_input(intr) ||
+             (intr->intrinsic == nir_intrinsic_load_interpolated_input &&
+              (kk_canonical_generic_mask() & BITFIELD64_BIT(io_location(intr, 1)))))
+            map->projected_basis = true;
+      }
+   }
+   return kk_nir_lower_fs_per_vertex_inputs(fs, NULL, true, map);
 }

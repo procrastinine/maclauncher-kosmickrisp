@@ -4,6 +4,7 @@
 
 libkk_shader_files = files(
   'kk_draws.cl',
+  'kk_mesh.cl',
   'kk_dgc.cl',
   'kk_geometry.cl',
   'kk_polygon.cl',

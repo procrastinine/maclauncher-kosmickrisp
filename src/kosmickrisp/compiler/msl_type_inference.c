@@ -170,7 +170,9 @@ update_instr_type(struct hash_table *types, nir_instr *instr, ti_type type)
       case nir_intrinsic_load_scratch:
       case nir_intrinsic_store_scratch:
       case nir_intrinsic_load_shared:
+   case nir_intrinsic_load_task_payload:
       case nir_intrinsic_store_shared:
+   case nir_intrinsic_store_task_payload:
       case nir_intrinsic_load_constant:
       case nir_intrinsic_load_frag_coord:
          return false;
@@ -275,6 +277,7 @@ static void
 infer_types_from_intrinsic(struct hash_table *types, nir_intrinsic_instr *instr)
 {
    switch (instr->intrinsic) {
+   case nir_intrinsic_load_per_primitive_input:
    case nir_intrinsic_load_input:
    case nir_intrinsic_load_interpolated_input:
    case nir_intrinsic_load_output: {
@@ -339,6 +342,25 @@ infer_types_from_intrinsic(struct hash_table *types, nir_intrinsic_instr *instr)
       set_type(types, &instr->src[0], TYPE_GENERIC_DATA);
       set_type(types, &instr->src[1], TYPE_UINT);
       break;
+   case nir_intrinsic_set_vertex_and_primitive_count:
+      set_type(types, &instr->src[0], TYPE_UINT);
+      set_type(types, &instr->src[1], TYPE_UINT);
+      break;
+   case nir_intrinsic_launch_mesh_workgroups:
+      set_type(types, &instr->src[0], TYPE_UINT);
+      break;
+   case nir_intrinsic_load_per_vertex_output:
+   case nir_intrinsic_load_per_primitive_output:
+      set_type(types, &instr->def, ti_type_from_nir(nir_intrinsic_dest_type(instr)));
+      set_type(types, &instr->src[0], TYPE_UINT);
+      set_type(types, &instr->src[1], TYPE_UINT);
+      break;
+   case nir_intrinsic_store_per_vertex_output:
+   case nir_intrinsic_store_per_primitive_output:
+      set_type(types, &instr->src[0], ti_type_from_nir(nir_intrinsic_src_type(instr)));
+      set_type(types, &instr->src[1], TYPE_UINT);
+      set_type(types, &instr->src[2], TYPE_UINT);
+      break;
    case nir_intrinsic_store_output: {
       ti_type ty = ti_type_from_nir(nir_intrinsic_src_type(instr));
       set_type(types, &instr->src[0], ty);
@@ -360,12 +382,14 @@ infer_types_from_intrinsic(struct hash_table *types, nir_intrinsic_instr *instr)
       break;
    case nir_intrinsic_load_scratch:
    case nir_intrinsic_load_shared:
+   case nir_intrinsic_load_task_payload:
    case nir_intrinsic_load_constant:
       set_type(types, &instr->def, TYPE_UINT);
       set_type(types, &instr->src[0], TYPE_UINT);
       break;
    case nir_intrinsic_store_scratch:
    case nir_intrinsic_store_shared:
+   case nir_intrinsic_store_task_payload:
       set_type(types, &instr->src[0], TYPE_UINT);
       set_type(types, &instr->src[1], TYPE_UINT);
       break;

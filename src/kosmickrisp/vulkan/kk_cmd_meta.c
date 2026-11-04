@@ -72,7 +72,9 @@ struct kk_meta_save {
    struct vk_vertex_input_state _dynamic_vi;
    struct vk_sample_locations_state _dynamic_sl;
    struct vk_dynamic_graphics_state dynamic;
-   struct kk_shader *shaders[MESA_SHADER_STAGES];
+   struct kk_shader *shaders[MESA_ALL_SHADER_STAGES];
+   struct kk_shader *graphics_shader;
+   uint32_t push_size;
    struct {
       union {
          struct {
@@ -103,7 +105,8 @@ kk_meta_begin(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
       save->_dynamic_vi = cmd->state.gfx._dynamic_vi;
       save->_dynamic_sl = cmd->state.gfx._dynamic_sl;
 
-      for (uint32_t stage = 0u; stage < MESA_SHADER_COMPUTE; ++stage) {
+      for (uint32_t stage = 0u; stage < MESA_SHADER_MESH_STAGES; ++stage) {
+         if (stage == MESA_SHADER_COMPUTE) continue;
          save->shaders[stage] = cmd->state.shaders[stage];
       }
 
@@ -122,6 +125,8 @@ kk_meta_begin(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
          cmd->state.shaders[MESA_SHADER_COMPUTE];
    }
 
+   save->graphics_shader = cmd->state.gfx.shader;
+   save->push_size = desc->push_size;
    save->cond_render = cmd->state.cond_render;
    cmd->state.cond_render.enabled = false;
 
@@ -176,10 +181,13 @@ kk_meta_end(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
              cmd->vk.dynamic_graphics_state.set,
              sizeof(cmd->vk.dynamic_graphics_state.set));
 
-      for (uint32_t stage = 0u; stage < MESA_SHADER_COMPUTE; ++stage) {
+      for (uint32_t stage = 0u; stage < MESA_SHADER_MESH_STAGES; ++stage) {
+         if (stage == MESA_SHADER_COMPUTE) continue;
          cmd->state.shaders[stage] = save->shaders[stage];
       }
-      cmd->state.dirty_shaders |= BITFIELD_MASK(MESA_SHADER_COMPUTE);
+      cmd->state.dirty_shaders |= BITFIELD_MASK(MESA_SHADER_MESH_STAGES) &
+         ~BITFIELD_BIT(MESA_SHADER_COMPUTE);
+      cmd->state.gfx.shader = save->graphics_shader;
 
       if (cmd->state.gfx.is_depth_stencil_dynamic)
          mtl_release(cmd->state.gfx.depth_stencil_state);
@@ -198,6 +206,7 @@ kk_meta_end(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
       kk_cmd_bind_compute_shader(cmd, save->shaders[MESA_SHADER_COMPUTE]);
    }
 
+   desc->push_size = save->push_size;
    cmd->state.cond_render = save->cond_render;
 
    memcpy(desc->root.push, save->push, sizeof(save->push));

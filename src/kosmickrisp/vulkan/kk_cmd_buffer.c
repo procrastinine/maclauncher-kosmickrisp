@@ -64,6 +64,10 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
       kk_destroy_bo(dev, *bo);
    }
    util_dynarray_clear(&cmd->large_bos);
+   util_dynarray_foreach(&cmd->mesh_command_buffers, mtl_command_buffer *, part)
+      kk_cmd_pool_return_cmd_buf(pool, *part);
+   util_dynarray_clear(&cmd->mesh_command_buffers);
+   cmd->mesh_batches_in_part = cmd->mesh_draws_in_part = 0;
    util_dynarray_clear(&cmd->post_render_writes);
    util_dynarray_clear(&cmd->ts_resolves);
    util_dynarray_clear(&cmd->ts_stage_map);
@@ -83,6 +87,9 @@ end_recording(struct kk_cmd_buffer *cmd)
    mtl_end_command_buffer(cmd->metal.cmd_buf);
    kk_cmd_pool_return_allocator(kk_cmd_buffer_pool(cmd), cmd->metal.allocator);
    cmd->metal.allocator = NULL;
+   util_dynarray_foreach(&cmd->mesh_allocators, mtl_command_allocator *, allocator)
+      kk_cmd_pool_return_allocator(kk_cmd_buffer_pool(cmd), *allocator);
+   util_dynarray_clear(&cmd->mesh_allocators);
 }
 
 static void
@@ -102,6 +109,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
    cmd->metal.cmd_buf = NULL;
 
    mtl_release(cmd->argument_table);
+   mtl_release(cmd->mesh_table);
 
    vk_command_buffer_finish(&cmd->vk);
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
@@ -109,6 +117,8 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
    kk_cmd_release_resources(dev, cmd);
    util_dynarray_fini(&cmd->large_bos);
    util_dynarray_fini(&cmd->dgc_commands);
+   util_dynarray_fini(&cmd->mesh_command_buffers);
+   util_dynarray_fini(&cmd->mesh_allocators);
    util_dynarray_fini(&cmd->post_render_writes);
    util_dynarray_fini(&cmd->msrtss_images);
    util_dynarray_fini(&cmd->ts_resolves);
@@ -147,6 +157,8 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    cmd->ts_resolves = UTIL_DYNARRAY_INIT;
    cmd->ts_stage_map = UTIL_DYNARRAY_INIT;
    cmd->submit_drawables = UTIL_DYNARRAY_INIT;
+   cmd->mesh_command_buffers = UTIL_DYNARRAY_INIT;
+   cmd->mesh_allocators = UTIL_DYNARRAY_INIT;
    cmd->post_render_writes = UTIL_DYNARRAY_INIT;
 
    {
@@ -442,6 +454,43 @@ cs_end(struct kk_cmd_buffer *cmd)
    }
 }
 
+/* Keep long virtual mesh schedules in bounded native command buffers. All
+ * parts retain the same Vulkan resources. Separate native allocators bound
+ * Metal's command-storage resource index even when most slices execute zero
+ * workgroups. Allocators return to the pool only after recording ends;
+ * submission order and final query availability are preserved. */
+bool
+kk_mesh_split_command_buffer(struct kk_cmd_buffer *cmd)
+{
+   struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+   mtl_command_buffer *next = kk_cmd_pool_get_cmd_buf(pool);
+   if (!next) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return false;
+   }
+   mtl_command_allocator *allocator = kk_cmd_pool_get_allocator(pool);
+   if (!allocator) {
+      kk_cmd_pool_return_cmd_buf(pool, next);
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return false;
+   }
+   if (cmd->metal.render)
+      kk_apply_attachment_store_ops(cmd, true);
+   cs_end(cmd);
+   mtl_end_command_buffer(cmd->metal.cmd_buf);
+   util_dynarray_append(&cmd->mesh_command_buffers, cmd->metal.cmd_buf);
+   util_dynarray_append(&cmd->mesh_allocators, cmd->metal.allocator);
+   cmd->metal.cmd_buf = next;
+   cmd->metal.allocator = allocator;
+   cmd->mesh_batches_in_part = cmd->mesh_draws_in_part = 0;
+   mtl_begin_command_buffer(next, allocator);
+   if (cmd->vk.base.object_name)
+      mtl_command_buffer_set_label(next, cmd->vk.base.object_name);
+   cmd->state.gfx.need_to_start_render_pass = true;
+   kk_cmd_buffer_dirty_all_gfx(cmd);
+   return true;
+}
+
 void
 kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd, uint64_t addr)
 {
@@ -538,10 +587,14 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
          kk_apply_attachment_store_ops(cmd, true);
          cs_end(cmd);
          cs_start_render(cmd);
-      } else
-         if (!kk_whole_pass_attachment_barrier(pDependencyInfo))
-            mtl_barrier_after_encoder_stages(cmd->metal.render,
-               local ? MTL_STAGE_FRAGMENT : MTL_STAGE_VERTEX, MTL_STAGE_FRAGMENT);
+      } else if (!kk_whole_pass_attachment_barrier(pDependencyInfo)) {
+         bool mesh = cmd->state.gfx.shader &&
+            cmd->state.gfx.shader->info.stage == MESA_SHADER_MESH;
+         enum mtl_stages before = local ? MTL_STAGE_FRAGMENT : mesh
+            ? MTL_STAGE_OBJECTS | MTL_STAGE_MESH | MTL_STAGE_FRAGMENT : MTL_STAGE_VERTEX;
+         enum mtl_stages after = mesh && !local ? before : MTL_STAGE_FRAGMENT;
+         mtl_barrier_after_encoder_stages(cmd->metal.render, before, after);
+      }
    } else if (cmd->metal.compute) {
       /* We chain encoders, so an intra-encoder barrier is enough here:
        * no need to tear down and recreate the encoder.
@@ -626,7 +679,7 @@ kk_CmdBindDescriptorSets2KHR(
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
-   if (pBindDescriptorSetsInfo->stageFlags & VK_SHADER_STAGE_ALL_GRAPHICS) {
+   if (pBindDescriptorSetsInfo->stageFlags & (VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT)) {
       kk_bind_descriptor_sets(&cmd->state.gfx.descriptors,
                               pBindDescriptorSetsInfo);
    }
@@ -694,7 +747,7 @@ kk_CmdPushDescriptorSet2KHR(
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
-   if (pPushDescriptorSetInfo->stageFlags & VK_SHADER_STAGE_ALL_GRAPHICS) {
+   if (pPushDescriptorSetInfo->stageFlags & (VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT)) {
       kk_push_descriptor_set(cmd, &cmd->state.gfx.descriptors,
                              pPushDescriptorSetInfo);
    }
@@ -719,7 +772,7 @@ kk_CmdPushConstants2KHR(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
-   if (pPushConstantsInfo->stageFlags & VK_SHADER_STAGE_ALL_GRAPHICS)
+   if (pPushConstantsInfo->stageFlags & (VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT))
       kk_push_constants(cmd, &cmd->state.gfx.descriptors, pPushConstantsInfo);
 
    if (pPushConstantsInfo->stageFlags & VK_SHADER_STAGE_COMPUTE_BIT)

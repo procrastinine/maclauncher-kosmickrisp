@@ -90,7 +90,7 @@ kk_preprocess_nir(UNUSED struct vk_physical_device *vk_pdev, nir_shader *nir,
     * has_base_workgroup_id */
    nir_lower_compute_system_values_options csv_options = {
       .has_base_global_invocation_id = 0,
-      .has_base_workgroup_id = true,
+      .has_base_workgroup_id = nir->info.stage == MESA_SHADER_COMPUTE,
    };
    NIR_PASS(_, nir, nir_lower_compute_system_values, &csv_options);
 }
@@ -225,6 +225,8 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD);
    if (feats->pipelineStatisticsQuery)
       key |= BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS);
+   if (feats->meshShaderQueries || feats->pipelineStatisticsQuery)
+      key |= BITFIELD_BIT(KK_FEAT_MESH_QUERIES);
    return key;
 }
 
@@ -756,6 +758,9 @@ kk_fs_needs_forced_depth_write(const nir_shader *nir,
                                           indices_known);
 }
 
+#include "kk_mesh_nir.h"
+static void kk_poly_layer_lower_fs(nir_shader *nir);
+
 static void
 kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
              const struct vk_pipeline_robustness_state *rs,
@@ -804,6 +809,9 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
       NIR_PASS(_, nir, kk_nir_lower_poly_multiview, poly_multiview,
                last_preraster);
 
+   if (nir->info.stage == MESA_SHADER_TASK || nir->info.stage == MESA_SHADER_MESH)
+      NIR_PASS(_, nir, kk_nir_lower_poly_multiview, state && state->mv && state->mv->view_mask, false);
+
    /* Massage IO related variables to please Metal */
    if (nir->info.stage == MESA_SHADER_VERTEX) {
       if (!poly_multiview)
@@ -826,6 +834,10 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
       msl_nir_lower_input_attachments(nir, state->ial, state->cal,
                                       state->rp);
    }
+
+   if (nir->info.stage == MESA_SHADER_FRAGMENT &&
+       (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT))
+      kk_poly_layer_lower_fs(nir);
 
    /* Common msl texture lowering needs to happen after ycbcr lowering and
     * before descriptor lowering. */
@@ -862,6 +874,8 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
 
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_shared,
             nir_address_format_32bit_offset);
+
+   kk_lower_task_payload(nir);
 
    if (nir->info.zero_initialize_shared_memory && nir->info.shared_size > 0) {
       /* QMD::SHARED_MEMORY_SIZE requires an alignment of 256B so it's safe to
@@ -953,13 +967,24 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
 
    mtl_release(shader->dgc_compute);
    kk_sparse_shader_finish(shader);
+   for (unsigned i = 0; i < 2; ++i)
+      if (shader->mesh_retained[i])
+         kk_mesh_release_pipeline(dev, shader, shader->mesh_retained[i],
+            i ? KK_PIPELINE_MESH_READER : KK_PIPELINE_MESH_CAPTURE);
+   if (shader->mesh_virtual)
+      kk_mesh_release_pipeline(dev, shader, shader->mesh_virtual, KK_PIPELINE_MESH_VIRTUAL);
+   for (unsigned i = 0; i < 2; ++i)
+      if (shader->mesh_sliced[i])
+         kk_mesh_release_pipeline(dev, shader, shader->mesh_sliced[i],
+            i ? KK_PIPELINE_MESH_VIRTUAL_SLICED : KK_PIPELINE_MESH_SLICED);
+   free(shader->mesh_fragment);
    kk_attachment_pipelines_finish(shader);
    struct kk_pipeline_handles *pipe = &shader->pipeline;
 
    if (shader->info.stage == MESA_SHADER_COMPUTE) {
       mtl_release(pipe->cs);
       pipe->cs = NULL;
-   } else if (shader->info.stage == MESA_SHADER_VERTEX) {
+   } else if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH)) {
       /* Pre-render compute pipelines. */
       for (uint32_t i = 0u; i < pipe->gfx.pre_render_count; ++i) {
          mtl_release(pipe->gfx.pre_render[i]);
@@ -990,12 +1015,12 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    ralloc_free((void *)data->code);
 
    u_foreach_bit(i, shader->info.gs_aux_mask) {
-      if (shader->info.stage == MESA_SHADER_VERTEX)
+      if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH))
          mtl_release(pipe->gfx.gs_aux[i]);
       ralloc_free(shader->gs_aux[i].entrypoint_name);
       ralloc_free(shader->gs_aux[i].code);
    }
-   if (shader->info.stage == MESA_SHADER_VERTEX) {
+   if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH)) {
       mtl_release(pipe->gfx.polygon_render);
       mtl_release(pipe->gfx.conservative_render);
       mtl_release(pipe->gfx.polygon_capture);
@@ -1154,6 +1179,17 @@ kk_compile_msl_options(struct kk_physical_device *pdev, nir_shader *nir,
    translate_options.mem_ctx = NULL;
    translate_options.disabled_workarounds = pdev->settings.disabled_workarounds;
    translate_options.mesh_queries = opts && opts->mesh_queries;
+   translate_options.mesh_retained_strides = opts ? opts->mesh_retained_strides : NULL;
+   translate_options.mesh_retained_fields = opts ? opts->mesh_retained_fields : NULL;
+   translate_options.mesh_view_mask = nir->info.stage == MESA_SHADER_MESH && state && state->mv ? state->mv->view_mask : 0;
+   translate_options.mesh_view_index_offset = offsetof(struct kk_per_draw_data, multiview_index);
+   translate_options.mesh_flat_heap = nir->info.stage == MESA_SHADER_MESH &&
+      opts && opts->per_vertex_map && opts->per_vertex_map->active &&
+      opts->per_vertex_map->canonical_heap;
+   translate_options.mesh_projected_basis = translate_options.mesh_flat_heap &&
+      opts->per_vertex_map->projected_basis;
+   translate_options.mesh_flat_heap_offset = translate_options.mesh_flat_heap
+      ? offsetof(struct kk_per_draw_data, per_vertex_heap) : 0;
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       for (uint32_t i = 0u; i < MAX_DRAW_BUFFERS; ++i) {
          /* If the attachment is unused, default to 4 to avoid issues with alpha
@@ -1232,6 +1268,33 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
    shader->info.conservative = kk_conservative_possible(state);
    gather_shader_info(shader, nir, state);
+   if (stage == MESA_SHADER_TASK || stage == MESA_SHADER_MESH) {
+      shader->info.mesh.local_size = (struct mtl_size){
+         nir->info.workgroup_size[0], nir->info.workgroup_size[1], nir->info.workgroup_size[2]};
+      shader->info.mesh.payload_size = nir->info.task_payload_size;
+      shader->info.mesh.queries = opts->mesh_queries;
+      if (stage == MESA_SHADER_TASK) {
+         shader->info.mesh.task_grid_bound = kk_task_grid_bound(nir);
+      } else {
+         shader->info.mesh.primitive = nir->info.mesh.primitive_type;
+         shader->info.mesh.flat_heap = per_vertex_map && per_vertex_map->active &&
+            per_vertex_map->canonical_heap;
+         shader->info.mesh.projected_basis = shader->info.mesh.flat_heap &&
+            per_vertex_map->projected_basis;
+         shader->info.mesh.max_primitives = nir->info.mesh.max_primitives_out;
+         shader->info.uses_per_draw_data |= shader->info.mesh.flat_heap;
+         shader->info.mesh.max_vertices = nir->info.mesh.max_vertices_out;
+         shader->info.mesh.view_mask = state && state->mv ? state->mv->view_mask : 0;
+         shader->info.uses_per_draw_data |= shader->info.mesh.view_mask != 0;
+         shader->info.num_cull_distances = 0;
+         if (prev_stage && prev_stage->info.stage == MESA_SHADER_TASK) {
+            shader->info.mesh.has_task = true;
+            shader->info.mesh.task_local_size = prev_stage->info.mesh.local_size;
+            shader->info.mesh.task_payload_size = prev_stage->info.mesh.payload_size;
+            shader->info.mesh.task_grid_bound = prev_stage->info.mesh.task_grid_bound;
+         }
+      }
+   }
    kk_barycentric_shader_info(shader, per_vertex_map);
    if (stage == MESA_SHADER_FRAGMENT && kk_polygon_possible(dev, state)) {
       shader->info.fs.noperspective_outputs = kk_polygon_noperspective_outputs(nir);
@@ -1253,7 +1316,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       prev_stage ? prev_stage->info.num_cull_distances : 0;
    /* A GS lowers clip and cull distances on its rasterization VS instead; the
     * stage feeding it has none after linking */
-   if (stage != MESA_SHADER_GEOMETRY)
+   if (stage != MESA_SHADER_GEOMETRY && stage != MESA_SHADER_MESH)
       msl_nir_lower_clip_cull_distance(nir, num_cull_distances);
 
    /* When using poly to emulate tessellation or GS, the VS and TCS are turned
@@ -1416,6 +1479,12 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       NIR_PASS(_, nir, kk_nir_lower_descriptors, robustness, 0, NULL);
    }
 
+   struct kk_compile_options mesh_options = *opts;
+   if (stage == MESA_SHADER_MESH) {
+      mesh_options.mesh_retained_strides = shader->info.mesh.retained_strides;
+      mesh_options.mesh_retained_fields = (uint32_t *)shader->info.mesh.retained_fields;
+      opts = &mesh_options;
+   }
    kk_compile_msl_options(pdev, nir, state, &shader->msl_data[stage], opts,
                           &shader->info.has_framebuffer_reads);
 
@@ -1677,7 +1746,7 @@ gather_graphics_pipeline_create_info(
 {
    assert(state && shader_count >= 2 &&
           "state, vertex and fragment shaders are a must");
-   struct kk_shader *vs = shaders[0];
+   struct kk_shader *vs = shaders[shaders[0]->info.stage == MESA_SHADER_TASK ? 1 : 0];
    struct kk_shader_info *info = &vs->info;
 
    /* Render pass data */
@@ -1729,8 +1798,9 @@ gather_graphics_pipeline_create_info(
    /* We need to store all other stage sources in the vertex too otherwise we
     * won't be able to create the whole pipeline correctly. */
    struct kk_shader *gs = NULL;
-   for (uint32_t i = 1; i < shader_count; ++i) {
+   for (uint32_t i = 0; i < shader_count; ++i) {
       struct kk_shader *s = shaders[i];
+      if (s == vs) continue;
       mesa_shader_stage stage = s->info.stage;
       kk_msl_copy(&vs->msl_data[stage], &s->msl_data[stage]);
 
@@ -1764,7 +1834,10 @@ gather_graphics_pipeline_create_info(
       }
    }
 
-   uint8_t topology = state->ia->primitive_topology;
+   uint8_t topology = vs->info.stage == MESA_SHADER_MESH
+      ? (vs->info.mesh.primitive == MESA_PRIM_POINTS ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+         : vs->info.mesh.primitive == MESA_PRIM_LINES ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+         : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST) : state->ia->primitive_topology;
    if (info->vs.additional_stages_bits & BITFIELD_BIT(MESA_SHADER_TESS_CTRL)) {
       /* TODO_KOSMICKRISP Hackity hack */
       struct kk_shader *tesc = shaders[1];
@@ -1797,6 +1870,65 @@ gather_graphics_pipeline_create_info(
    info->vs.topology =
       vk_primitive_topology_to_mtl_primitive_topology_class(topology);
 }
+
+static void
+kk_configure_render_pipeline(struct kk_device *device, struct kk_shader *vs,
+                             struct kk_pipeline_handles *pipe,
+                             mtl_render_pipeline_descriptor *pipeline_descriptor,
+                             unsigned polygon)
+{
+   /* If color attachments are reordered there might be unused / invalid gaps
+    * in the array so need to check them all, not just first
+    * color_attachment_count entries.
+    */
+   for (uint8_t i = 0; i < MAX_DRAW_BUFFERS; ++i) {
+      if (vs->info.vs.rt_formats[i] != MTL_PIXEL_FORMAT_INVALID)
+         mtl_render_pipeline_descriptor_set_color_attachment_format(
+            pipeline_descriptor, i, vs->info.vs.rt_formats[i]);
+   }
+
+   if (vs->info.vs.has_ds && !polygon) {
+      pipe->gfx.ds_handle = kk_compile_ds_state(device, &vs->info);
+   }
+
+   if (vs->info.vs.view_mask && vs->info.stage != MESA_SHADER_MESH) {
+      uint32_t max_amplification = util_bitcount(vs->info.vs.view_mask);
+      mtl_render_pipeline_descriptor_set_max_vertex_amplification_count(
+         pipeline_descriptor, max_amplification);
+   }
+
+   if (vs->info.vs.has_ms) {
+      mtl_render_pipeline_descriptor_set_raster_sample_count(
+         pipeline_descriptor, vs->info.vs.sample_count);
+   }
+
+}
+
+static VkResult
+kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
+                             mtl_render_pipeline_descriptor *descriptor,
+                             unsigned kind)
+{
+   if (!device->vk.enabled_features.dynamicRenderingUnusedAttachments &&
+       !device->vk.enabled_features.extendedDynamicState3RasterizationSamples &&
+       !device->vk.enabled_features.deviceGeneratedCommands &&
+       !device->vk.enabled_features.drawIndirectCount)
+      return VK_SUCCESS;
+   if (!shader->attachment_pipelines) {
+      shader->attachment_pipelines = calloc(1, sizeof(*shader->attachment_pipelines));
+      if (!shader->attachment_pipelines)
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      simple_mtx_init(&shader->attachment_pipelines->mutex, mtx_plain);
+   }
+   struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
+   simple_mtx_lock(&cache->mutex);
+   if (!cache->descriptor[kind])
+      cache->descriptor[kind] = mtl_retain(descriptor);
+   simple_mtx_unlock(&cache->mutex);
+   return VK_SUCCESS;
+}
+
+#include "kk_mesh_pipeline.h"
 
 static VkResult
 kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
@@ -1879,30 +2011,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
       pipeline_descriptor, polygon == 2 ? MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE :
          polygon ? MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED : vs->info.vs.topology);
 
-   /* If color attachments are reordered there might be unused / invalid gaps
-    * in the array so need to check them all, not just first
-    * color_attachment_count entries.
-    */
-   for (uint8_t i = 0; i < MAX_DRAW_BUFFERS; ++i) {
-      if (vs->info.vs.rt_formats[i] != MTL_PIXEL_FORMAT_INVALID)
-         mtl_render_pipeline_descriptor_set_color_attachment_format(
-            pipeline_descriptor, i, vs->info.vs.rt_formats[i]);
-   }
-
-   if (vs->info.vs.has_ds && !polygon) {
-      pipe->gfx.ds_handle = kk_compile_ds_state(device, &vs->info);
-   }
-
-   if (vs->info.vs.view_mask) {
-      uint32_t max_amplification = util_bitcount(vs->info.vs.view_mask);
-      mtl_render_pipeline_descriptor_set_max_vertex_amplification_count(
-         pipeline_descriptor, max_amplification);
-   }
-
-   if (vs->info.vs.has_ms) {
-      mtl_render_pipeline_descriptor_set_raster_sample_count(
-         pipeline_descriptor, vs->info.vs.sample_count);
-   }
+   kk_configure_render_pipeline(device, vs, pipe, pipeline_descriptor, polygon);
 
    mtl_render_pipeline_state *render =
       kk_attachment_compile_pipeline(device, vs, pipeline_descriptor);
@@ -1912,20 +2021,8 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    if (render == NULL)
       result = VK_ERROR_INVALID_SHADER_NV;
 
-   if (render && ((device->vk.enabled_features.dynamicRenderingUnusedAttachments ||
-                  device->vk.enabled_features.extendedDynamicState3RasterizationSamples) ||
-       device->vk.enabled_features.deviceGeneratedCommands ||
-       device->vk.enabled_features.drawIndirectCount)) {
-      if (!vs->attachment_pipelines) {
-         vs->attachment_pipelines = calloc(1, sizeof(*vs->attachment_pipelines));
-         if (!vs->attachment_pipelines)
-            result = VK_ERROR_OUT_OF_HOST_MEMORY;
-         else
-            simple_mtx_init(&vs->attachment_pipelines->mutex, mtx_plain);
-      }
-      if (vs->attachment_pipelines)
-         vs->attachment_pipelines->descriptor[polygon] = mtl_retain(pipeline_descriptor);
-   }
+   if (render)
+      result = kk_record_render_descriptor(device, vs, pipeline_descriptor, polygon);
    mtl_release(pipeline_descriptor);
    mtl_release(fragment_function);
    mtl_release(fragment_library);
@@ -1939,6 +2036,8 @@ destroy_vertex:
 static VkResult
 kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
 {
+   if (vs->info.stage == MESA_SHADER_MESH)
+      return kk_compile_mesh_pipeline(device, vs, false, &vs->pipeline);
    VkResult result = kk_compile_graphics_pipeline_native(device, vs, false);
    if (result != VK_SUCCESS || !vs->info.polygon_point)
       return result == VK_SUCCESS ? kk_dgc_eager_graphics_pipeline(device, vs) : result;
@@ -1973,7 +2072,8 @@ move_primitive_id(nir_builder *b, nir_intrinsic_instr *intr, void *data)
       return true;
    }
 
-   if (intr->intrinsic != nir_intrinsic_store_output)
+   if (intr->intrinsic != nir_intrinsic_store_output &&
+       intr->intrinsic != nir_intrinsic_store_per_primitive_output)
       return false;
 
    nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
@@ -2014,6 +2114,11 @@ kk_forward_gs_primitive_id(nir_shader *gs, nir_shader *fs)
    fs->info.inputs_read |= BITFIELD64_BIT(slot);
    gs->info.outputs_written &= ~VARYING_BIT_PRIMITIVE_ID;
    gs->info.outputs_written |= BITFIELD64_BIT(slot);
+   if (gs->info.stage == MESA_SHADER_MESH) {
+      gs->info.per_primitive_outputs &= ~VARYING_BIT_PRIMITIVE_ID;
+      gs->info.per_primitive_outputs |= BITFIELD64_BIT(slot);
+      fs->info.per_primitive_inputs |= BITFIELD64_BIT(slot);
+   }
 }
 
 #include "kk_sparse_pipeline.h"
@@ -2167,7 +2272,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    /* nir_opt_varyings_bulk removes a GS primitive ID output that the FS does
     * not read as an input. The FS is last and a GS right before it. */
    if (total_shaders >= 2u &&
-       nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_GEOMETRY) {
+       (nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_GEOMETRY ||
+        nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_MESH)) {
       kk_forward_gs_primitive_id(nir_shaders[total_shaders - 2u],
                                  nir_shaders[total_shaders - 1u]);
    }
@@ -2190,6 +2296,11 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT
       ? nir_shader_clone(NULL, nir_shaders[total_shaders - 1u]) : NULL;
    struct kk_per_vertex_map per_vertex_map = {0};
+   if (total_shaders >= 2u &&
+       nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT &&
+       nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_MESH)
+      NIR_PASS(_, nir_shaders[total_shaders - 1u], kk_nir_lower_mesh_flat_inputs,
+               nir_shaders[total_shaders - 2u], &per_vertex_map);
    if (state && total_shaders >= 2u &&
        nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT &&
        (nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_VERTEX ||
@@ -2210,6 +2321,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
 
    const struct kk_compile_options compile_options = {
       .per_vertex_map = &per_vertex_map,
+      .mesh_queries = features & BITFIELD_BIT(KK_FEAT_MESH_QUERIES),
       .conservative_fs = conservative_fs,
    };
    for (uint32_t i = 0; i < total_shaders; i++) {
@@ -2278,7 +2390,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    } else {
       gather_graphics_pipeline_create_info(state, shaders, total_shaders);
       shaders[0]->info.api_geometry = explicit_geometry;
-      result = kk_compile_graphics_pipeline(dev, shaders[0]);
+      result = kk_compile_graphics_pipeline(dev, shaders[shaders[0]->info.stage == MESA_SHADER_TASK ? 1 : 0]);
 
       /* Generated Poly and empty-fragment leaves are already copied into the
        * original vertex pipeline and share its normal lifetime. */
@@ -2335,7 +2447,7 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
 
    blob_write_bytes(blob, &shader->info, sizeof(shader->info));
    kk_msl_serialize(&shader->msl_data[shader->info.stage], blob);
-   if (shader->info.stage == MESA_SHADER_VERTEX) {
+   if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH)) {
       u_foreach_bit(stage, shader->info.vs.additional_stages_bits) {
          kk_msl_serialize(&shader->msl_data[stage], blob);
       }
@@ -2400,7 +2512,7 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
 
    shader->info = info;
 
-   if (shader->info.stage == MESA_SHADER_VERTEX) {
+   if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH)) {
       u_foreach_bit(stage, shader->info.vs.additional_stages_bits) {
          result = kk_msl_deserialize(blob, &shader->msl_data[stage]);
          if (result != VK_SUCCESS)
@@ -2435,7 +2547,7 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
       if (result == VK_SUCCESS && shader->info.indirect_bindable &&
           !kk_dgc_get_compute_pipeline(dev, shader))
          result = VK_ERROR_INVALID_SHADER_NV;
-   } else if (info.stage == MESA_SHADER_VERTEX) {
+   } else if (info.stage == MESA_SHADER_VERTEX || info.stage == MESA_SHADER_MESH) {
       result = kk_compile_graphics_pipeline(dev, shader);
    }
 
@@ -2475,8 +2587,10 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
    cmd->state.dirty_shaders |= BITFIELD_BIT(stage);
 
    /* Relevant pipeline data is only stored in vertex shaders */
-   if (stage != MESA_SHADER_VERTEX)
+   if (stage != MESA_SHADER_VERTEX && stage != MESA_SHADER_MESH)
       return;
+   if (!shader) return;
+   cmd->state.gfx.shader = shader;
 
    struct kk_descriptor_state *desc = &cmd->state.gfx.descriptors;
    desc->root_dirty |= shader->info.descriptor_heap != desc->descriptor_heap || shader->info.push_size > desc->push_size;

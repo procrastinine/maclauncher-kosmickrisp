@@ -13,6 +13,8 @@ struct kk_compile_options {
    struct nir_shader *conservative_fs;
    bool independent_interface;
    bool mesh_queries;
+   uint32_t *mesh_retained_strides;
+   uint32_t *mesh_retained_fields;
    const struct nir_to_msl_options *msl_custom;
 };
 

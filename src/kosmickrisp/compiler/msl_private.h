@@ -26,6 +26,13 @@ struct nir_to_msl_ctx {
    struct _mesa_string_buffer *text;
    uint64_t disabled_workarounds;
    bool uses_per_draw_data;
+   bool mesh_queries;
+   uint32_t mesh_retained_vertex_stride, mesh_retained_primitive_stride;
+   uint32_t mesh_retained_fields[4][4];
+   uint32_t mesh_view_mask, mesh_view_index_offset;
+   bool mesh_flat_heap;
+   bool mesh_projected_basis;
+   unsigned mesh_flat_heap_offset;
    unsigned short indentlevel;
    struct io_slot_info inputs_info[NUM_TOTAL_VARYING_SLOTS];
    struct io_slot_info outputs_info[NUM_TOTAL_VARYING_SLOTS];

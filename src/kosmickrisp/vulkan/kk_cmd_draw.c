@@ -862,13 +862,16 @@ static struct kk_shader *
 kk_geometry_shader(struct kk_cmd_buffer *cmd)
 {
    struct kk_shader *gs = cmd->state.shaders[MESA_SHADER_GEOMETRY];
-   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   struct kk_shader *vs = cmd->state.gfx.shader;
    return gs ? gs : vs && vs->info.has_geometry ? vs : NULL;
 }
 
 static enum mesa_prim
 kk_rast_prim(struct kk_cmd_buffer *cmd)
 {
+   struct kk_shader *shader = cmd->state.gfx.shader;
+   if (shader && shader->info.stage == MESA_SHADER_MESH)
+      return shader->info.mesh.primitive;
    struct kk_shader *gs = kk_geometry_shader(cmd);
    if (gs)
       return gs->info.geometry.mode;
@@ -1030,10 +1033,10 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
        (IS_DIRTY(DS_DEPTH_TEST_ENABLE) | IS_DIRTY(DS_DEPTH_WRITE_ENABLE) |
         IS_DIRTY(DS_DEPTH_COMPARE_OP) | IS_DIRTY(DS_STENCIL_TEST_ENABLE) |
         IS_DIRTY(DS_STENCIL_OP) | IS_DIRTY(DS_STENCIL_COMPARE_MASK) |
-        IS_DIRTY(DS_STENCIL_WRITE_MASK) || IS_SHADER_DIRTY(VERTEX))) {
+        IS_DIRTY(DS_STENCIL_WRITE_MASK) || (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)))) {
       kk_cmd_release_dynamic_ds_state(cmd);
 
-      struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+      struct kk_shader *vs = cmd->state.gfx.shader;
       bool has_depth = gfx->render.depth_att.iview &&
          vs->info.vs.d_format != MTL_PIXEL_FORMAT_INVALID;
       bool has_stencil = gfx->render.stencil_att.iview &&
@@ -1043,10 +1046,10 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
       mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
    }
 
-   if (IS_SHADER_DIRTY(VERTEX) || IS_DIRTY(RS_POLYGON_MODE) ||
+   if ((IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) || IS_DIRTY(RS_POLYGON_MODE) ||
        IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(COLOR_ATTACHMENT_MAP) ||
        IS_DIRTY(MS_RASTERIZATION_SAMPLES)) {
-      struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+      struct kk_shader *vs = cmd->state.gfx.shader;
       mtl_render_pipeline_state *pipeline =
          kk_attachment_pipeline(cmd, vs, gfx->conservative ? 2 : gfx->polygon_points);
       if (!pipeline)
@@ -1217,7 +1220,7 @@ kk_upload_vertex_params(struct kk_cmd_buffer *cmd,
          data->index.gpu.range / data->index.el_size_B;
    }
 
-   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   struct kk_shader *vs = cmd->state.gfx.shader;
    params.outputs = vs->info.outputs_written;
 
    if (!indirect) {
@@ -1482,10 +1485,10 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
             .extra_size = dyn->rs.extra_primitive_overestimation_size,
             .samples = MAX2(dyn->ms.rasterization_samples, 1),
             .sample_mask = dyn->ms.sample_mask,
-            .canonical_locations = cmd->state.shaders[MESA_SHADER_VERTEX]->info.conservative_canonical_outputs,
+            .canonical_locations = cmd->state.gfx.shader->info.conservative_canonical_outputs,
             .canonical_provoking_components = {
-               cmd->state.shaders[MESA_SHADER_VERTEX]->info.conservative_canonical_components[0],
-               cmd->state.shaders[MESA_SHADER_VERTEX]->info.conservative_canonical_components[1],
+               cmd->state.gfx.shader->info.conservative_canonical_components[0],
+               cmd->state.gfx.shader->info.conservative_canonical_components[1],
             },
          };
          params.capture = gfx->polygon_capture =
@@ -1521,7 +1524,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
    bool rast_discard = dyn->rs.rasterizer_discard_enable ||
       (dyn->rs.rasterization_stream != 0 && !(gs && gs->info.geometry.multistream));
    if (IS_DIRTY(RS_RASTERIZER_DISCARD_ENABLE) ||
-       IS_DIRTY(RS_RASTERIZATION_STREAM) || IS_SHADER_DIRTY(VERTEX) ||
+       IS_DIRTY(RS_RASTERIZATION_STREAM) || (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) ||
        IS_SHADER_DIRTY(GEOMETRY)) {
       if (rast_discard) {
          set_empty_scissor(enc);
@@ -1659,14 +1662,14 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
 
    if (IS_DIRTY(VI) || IS_DIRTY(VI_BINDINGS_VALID) ||
        IS_DIRTY(VI_BINDING_STRIDES) || gfx->dirty & KK_DIRTY_VB ||
-       IS_SHADER_DIRTY(VERTEX)) {
+       (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH))) {
       if (!kk_flush_vertex_input(cmd))
          return;
       desc->root_dirty = true;
    }
 
    if (IS_DIRTY(MS_SAMPLE_MASK) || IS_DIRTY(MS_ALPHA_TO_COVERAGE_ENABLE) ||
-       IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(FRAGMENT)) {
+       (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) || IS_SHADER_DIRTY(FRAGMENT)) {
       desc->root.draw.sample_mask = dyn->ms.sample_mask;
       desc->root.draw.alpha_to_coverage = dyn->ms.alpha_to_coverage_enable;
       desc->root_dirty = true;
@@ -1917,7 +1920,7 @@ build_per_draw_upload_mask(struct kk_cmd_buffer *cmd)
 {
    uint32_t mask = 0;
 
-   struct kk_shader *vertex = cmd->state.shaders[MESA_SHADER_VERTEX];
+   struct kk_shader *vertex = cmd->state.gfx.shader;
    if (vertex && vertex->info.uses_per_draw_data) {
       mask |= BITFIELD_BIT(MESA_SHADER_VERTEX);
    }
@@ -2252,7 +2255,7 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
    /* The optional tail adds no upload bytes to ordinary shaders. */
    bool multiview = gfx->render.view_mask &&
       (cmd->state.shaders[MESA_SHADER_TESS_EVAL] ||
-       cmd->state.shaders[MESA_SHADER_VERTEX]->info.api_geometry);
+       cmd->state.gfx.shader->info.api_geometry);
    uint32_t per_draw_size = multiview ? sizeof(gfx->per_draw_data) :
       per_vertex ? offsetof(struct kk_per_draw_data, multiview_index) :
       offsetof(struct kk_per_draw_data, per_vertex_index_addr);
@@ -2283,7 +2286,7 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_grid grid_vs, grid_tcs, grid_tess;
 
-   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   struct kk_shader *vs = cmd->state.gfx.shader;
    struct kk_shader *tcs = cmd->state.shaders[MESA_SHADER_TESS_CTRL];
 
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
@@ -2416,7 +2419,7 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
                      struct kk_draw_data draw, bool restart)
 {
    struct kk_graphics_state *gfx = &cmd->state.gfx;
-   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   struct kk_shader *vs = cmd->state.gfx.shader;
    struct kk_shader *tes = cmd->state.shaders[MESA_SHADER_TESS_EVAL];
    struct kk_shader *gs = kk_geometry_shader(cmd);
    uint64_t vertex_params = gfx->per_draw_data.vertex_params;
@@ -2576,6 +2579,7 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
 }
 
 #include "kk_statistics_command.h"
+#include "kk_mesh_command.h"
 
 #include "kk_barycentric_draw.h"
 
@@ -2585,7 +2589,7 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    kk_sparse_refresh_shader(cmd, MESA_SHADER_VERTEX);
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_graphics_state *gfx = &cmd->state.gfx;
-   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   struct kk_shader *vs = cmd->state.gfx.shader;
    /* Poly clips original triangles before applying bias. Native bias is
     * disabled while this path is active, including FILL/LINE representations. */
    bool controlled_bias = dyn->rs.depth_bias.enable &&
@@ -2754,7 +2758,7 @@ static void
 kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
    struct kk_graphics_state *gfx = &cmd->state.gfx;
-   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   struct kk_shader *vs = cmd->state.gfx.shader;
    uint32_t view_mask = gfx->render.view_mask;
    if (!view_mask || !(vs->info.api_geometry ||
                       cmd->state.shaders[MESA_SHADER_TESS_EVAL])) {

@@ -15,6 +15,11 @@
 /* Bridge enums */
 enum mtl_pixel_format;
 
+mtl_render_pipeline_descriptor *mtl_new_mesh_pipeline_descriptor(
+   mtl_function_descriptor *mesh, mtl_function_descriptor *object,
+   uint32_t mesh_threads, uint32_t object_threads,
+   uint32_t payload_bytes, uint32_t mesh_groups);
+
 /* Compiler */
 mtl_compiler *mtl_new_compiler(mtl_device *device);
 

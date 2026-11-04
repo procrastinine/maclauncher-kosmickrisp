@@ -340,10 +340,15 @@ struct gather_ctx {
    struct io_slot_info *output;
 };
 
+#include "kk_mesh_iomap.h"
+
 static bool
 msl_nir_gather_io_info(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
 {
    struct gather_ctx *ctx = (struct gather_ctx *)data;
+   if (b->shader->info.stage == MESA_SHADER_MESH &&
+       kk_mesh_gather_io(intrin, ctx->output))
+      return false;
    switch (intrin->intrinsic) {
    case nir_intrinsic_load_interpolated_input: {
       unsigned component = nir_intrinsic_component(intrin);
@@ -371,6 +376,7 @@ msl_nir_gather_io_info(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
          interp_intrin->intrinsic == nir_intrinsic_load_barycentric_at_offset;
       break;
    }
+   case nir_intrinsic_load_per_primitive_input:
    case nir_intrinsic_load_input: {
       unsigned component = nir_intrinsic_component(intrin);
       struct nir_io_semantics io = nir_intrinsic_io_semantics(intrin);
@@ -457,6 +463,10 @@ msl_emit_io_blocks(struct nir_to_msl_ctx *ctx, nir_shader *shader)
       fs_input_block(shader, ctx);
       fs_output_block(shader, ctx);
       break;
+   case MESA_SHADER_MESH:
+      kk_mesh_io_blocks(ctx);
+      break;
+   case MESA_SHADER_TASK:
    case MESA_SHADER_COMPUTE:
    case MESA_SHADER_TESS_CTRL:
       break;
@@ -522,13 +532,16 @@ msl_output_name(struct nir_to_msl_ctx *ctx, unsigned location,
         alu_type_to_string(info.type), vector_suffixes[info.num_components]);
       return;
    }
-   if (load_from_input) {
-      P(ctx, "in.");
-   } else {
-      P(ctx, "out.");
+   if (ctx->shader->info.stage != MESA_SHADER_MESH) {
+      if (load_from_input) {
+         P(ctx, "in.");
+      } else {
+         P(ctx, "out.");
+      }
    }
    switch (ctx->shader->info.stage) {
    case MESA_SHADER_VERTEX:
+   case MESA_SHADER_MESH:
       varying_slot_name(ctx, location, component);
       break;
    case MESA_SHADER_FRAGMENT:
@@ -566,7 +579,8 @@ msl_input_num_components(struct nir_to_msl_ctx *ctx, uint32_t location)
 uint32_t
 msl_output_num_components(struct nir_to_msl_ctx *ctx, uint32_t location)
 {
-   if (ctx->shader->info.stage == MESA_SHADER_VERTEX &&
+   if ((ctx->shader->info.stage == MESA_SHADER_VERTEX ||
+        ctx->shader->info.stage == MESA_SHADER_MESH) &&
        VARYING_SLOT_INFO[location].scalarized)
       return 1;
    else

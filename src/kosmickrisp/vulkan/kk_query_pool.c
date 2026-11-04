@@ -40,6 +40,7 @@ kk_reports_per_query(struct kk_query_pool *pool)
    case VK_QUERY_TYPE_OCCLUSION:
    case VK_QUERY_TYPE_TIMESTAMP:
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT:
+   case VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT:
       return 1;
    case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT:
       return 2;
@@ -148,7 +149,8 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
    if (pCreateInfo->queryType == VK_QUERY_TYPE_PIPELINE_STATISTICS &&
        (pCreateInfo->pipelineStatistics == 0 ||
         (pCreateInfo->pipelineStatistics &
-         ~0x7ffu)))
+         ~(0x7ffu | VK_QUERY_PIPELINE_STATISTIC_TASK_SHADER_INVOCATIONS_BIT_EXT |
+           VK_QUERY_PIPELINE_STATISTIC_MESH_SHADER_INVOCATIONS_BIT_EXT))))
       return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
 
    pool =
@@ -467,6 +469,10 @@ kk_begin_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
       cmd->state.gfx.descriptors.root_dirty = true;
       return;
    }
+   if (pool->vk.query_type == VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT) {
+      cmd->state.gfx.mesh_primitives_query = kk_query_report_addr(kk_cmd_buffer_device(cmd), pool, query);
+      return;
+   }
    if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
       cmd->state.gfx.xfb_query[index] = kk_query_report_addr(kk_cmd_buffer_device(cmd), pool, query);
       return;
@@ -494,6 +500,8 @@ kk_end_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
       cmd->state.pipeline_statistics_flags = 0;
       cmd->state.gfx.descriptors.root.draw.fragment_statistic = 0;
       cmd->state.gfx.descriptors.root_dirty = true;
+   } else if (pool->vk.query_type == VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT) {
+      cmd->state.gfx.mesh_primitives_query = 0;
    } else if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
       cmd->state.gfx.xfb_query[index] = 0;
    } else if (pool->vk.query_type == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {

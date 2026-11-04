@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 /* The independent-stage ABI is owned here, not by its GPL consumer. */
-#define KK_CANONICAL_VARYING_COUNT \
-   (VARYING_SLOT_VAR31 - VARYING_SLOT_VAR0 + 1)
+#include "kosmickrisp/libkk/kk_canonical_layout.h"
 
 static uint64_t
 kk_canonical_generic_mask(void)
@@ -37,7 +36,8 @@ kk_canonical_fs_map(nir_shader *fs, struct kk_per_vertex_map *map)
          if (instr->type != nir_instr_type_intrinsic)
             continue;
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-         bool flat = intr->intrinsic == nir_intrinsic_load_input;
+         bool flat = intr->intrinsic == nir_intrinsic_load_input ||
+                     intr->intrinsic == nir_intrinsic_load_per_primitive_input;
          if (!flat && intr->intrinsic != nir_intrinsic_load_interpolated_input)
             continue;
          unsigned location = io_location(intr, flat ? 0 : 1);

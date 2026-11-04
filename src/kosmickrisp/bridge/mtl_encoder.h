@@ -160,4 +160,9 @@ void mtl_render_set_depth_store_action(mtl_render_encoder *encoder,
 void mtl_render_set_stencil_store_action(mtl_render_encoder *encoder,
                                          enum mtl_store_action action);
 
+void mtl_draw_mesh_threadgroups(mtl_render_encoder *encoder,
+   struct mtl_size groups, struct mtl_size object_size, struct mtl_size mesh_size);
+void mtl_draw_mesh_threadgroups_indirect(mtl_render_encoder *encoder,
+   uint64_t address, struct mtl_size object_size, struct mtl_size mesh_size);
+
 #endif /* MTL_ENCODER_H */

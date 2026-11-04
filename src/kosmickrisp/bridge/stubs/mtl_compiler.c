@@ -106,3 +106,11 @@ mtl_render_pipeline_descriptor_copy_linking(
 {
    /* Copies pipeline-linking state. */
 }
+
+mtl_render_pipeline_descriptor *
+mtl_new_mesh_pipeline_descriptor(mtl_function_descriptor *mesh,
+   mtl_function_descriptor *object, uint32_t mesh_threads,
+   uint32_t object_threads, uint32_t payload_bytes, uint32_t mesh_groups)
+{
+   return NULL;
+}

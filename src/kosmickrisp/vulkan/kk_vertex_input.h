@@ -48,7 +48,7 @@ kk_prepare_vertex_input(struct kk_cmd_buffer *cmd,
 static bool kk_flush_vertex_input(struct kk_cmd_buffer *cmd)
 {
    bool success = kk_prepare_vertex_input(cmd, &cmd->state.gfx,
-      &cmd->vk.dynamic_graphics_state, cmd->state.shaders[MESA_SHADER_VERTEX],
+      &cmd->vk.dynamic_graphics_state, cmd->state.gfx.shader,
       &cmd->state.gfx.descriptors.root);
    cmd->state.gfx.descriptors.root_dirty = true;
    return success;

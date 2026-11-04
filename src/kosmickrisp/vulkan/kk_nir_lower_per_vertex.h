@@ -24,6 +24,7 @@ struct kk_per_vertex_map {
    /* Independent non-LTO stage ABI. A producer request needs only this flag;
     * VS lowering derives its complete layout without a fragment map. */
    bool canonical_heap;
+   bool projected_basis;
    /* Varying slots read with PerVertexKHR by the fragment shader. */
    uint64_t locations;
    /* Ordinary locations sharing the same per-corner heap storage. */
@@ -66,6 +67,10 @@ enum kk_barycentric_usage kk_nir_barycentric_usage(nir_shader *fs);
 bool kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev,
                                        bool force,
                                        struct kk_per_vertex_map *map);
+
+
+bool kk_nir_lower_mesh_flat_inputs(nir_shader *fs, nir_shader *mesh,
+                                   struct kk_per_vertex_map *map);
 
 bool kk_nir_lower_vs_per_vertex_outputs(nir_shader *vs,
                                         const struct kk_per_vertex_map *map);

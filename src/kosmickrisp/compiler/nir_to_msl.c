@@ -999,6 +999,12 @@ memory_modes_to_msl(struct nir_to_msl_ctx *ctx, nir_variable_mode modes)
       case nir_var_function_temp:
          P(ctx, "mem_flags::mem_none");
          break;
+      case nir_var_mem_task_payload:
+         P(ctx, "kk_payload_flags(payload)");
+         break;
+      case nir_var_shader_out:
+         P(ctx, "mem_flags::mem_threadgroup");
+         break;
       case nir_var_mem_shared:
          P(ctx, "mem_flags::mem_threadgroup");
          break;
@@ -1103,6 +1109,9 @@ global_access_qualifier(struct nir_to_msl_ctx *ctx,
 
 #include "msl_sparse.h"
 
+#include "kk_mesh_runtime.h"
+#include "kk_mesh_intrinsics.h"
+
 static void
 intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
 {
@@ -1119,6 +1128,7 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       return;
 
    if (kk_emit_image64(ctx, instr)) return;
+   if (kk_emit_mesh_intrinsic(ctx, instr)) return;
    if (kk_emit_atomic64(ctx, instr)) return;
    bool guarded = msl_interlock_side_effect(ctx, instr);
    if (guarded) {
@@ -1283,6 +1293,7 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       P(ctx, ";\n");
       break;
    }
+   case nir_intrinsic_load_per_primitive_input:
    case nir_intrinsic_load_input: {
       unsigned idx = nir_src_as_uint(instr->src[0u]);
       nir_io_semantics io = nir_intrinsic_io_semantics(instr);
@@ -2091,6 +2102,11 @@ jump_instr_to_msl(struct nir_to_msl_ctx *ctx, nir_jump_instr *jump)
 {
    switch (jump->type) {
    case nir_jump_halt:
+      if (ctx->shader->info.stage == MESA_SHADER_TASK) {
+         P_IND(ctx, "return;\n");
+         break;
+      }
+      FALLTHROUGH;
    case nir_jump_abort:
       P_IND(ctx, "TODO: halt/abort\n");
       assert(!"Unimplemented");
@@ -2495,7 +2511,8 @@ msl_gather_info(struct nir_to_msl_ctx *ctx, struct nir_to_msl_options *options)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(ctx->shader);
    ctx->types = msl_infer_types(ctx->shader);
-   ctx->uses_per_draw_data = msl_gather_uses_per_draw_data(ctx->shader);
+   ctx->uses_per_draw_data = ctx->mesh_flat_heap || ctx->mesh_view_mask ||
+      msl_gather_uses_per_draw_data(ctx->shader);
 
    /* TODO_KOSMICKRISP
     * Reindex blocks and ssa. This allows us to optimize things we don't at the
@@ -2504,7 +2521,8 @@ msl_gather_info(struct nir_to_msl_ctx *ctx, struct nir_to_msl_options *options)
    nir_index_ssa_defs(impl);
 
    if (ctx->shader->info.stage == MESA_SHADER_VERTEX ||
-       ctx->shader->info.stage == MESA_SHADER_FRAGMENT) {
+       ctx->shader->info.stage == MESA_SHADER_FRAGMENT ||
+       ctx->shader->info.stage == MESA_SHADER_MESH) {
       msl_gather_io_info(ctx, ctx->inputs_info, ctx->outputs_info);
 
       if (ctx->shader->info.stage == MESA_SHADER_FRAGMENT) {
@@ -2611,6 +2629,8 @@ msl_emit_constant_data(struct nir_to_msl_ctx *ctx, nir_shader *shader)
    P(ctx, "};\n");
 }
 
+#include "kk_mesh_msl.h"
+
 char *
 nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
 {
@@ -2623,6 +2643,12 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       .shader = shader,
       .text = _mesa_string_buffer_create(options->mem_ctx, 1024),
       .disabled_workarounds = options->disabled_workarounds,
+      .mesh_queries = options->mesh_queries,
+      .mesh_view_mask = options->mesh_view_mask,
+      .mesh_view_index_offset = options->mesh_view_index_offset,
+      .mesh_flat_heap = options->mesh_flat_heap,
+      .mesh_projected_basis = options->mesh_projected_basis,
+      .mesh_flat_heap_offset = options->mesh_flat_heap_offset,
    };
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    msl_interlock_prepare(shader);
@@ -2641,6 +2667,9 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (kk_uses_image_atomic64(shader)) P(&ctx, "%s", kk_image_atomic64_msl);
    if (kk_fp32_preserve(shader)) P(&ctx, "%s", kk_fp32_preserve_msl);
 
+   if (shader->info.stage == MESA_SHADER_TASK || shader->info.stage == MESA_SHADER_MESH)
+      P(&ctx, "%s", kk_mesh_runtime_msl);
+
    msl_emit_constant_data(&ctx, shader);
 
    msl_emit_io_blocks(&ctx, shader);
@@ -2648,6 +2677,9 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (shader->info.stage == MESA_SHADER_FRAGMENT &&
        shader->info.fs.early_fragment_tests)
       P(&ctx, "[[early_fragment_tests]]\n");
+   if (shader->info.stage == MESA_SHADER_TASK || shader->info.stage == MESA_SHADER_MESH) {
+      kk_mesh_emit_functions(&ctx, impl);
+   } else {
    P(&ctx, "%s %s %s(\n", get_stage_string(shader->info.stage),
      output_type(shader), get_entrypoint_name(shader));
    ctx.indentlevel++;
@@ -2677,6 +2709,13 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    emit_output_return(&ctx, shader);
    ctx.indentlevel--;
    P(&ctx, "}\n");
+   }
+   if (shader->info.stage == MESA_SHADER_MESH && options->mesh_retained_strides) {
+      options->mesh_retained_strides[0] = ctx.mesh_retained_vertex_stride;
+      options->mesh_retained_strides[1] = ctx.mesh_retained_primitive_stride;
+   }
+   if (shader->info.stage == MESA_SHADER_MESH && options->mesh_retained_fields)
+      memcpy(options->mesh_retained_fields, ctx.mesh_retained_fields, sizeof(ctx.mesh_retained_fields));
    char *ret = ctx.text->buf;
    if (ctx.sampler_helpers) _mesa_hash_table_destroy(ctx.sampler_helpers, NULL);
    _mesa_hash_table_destroy(ctx.types, NULL);
