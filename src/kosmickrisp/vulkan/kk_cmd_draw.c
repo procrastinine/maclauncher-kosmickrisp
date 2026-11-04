@@ -914,7 +914,8 @@ kk_flush_sample_locations(struct kk_cmd_buffer *cmd)
    }
 
    /* Determine if we have switched to or from multisampled bresenham lines */
-   if (IS_DIRTY(IA_PRIMITIVE_TOPOLOGY) || IS_DIRTY(RS_LINE_MODE)) {
+   if (IS_DIRTY(IA_PRIMITIVE_TOPOLOGY) || IS_DIRTY(RS_LINE_MODE) ||
+       IS_DIRTY(MS_RASTERIZATION_SAMPLES)) {
       bool was_ms_bresenham_lines = render->ms_bresenham_lines;
       render->ms_bresenham_lines =
          u_reduced_prim(dyn->ia.primitive_topology) == MESA_PRIM_LINES &&
@@ -964,6 +965,7 @@ kk_flush_render_pass(struct kk_cmd_buffer *cmd)
 {
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_rendering_state *render = &cmd->state.gfx.render;
+   cmd->state.gfx.pipeline_sample_count = MAX2(dyn->ms.rasterization_samples, 1);
    bool needs_restart = false;
    /* Metal fixes the default sample count when an encoder starts. Vulkan may
     * change it between attachmentless draws in the same rendering scope. */
@@ -1034,7 +1036,8 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
    }
 
    if (IS_SHADER_DIRTY(VERTEX) || IS_DIRTY(RS_POLYGON_MODE) ||
-       IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(COLOR_ATTACHMENT_MAP)) {
+       IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(COLOR_ATTACHMENT_MAP) ||
+       IS_DIRTY(MS_RASTERIZATION_SAMPLES)) {
       struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
       mtl_render_pipeline_state *pipeline =
          kk_attachment_pipeline(cmd, vs, gfx->polygon_points);
@@ -1632,6 +1635,13 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
        IS_SHADER_DIRTY(VERTEX)) {
       if (!kk_flush_vertex_input(cmd))
          return;
+      desc->root_dirty = true;
+   }
+
+   if (IS_DIRTY(MS_SAMPLE_MASK) || IS_DIRTY(MS_ALPHA_TO_COVERAGE_ENABLE) ||
+       IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(FRAGMENT)) {
+      desc->root.draw.sample_mask = dyn->ms.sample_mask;
+      desc->root.draw.alpha_to_coverage = dyn->ms.alpha_to_coverage_enable;
       desc->root_dirty = true;
    }
 

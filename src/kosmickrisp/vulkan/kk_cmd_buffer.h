@@ -39,6 +39,8 @@ struct kk_root_descriptor_table {
          uint64_t attrib_base[KK_MAX_ATTRIBS];
          uint32_t attrib_clamps[KK_MAX_ATTRIBS];
          uint64_t vertex_input;
+         uint32_t sample_mask;
+         uint32_t alpha_to_coverage;
 
          uint64_t fragment_statistic;
          float blend_constant[4];

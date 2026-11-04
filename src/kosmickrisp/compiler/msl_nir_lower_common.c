@@ -268,20 +268,18 @@ msl_replace_load_sample_mask_in_for_static_sample_mask(
 }
 
 bool
-msl_lower_static_sample_mask(nir_shader *nir, uint32_t sample_mask)
+msl_lower_sample_mask(nir_shader *nir, nir_def *static_sample_mask)
 {
    /* Only support vertex for now */
    assert(nir->info.stage == MESA_SHADER_FRAGMENT);
 
    /* Embed sample mask */
-   nir_function_impl *entrypoint = nir_shader_get_entrypoint(nir);
-   nir_builder b = nir_builder_at(nir_before_impl(entrypoint));
+   nir_builder b = nir_builder_at(nir_after_instr(nir_def_instr(static_sample_mask)));
 
    struct nir_io_semantics io_semantics = {
       .location = FRAG_RESULT_SAMPLE_MASK,
       .num_slots = 1u,
    };
-   nir_def *static_sample_mask = nir_imm_int(&b, sample_mask);
    nir_store_output(&b, nir_load_sample_mask_in(&b), nir_imm_int(&b, 0u),
                     .base = 0u, .range = 1u, .write_mask = 0x1, .component = 0u,
                     .src_type = nir_type_uint32, .io_semantics = io_semantics);
@@ -292,6 +290,13 @@ msl_lower_static_sample_mask(nir_shader *nir, uint32_t sample_mask)
       nir_metadata_control_flow, static_sample_mask);
 
    return true;
+}
+
+bool
+msl_lower_static_sample_mask(nir_shader *nir, uint32_t sample_mask)
+{
+   nir_builder b = nir_builder_at(nir_before_impl(nir_shader_get_entrypoint(nir)));
+   return msl_lower_sample_mask(nir, nir_imm_int(&b, sample_mask));
 }
 
 static bool
@@ -978,14 +983,13 @@ static bool lower_demote_samples(nir_builder *b, nir_intrinsic_instr *intr,
 /* TODO_KOSMICKRISP: Support dynamic state. nir_lower_alpha_to_coverage
  * already has inputs for this, nir_lower_alpha_to_one does not. */
 bool
-msl_nir_lower_multisample_alpha(nir_shader *s, bool alpha_to_coverage,
-                                bool alpha_to_one)
+msl_nir_lower_multisample_alpha_dynamic(nir_shader *s, bool alpha_to_coverage,
+                                        bool alpha_to_one, nir_def *enable)
 {
    bool progress = false;
 
    if (alpha_to_coverage) {
-      NIR_PASS(progress, s, nir_lower_alpha_to_coverage, false,
-               NULL);
+      NIR_PASS(progress, s, nir_lower_alpha_to_coverage, false, enable);
 
       /* Lower the resulting demote samples intrinsics */
       NIR_PASS(progress, s, nir_shader_intrinsics_pass, lower_demote_samples,
@@ -996,4 +1000,10 @@ msl_nir_lower_multisample_alpha(nir_shader *s, bool alpha_to_coverage,
       NIR_PASS(progress, s, nir_lower_alpha_to_one);
 
    return progress;
+}
+
+bool
+msl_nir_lower_multisample_alpha(nir_shader *nir, bool coverage, bool one)
+{
+   return msl_nir_lower_multisample_alpha_dynamic(nir, coverage, one, NULL);
 }

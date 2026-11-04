@@ -8,6 +8,7 @@ struct kk_attachment_variant {
    struct kk_attachment_variant *next;
    enum mtl_pixel_format formats[MAX_DRAW_BUFFERS];
    bool polygon;
+   uint32_t samples;
    mtl_render_pipeline_state *pipeline;
 };
 
@@ -103,12 +104,15 @@ kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
       if (location < MAX_DRAW_BUFFERS && render->color_att[i].iview)
          formats[location] = vk_format_to_mtl_pixel_format(render->color_att[i].vk_format);
    }
-   if (!memcmp(formats, shader->info.vs.rt_formats, sizeof(formats)))
+   uint32_t samples = MAX2(cmd->vk.dynamic_graphics_state.ms.rasterization_samples, 1);
+   if (samples == shader->info.vs.sample_count &&
+       !memcmp(formats, shader->info.vs.rt_formats, sizeof(formats)))
       return original;
 
    simple_mtx_lock(&cache->mutex);
    for (struct kk_attachment_variant *v = cache->variants; v; v = v->next) {
-      if (v->polygon == polygon && !memcmp(v->formats, formats, sizeof(formats))) {
+      if (v->polygon == polygon && v->samples == samples &&
+          !memcmp(v->formats, formats, sizeof(formats))) {
          simple_mtx_unlock(&cache->mutex);
          return v->pipeline;
       }
@@ -124,11 +128,12 @@ kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
       }
       variant->pipeline = mtl_new_render_pipeline_for_attachments(
          kk_cmd_buffer_device(cmd)->mtl_compiler_handle,
-         cache->descriptor[polygon], formats, MAX_DRAW_BUFFERS, disabled);
+         cache->descriptor[polygon], formats, MAX_DRAW_BUFFERS, disabled, samples);
       result = VK_ERROR_INVALID_SHADER_NV;
       if (variant->pipeline) {
          memcpy(variant->formats, formats, sizeof(formats));
          variant->polygon = polygon;
+         variant->samples = samples;
          variant->next = cache->variants;
          cache->variants = variant;
          simple_mtx_unlock(&cache->mutex);

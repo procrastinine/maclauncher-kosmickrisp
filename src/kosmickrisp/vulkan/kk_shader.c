@@ -146,6 +146,9 @@ struct kk_fs_key {
    uint32_t rasterization_samples;
    uint16_t static_sample_mask;
    bool sample_shading_enable;
+   bool alpha_to_coverage_enable;
+   bool alpha_to_one_enable;
+   uint8_t dynamic_multisample;
    bool has_depth;
    bool has_stencil;
    bool dynamic_input_attachment_map;
@@ -175,7 +178,14 @@ kk_populate_fs_key(struct kk_fs_key *key,
       key->rasterization_samples = state->ms->rasterization_samples;
       key->static_sample_mask = state->ms->sample_mask;
       key->sample_shading_enable = state->ms->sample_shading_enable;
+      key->alpha_to_coverage_enable = state->ms->alpha_to_coverage_enable;
+      key->alpha_to_one_enable = state->ms->alpha_to_one_enable;
    }
+
+   key->dynamic_multisample =
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES) |
+      (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK) << 1) |
+      (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_ALPHA_TO_COVERAGE_ENABLE) << 2);
 
    /* Depth writes are removed unless there's an actual attachment */
    key->has_depth = state->rp->depth_attachment_format != VK_FORMAT_UNDEFINED;
@@ -526,6 +536,8 @@ lower_subpass_dim(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
    return true;
 }
 
+#include "kk_dynamic_multisample.h"
+
 static void
 kk_lower_fs(struct kk_device *dev, nir_shader *nir,
             const struct vk_graphics_pipeline_state *state)
@@ -536,11 +548,7 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
       state->ms && state->ms->sample_shading_enable;
 
    /* Must be lowered before blending */
-   if (state->ms) {
-      NIR_PASS(_, nir, msl_nir_lower_multisample_alpha,
-               state->ms->alpha_to_coverage_enable,
-               state->ms->alpha_to_one_enable);
-   }
+   kk_lower_multisample_alpha(nir, state);
 
    /* msl_nir_lower_sample_shading needs to go before blending since
     * nir_lower_blend will always set uses_sample_shading to true if there's any
@@ -584,8 +592,7 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
 
    NIR_PASS(_, nir, msl_nir_fs_io_types);
 
-   if (state->ms && state->ms->rasterization_samples &&
-       state->ms->sample_mask != UINT16_MAX) {
+   if (kk_fs_has_sample_mask(state)) {
 
       /* KK_WORKAROUND_7 */
       if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(7))) {
@@ -600,7 +607,7 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
             nir_discard_if(&b, nir_ieq_imm(&b, sample_mask_bit, 0u));
          }
       }
-      NIR_PASS(_, nir, msl_lower_static_sample_mask, state->ms->sample_mask);
+      kk_lower_sample_mask(nir, state);
    }
    /* Check https://github.com/KhronosGroup/Vulkan-Portability/issues/54 for
     * explanation on why we need this. */
@@ -1585,7 +1592,7 @@ gather_graphics_pipeline_create_info(
    info->vs.sample_count = 1u;
    if (info->vs.has_ms) {
       const struct vk_multisample_state *ms = state->ms;
-      info->vs.sample_count = ms->rasterization_samples;
+      info->vs.sample_count = MAX2(ms->rasterization_samples, 1);
    }
 
    /* We need to store all other stage sources in the vertex too otherwise we
@@ -1766,7 +1773,8 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    if (render == NULL)
       result = VK_ERROR_INVALID_SHADER_NV;
 
-   if (render && device->vk.enabled_features.dynamicRenderingUnusedAttachments) {
+   if (render && (device->vk.enabled_features.dynamicRenderingUnusedAttachments ||
+                  device->vk.enabled_features.extendedDynamicState3RasterizationSamples)) {
       if (!vs->attachment_pipelines) {
          vs->attachment_pipelines = calloc(1, sizeof(*vs->attachment_pipelines));
          if (!vs->attachment_pipelines)

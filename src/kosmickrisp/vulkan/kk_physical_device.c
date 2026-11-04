@@ -495,6 +495,9 @@ kk_get_device_features(
       .depthClipEnable = true,
 
       /* VK_EXT_extended_dynamic_state3 */
+      .extendedDynamicState3RasterizationSamples = true,
+      .extendedDynamicState3SampleMask = true,
+      .extendedDynamicState3AlphaToCoverageEnable = true,
       .extendedDynamicState3DepthClampEnable = true,
       .extendedDynamicState3DepthClipEnable = true,
       .extendedDynamicState3DepthClipNegativeOneToOne = true,

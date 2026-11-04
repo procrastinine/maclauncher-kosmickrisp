@@ -207,10 +207,12 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
 mtl_render_pipeline_state *
 mtl_new_render_pipeline_for_attachments(mtl_compiler *compiler,
    mtl_render_pipeline_descriptor *descriptor,
-   const enum mtl_pixel_format *formats, uint32_t count, uint32_t disabled)
+   const enum mtl_pixel_format *formats, uint32_t count, uint32_t disabled,
+   uint32_t samples)
 {
    @autoreleasepool {
       MTL4RenderPipelineDescriptor *copy = [(MTL4RenderPipelineDescriptor *)descriptor copy];
+      copy.rasterSampleCount = samples;
       for (uint32_t i = 0; i < count; ++i) {
          copy.colorAttachments[i].pixelFormat = (MTLPixelFormat)formats[i];
          if (disabled & (1u << i))
