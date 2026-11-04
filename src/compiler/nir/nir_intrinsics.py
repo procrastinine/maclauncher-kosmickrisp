@@ -314,6 +314,9 @@ index("struct nir_io_xfb", "io_xfb", size = 2)
 # Ray query values accessible from the RayQueryKHR object
 index("nir_ray_query_value", "ray_query_value")
 
+# Hit object values (SPV_EXT_shader_invocation_reorder)
+index("nir_hit_object_field", "hit_object_field")
+
 # Select between committed and candidate ray queriy intersections
 index("bool", "committed")
 
@@ -767,6 +770,26 @@ intrinsic("rq_generate_intersection", src_comp=[-1, 1])
 intrinsic("rq_confirm_intersection", src_comp=[-1])
 # src[] = { query }
 intrinsic("rq_load", src_comp=[-1], dest_comp=0, indices=[RAY_QUERY_VALUE,COMMITTED,COLUMN])
+
+# Hit objects (SPV_EXT_shader_invocation_reorder). src[0] is always the hit
+# object deref; the driver lowers these before splitting shader calls.
+intrinsic("hit_object_load", src_comp=[-1], dest_comp=0, indices=[HIT_OBJECT_FIELD,COLUMN])
+# src[] = { hit_object, sbt_record_index }
+intrinsic("hit_object_set_sbt_record_index", src_comp=[-1, 1])
+intrinsic("hit_object_record_empty", src_comp=[-1])
+# src[] = { hit_object, ray_flags, miss_index, origin, tmin, direction, tmax }
+intrinsic("hit_object_record_miss", src_comp=[-1, 1, 1, 3, 1, 3, 1])
+# src[] = { hit_object, ray_query, sbt_record_index, attributes, hit_kind }
+intrinsic("hit_object_record_from_query", src_comp=[-1, -1, 1, -1, 1])
+# src[] = { hit_object, accel_struct, ray_flags, cull_mask, sbt_offset,
+#           sbt_stride, miss_index, origin and tmin, direction and tmax,
+#           payload }: records the closest hit or the miss without invoking
+# closest-hit or miss shaders.
+intrinsic("hit_object_trace_ray", src_comp=[-1, -1, 1, 1, 1, 1, 1, 4, 4, -1])
+# src[] = { hit_object, payload }
+intrinsic("hit_object_execute_shader", src_comp=[-1, -1])
+# src[] = { hit_object, attributes }
+intrinsic("hit_object_get_attributes", src_comp=[-1, -1])
 
 # Driver independent raytracing helpers
 

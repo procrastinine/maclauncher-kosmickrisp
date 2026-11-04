@@ -149,6 +149,7 @@ static const struct spirv_capabilities implemented_capabilities = {
    .RayTracingOpacityMicromapKHR = true,
    .RayTracingOpacityMicromapExecutionModeKHR = true,
    .RayTracingPositionFetchKHR = true,
+   .ShaderInvocationReorderEXT = true,
    .RayTraversalPrimitiveCullingKHR = true,
    .ReplicatedCompositesEXT = true,
    .RoundingModeRTE = true,
@@ -456,6 +457,7 @@ vtn_base_type_to_string(enum vtn_base_type t)
    CASE(sampled_image);
    CASE(accel_struct);
    CASE(ray_query);
+   CASE(hit_object);
    CASE(function);
    CASE(event);
    CASE(cooperative_matrix);
@@ -1350,6 +1352,7 @@ vtn_types_compatible(struct vtn_builder *b,
       return true;
    case vtn_base_type_accel_struct:
    case vtn_base_type_ray_query:
+   case vtn_base_type_hit_object:
       return true;
 
    case vtn_base_type_function:
@@ -1391,6 +1394,7 @@ vtn_type_copy(struct vtn_builder *b, struct vtn_type *src)
    case vtn_base_type_event:
    case vtn_base_type_accel_struct:
    case vtn_base_type_ray_query:
+   case vtn_base_type_hit_object:
    case vtn_base_type_cooperative_matrix:
    case vtn_base_type_buffer:
       /* Nothing more to do */
@@ -2513,6 +2517,13 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
       val->type->type = glsl_struct_type(NULL, 0, name, false);
       break;
    }
+
+   case SpvOpTypeHitObjectEXT:
+      /* Driver-defined storage; see NIR_HIT_OBJECT_WORDS. */
+      val->type->base_type = vtn_base_type_hit_object;
+      val->type->type = glsl_array_type(glsl_uint_type(), NIR_HIT_OBJECT_WORDS, 4);
+      b->shader->info.hit_objects = true;
+      break;
 
    case SpvOpTypeRayQueryKHR: {
       val->type->base_type = vtn_base_type_ray_query;
@@ -5804,6 +5815,7 @@ vtn_handle_variable_or_type_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpTypePipe:
    case SpvOpTypeAccelerationStructureKHR:
    case SpvOpTypeRayQueryKHR:
+   case SpvOpTypeHitObjectEXT:
    case SpvOpTypeCooperativeMatrixKHR:
    case SpvOpTypeUntypedPointerKHR:
    case SpvOpTypeBufferEXT:
@@ -6089,6 +6101,160 @@ vtn_handle_ray_intrinsic(struct vtn_builder *b, SpvOp opcode,
 
    default:
       vtn_fail_with_opcode("Unhandled opcode", opcode);
+   }
+}
+
+static nir_hit_object_field
+vtn_hit_object_field(struct vtn_builder *b, SpvOp opcode)
+{
+   switch (opcode) {
+   case SpvOpHitObjectGetRayFlagsEXT: return nir_hit_object_field_ray_flags;
+   case SpvOpHitObjectGetCurrentTimeEXT: return nir_hit_object_field_current_time;
+   case SpvOpHitObjectGetHitKindEXT: return nir_hit_object_field_hit_kind;
+   case SpvOpHitObjectGetPrimitiveIndexEXT: return nir_hit_object_field_primitive_index;
+   case SpvOpHitObjectGetGeometryIndexEXT: return nir_hit_object_field_geometry_index;
+   case SpvOpHitObjectGetInstanceIdEXT: return nir_hit_object_field_instance_id;
+   case SpvOpHitObjectGetInstanceCustomIndexEXT: return nir_hit_object_field_instance_custom_index;
+   case SpvOpHitObjectGetObjectRayOriginEXT: return nir_hit_object_field_object_ray_origin;
+   case SpvOpHitObjectGetObjectRayDirectionEXT: return nir_hit_object_field_object_ray_direction;
+   case SpvOpHitObjectGetWorldRayOriginEXT: return nir_hit_object_field_world_ray_origin;
+   case SpvOpHitObjectGetWorldRayDirectionEXT: return nir_hit_object_field_world_ray_direction;
+   case SpvOpHitObjectGetObjectToWorldEXT: return nir_hit_object_field_object_to_world;
+   case SpvOpHitObjectGetWorldToObjectEXT: return nir_hit_object_field_world_to_object;
+   case SpvOpHitObjectGetRayTMinEXT: return nir_hit_object_field_ray_tmin;
+   case SpvOpHitObjectGetRayTMaxEXT: return nir_hit_object_field_ray_tmax;
+   case SpvOpHitObjectGetShaderBindingTableRecordIndexEXT: return nir_hit_object_field_sbt_record_index;
+   case SpvOpHitObjectGetShaderRecordBufferHandleEXT: return nir_hit_object_field_shader_record;
+   case SpvOpHitObjectGetIntersectionTriangleVertexPositionsEXT:
+      return nir_hit_object_field_triangle_vertex_positions;
+   default:
+      vtn_fail_with_opcode("Unhandled hit object getter", opcode);
+   }
+}
+
+static void
+vtn_hit_object_trace(struct vtn_builder *b, const uint32_t *w, bool motion)
+{
+   nir_intrinsic_instr *intrin =
+      nir_intrinsic_instr_create(b->nb.shader, nir_intrinsic_hit_object_trace_ray);
+   intrin->src[0] = nir_src_for_ssa(&vtn_nir_deref(b, w[1])->def);
+   /* Acceleration structure through miss index, as for trace_ray, then the
+    * origin and direction with tmin and tmax as their fourth components.
+    * A motion trace's current time follows tmax and is not used. */
+   for (unsigned i = 0; i < 6; i++)
+      intrin->src[i + 1] = nir_src_for_ssa(vtn_ssa_value(b, w[i + 2])->def);
+   intrin->src[7] = nir_src_for_ssa(nir_vec4(&b->nb,
+      nir_channel(&b->nb, vtn_get_nir_ssa(b, w[8]), 0), nir_channel(&b->nb, vtn_get_nir_ssa(b, w[8]), 1),
+      nir_channel(&b->nb, vtn_get_nir_ssa(b, w[8]), 2), vtn_get_nir_ssa(b, w[9])));
+   intrin->src[8] = nir_src_for_ssa(nir_vec4(&b->nb,
+      nir_channel(&b->nb, vtn_get_nir_ssa(b, w[10]), 0), nir_channel(&b->nb, vtn_get_nir_ssa(b, w[10]), 1),
+      nir_channel(&b->nb, vtn_get_nir_ssa(b, w[10]), 2), vtn_get_nir_ssa(b, w[11])));
+   intrin->src[9] = nir_src_for_ssa(&vtn_nir_deref(b, w[motion ? 13 : 12])->def);
+   nir_builder_instr_insert(&b->nb, &intrin->instr);
+}
+
+static void
+vtn_hit_object_execute(struct vtn_builder *b, uint32_t hit_object, uint32_t payload)
+{
+   nir_intrinsic_instr *intrin =
+      nir_intrinsic_instr_create(b->nb.shader, nir_intrinsic_hit_object_execute_shader);
+   intrin->src[0] = nir_src_for_ssa(&vtn_nir_deref(b, hit_object)->def);
+   intrin->src[1] = nir_src_for_ssa(&vtn_nir_deref(b, payload)->def);
+   nir_builder_instr_insert(&b->nb, &intrin->instr);
+}
+
+/* SPV_EXT_shader_invocation_reorder. Execution is never reordered, so the
+ * reorder instructions have no effect and the combined forms run their
+ * trace and execute parts in order. */
+static void
+vtn_handle_hit_object(struct vtn_builder *b, SpvOp opcode,
+                      const uint32_t *w, unsigned count)
+{
+   switch (opcode) {
+   case SpvOpReorderThreadWithHintEXT:
+   case SpvOpReorderThreadWithHitObjectEXT:
+      return;
+
+   case SpvOpHitObjectRecordEmptyEXT:
+      nir_hit_object_record_empty(&b->nb, &vtn_nir_deref(b, w[1])->def);
+      return;
+
+   case SpvOpHitObjectRecordMissEXT:
+   case SpvOpHitObjectRecordMissMotionEXT:
+      nir_hit_object_record_miss(&b->nb, &vtn_nir_deref(b, w[1])->def,
+                                 vtn_get_nir_ssa(b, w[2]), vtn_get_nir_ssa(b, w[3]),
+                                 vtn_get_nir_ssa(b, w[4]), vtn_get_nir_ssa(b, w[5]),
+                                 vtn_get_nir_ssa(b, w[6]), vtn_get_nir_ssa(b, w[7]));
+      return;
+
+   case SpvOpHitObjectRecordFromQueryEXT:
+      nir_hit_object_record_from_query(&b->nb, &vtn_nir_deref(b, w[1])->def,
+                                       &vtn_nir_deref(b, w[2])->def,
+                                       vtn_get_nir_ssa(b, w[3]),
+                                       &vtn_nir_deref(b, w[4])->def,
+                                       vtn_get_nir_ssa(b, w[5]));
+      return;
+
+   case SpvOpHitObjectTraceRayEXT:
+   case SpvOpHitObjectTraceRayMotionEXT:
+      vtn_hit_object_trace(b, w, opcode == SpvOpHitObjectTraceRayMotionEXT);
+      return;
+
+   case SpvOpHitObjectExecuteShaderEXT:
+   case SpvOpHitObjectReorderExecuteShaderEXT:
+      vtn_hit_object_execute(b, w[1], w[2]);
+      return;
+
+   case SpvOpHitObjectTraceReorderExecuteEXT:
+   case SpvOpHitObjectTraceMotionReorderExecuteEXT: {
+      bool motion = opcode == SpvOpHitObjectTraceMotionReorderExecuteEXT;
+      vtn_hit_object_trace(b, w, motion);
+      vtn_hit_object_execute(b, w[1], w[motion ? 13 : 12]);
+      return;
+   }
+
+   case SpvOpHitObjectGetAttributesEXT:
+      nir_hit_object_get_attributes(&b->nb, &vtn_nir_deref(b, w[1])->def,
+                                    &vtn_nir_deref(b, w[2])->def);
+      return;
+
+   case SpvOpHitObjectSetShaderBindingTableRecordIndexEXT:
+      nir_hit_object_set_sbt_record_index(&b->nb, &vtn_nir_deref(b, w[1])->def,
+                                          vtn_get_nir_ssa(b, w[2]));
+      return;
+
+   case SpvOpHitObjectIsEmptyEXT:
+   case SpvOpHitObjectIsHitEXT:
+   case SpvOpHitObjectIsMissEXT: {
+      nir_def *kind = nir_hit_object_load(&b->nb, 1, 32, &vtn_nir_deref(b, w[3])->def,
+                                          .hit_object_field = nir_hit_object_field_kind);
+      unsigned expected = opcode == SpvOpHitObjectIsEmptyEXT ? nir_hit_object_kind_empty :
+                          opcode == SpvOpHitObjectIsHitEXT ? nir_hit_object_kind_hit :
+                                                             nir_hit_object_kind_miss;
+      vtn_push_nir_ssa(b, w[2], nir_ieq_imm(&b->nb, kind, expected));
+      return;
+   }
+
+   default: {
+      nir_hit_object_field field = vtn_hit_object_field(b, opcode);
+      const struct glsl_type *type = vtn_get_type(b, w[1])->type;
+      nir_def *hit_object = &vtn_nir_deref(b, w[3])->def;
+      if (glsl_type_is_array_or_matrix(type)) {
+         const struct glsl_type *elem = glsl_get_array_element(type);
+         struct vtn_ssa_value *ssa = vtn_create_ssa_value(b, type);
+         for (unsigned i = 0; i < glsl_get_length(type); i++)
+            ssa->elems[i]->def = nir_hit_object_load(&b->nb, glsl_get_vector_elements(elem),
+                                                     glsl_get_bit_size(elem), hit_object,
+                                                     .hit_object_field = field, .column = i);
+         vtn_push_ssa_value(b, w[2], ssa);
+      } else {
+         vtn_push_nir_ssa(b, w[2],
+            nir_hit_object_load(&b->nb, glsl_get_vector_elements(type),
+                                glsl_get_bit_size(type), hit_object,
+                                .hit_object_field = field));
+      }
+      return;
+   }
    }
 }
 
@@ -6852,6 +7018,44 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpRayQueryGetIntersectionWorldToObjectKHR:
    case SpvOpRayQueryGetIntersectionTriangleVertexPositionsKHR:
       vtn_handle_ray_query_intrinsic(b, opcode, w, count);
+      break;
+
+   case SpvOpHitObjectRecordFromQueryEXT:
+   case SpvOpHitObjectRecordMissEXT:
+   case SpvOpHitObjectRecordMissMotionEXT:
+   case SpvOpHitObjectRecordEmptyEXT:
+   case SpvOpHitObjectTraceRayEXT:
+   case SpvOpHitObjectTraceRayMotionEXT:
+   case SpvOpHitObjectExecuteShaderEXT:
+   case SpvOpHitObjectReorderExecuteShaderEXT:
+   case SpvOpHitObjectTraceReorderExecuteEXT:
+   case SpvOpHitObjectTraceMotionReorderExecuteEXT:
+   case SpvOpHitObjectGetAttributesEXT:
+   case SpvOpHitObjectSetShaderBindingTableRecordIndexEXT:
+   case SpvOpHitObjectGetIntersectionTriangleVertexPositionsEXT:
+   case SpvOpHitObjectGetRayFlagsEXT:
+   case SpvOpHitObjectGetCurrentTimeEXT:
+   case SpvOpHitObjectGetHitKindEXT:
+   case SpvOpHitObjectGetPrimitiveIndexEXT:
+   case SpvOpHitObjectGetGeometryIndexEXT:
+   case SpvOpHitObjectGetInstanceIdEXT:
+   case SpvOpHitObjectGetInstanceCustomIndexEXT:
+   case SpvOpHitObjectGetObjectRayOriginEXT:
+   case SpvOpHitObjectGetObjectRayDirectionEXT:
+   case SpvOpHitObjectGetWorldRayDirectionEXT:
+   case SpvOpHitObjectGetWorldRayOriginEXT:
+   case SpvOpHitObjectGetObjectToWorldEXT:
+   case SpvOpHitObjectGetWorldToObjectEXT:
+   case SpvOpHitObjectGetRayTMaxEXT:
+   case SpvOpHitObjectGetRayTMinEXT:
+   case SpvOpHitObjectGetShaderBindingTableRecordIndexEXT:
+   case SpvOpHitObjectGetShaderRecordBufferHandleEXT:
+   case SpvOpHitObjectIsEmptyEXT:
+   case SpvOpHitObjectIsHitEXT:
+   case SpvOpHitObjectIsMissEXT:
+   case SpvOpReorderThreadWithHintEXT:
+   case SpvOpReorderThreadWithHitObjectEXT:
+      vtn_handle_hit_object(b, opcode, w, count);
       break;
 
    case SpvOpLifetimeStart:

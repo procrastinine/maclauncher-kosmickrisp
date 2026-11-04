@@ -253,6 +253,42 @@ typedef enum {
 } nir_ray_query_value;
 
 /**
+ * Values stored in a hit object (SPV_EXT_shader_invocation_reorder). A hit
+ * object variable is an array of NIR_HIT_OBJECT_WORDS 32-bit words whose
+ * layout belongs to the driver lowering of the hit_object_* intrinsics.
+ * The kind is one of nir_hit_object_kind.
+ */
+typedef enum {
+   nir_hit_object_field_kind,
+   nir_hit_object_field_ray_flags,
+   nir_hit_object_field_world_ray_origin,
+   nir_hit_object_field_ray_tmin,
+   nir_hit_object_field_world_ray_direction,
+   nir_hit_object_field_ray_tmax,
+   nir_hit_object_field_object_ray_origin,
+   nir_hit_object_field_object_ray_direction,
+   nir_hit_object_field_object_to_world,
+   nir_hit_object_field_world_to_object,
+   nir_hit_object_field_instance_id,
+   nir_hit_object_field_instance_custom_index,
+   nir_hit_object_field_primitive_index,
+   nir_hit_object_field_geometry_index,
+   nir_hit_object_field_hit_kind,
+   nir_hit_object_field_sbt_record_index,
+   nir_hit_object_field_shader_record,
+   nir_hit_object_field_triangle_vertex_positions,
+   nir_hit_object_field_current_time,
+} nir_hit_object_field;
+
+typedef enum {
+   nir_hit_object_kind_empty,
+   nir_hit_object_kind_hit,
+   nir_hit_object_kind_miss,
+} nir_hit_object_kind;
+
+#define NIR_HIT_OBJECT_WORDS 80
+
+/**
  * Intel resource flags
  */
 typedef enum {

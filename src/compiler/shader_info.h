@@ -334,6 +334,11 @@ typedef struct shader_info {
     */
    bool ray_query_opacity_micromap:1;
 
+   /**
+    * The shader uses hit objects (SPV_EXT_shader_invocation_reorder).
+    */
+   bool hit_objects:1;
+
    /* Use ACO instead of LLVM on AMD. */
    bool use_aco_amd:1;
 
