@@ -54,9 +54,11 @@ static void
 check_device_lost(struct kk_device *dev, struct mtl_feedback_data *data)
 {
    if (data->error != MTL_COMMAND_QUEUE_ERROR_NONE) {
+      /* A short GPU time points to a fault and a long one to a timeout. */
       vk_device_set_lost(
-         &dev->vk, "Command queue error: %s, with message \"%s\"",
-         mtl_command_queue_error_to_string(data->error), data->error_message);
+         &dev->vk, "Command queue error: %s (%d), with message \"%s\", after %.3f s of GPU time",
+         mtl_command_queue_error_to_string(data->error), (int)data->error,
+         data->error_message, data->gpu_end - data->gpu_start);
       kk_device_fault_record(dev, data);
       kk_interlock_submission_lost(dev);
    }

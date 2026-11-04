@@ -327,6 +327,8 @@ mtl_command_queue_error_to_string(enum mtl_command_queue_error error)
    case MTL_COMMAND_QUEUE_ERROR_INTERNAL:
       return "MTL_COMMAND_QUEUE_ERROR_INTERNAL";
    default:
-      UNREACHABLE("Unsupported error value");
+      /* The value is Metal's NSError code, which can name a code this enum
+       * does not list. This runs in the command buffer completion handler. */
+      return "MTL_COMMAND_QUEUE_ERROR_UNLISTED";
    }
 }

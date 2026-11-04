@@ -17,6 +17,7 @@
 #include "kk_queue.h"
 #include "kk_entrypoints.h"
 #include "kosmickrisp/bridge/mtl_bridge.h"
+#include "kosmickrisp/bridge/vk_to_mtl_map.h"
 #include "vk_format.h"
 #include "util/u_memory.h"
 #include "kk_standard_sparse_3d.h"
@@ -959,7 +960,9 @@ kk_sparse_mapping_complete(struct mtl_feedback_data *feedback)
    struct kk_queue *queue = commit->queue;
    struct kk_device *dev = kk_queue_device(queue);
    if (feedback->error != MTL_COMMAND_QUEUE_ERROR_NONE) {
-      vk_device_set_lost(&dev->vk, "Sparse mapping barrier: %s", feedback->error_message);
+      vk_device_set_lost(&dev->vk, "Sparse mapping barrier: %s (%d), with message \"%s\", after %.3f s of GPU time",
+                         mtl_command_queue_error_to_string(feedback->error), (int)feedback->error,
+                         feedback->error_message, feedback->gpu_end - feedback->gpu_start);
       kk_device_fault_record(dev, feedback);
    }
    mtl_release(commit->command);

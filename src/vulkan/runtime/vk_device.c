@@ -39,6 +39,7 @@
 #include "util/u_debug.h"
 #include "util/hash_table.h"
 #include "util/perf/cpu_trace.h"
+#include "util/log.h"
 #include "util/ralloc.h"
 #include "util/timespec.h"
 
@@ -445,6 +446,15 @@ _vk_device_set_lost(struct vk_device *device,
 
    va_list ap;
    va_start(ap, msg);
+   /* Release builds drop __vk_errorv's message unless the application
+    * installed a debug callback, so the reason for a lost device reached no
+    * log. It is reported once, here, on the loss itself. */
+   va_list report;
+   va_copy(report, ap);
+   char *reason = ralloc_vasprintf(NULL, msg, report);
+   va_end(report);
+   mesa_loge("%s:%d: device lost: %s", file, line, reason ? reason : msg);
+   ralloc_free(reason);
    __vk_errorv(device, VK_ERROR_DEVICE_LOST, file, line, msg, ap);
    va_end(ap);
 
