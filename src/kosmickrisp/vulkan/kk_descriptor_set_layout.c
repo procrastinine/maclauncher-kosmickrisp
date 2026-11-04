@@ -16,6 +16,29 @@
 
 #include "vk_pipeline_layout.h"
 
+/* Code specialization follows immutable logical state, never device addresses. */
+static void
+kk_hash_immutable_sampler(struct mesa_blake3 *hash, const struct kk_sampler *sampler)
+{
+   if (!sampler) {
+      const uint32_t absent = 0;
+      _mesa_blake3_update(hash, &absent, sizeof(absent));
+      return;
+   }
+   const uint32_t state[] = {
+      1, sampler->params_cpu != NULL, sampler->is_virtual, sampler->has_border,
+      sampler->reduction_mode, sampler->lod_bias_fp16, sampler->lod_min_fp16,
+      sampler->lod_max_fp16, sampler->query_lod_bias_fp16, sampler->mipmap_mode,
+      sampler->vk.ycbcr_conversion != NULL,
+   };
+   _mesa_blake3_update(hash, state, sizeof(state));
+   if (sampler->params_cpu)
+      _mesa_blake3_update(hash, sampler->params_cpu, sizeof(*sampler->params_cpu));
+   if (sampler->vk.ycbcr_conversion)
+      _mesa_blake3_update(hash, &sampler->vk.ycbcr_conversion->state,
+                         sizeof(sampler->vk.ycbcr_conversion->state));
+}
+
 static bool
 binding_has_immutable_samplers(const VkDescriptorSetLayoutBinding *binding)
 {
@@ -308,14 +331,12 @@ kk_CreateDescriptorSetLayout(VkDevice device,
       BLAKE3_UPDATE_VALUE(layout->binding[b].dynamic_buffer_index);
 
       if (layout->binding[b].immutable_samplers != NULL) {
-         for (uint32_t i = 0; i < layout->binding[b].array_size; i++) {
-            const struct kk_sampler *sampler =
-               layout->binding[b].immutable_samplers[i];
-
-            /* We zalloc the object, so it's safe to hash the whole thing */
-            if (sampler != NULL && sampler->vk.ycbcr_conversion != NULL)
-               BLAKE3_UPDATE_VALUE(sampler->vk.ycbcr_conversion->state);
-         }
+         /* This tag cannot be a following binding's valid descriptor type. */
+         const uint32_t immutable = UINT32_MAX;
+         BLAKE3_UPDATE_VALUE(immutable);
+         for (uint32_t i = 0; i < layout->binding[b].array_size; i++)
+            kk_hash_immutable_sampler(&blake3_ctx,
+                                     layout->binding[b].immutable_samplers[i]);
       }
    }
 #undef BLAKE3_UPDATE_VALUE

@@ -6,6 +6,7 @@
 
 #include "vulkan/vulkan_core.h"
 #include "msl_private.h"
+#include "kk-sampler-helper-flags.h"
 
 typedef enum ti_type {
    /* We haven't been able to assign a type yet */
@@ -606,7 +607,8 @@ infer_types_from_tex(struct hash_table *types, nir_tex_instr *tex)
 }
 
 static void
-infer_types_from_instr(struct hash_table *types, nir_instr *instr)
+infer_types_from_instr(struct hash_table *types, nir_instr *instr,
+                       bool *has_sampler_helpers)
 {
    switch (instr->type) {
    case nir_instr_type_alu:
@@ -616,6 +618,8 @@ infer_types_from_instr(struct hash_table *types, nir_instr *instr)
       infer_types_from_intrinsic(types, nir_instr_as_intrinsic(instr));
       return;
    case nir_instr_type_tex:
+      *has_sampler_helpers |= nir_instr_as_tex(instr)->backend_flags &
+                              (KK_SAMPLE_HELPER | KK_SAMPLE_METADATA);
       infer_types_from_tex(types, nir_instr_as_tex(instr));
       break;
    default:
@@ -900,15 +904,16 @@ msl_src_as_const(struct nir_to_msl_ctx *ctx, nir_src *src)
 }
 
 struct hash_table *
-msl_infer_types(nir_shader *shader)
+msl_infer_types(nir_shader *shader, bool *has_sampler_helpers)
 {
+   *has_sampler_helpers = false;
    struct hash_table *types = _mesa_pointer_hash_table_create(NULL);
    bool progress = false;
    // First, seed the types for every instruction for every source and def
    nir_foreach_function_impl(impl, shader) {
       nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
-            infer_types_from_instr(types, instr);
+            infer_types_from_instr(types, instr, has_sampler_helpers);
          }
       }
    }

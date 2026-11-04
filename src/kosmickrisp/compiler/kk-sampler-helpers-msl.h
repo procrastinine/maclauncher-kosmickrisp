@@ -17,7 +17,18 @@
 #include "kk-sampler-params.h"
 #include "kk_sparse_layout.h"
 
-struct kk_msl_sample_helper { nir_tex_instr *tex; unsigned id; };
+struct kk_msl_sample_key {
+   uint32_t signature[8];
+   uint32_t arguments[14];
+   uint32_t constant_offset;
+   int64_t offset[4];
+};
+struct kk_msl_sample_helper {
+   struct kk_msl_sample_key key;
+   nir_tex_instr *tex;
+   unsigned id;
+   struct kk_msl_sample_helper *next;
+};
 static const nir_tex_src_type kk_sample_args[] = {
    nir_tex_src_bias, nir_tex_src_lod, nir_tex_src_ddx, nir_tex_src_ddy,
    nir_tex_src_min_lod, nir_tex_src_offset, nir_tex_src_comparator,
@@ -119,22 +130,51 @@ kk_sample_sparse_tap(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
    P(ctx, "    }\n");
 }
 
-static char *
-kk_sample_key(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
+static void
+kk_sample_key(nir_tex_instr *tex, struct kk_msl_sample_key *key)
 {
-   char *key = ralloc_asprintf(ctx->text, "%u:%u:%u:%u:%u:%u:%u:%u",
-      tex->op, tex->sampler_dim, tex->is_array, tex->is_shadow,
-      tex->component, tex->dest_type, tex->coord_components, tex->backend_flags);
+   memset(key, 0, sizeof(*key));
+   key->signature[0] = tex->op;
+   key->signature[1] = tex->sampler_dim;
+   key->signature[2] = tex->is_array;
+   key->signature[3] = tex->is_shadow;
+   key->signature[4] = tex->component;
+   key->signature[5] = tex->dest_type;
+   key->signature[6] = tex->coord_components;
+   key->signature[7] = tex->backend_flags;
    for (unsigned i = 0; i < ARRAY_SIZE(kk_sample_args); ++i) {
       nir_src *src = nir_tex_get_src(tex, kk_sample_args[i]);
-      ralloc_asprintf_append(&key, ":%u:%u", src ? src->ssa->num_components : 0,
-                             src ? src->ssa->bit_size : 0);
-      if (src && kk_sample_args[i] == nir_tex_src_offset && nir_src_is_const(*src))
+      if (!src) continue;
+      key->arguments[2 * i] = src->ssa->num_components;
+      key->arguments[2 * i + 1] = src->ssa->bit_size;
+      if (kk_sample_args[i] == nir_tex_src_offset && nir_src_is_const(*src)) {
+         key->constant_offset = 1;
+         assert(src->ssa->num_components <= ARRAY_SIZE(key->offset));
          for (unsigned c = 0; c < src->ssa->num_components; ++c)
-            ralloc_asprintf_append(&key, ":%lld", (long long)nir_src_comp_as_int(*src, c));
+            key->offset[c] = nir_src_comp_as_int(*src, c);
+      }
    }
-   return key;
 }
+
+static uint32_t
+kk_sample_key_hash(const void *key)
+{
+   return _mesa_hash_data(key, sizeof(struct kk_msl_sample_key));
+}
+
+static bool
+kk_sample_key_equal(const void *a, const void *b)
+{
+   return memcmp(a, b, sizeof(struct kk_msl_sample_key)) == 0;
+}
+
+static bool
+kk_sample_has_footprint(const nir_tex_instr *tex)
+{
+   return tex->op != nir_texop_tg4 &&
+      (tex->backend_flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_MINMAX | KK_SAMPLE_SPARSE));
+}
+
 
 static void
 kk_sample_coord(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex, const char *coord)
@@ -294,12 +334,14 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
          P(ctx, "    float native_unclamped = image.calculate_unclamped_lod(native_sampler, coord.%.*s);\n", cube ? 3 : dims, "xyz");
          P(ctx, "    float native_clamped = image.calculate_clamped_lod(native_sampler, coord.%.*s);\n", cube ? 3 : dims, "xyz");
       }
-      P(ctx, "    if ((metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0) {\n");
-      P(ctx, "        constant kk_sampler_params &params = kk_sampler_params_from_meta(metadata);\n");
-      P(ctx, "        float lod = clamp(reduction_lod, params.min_lod, params.max_lod);\n");
-      P(ctx, "        lod = clamp(lod, 0.0f, float(image.get_num_mip_levels() - 1u));\n");
-      P(ctx, "        if ((params.flags & KK_SAMPLER_PARAMS_MIPMAP_LINEAR) == 0) lod = fmax(ceil(lod + 0.5f) - 1.0f, 0.0f);\n");
-      P(ctx, "        return float2(lod, reduction_lod);\n    }\n");
+      if (tex->backend_flags & KK_SAMPLE_VIRTUAL) {
+         P(ctx, "    if ((metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0) {\n");
+         P(ctx, "        constant kk_sampler_params &params = kk_sampler_params_from_meta(metadata);\n");
+         P(ctx, "        float lod = clamp(reduction_lod, params.min_lod, params.max_lod);\n");
+         P(ctx, "        lod = clamp(lod, 0.0f, float(image.get_num_mip_levels() - 1u));\n");
+         P(ctx, "        if ((params.flags & KK_SAMPLER_PARAMS_MIPMAP_LINEAR) == 0) lod = fmax(ceil(lod + 0.5f) - 1.0f, 0.0f);\n");
+         P(ctx, "        return float2(lod, reduction_lod);\n    }\n");
+      }
       if (ctx->shader->info.stage == MESA_SHADER_COMPUTE) {
          P(ctx, "    float low = kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MIN_LOD, false), high = kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MAX_LOD, false);\n");
          P(ctx, "    float lod = clamp(clamp(reduction_lod, low, high), 0.0f, float(image.get_num_mip_levels() - 1u));\n");
@@ -322,7 +364,7 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
    bool flush = fp && tex->def.bit_size == 32 &&
       nir_is_denorm_flush_to_zero(ctx->shader->info.float_controls_execution_mode, 32);
    const char *accum = tex->is_shadow ? "float" : "float4";
-   if (!gather) {
+   if (kk_sample_has_footprint(tex)) {
       P(ctx, "static %s kk_reduce_%u(%s a, %s b, uint mode) {\n", type, id, type, type);
       if (flush) P(ctx, "    #pragma METAL fp math_mode(safe)\n");
       P(ctx, "    %s value = mode == 1u ? %s(a, b) : %s(a, b);\n", type, fp ? "fmin" : "min", fp ? "fmax" : "max");
@@ -424,7 +466,8 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       kk_sample_sparse_arg(ctx, tex, false);
       P(ctx, ");\n        value = mode == 0u ? %s(mix(%s(value), %s(upper), lod - float(low))) : kk_reduce_%u(value, upper, mode);\n    }\n    return value;\n}\n", type, accum, accum, id);
    }
-   if (!gather) {
+   if (kk_sample_has_footprint(tex) &&
+       (tex->backend_flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_SPARSE))) {
       P(ctx, "template<bool Border> static __attribute__((noinline)) %s kk_virtual_%u(", type, id);
       kk_sample_texture_param(ctx, tex);
       P(ctx, ", sampler native_sampler, constant SamplerTable &table, constant ushort *metadata, float4 coord");
@@ -439,6 +482,11 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
          } else {
             P(ctx, "    constant kk_sampler_params &params = kk_sampler_params_from_meta(metadata);\n");
          }
+         /* This is exactly the old count-one case, before any footprint
+          * dimensions, lengths or ratios are evaluated. */
+         P(ctx, "    if ((params.flags & KK_SAMPLER_PARAMS_ANISOTROPY_ENABLE) == 0 || params.max_anisotropy < 2.0f) return kk_reduction_%u<Border>(image, native_sampler, table, metadata, coord", id);
+         kk_sample_parameters(ctx, tex, false);
+         P(ctx, ", reduction_lod, mode"); kk_sample_sparse_arg(ctx, tex, false); P(ctx, ");\n");
          P(ctx, "    float3 gx = float3(dx");
          for (unsigned c = gradient_dims; c < 3; ++c) P(ctx, ", 0.0f");
          P(ctx, "), gy = float3(dy");
@@ -459,7 +507,7 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
          P(ctx, "    float lx = length(footprint_x), ly = length(footprint_y), major_length = fmax(lx, ly), minor_length = fmin(lx, ly);\n");
          /* Match create_sampler's native power-of-two policy, retaining the
           * original fp32 input in the shared record and testing enable first. */
-         P(ctx, "    float limit = 1.0f;\n    if ((params.flags & KK_SAMPLER_PARAMS_ANISOTROPY_ENABLE) != 0) {\n        uint requested = uint(fmax(params.max_anisotropy, 1.0f));\n        limit = requested <= 1u ? 1.0f : float(1u << (32u - clz(requested - 1u)));\n    }\n");
+         P(ctx, "    uint requested = uint(params.max_anisotropy);\n    float limit = float(1u << (32u - clz(requested - 1u)));\n");
          P(ctx, "    float ratio = clamp(major_length / fmax(minor_length, 0x1p-126f), 1.0f, limit);\n");
          P(ctx, "    uint count = uint(ceil(ratio));\n    if (count == 1u) return kk_reduction_%u<Border>(image, native_sampler, table, metadata, coord", id);
          kk_sample_parameters(ctx, tex, false); P(ctx, ", reduction_lod, mode"); kk_sample_sparse_arg(ctx, tex, false); P(ctx, ");\n");
@@ -491,16 +539,30 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
    kk_sample_texture_param(ctx, tex);
    P(ctx, ", sampler native_sampler, constant SamplerTable &table, ulong address, float4 coord");
    kk_sample_parameters(ctx, tex, true);
-   if (!gather) P(ctx, ", float reduction_lod");
+   if (nir_tex_get_src(tex, nir_tex_src_backend2)) P(ctx, ", float reduction_lod");
    kk_sample_sparse_arg(ctx, tex, true);
    P(ctx, ") {\n    constant ushort *metadata = (constant ushort*)address;\n");
-   if (reduction) { P(ctx, "    uint mode = metadata[21];\n"); } else { P(ctx, "    uint mode = 0u;\n"); }
+   if (tex->backend_flags & KK_SAMPLE_MIN) {
+      P(ctx, tex->backend_flags & KK_SAMPLE_SPARSE ? "    uint mode = 1u;\n" : "    constexpr uint mode = 1u;\n");
+   } else if (tex->backend_flags & KK_SAMPLE_MAX) {
+      P(ctx, tex->backend_flags & KK_SAMPLE_SPARSE ? "    uint mode = 2u;\n" : "    constexpr uint mode = 2u;\n");
+   } else if (reduction) {
+      P(ctx, "    uint mode = metadata[21];\n");
+   } else {
+      P(ctx, tex->backend_flags & KK_SAMPLE_SPARSE ? "    uint mode = 0u;\n" : "    constexpr uint mode = 0u;\n");
+   }
    if (tex->backend_flags & KK_SAMPLE_SPARSE) {
       P(ctx, "    if (sparse.query_address != 0ul && (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) == 0 && mode == 0u) mode = (sparse.physical_facts & %uu) >> %uu;\n", KK_SPARSE_PHYSICAL_REDUCTION_MASK, KK_SPARSE_PHYSICAL_REDUCTION_SHIFT);
    }
-   if (tex->backend_flags & KK_SAMPLE_BORDER) { P(ctx, "    bool border = short(metadata[5]) >= 0;\n"); } else { P(ctx, "    constexpr bool border = false;\n"); }
-   if (!gather) {
-      P(ctx, "    bool virtual_sampler = (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0;\n");
+   if (tex->backend_flags & KK_SAMPLE_BORDER_KNOWN) {
+      P(ctx, "    constexpr bool border = true;\n");
+   } else if (tex->backend_flags & KK_SAMPLE_BORDER) {
+      P(ctx, "    bool border = short(metadata[5]) >= 0;\n");
+   } else {
+      P(ctx, "    constexpr bool border = false;\n");
+   }
+   if (kk_sample_has_footprint(tex)) {
+      P(ctx, tex->backend_flags & KK_SAMPLE_VIRTUAL ? "    bool virtual_sampler = (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0;\n" : "    constexpr bool virtual_sampler = false;\n");
       if (tex->backend_flags & KK_SAMPLE_SPARSE_POINT) {
          P(ctx, "    if (!border) return kk_level_%u<false>(image, native_sampler, table, metadata, coord, 0u, false, 0u, float3(0)", id);
          if (tex->is_shadow) P(ctx, ", compare_value");
@@ -516,8 +578,11 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       }
       for (unsigned border = 0; border < 2; ++border) {
          if (border && !(tex->backend_flags & KK_SAMPLE_BORDER)) continue;
-         P(ctx, "        if (%s) {\n            if (virtual_sampler%s) return kk_virtual_%u<%s>(image, native_sampler, table, metadata, coord", border ? "border" : "!border", tex->backend_flags & KK_SAMPLE_SPARSE ? " || sparse.query_address != 0ul" : "", id, border ? "true" : "false");
-         kk_sample_parameters(ctx, tex, false); P(ctx, ", reduction_lod, mode"); kk_sample_sparse_arg(ctx, tex, false); P(ctx, ");\n");
+         P(ctx, "        if (%s) {\n", border ? "border" : "!border");
+         if (tex->backend_flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_SPARSE)) {
+            P(ctx, "            if (virtual_sampler%s) return kk_virtual_%u<%s>(image, native_sampler, table, metadata, coord", tex->backend_flags & KK_SAMPLE_SPARSE ? " || sparse.query_address != 0ul" : "", id, border ? "true" : "false");
+            kk_sample_parameters(ctx, tex, false); P(ctx, ", reduction_lod, mode"); kk_sample_sparse_arg(ctx, tex, false); P(ctx, ");\n");
+         }
          P(ctx, "            return kk_reduction_%u<%s>(image, native_sampler, table, metadata, coord", id, border ? "true" : "false");
          kk_sample_parameters(ctx, tex, false); P(ctx, ", reduction_lod, mode"); kk_sample_sparse_arg(ctx, tex, false); P(ctx, ");\n        }\n");
       }
@@ -554,16 +619,20 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
 }
 
 static void
-kk_sample_emit_metadata(struct nir_to_msl_ctx *ctx)
+kk_sample_emit_metadata(struct nir_to_msl_ctx *ctx, bool sparse, bool compare)
 {
    P(ctx, "%s", kk_sampler_params_msl_declaration());
-   P(ctx, "struct kk_sparse_sample_state { ulong query_address; kk_sampler_params params; uint physical_facts; bool all_resident; };\n");
-   P(ctx, "template<typename T> struct kk_sparse_sample_result { T color; bool all_resident; T value() const { return color; } bool resident() const { return all_resident; } };\n");
+   if (sparse) {
+      P(ctx, "struct kk_sparse_sample_state { ulong query_address; kk_sampler_params params; uint physical_facts; bool all_resident; };\n");
+      P(ctx, "template<typename T> struct kk_sparse_sample_result { T color; bool all_resident; T value() const { return color; } bool resident() const { return all_resident; } };\n");
+   }
    P(ctx, "static constant kk_sampler_params &kk_sampler_params_from_meta(constant ushort *metadata) {\n");
    P(ctx, "    ulong address = ulong(metadata[6]) | (ulong(metadata[7]) << 16) | (ulong(metadata[8]) << 32) | (ulong(metadata[11]) << 48);\n");
    P(ctx, "    return *(constant kk_sampler_params *)address;\n}\n");
-   P(ctx, "static bool kk_sampler_compare(uint op, float reference, float depth) {\n");
-   P(ctx, "    #pragma METAL fp math_mode(safe)\n    switch (op) {\n    case 0u: return false;\n    case 1u: return reference < depth;\n    case 2u: return reference == depth;\n    case 3u: return reference <= depth;\n    case 4u: return reference > depth;\n    case 5u: return reference != depth;\n    case 6u: return reference >= depth;\n    case 7u: return true;\n    }\n    return false;\n}\n");
+   if (compare) {
+      P(ctx, "static bool kk_sampler_compare(uint op, float reference, float depth) {\n");
+      P(ctx, "    #pragma METAL fp math_mode(safe)\n    switch (op) {\n    case 0u: return false;\n    case 1u: return reference < depth;\n    case 2u: return reference == depth;\n    case 3u: return reference <= depth;\n    case 4u: return reference > depth;\n    case 5u: return reference != depth;\n    case 6u: return reference >= depth;\n    case 7u: return true;\n    }\n    return false;\n}\n");
+   }
    /* One selector declaration supplies helper calls and the public query. */
 #define KK_METADATA_CONSTANT(name) P(ctx, "constant uint " #name " = %uu;\n", name)
    KK_METADATA_CONSTANT(KK_SAMPLER_META_MIN_LOD);
@@ -574,6 +643,12 @@ kk_sample_emit_metadata(struct nir_to_msl_ctx *ctx)
    P(ctx, "    constant ushort *metadata = (constant ushort *)address;\n");
    P(ctx, "    bool virtual_sampler = (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0;\n");
    P(ctx, "    if (field == %uu) return virtual_sampler ? 1.0f : 0.0f;\n", KK_SAMPLER_META_VIRTUAL);
+   /* Query bias remains numeric at byte40 on both descriptor encodings.
+    * Native bias queries need no original-record pointer reconstruction. */
+   P(ctx, "    if (!virtual_sampler && field == %uu) {\n", KK_SAMPLER_META_BIAS);
+   P(ctx, "        if ((metadata[22] & KK_SAMPLER_FILTER_PARAMS_POINTER) != 0) return lower_native_bias && %s ? float(as_type<half>(metadata[20])) : 0.0f;\n", ctx->native_sampler_lod_bias ? "false" : "true");
+   P(ctx, "        return lower_native_bias ? float(as_type<half>(metadata[6])) : 0.0f;\n    }\n");
+   P(ctx, "    if (!virtual_sampler && field == %uu) return float(as_type<half>(metadata[20]));\n", KK_SAMPLER_META_QUERY_BIAS);
    P(ctx, "    if ((metadata[22] & (KK_SAMPLER_FILTER_PARAMS_POINTER | KK_SAMPLER_FILTER_VIRTUAL)) != 0) {\n        constant kk_sampler_params &params = kk_sampler_params_from_meta(metadata);\n        switch (field) {\n");
    P(ctx, "        case %uu: return virtual_sampler ? params.lod_bias : (lower_native_bias && %s ? float(half(params.lod_bias)) : 0.0f);\n", KK_SAMPLER_META_BIAS, ctx->native_sampler_lod_bias ? "false" : "true");
    P(ctx, "        case %uu: return virtual_sampler ? params.lod_bias : float(half(params.lod_bias));\n", KK_SAMPLER_META_QUERY_BIAS);
@@ -598,22 +673,34 @@ kk_sample_emit_metadata(struct nir_to_msl_ctx *ctx)
 static void
 kk_sample_emit_helpers(struct nir_to_msl_ctx *ctx)
 {
-   bool emitted_metadata = false;
+   bool metadata = false, sparse = false, compare = false;
+   struct kk_msl_sample_helper *first = NULL, **tail = &first;
    nir_foreach_function_impl(impl, ctx->shader) nir_foreach_block(block, impl) nir_foreach_instr(instr, block) {
       if (instr->type != nir_instr_type_tex) continue;
       nir_tex_instr *tex = nir_instr_as_tex(instr);
       if (!(tex->backend_flags & (KK_SAMPLE_HELPER | KK_SAMPLE_METADATA))) continue;
-      if (!emitted_metadata) { kk_sample_emit_metadata(ctx); emitted_metadata = true; }
+      metadata |= (tex->backend_flags & KK_SAMPLE_METADATA) ||
+                  kk_sample_has_footprint(tex) || tex->op == nir_texop_lod ||
+                  (tex->is_shadow && tex->op == nir_texop_tg4 &&
+                   (tex->backend_flags & KK_SAMPLE_BORDER));
       if (tex->backend_flags & KK_SAMPLE_METADATA) continue;
+      sparse |= tex->backend_flags & KK_SAMPLE_SPARSE;
+      compare |= tex->is_shadow;
       if (!ctx->sampler_helpers)
-         ctx->sampler_helpers = _mesa_hash_table_create(ctx->text, _mesa_hash_string, _mesa_key_string_equal);
-      char *key = kk_sample_key(ctx, tex);
-      if (_mesa_hash_table_search(ctx->sampler_helpers, key)) {ralloc_free(key);continue;}
+         ctx->sampler_helpers = _mesa_hash_table_create(ctx->text, kk_sample_key_hash, kk_sample_key_equal);
+      struct kk_msl_sample_key key;
+      kk_sample_key(tex, &key);
+      if (_mesa_hash_table_search(ctx->sampler_helpers, &key)) continue;
       struct kk_msl_sample_helper *helper = rzalloc(ctx->text, struct kk_msl_sample_helper);
+      helper->key = key;
       helper->tex = tex; helper->id = ctx->sampler_helpers->entries;
-      _mesa_hash_table_insert(ctx->sampler_helpers, key, helper);
-      kk_sample_emit_one(ctx, helper);
+      _mesa_hash_table_insert(ctx->sampler_helpers, &helper->key, helper);
+      *tail = helper;
+      tail = &helper->next;
    }
+   if (metadata) kk_sample_emit_metadata(ctx, sparse, compare);
+   for (struct kk_msl_sample_helper *helper = first; helper; helper = helper->next)
+      kk_sample_emit_one(ctx, helper);
 }
 
 static bool
@@ -628,8 +715,9 @@ kk_sample_emit_call(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
       return true;
    }
    if (!(tex->backend_flags & KK_SAMPLE_HELPER)) return false;
-   char *key = kk_sample_key(ctx, tex);
-   struct hash_entry *entry = _mesa_hash_table_search(ctx->sampler_helpers, key);ralloc_free(key);assert(entry);
+   struct kk_msl_sample_key key;
+   kk_sample_key(tex, &key);
+   struct hash_entry *entry = _mesa_hash_table_search(ctx->sampler_helpers, &key);assert(entry);
    struct kk_msl_sample_helper *helper = entry->data;
    bool sparse = tex->backend_flags & KK_SAMPLE_SPARSE;
    if (sparse) {
@@ -648,7 +736,7 @@ kk_sample_emit_call(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
       if (!src || (kk_sample_args[i] == nir_tex_src_offset && nir_src_is_const(*src))) continue;
       P(ctx, ", ");src_to_msl(ctx, src);
    }
-   if (tex->op != nir_texop_tg4) {
+   if (nir_tex_get_src(tex, nir_tex_src_backend2)) {
       P(ctx, ", ");src_to_msl(ctx, nir_tex_get_src(tex, nir_tex_src_backend2));P(ctx, ".x");
    }
    if (sparse) {

@@ -59,7 +59,7 @@ struct nir_to_msl_ctx {
 /* Perform type inference. The returned value is a
  * map from nir_def* to base type.*/
 
-struct hash_table *msl_infer_types(nir_shader *shader);
+struct hash_table *msl_infer_types(nir_shader *shader, bool *has_sampler_helpers);
 
 const char *msl_type_for_def(struct hash_table *types, nir_def *def);
 
