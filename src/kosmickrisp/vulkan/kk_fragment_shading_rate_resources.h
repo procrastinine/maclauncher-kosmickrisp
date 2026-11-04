@@ -4,6 +4,7 @@
 #include "kk_cmd_buffer.h"
 #include "kosmickrisp/libkk/kk_fragment_shading_rate_types.h"
 #include "kk_fragment_shading_rate_workspace.h"
+#include "kk_fragment_shading_rate_cache.h"
 
 /* Origins align to complete logical quads for every supported rate. A final
  * window may extend past the render area; native scissors clip its actual
@@ -83,5 +84,17 @@ VkResult kk_vrs_workspace_initialize(const struct kk_vrs_shadow_programs *,
 VkResult kk_vrs_cmd_bind_workspace(struct kk_cmd_buffer *,
    const struct kk_vrs_transaction_workspace *, mtl_argument_table *original,
    mtl_argument_table *private_table, uint32_t job, uint32_t row);
+
+/* Records only on a caller-owned live phase encoder. It neither creates nor
+ * ends an encoder, allocates storage nor orders capture/transaction/replay.
+ * The caller must finish this private encoder before ordinary compute state
+ * is used again, and hold programs/workspace/tables through GPU completion.
+ * SHADOW_LOAD initializes one window; CAPTURE_CLEAR resets one selected slot;
+ * TRANSACTION executes one immutable row. Ordering/continuation is external. */
+VkResult kk_vrs_encode_workspace_compute(struct kk_cmd_buffer *,
+   mtl_compute_encoder *, const struct kk_vrs_shadow_programs *,
+   const struct kk_vrs_transaction_workspace *, mtl_argument_table *original,
+   mtl_argument_table *private_table, uint32_t slot, uint32_t row,
+   enum kk_vrs_fragment_kind);
 
 #endif

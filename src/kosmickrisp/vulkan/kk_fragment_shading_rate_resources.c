@@ -269,3 +269,49 @@ kk_vrs_cmd_bind_workspace(struct kk_cmd_buffer *cmd,
    mtl_set_address(private_table, address, KK_ARGUMENT_PER_DRAW);
    return VK_SUCCESS;
 }
+
+VkResult
+kk_vrs_encode_workspace_compute(struct kk_cmd_buffer *cmd,
+   mtl_compute_encoder *encoder, const struct kk_vrs_shadow_programs *programs,
+   const struct kk_vrs_transaction_workspace *workspace, mtl_argument_table *original,
+   mtl_argument_table *private_table, uint32_t slot, uint32_t row,
+   enum kk_vrs_fragment_kind kind)
+{
+   if (!encoder || !programs || !workspace ||
+       programs->input_stride != workspace->layout.input_stride ||
+       programs->samples != workspace->layout.samples)
+      return VK_ERROR_UNKNOWN;
+   mtl_compute_pipeline_state *pipeline;
+   struct mtl_size grid, group;
+   switch (kind) {
+   case KK_VRS_SHADOW_LOAD:
+      if (row) return VK_ERROR_UNKNOWN;
+      pipeline = programs->load_pipeline;
+      grid = (struct mtl_size){workspace->layout.side, workspace->layout.side,
+         workspace->layout.samples};
+      group = (struct mtl_size){8, 8, 1};
+      break;
+   case KK_VRS_CAPTURE_CLEAR:
+      if (row) return VK_ERROR_UNKNOWN;
+      pipeline = programs->clear_pipeline;
+      grid = group = (struct mtl_size){256, 1, 1};
+      break;
+   case KK_VRS_TRANSACTION:
+      pipeline = programs->transaction_pipeline;
+      grid = group = (struct mtl_size){256, 1, 1};
+      break;
+   default:
+      return VK_ERROR_UNKNOWN;
+   }
+   if (!pipeline) return VK_ERROR_INVALID_SHADER_NV;
+   VkResult result = kk_vrs_cmd_bind_workspace(cmd, workspace, original,
+      private_table, slot, row);
+   if (result != VK_SUCCESS) return result;
+   mtl_compute_set_pipeline_state(encoder, pipeline);
+   mtl_compute_set_argument_table(encoder, private_table);
+   mtl_dispatch_threads(encoder, grid, group);
+   /* The original table is not mutated. Its normal application/root/sampler
+    * entries remain the owner's bindings, independent of our PER_DRAW. */
+   mtl_compute_set_argument_table(encoder, original);
+   return VK_SUCCESS;
+}
