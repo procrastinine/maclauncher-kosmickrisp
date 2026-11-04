@@ -21,6 +21,7 @@ struct kk_sparse_view_state;
 
 struct kk_image_view {
    struct vk_image_view vk;
+   struct kk_layered_bc_view *layered_bc;
    struct kk_writable_msaa_view *writable_msaa;
    struct kk_sparse_view_state *sparse;
 

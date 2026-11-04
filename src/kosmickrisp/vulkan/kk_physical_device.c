@@ -986,7 +986,7 @@ kk_get_device_properties(
       .nonStrictWideLinesUseParallelogram = true,
 
       /* VK_KHR_maintenance6 */
-      .blockTexelViewCompatibleMultipleLayers = false,
+      .blockTexelViewCompatibleMultipleLayers = true,
       .maxCombinedImageSamplerDescriptorCount = 3,
       .fragmentShadingRateClampCombinerInputs = false, /* TODO */
 

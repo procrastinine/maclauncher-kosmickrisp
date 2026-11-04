@@ -86,6 +86,7 @@ kk_files = files(
   'kk_image_layout.c',
   'kk_image_view.h',
   'kk_image_view.c',
+  'kk_layered_bc.c',
   'kk_native_block_alias.c',
   'kk_image.h',
   'kk_image.c',

@@ -18,6 +18,7 @@
 #include "kosmickrisp/libkk/kk_tess_grid.h"
 #include "kk_format.h"
 #include "kk_image_view.h"
+#include "kk_layered_bc.h"
 #include "kk_physical_device.h"
 #include "kk_query_pool.h"
 
@@ -105,6 +106,11 @@ kk_merge_render_iview(VkExtent2D *extent, struct kk_image_view *iview)
       unsigned width = u_minify(iview->vk.image->extent.width, level);
       unsigned height = u_minify(iview->vk.image->extent.height, level);
 
+      if (iview->layered_bc) {
+         width = iview->vk.extent.width;
+         height = iview->vk.extent.height;
+      }
+
       extent->width = MAX2(extent->width, width);
       extent->height = MAX2(extent->height, height);
    }
@@ -125,7 +131,8 @@ kk_clear_common_attachment_description(
 static void
 kk_fill_common_attachment_description(
    mtl_render_pass_attachment_descriptor *descriptor,
-   const struct kk_attachment *info, bool force_attachment_load,
+   const struct kk_attachment *info, const struct kk_rendering_state *render,
+   bool force_attachment_load,
    bool attach_resolve_texture)
 {
    const struct kk_image_view *iview = info->iview;
@@ -141,6 +148,8 @@ kk_fill_common_attachment_description(
       mtl_render_pass_attachment_descriptor_set_slice(
          descriptor, iview->vk.base_array_layer);
    }
+
+   kk_layered_bc_attachment_description(descriptor, info, render, false);
 
    /* STORE_OP_NONE behaves like DONT_CARE if there are writes
     * (CLEAR or DONT_CARE are writes).
@@ -169,6 +178,7 @@ kk_fill_common_attachment_description(
          mtl_render_pass_attachment_descriptor_set_resolve_slice(
             descriptor, info->resolve_iview->vk.base_array_layer);
       }
+      kk_layered_bc_attachment_description(descriptor, info, render, true);
    }
 }
 
@@ -244,7 +254,7 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
          &render->color_att[i], rendering_to_whole_framebuffer,
          VK_IMAGE_ASPECT_COLOR_BIT);
 
-      kk_fill_common_attachment_description(attachment_descriptor, color_att,
+      kk_fill_common_attachment_description(attachment_descriptor, color_att, render,
                                             force_attachment_load,
                                             renderpass_resolve);
 
@@ -256,6 +266,8 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
    }
 }
 
+#include "kk_layered_bc_render.h"
+
 static void
 kk_begin_rendering(VkCommandBuffer commandBuffer,
                      const VkRenderingInfo *pRenderingInfo)
@@ -266,7 +278,13 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
 
    struct kk_rendering_state *render = &cmd->state.gfx.render;
 
+   const bool layered_bc = kk_layered_bc_rendering_info_requested(pRenderingInfo);
+   /* Per-layer physical passes cannot use whole-pass memoryless retention.
+    * Reuse the existing private commitment path for paired transient views. */
+   const bool transient_safe = cmd->transient_safe;
+   cmd->transient_safe &= !layered_bc;
    VkResult result = kk_transient_prepare_rendering(cmd, pRenderingInfo);
+   cmd->transient_safe = transient_safe;
    if (result != VK_SUCCESS) {
       vk_command_buffer_set_error(&cmd->vk, result);
       return;
@@ -274,6 +292,8 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
 
    memset(render, 0, sizeof(*render));
 
+   render->layered_bc = layered_bc;
+   render->layered_bc_view_mask = pRenderingInfo->viewMask;
    render->flags = pRenderingInfo->flags;
    render->area = pRenderingInfo->renderArea;
    render->view_mask = pRenderingInfo->viewMask;
@@ -358,7 +378,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
 
       /* Render targets are always arrays */
       mtl_render_pass_descriptor_set_render_target_array_length(
-         pass_descriptor, layer_count ? layer_count : 1u);
+         pass_descriptor, render->layered_bc ? 1u : (layer_count ? layer_count : 1u));
    }
 
    /* Check if we are rendering to the whole framebuffer. Required to understand
@@ -397,7 +417,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
          mtl_render_pass_descriptor_get_depth_attachment(pass_descriptor);
       kk_fill_common_attachment_description(
-         attachment_descriptor, &render->depth_att, force_attachment_load,
+         attachment_descriptor, &render->depth_att, render, force_attachment_load,
          renderpass_resolve);
 
       /* clearValue.depthStencil.depth could have invalid values such as NaN
@@ -427,7 +447,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
          mtl_render_pass_descriptor_get_stencil_attachment(pass_descriptor);
       kk_fill_common_attachment_description(
-         attachment_descriptor, &render->stencil_att, force_attachment_load,
+         attachment_descriptor, &render->stencil_att, render, force_attachment_load,
          renderpass_resolve);
       mtl_render_pass_attachment_descriptor_set_clear_stencil(
          attachment_descriptor,
@@ -450,8 +470,8 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    /* Rendering with no attachments requires pushing the start of the render
     * pass to first pipeline binding to know sample count. */
    cmd->state.gfx.render_pass_descriptor = pass_descriptor;
-   if (!no_framebuffer)
-      cs_start_render(cmd);
+   if (!no_framebuffer && !kk_layered_bc_start_rendering(cmd, force_attachment_load))
+      return;
 
    /* Store descriptor in case we need to restart the pass at pipeline barrier,
     * but force loads */
@@ -476,7 +496,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
       mtl_render_pass_attachment_descriptor_set_load_action(
          attachment_descriptor, MTL_LOAD_ACTION_LOAD);
    }
-   cmd->state.gfx.need_to_start_render_pass = no_framebuffer;
+   cmd->state.gfx.need_to_start_render_pass = no_framebuffer || render->layered_bc;
 
    kk_cmd_buffer_dirty_all_gfx(cmd);
 
@@ -2657,6 +2677,7 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
 static void
 kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
+   if (!kk_layered_bc_prepare_draw(cmd)) return;
    kk_sparse_refresh_shader(cmd, MESA_SHADER_VERTEX);
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_graphics_state *gfx = &cmd->state.gfx;
@@ -2681,6 +2702,7 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    }
 
    kk_flush_gfx_state(cmd);
+   if (!kk_layered_bc_begin_draw(cmd, data)) goto layered_bc_done;
 
    data->restart = dyn->ia.primitive_restart_enable;
    data->restart_index = dyn->ia.primitive_restart_index;
@@ -2689,7 +2711,7 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 
    /* Convert to indirect and process predicates. Skip draw if we fail. */
    if (data->predicate_count > 0 && !kk_predicate_draws(cmd, data))
-      return;
+      goto layered_bc_done;
 
    bool tess = cmd->state.shaders[MESA_SHADER_TESS_EVAL];
    bool geom = kk_geometry_shader(cmd);
@@ -2705,13 +2727,13 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
     * its own lists. */
    if (!per_vertex && requires_unroll(cmd, data) &&
        !kk_unroll_geometry(cmd, data, true))
-      return;
+      goto layered_bc_done;
 
    /* Primitive restart: split into a triangle list on the GPU, keeping the
     * Vulkan vertex order, then emulate on the list. */
    if (per_vertex && data->indexed && data->restart &&
        !kk_unroll_geometry(cmd, data, false))
-      return;
+      goto layered_bc_done;
 
    /* Rotate the rewritten primitives only when flat inputs need the last
     * vertex first, like kk_unroll_geometry. The per-vertex emulation handles
@@ -2719,20 +2741,20 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    if (!geom && mesa_prim_has_adjacency(data->prim) &&
        !kk_unroll_adjacency(
           cmd, data, !per_vertex && requires_unroll_flatshade(cmd, data)))
-      return;
+      goto layered_bc_done;
 
    /* Patch lists do not restart, so only a GS fed by the input assembly needs
     * its restarts unrolled. The unroll kernel reads an indirect draw. */
    bool gs_restart = geom && !tess && data->restart && data->indexed;
    if (gs_restart && !kk_convert_to_indirect_draw(cmd, data))
-      return;
+      goto layered_bc_done;
 
    uint64_t per_vertex_draws = 0u;
    if (per_vertex && data->indirect && !per_vertex_draws_raw_indirect(data)) {
       struct kk_ptr out = kk_pool_alloc(
          cmd, data->draw_count * sizeof(VkDrawIndirectCommand), 4u);
       if (unlikely(!out.gpu))
-         return;
+         goto layered_bc_done;
       libkk_per_vertex_draw(cmd, kk_grid_1d(data->draw_count), true, out.gpu,
                             data->indirect_command.addr,
                             data->indirect_command.stride / sizeof(uint32_t),
@@ -2817,6 +2839,9 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       }
       kk_poly_layer_dispatch_draw(cmd, draw_data);
    }
+
+layered_bc_done:
+   kk_layered_bc_end_draw(cmd);
 }
 
 static void
@@ -3135,7 +3160,7 @@ kk_CmdDrawIndirectCount2KHR(VkCommandBuffer commandBuffer,
 
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
-   if (pInfo->maxDrawCount >= 1024 &&
+   if (!cmd->state.gfx.render.layered_bc && pInfo->maxDrawCount >= 1024 &&
        !cmd->state.shaders[MESA_SHADER_TESS_EVAL] && !kk_geometry_shader(cmd) &&
        cmd->vk.dynamic_graphics_state.rs.polygon_mode == VK_POLYGON_MODE_FILL &&
        !cmd->state.gfx.xfb_enabled && !cmd->state.pipeline_statistics &&
@@ -3182,7 +3207,7 @@ kk_CmdDrawIndexedIndirectCount2KHR(VkCommandBuffer commandBuffer,
 
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
-   if (pInfo->maxDrawCount >= 1024 &&
+   if (!cmd->state.gfx.render.layered_bc && pInfo->maxDrawCount >= 1024 &&
        !cmd->state.shaders[MESA_SHADER_TESS_EVAL] && !kk_geometry_shader(cmd) &&
        cmd->vk.dynamic_graphics_state.rs.polygon_mode == VK_POLYGON_MODE_FILL &&
        !cmd->state.gfx.xfb_enabled && !cmd->state.pipeline_statistics &&

@@ -179,6 +179,9 @@ struct kk_attachment {
 };
 
 struct kk_rendering_state {
+   bool layered_bc;
+   uint32_t layered_bc_layer;
+   uint32_t layered_bc_view_mask;
    bool attachmentless;
    bool msrtss;
    VkRenderingFlagBits flags;

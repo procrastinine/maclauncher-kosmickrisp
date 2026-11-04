@@ -6,6 +6,7 @@
  */
 
 #include "kk_image_view.h"
+#include "kk_layered_bc.h"
 #include "kk-writable-msaa.h"
 
 #include "kk_device.h"
@@ -174,7 +175,7 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
          subres_layout.width_px = view->vk.extent.width;
          subres_layout.height_px = view->vk.extent.height;
          subres_layout.depth_px = view->vk.extent.depth;
-         subres_layout.layers = view->vk.layer_count;
+         subres_layout.layers = kk_layered_bc_requested(&view->vk) ? 1 : view->vk.layer_count;
          subres_layout.levels = view->vk.level_count;
          subres_layout.format.pipe = view_layout.format.pipe;
          subres_layout.format.mtl = view_layout.format.mtl;
@@ -191,6 +192,11 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
 
          /* Adjust for new base texture pointing to subresource */
          view_layout.base_level = 0u;
+         if (kk_layered_bc_requested(&view->vk))
+            {
+            view_layout.min_lod_clamp = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0f);
+            view_layout.view_type = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+         }
          view_layout.num_levels = subres_layout.levels;
          view_layout.base_array_layer = 0u;
          view_layout.array_len = subres_layout.layers;
@@ -288,6 +294,8 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
    }
 
    VkResult result = kk_writable_msaa_view_init(dev, view);
+   if (result == VK_SUCCESS)
+      result = kk_layered_bc_view_init(dev, view);
    if (result != VK_SUCCESS)
       kk_image_view_finish(dev, view);
    return result;
@@ -296,6 +304,7 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
 void
 kk_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
 {
+   kk_layered_bc_view_finish(dev, view);
    kk_writable_msaa_view_finish(dev, view);
    for (uint8_t plane = 0; plane < view->plane_count; plane++) {
       if (view->planes[plane].mtl_handle_cube_face)

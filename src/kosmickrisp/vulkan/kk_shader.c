@@ -853,6 +853,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
 
    /* Common msl texture lowering needs to happen after ycbcr lowering and
     * before descriptor lowering. */
+   NIR_PASS(_, nir, kk_nir_prepare_layered_bc_cubes, rs, set_layout_count, set_layouts);
    if (features & BITFIELD_BIT(KK_FEAT_NON_SEAMLESS_CUBE))
       NIR_PASS(_, nir, kk_nir_lower_non_seamless_cube, set_layout_count, set_layouts);
 
@@ -931,6 +932,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
    if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
       NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
 
+   NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts);
    NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
       (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10,
       features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER));

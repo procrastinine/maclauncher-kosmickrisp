@@ -853,10 +853,18 @@ kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    uint64_t indirect, uint64_t count, uint32_t draw_count,
    uint32_t stride, bool force_virtual)
 {
+   if (cmd->state.gfx.render.layered_bc) {
+      if (!kk_layered_bc_prepare_draw(cmd)) return;
+      kk_flush_gfx_state(cmd);
+      if (!kk_mesh_layer_replay_begin(cmd, cmd->state.gfx.render.layer_count,
+            kk_layered_bc_bind_layer, &cmd->state.gfx.render))
+         goto layered_bc_mesh_error;
+   }
+
    const uint32_t mask = cmd->state.gfx.render.view_mask;
    if (!mask) {
       kk_draw_mesh_one_view(cmd, direct, indirect, count, draw_count, stride, force_virtual);
-      return;
+      goto layered_bc_mesh_done;
    }
    uint64_t saved_view = cmd->state.gfx.per_draw_data.multiview_index;
    u_foreach_bit(view, mask) {
@@ -867,6 +875,13 @@ kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    }
    cmd->state.gfx.render.view_mask = mask;
    cmd->state.gfx.per_draw_data.multiview_index = saved_view;
+
+   goto layered_bc_mesh_done;
+layered_bc_mesh_error:
+   vk_command_buffer_set_error(&cmd->vk, VK_ERROR_FEATURE_NOT_PRESENT);
+layered_bc_mesh_done:
+   if (cmd->state.gfx.render.layered_bc && cmd->state.gfx.layer_replay.bind)
+      kk_mesh_layer_replay_end(cmd);
 }
 
 VKAPI_ATTR void VKAPI_CALL

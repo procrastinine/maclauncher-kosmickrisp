@@ -1107,11 +1107,10 @@ lower_ssbo_descriptor(nir_builder *b, nir_intrinsic_instr *intr, void *_data)
    }
 }
 
-bool
-kk_nir_lower_descriptors(nir_shader *nir,
-                         const struct vk_pipeline_robustness_state *rs,
-                         uint32_t set_layout_count,
-                         struct vk_descriptor_set_layout *const *set_layouts)
+static struct lower_descriptors_ctx
+kk_descriptor_context(const struct vk_pipeline_robustness_state *rs,
+                      uint32_t set_layout_count,
+                      struct vk_descriptor_set_layout *const *set_layouts)
 {
    struct lower_descriptors_ctx ctx = {
       .clamp_desc_array_bounds =
@@ -1131,6 +1130,40 @@ kk_nir_lower_descriptors(nir_shader *nir,
       if (set_layouts[s] != NULL)
          ctx.set_layouts[s] = vk_to_kk_descriptor_set_layout(set_layouts[s]);
    }
+
+   return ctx;
+}
+
+#include "kk_layered_bc_nir.h"
+
+bool
+kk_nir_prepare_layered_bc_cubes(nir_shader *nir,
+                         const struct vk_pipeline_robustness_state *rs,
+                         uint32_t set_layout_count,
+                         struct vk_descriptor_set_layout *const *set_layouts)
+{
+   struct lower_descriptors_ctx ctx = kk_descriptor_context(rs, set_layout_count, set_layouts);
+   return nir_shader_tex_pass(nir, kk_layered_bc_cube, nir_metadata_none, &ctx);
+}
+
+bool
+kk_nir_prepare_layered_bc(nir_shader *nir,
+                         const struct vk_pipeline_robustness_state *rs,
+                         uint32_t set_layout_count,
+                         struct vk_descriptor_set_layout *const *set_layouts)
+{
+   struct lower_descriptors_ctx ctx = kk_descriptor_context(rs, set_layout_count, set_layouts);
+   return nir_shader_instructions_pass(nir, kk_layered_bc_instruction,
+                                       nir_metadata_none, &ctx);
+}
+
+bool
+kk_nir_lower_descriptors(nir_shader *nir,
+                         const struct vk_pipeline_robustness_state *rs,
+                         uint32_t set_layout_count,
+                         struct vk_descriptor_set_layout *const *set_layouts)
+{
+   struct lower_descriptors_ctx ctx = kk_descriptor_context(rs, set_layout_count, set_layouts);
 
    /* First lower everything but complex SSBOs, then lower complex SSBOs.
     *
