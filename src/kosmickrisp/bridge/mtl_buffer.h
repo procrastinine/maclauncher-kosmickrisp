@@ -26,7 +26,6 @@ mtl_buffer_zero_sync(mtl_device *device, mtl_buffer *buffer);
 /* FD and mapping ownership transfers only on a successful native allocation. */
 mtl_buffer *mtl_new_buffer_with_memory_fd(mtl_device *device, int fd, void *mapping,
    uint64_t mapping_size, uint64_t payload_offset, uint64_t payload_size);
-int mtl_buffer_export_memory_fd(mtl_buffer *buffer);
 
 /* Allocation from buffer */
 mtl_texture *mtl_new_texture_with_descriptor_linear(

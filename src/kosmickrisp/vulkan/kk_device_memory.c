@@ -48,6 +48,13 @@ struct kk_fd_memory_header {
 _Static_assert(sizeof(struct kk_fd_memory_header) < KK_FD_PAYLOAD_OFFSET,
                "External memory header must fit before the payload");
 
+/* Only FD-backed allocations carry this local export metadata. The native
+ * buffer owns the descriptor through final release; the live BO borrows it. */
+struct kk_fd_bo {
+   struct kk_bo base;
+   int fd;
+};
+
 const VkExternalMemoryProperties kk_fd_mem_props = {
    .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT |
                              VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT,
@@ -160,12 +167,13 @@ kk_allocate_fd_memory(struct kk_device *dev, const VkMemoryAllocateInfo *info,
        * Imported contents are never overwritten or reinitialized. */
    }
 
-   struct kk_bo *bo = CALLOC_STRUCT(kk_bo);
-   if (!bo) {
+   struct kk_fd_bo *fd_bo = CALLOC_STRUCT(kk_fd_bo);
+   if (!fd_bo) {
       munmap(mapping, mapping_size);
       close(fd);
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
+   struct kk_bo *bo = &fd_bo->base;
    bo->map = mtl_new_buffer_with_memory_fd(dev->mtl_handle, fd, mapping,
                                            mapping_size, KK_FD_PAYLOAD_OFFSET,
                                            payload_size);
@@ -178,6 +186,7 @@ kk_allocate_fd_memory(struct kk_device *dev, const VkMemoryAllocateInfo *info,
    }
    /* The native buffer now owns its FD and mapping through final release.
     * Exported descriptors own additional kernel references independently. */
+   fd_bo->fd = fd;
    bo->size_B = payload_size;
    bo->gpu = mtl_buffer_get_gpu_address(bo->map);
    if (pdev->mem_types[info->memoryTypeIndex].propertyFlags &
@@ -198,7 +207,8 @@ kk_GetMemoryFdKHR(VkDevice device, const VkMemoryGetFdInfoKHR *info, int *fd)
    if (info->handleType != VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT ||
        !(mem->vk.export_handle_types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT))
       return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
-   *fd = mtl_buffer_export_memory_fd(mem->bo->map);
+   struct kk_fd_bo *bo = container_of(mem->bo, struct kk_fd_bo, base);
+   *fd = fcntl(bo->fd, F_DUPFD_CLOEXEC, 0);
    if (*fd < 0)
       return vk_error(dev, errno == EMFILE || errno == ENFILE ?
                             VK_ERROR_TOO_MANY_OBJECTS : VK_ERROR_OUT_OF_HOST_MEMORY);

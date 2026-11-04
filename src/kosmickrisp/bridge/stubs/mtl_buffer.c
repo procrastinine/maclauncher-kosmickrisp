@@ -38,4 +38,3 @@ mtl_new_buffer_with_memory_fd(mtl_device *device, int fd, void *mapping,
 {
    return NULL;
 }
-int mtl_buffer_export_memory_fd(mtl_buffer *buffer) { return -1; }

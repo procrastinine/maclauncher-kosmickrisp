@@ -6,9 +6,6 @@
 
 #include "mtl_buffer.h"
 #import <Foundation/Foundation.h>
-#import <objc/runtime.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include "mtl_texture.h"
@@ -143,10 +140,6 @@ mtl_new_texture_with_descriptor_linear(mtl_buffer *buffer,
 }
 
 
-/* Only explicitly external buffers have associated FD metadata. Ordinary
- * resources gain no fields, allocations, destructor or per-draw lookup. */
-static char kk_memory_fd_key;
-
 mtl_buffer *
 mtl_new_buffer_with_memory_fd(mtl_device *device, int fd, void *mapping,
                                uint64_t mapping_size, uint64_t payload_offset,
@@ -161,22 +154,6 @@ mtl_new_buffer_with_memory_fd(mtl_device *device, int fd, void *mapping,
             munmap(mapping, mapping_size);
             close(fd);
          }];
-      if (buffer)
-         objc_setAssociatedObject(buffer, &kk_memory_fd_key, @(fd),
-                                   OBJC_ASSOCIATION_RETAIN_NONATOMIC);
       return (mtl_buffer *)buffer;
-   }
-}
-
-int
-mtl_buffer_export_memory_fd(mtl_buffer *buffer)
-{
-   @autoreleasepool {
-      NSNumber *value = objc_getAssociatedObject((id)buffer, &kk_memory_fd_key);
-      if (!value) {
-         errno = EINVAL;
-         return -1;
-      }
-      return fcntl(value.intValue, F_DUPFD_CLOEXEC, 0);
    }
 }
