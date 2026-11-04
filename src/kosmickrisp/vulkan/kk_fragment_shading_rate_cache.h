@@ -22,6 +22,7 @@ enum kk_vrs_fragment_kind {
    KK_VRS_SHADOW_LOAD,
    KK_VRS_SHADOW_REPLAY,
    KK_VRS_TILE_VERTEX,
+   KK_VRS_CAPTURE_CLEAR,
    KK_VRS_FRAGMENT_KIND_COUNT,
 };
 struct msl_compile_data;
@@ -116,11 +117,11 @@ VkResult kk_vrs_shadow_get(struct kk_device *, struct kk_vrs_source *,
 VkResult kk_vrs_artifact_compute(struct kk_device *, struct kk_vrs_artifact *,
    bool statistics, mtl_compute_pipeline_state **out);
 /* Explicit coarse-use composition only. Every artifact is a canonical cache
- * reference; the two compute handles are borrowed from those artifacts. Keep
+ * reference; the compute handles are borrowed from those artifacts. Keep
  * this record and the native render bundle alive until command retirement. */
 struct kk_vrs_shadow_programs {
-   struct kk_vrs_artifact *capture, *transaction, *load, *replay, *vertex;
-   mtl_compute_pipeline_state *load_pipeline, *transaction_pipeline;
+   struct kk_vrs_artifact *capture, *transaction, *load, *replay, *vertex, *clear;
+   mtl_compute_pipeline_state *load_pipeline, *transaction_pipeline, *clear_pipeline;
    enum mtl_pixel_format formats[8];
    uint32_t input_stride, samples;
    bool statistics, uses_per_draw, has_depth, has_stencil;

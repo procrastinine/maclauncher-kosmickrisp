@@ -9,7 +9,7 @@
 #include "kk_fragment_shading_rate_cells_nir.h"
 #include "kk_fragment_shading_rate_shadow_nir.h"
 
-#define KK_VRS_SOURCE_SCHEMA 21u
+#define KK_VRS_SOURCE_SCHEMA 22u
 #define KK_VRS_ARTIFACT_SCHEMA 5u
 #define KK_VRS_KEY_SIZE 48u
 struct kk_vrs_source {
@@ -823,7 +823,7 @@ kk_vrs_shadow_get(struct kk_device *dev, struct kk_vrs_source *source,
    const struct kk_vrs_transaction_options *state, enum kk_vrs_fragment_kind kind,
    struct kk_vrs_artifact **out)
 {
-   if (kind < KK_VRS_SHADOW_LOAD || kind > KK_VRS_TILE_VERTEX) {
+   if (kind < KK_VRS_SHADOW_LOAD || kind > KK_VRS_CAPTURE_CLEAR) {
       *out = NULL;
       return VK_ERROR_FEATURE_NOT_PRESENT;
    }
@@ -836,7 +836,8 @@ kk_vrs_artifact_compute(struct kk_device *dev, struct kk_vrs_artifact *artifact,
 {
    *out = NULL;
    if (!dev->vrs || !artifact ||
-       (artifact->key[13] != KK_VRS_TRANSACTION && artifact->key[13] != KK_VRS_SHADOW_LOAD))
+       (artifact->key[13] != KK_VRS_TRANSACTION && artifact->key[13] != KK_VRS_SHADOW_LOAD &&
+        artifact->key[13] != KK_VRS_CAPTURE_CLEAR))
       return VK_ERROR_FEATURE_NOT_PRESENT;
    statistics &= artifact->data.uses_pipeline_statistics;
    simple_mtx_lock(&dev->vrs->compile_mutex);
@@ -849,7 +850,7 @@ kk_vrs_artifact_compute(struct kk_device *dev, struct kk_vrs_artifact *artifact,
       } else {
          artifact->compute[statistics] = mtl_new_compute_pipeline_state(
             dev->mtl_compiler_handle, function,
-            artifact->key[13] == KK_VRS_TRANSACTION ? 256 : 64);
+            artifact->key[13] == KK_VRS_SHADOW_LOAD ? 64 : 256);
          if (!artifact->compute[statistics]) result = VK_ERROR_INVALID_SHADER_NV;
          if (statistics) mtl_release(function);
       }
@@ -863,6 +864,7 @@ void
 kk_vrs_shadow_programs_finish(struct kk_device *dev, struct kk_vrs_shadow_programs *p)
 {
    if (!p) return;
+   kk_vrs_artifact_unref(dev, p->clear);
    kk_vrs_artifact_unref(dev, p->vertex);
    kk_vrs_artifact_unref(dev, p->replay);
    kk_vrs_artifact_unref(dev, p->load);
@@ -887,6 +889,8 @@ kk_vrs_shadow_programs_get(struct kk_device *dev, struct kk_vrs_source *source,
    if (result != VK_SUCCESS) goto fail;
    result = kk_vrs_shadow_get(dev, source, state, KK_VRS_TILE_VERTEX, &p->vertex);
    if (result != VK_SUCCESS) goto fail;
+   result = kk_vrs_shadow_get(dev, source, state, KK_VRS_CAPTURE_CLEAR, &p->clear);
+   if (result != VK_SUCCESS) goto fail;
    p->input_stride = p->capture->input_stride;
    if (p->input_stride < 64 || p->input_stride != p->transaction->input_stride) {
       result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
@@ -896,6 +900,8 @@ kk_vrs_shadow_programs_get(struct kk_device *dev, struct kk_vrs_source *source,
    result = kk_vrs_artifact_compute(dev, p->load, false, &p->load_pipeline);
    if (result != VK_SUCCESS) goto fail;
    result = kk_vrs_artifact_compute(dev, p->transaction, p->statistics, &p->transaction_pipeline);
+   if (result != VK_SUCCESS) goto fail;
+   result = kk_vrs_artifact_compute(dev, p->clear, false, &p->clear_pipeline);
    if (result != VK_SUCCESS) goto fail;
    p->samples = state->samples;
    p->uses_per_draw = source->data.uses_per_draw;

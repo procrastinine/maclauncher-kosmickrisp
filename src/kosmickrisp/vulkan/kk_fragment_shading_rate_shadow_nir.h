@@ -2,6 +2,7 @@
 #ifndef KK_FRAGMENT_SHADING_RATE_SHADOW_NIR_H
 #define KK_FRAGMENT_SHADING_RATE_SHADOW_NIR_H
 #include "kk_interlock_load_nir.h"
+#include "kk_fragment_shading_rate_clear_nir.h"
 
 /* These are the existing shared attachment-load, replacement-replay and tile
  * vertex programs. Application output lowering and DS tests already execute
@@ -24,6 +25,8 @@ kk_vrs_shadow_shader(enum kk_vrs_fragment_kind kind,
          info.color_format[logical] = vk_format_to_pipe_format(rp->color_attachment_formats[physical]);
    }
    switch (kind) {
+   case KK_VRS_CAPTURE_CLEAR:
+      return kk_vrs_clear_shader(options);
    case KK_VRS_SHADOW_LOAD:
       return kk_interlock_load_shader(options, &render, &info, true);
    case KK_VRS_SHADOW_REPLAY:
