@@ -1641,8 +1641,7 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          params.capture = gfx->polygon_capture = capture_data.gpu;
       } else {
          if (cmd->interlock_heap_active) {
-         unsigned envelope_size = gs->info.depth_bounds_emulation ?
-            sizeof(struct kk_depth_bounds_envelope) : sizeof(struct kk_interlock_envelope);
+         unsigned envelope_size = sizeof(struct kk_interlock_envelope);
          gfx->interlock_capture = kk_pool_alloc(cmd, envelope_size, 8);
          if (gfx->interlock_capture.cpu) {
             memset(gfx->interlock_capture.cpu, 0, envelope_size);
@@ -2855,7 +2854,7 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    if (vs->info.interlock_envelope || cmd->interlock_heap_active) {
       VkResult result = kk_interlock_heap_select(cmd,
          vs->info.interlock_envelope &&
-         (vs->info.depth_bounds_emulation || dyn->ms.rasterization_samples > 1));
+         dyn->ms.rasterization_samples > 1);
       if (result != VK_SUCCESS) {
          vk_command_buffer_set_error(&cmd->vk, result);
          goto layered_bc_done;

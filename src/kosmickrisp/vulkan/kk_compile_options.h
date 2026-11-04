@@ -19,7 +19,6 @@ struct kk_compile_options {
    bool polygon_capture;
    bool polygon_regular;
    bool pixel_envelope;
-   bool depth_bounds;
    bool pixel_sample_shading;
    bool mesh_queries;
    bool pipeline_statistics;

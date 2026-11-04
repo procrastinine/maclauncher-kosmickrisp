@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_interlock_submit.h"
 #include "kk_scene.h"
-#include "kk_depth_bounds.h"
 #include "kk_interlock_heap.h"
 #include "kk_device.h"
 #include "kk_queue.h"
@@ -33,7 +32,7 @@ struct kk_interlock_queue {
 VkResult
 kk_interlock_submission_init(struct kk_device *dev)
 {
-   if (!dev->vk.enabled_features.fragmentShaderPixelInterlock && !kk_depth_bounds_emulated(dev))
+   if (!dev->vk.enabled_features.fragmentShaderPixelInterlock)
       return VK_SUCCESS;
    struct kk_interlock_registry *r = vk_zalloc(&dev->vk.alloc, sizeof(*r), 8,
                                                VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);

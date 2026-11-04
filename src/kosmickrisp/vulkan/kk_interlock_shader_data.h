@@ -32,28 +32,14 @@ struct kk_interlock_shader {
    struct msl_compile_data program[KK_INTERLOCK_PROGRAM_COUNT];
 };
 
-struct kk_depth_bounds_shader {
-   struct kk_interlock_shader base;
-   struct msl_compile_data clear;
-};
-
-struct kk_depth_bounds_pipeline {
-   mtl_compute_pipeline_state *clear;
-   mtl_function_descriptor *capture_fragment;
-};
-
 struct kk_interlock_pipeline_entry;
 
 struct kk_interlock_pipeline {
    mtl_render_pipeline_descriptor *descriptor[3];
    bool framebuffer_reads[3];
    bool uses_pipeline_statistics[3];
-   bool depth_bounds;
    mtl_compute_pipeline_state *load;
-   union {
-      mtl_depth_stencil_state *replace;
-      struct kk_depth_bounds_pipeline *bounds;
-   };
+   mtl_depth_stencil_state *replace;
    struct kk_interlock_pipeline_entry *entries;
    simple_mtx_t mutex;
 };

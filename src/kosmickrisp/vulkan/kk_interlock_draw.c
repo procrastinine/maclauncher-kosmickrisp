@@ -413,8 +413,6 @@ kk_interlock_prepare_draw(struct kk_cmd_buffer *cmd, struct kk_ptr parameters,
    if (gfx->render.stencil_att.iview && shader->info.vs.s_format != MTL_PIXEL_FORMAT_INVALID)
       tested |= VK_IMAGE_ASPECT_STENCIL_BIT;
    kk_depth_bounds_set_transaction_state(env, &dyn->ds, tested);
-   if (shader->info.depth_bounds_emulation)
-      kk_depth_bounds_set_transaction_inputs(env, &dyn->ial, &gfx->render);
    if (gfx->occlusion.mode != MTL_VISIBILITY_RESULT_MODE_DISABLED)
       env->occlusion = dev->occlusion_queries.bo->gpu + gfx->occlusion.index * 8;
    if (!mtl_interlock_default_sample_positions(dev->mtl_handle,
@@ -501,26 +499,7 @@ kk_interlock_prepare_draw(struct kk_cmd_buffer *cmd, struct kk_ptr parameters,
       p->pipeline[i] = mtl_retain(handle);
    }
    p->load = mtl_retain(shader->interlock_pipeline->load);
-   if (shader->info.depth_bounds_emulation) {
-      VkImageAspectFlags read_only = 0;
-      if (vk_image_layout_is_read_only(gfx->render.depth_att.image_layout, VK_IMAGE_ASPECT_DEPTH_BIT))
-         read_only |= VK_IMAGE_ASPECT_DEPTH_BIT;
-      if (vk_image_layout_is_read_only(gfx->render.stencil_att.image_layout, VK_IMAGE_ASPECT_STENCIL_BIT))
-         read_only |= VK_IMAGE_ASPECT_STENCIL_BIT;
-      VkImageAspectFlags writes = kk_depth_bounds_write_aspects(&dyn->ds, tested, read_only);
-      struct vk_depth_stencil_state replay = {0};
-      replay.depth.test_enable = true;
-      replay.depth.compare_op = VK_COMPARE_OP_ALWAYS;
-      replay.depth.write_enable = writes & VK_IMAGE_ASPECT_DEPTH_BIT;
-      replay.stencil.test_enable = writes & VK_IMAGE_ASPECT_STENCIL_BIT;
-      replay.stencil.front.op.compare = replay.stencil.back.op.compare = VK_COMPARE_OP_ALWAYS;
-      replay.stencil.front.op.pass = replay.stencil.back.op.pass = VK_STENCIL_OP_REPLACE;
-      replay.stencil.front.write_mask = replay.stencil.back.write_mask = 255;
-      p->replace = kk_compile_depth_stencil_state(dev, &replay,
-         tested & VK_IMAGE_ASPECT_DEPTH_BIT, tested & VK_IMAGE_ASPECT_STENCIL_BIT);
-   } else {
-      p->replace = mtl_retain(shader->interlock_pipeline->replace);
-   }
+   p->replace = mtl_retain(shader->interlock_pipeline->replace);
    p->scissor_count = MAX2(dyn->vp.scissor_count, 1);
    for (unsigned i = 0; i < p->scissor_count; ++i) {
       const VkRect2D *r = &dyn->vp.scissors[i];
@@ -591,4 +570,3 @@ kk_interlock_record_draw(struct kk_cmd_buffer *cmd)
    }
    return result;
 }
-#include "kk_depth_bounds_mesh_draw.h"

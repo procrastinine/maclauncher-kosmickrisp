@@ -3,7 +3,6 @@
 #define KK_INTERLOCK_SELECT_H
 
 #include "compiler/nir/nir_serialize.h"
-#include "kk_depth_bounds.h"
 
 static bool
 kk_interlock_pixel_shader(const nir_shader *nir)
@@ -27,8 +26,6 @@ kk_interlock_link_graphics(struct vk_device *device,
    const struct vk_graphics_pipeline_state *state,
    const struct blob *nir, const struct vk_shader *compiled)
 {
-   if (kk_depth_bounds_pipeline(container_of(device, struct kk_device, vk), state))
-      return true;
    if (!device->enabled_features.fragmentShaderPixelInterlock)
       return false;
    if (state && state->ms && !kk_interlock_multisample_pipeline(state))

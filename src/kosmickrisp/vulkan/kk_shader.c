@@ -697,7 +697,7 @@ lower_subpass_dim(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
 
 static void
 kk_lower_fs(struct kk_device *dev, nir_shader *nir,
-            const struct vk_graphics_pipeline_state *state, bool depth_bounds)
+            const struct vk_graphics_pipeline_state *state)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
@@ -711,9 +711,8 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
 
    kk_line_lower_pure_early(nir, state);
 
-   const bool pixel_envelope = depth_bounds ||
-      (dev->vk.enabled_features.fragmentShaderPixelInterlock &&
-       kk_interlock_multisample_pipeline(state) && kk_interlock_pixel_shader(nir));
+   const bool pixel_envelope = dev->vk.enabled_features.fragmentShaderPixelInterlock &&
+      kk_interlock_multisample_pipeline(state) && kk_interlock_pixel_shader(nir);
    /* Envelope output processing applies these shared passes per sample,
     * after the original pixel-frequency body has executed only once. */
    if (!pixel_envelope)
@@ -966,7 +965,7 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
              const struct vk_graphics_pipeline_state *state,
              kk_feature_key features,
              const struct vk_shader_compile_info *compile_info,
-             const uint64_t *embedded, bool depth_bounds)
+             const uint64_t *embedded)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
@@ -1035,11 +1034,8 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
          NIR_PASS(_, nir, msl_ensure_depth_write);
 
       msl_nir_lower_input_attachments(nir, state->ial, state->cal,
-         state->rp, depth_bounds ||
-            (dev->vk.enabled_features.fragmentShaderPixelInterlock &&
-             kk_interlock_multisample_pipeline(state) && kk_interlock_pixel_shader(nir)),
-         state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT,
-         depth_bounds);
+         state->rp, dev->vk.enabled_features.fragmentShaderPixelInterlock &&
+         kk_interlock_multisample_pipeline(state) && kk_interlock_pixel_shader(nir));
    }
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT &&
@@ -1143,11 +1139,11 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
              const struct vk_graphics_pipeline_state *state,
              kk_feature_key features,
              const struct vk_shader_compile_info *compile_info,
-             const uint64_t *embedded, bool depth_bounds)
+             const uint64_t *embedded)
 {
    KK_PERF_VOID(dev, KK_PERF_NIR,
       kk_lower_nir_untracked(dev, nir, emulated_stage, defer_hw_vs, rs, set_layout_count,
-                            set_layouts, state, features, compile_info, embedded, depth_bounds));
+                            set_layouts, state, features, compile_info, embedded));
 }
 
 static const struct vk_shader_ops kk_shader_ops;
@@ -1585,7 +1581,6 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    }
    gather_shader_info(shader, nir, state);
    shader->info.interlock_envelope = pixel_envelope;
-   shader->info.depth_bounds_emulation = opts->depth_bounds;
    shader->info.poly_layer_replay = opts->poly_layer_replay;
    if (stage == MESA_SHADER_FRAGMENT)
       shader->info.fs.line_geometry_stipple = kk_line_geometry_stipple(nir, state);
@@ -1633,8 +1628,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       kk_vrs_finish_captured_fragment(point_fs, prev_stage, state, opts,
          robustness, pixel_envelope);
       shader->info.polygon_point = true;
-      if (!shader->info.depth_bounds_emulation &&
-          (pixel_envelope || opts->polygon_regular || opts->poly_layer_replay)) {
+      if (pixel_envelope || opts->polygon_regular || opts->poly_layer_replay) {
          vrs_captured_required = dev->vrs && opts->vrs_source && !pixel_envelope;
          nir_shader *captured = vrs_captured_required ?
             nir_shader_clone(NULL, opts->vrs_source) : NULL;
@@ -1889,18 +1883,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    if (pixel_envelope && stage == MESA_SHADER_FRAGMENT)
       nir_shader_intrinsics_pass(nir, kk_interlock_trim_native_output,
          nir_metadata_control_flow, (void *)state);
-   if (shader->info.depth_bounds_emulation && stage == MESA_SHADER_FRAGMENT) {
-      /* All draws for this pipeline use the transaction, including a dynamic
-       * bounds-disable. Its native attachment executables capture coverage;
-       * only the transaction executes the original application body. */
-      const struct msl_compile_data *capture = &shader->interlock->program[KK_INTERLOCK_CAPTURE];
-      kk_msl_copy(&shader->msl_data[stage], capture);
-      kk_msl_copy(&shader->polygon[3], capture);
-      ralloc_free(nir);
-   } else {
-      kk_compile_msl_options(dev, nir, state, &shader->msl_data[stage], opts,
-                             NULL, &shader->info.framebuffer_read_mask);
-   }
+   kk_compile_msl_options(dev, nir, state, &shader->msl_data[stage], opts,
+                          NULL, &shader->info.framebuffer_read_mask);
 
    if (opts->vrs_source) {
       struct kk_vrs_source *source = kk_vrs_source_capture_linked(dev, opts->vrs_source,
@@ -2005,7 +1989,7 @@ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
       .null_uniform_buffer_descriptor = false,
       .null_storage_buffer_descriptor = false,
    };
-   kk_lower_nir(dev, nir, false, false, &no_robustness, 0u, NULL, state, features, NULL, NULL, false);
+   kk_lower_nir(dev, nir, false, false, &no_robustness, 0u, NULL, state, features, NULL, NULL);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    return nir;
@@ -2472,7 +2456,6 @@ gather_graphics_pipeline_create_info(
          kk_interlock_shader_finish(vs->interlock);
          vs->interlock = kk_interlock_shader_ref(s->interlock);
          info->interlock_envelope = true;
-         info->depth_bounds_emulation |= s->info.depth_bounds_emulation;
       }
 
       if (stage == MESA_SHADER_FRAGMENT)
@@ -2920,7 +2903,7 @@ static void
 kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
                        const struct vk_graphics_pipeline_state *state,
                        const struct vk_shader_compile_info *info,
-                       kk_feature_key features, nir_shader **retained, bool depth_bounds)
+                       kk_feature_key features, nir_shader **retained)
 {
    bool callable = retained && dev->vrs &&
       !fs->info.fs.uses_sample_shading &&
@@ -2929,7 +2912,7 @@ kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
          dev->vk.enabled_features.primitiveFragmentShadingRate,
          dev->vk.enabled_features.attachmentFragmentShadingRate) &&
       kk_nir_vrs_split_application(fs);
-   kk_lower_fs(dev, fs, state, depth_bounds);
+   kk_lower_fs(dev, fs, state);
    kk_finish_nir(dev, fs, info ? info->robustness : &rs_none,
       info ? info->set_layout_count : 0, info ? info->set_layouts : NULL, features,
       info ? info->flags : 0);
@@ -2954,10 +2937,10 @@ static void
 kk_finish_fragment_nir(struct kk_device *dev, nir_shader *fs,
                        const struct vk_graphics_pipeline_state *state,
                        const struct vk_shader_compile_info *info,
-                       kk_feature_key features, nir_shader **retained, bool depth_bounds)
+                       kk_feature_key features, nir_shader **retained)
 {
    KK_PERF_VOID(dev, KK_PERF_NIR,
-      kk_finish_fragment_nir_untracked(dev, fs, state, info, features, retained, depth_bounds));
+      kk_finish_fragment_nir_untracked(dev, fs, state, info, features, retained));
 }
 
 static VkResult
@@ -3035,15 +3018,13 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    /* Lower shaders, notably lowering IO. This is a prerequisite for intershader
     * optimization. */
    const struct vk_pipeline_robustness_state *vertex_robustness = &rs_none;
-   const bool depth_bounds = kk_depth_bounds_pipeline(dev, state);
-   bool pixel_envelope = depth_bounds;
+   bool pixel_envelope = false;
    bool pixel_sample_shading = false;
    const bool pixel_candidate = shader_count &&
       infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT &&
-      (depth_bounds ||
-       (enabled_features->fragmentShaderPixelInterlock &&
-        kk_interlock_multisample_pipeline(state) &&
-        kk_interlock_pixel_shader(infos[shader_count - 1u].nir)));
+      enabled_features->fragmentShaderPixelInterlock &&
+      kk_interlock_multisample_pipeline(state) &&
+      kk_interlock_pixel_shader(infos[shader_count - 1u].nir);
    nir_shader *deferred_native = NULL;
    const struct vk_shader_compile_info *deferred_info = NULL;
    const bool retain_native = dev->vrs && !pixel_candidate && !polygon_capture &&
@@ -3114,7 +3095,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          (info->stage == MESA_SHADER_VERTEX || info->stage == MESA_SHADER_TESS_EVAL);
       if (defer_hw_vs) { deferred_native = nir; deferred_info = info; }
       kk_lower_nir(dev, nir, emulated_stage, defer_hw_vs, info->robustness,
-                   info->set_layout_count, info->set_layouts, state, features, info, NULL, depth_bounds);
+                   info->set_layout_count, info->set_layouts, state, features, info, NULL);
       if (nir->info.stage == MESA_SHADER_FRAGMENT &&
           (features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS)))
          NIR_PASS(_, nir, kk_nir_statistics_fs);
@@ -3141,7 +3122,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    uint32_t total_shaders = shader_count;
    nir_shader *native_pair[2] = {NULL, NULL};
    bool native_fragment_needs_finish = false;
-   bool native_passthrough = !depth_bounds && !explicit_geometry && !xfb && !tess &&
+   bool native_passthrough = !explicit_geometry && !xfb && !tess &&
       (kk_polygon_native_possible(state) || poly_layer_replay ||
        (!pixel_envelope && kk_depth_bias_native_possible(depth_bias_control, state)));
    nir_shader *native_vs = NULL, *native_fs = NULL;
@@ -3175,7 +3156,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          const struct vk_shader_compile_info *info = NULL;
          for (unsigned i = 0; i < shader_count; ++i)
             if (infos[i].stage == MESA_SHADER_FRAGMENT) info = &infos[i];
-         kk_finish_fragment_nir(dev, native_pair[1], state, info, features, NULL, false);
+         kk_finish_fragment_nir(dev, native_pair[1], state, info, features, NULL);
       }
    }
    if (!explicit_geometry && (xfb || pixel_envelope || polygon_capture || poly_layer_replay)) {
@@ -3271,7 +3252,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          if (infos[j].stage == MESA_SHADER_FRAGMENT) info = &infos[j];
       /* Main and native alternatives share the same fine epilogue and
        * descriptor finishing; only the main program retains VRS source. */
-      kk_finish_fragment_nir(dev, fs, state, info, features, &retained_fs, depth_bounds);
+      kk_finish_fragment_nir(dev, fs, state, info, features, &retained_fs);
    }
 
    nir_shader *conservative_fs = kk_conservative_possible(state) &&
@@ -3337,7 +3318,6 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    }
    const struct kk_compile_options compile_options = {
       .linked_producer = linked,
-      .depth_bounds = depth_bounds,
       .pixel_envelope = pixel_envelope,
       .pixel_sample_shading = pixel_sample_shading,
       .poly_layer_replay = poly_layer_replay,
