@@ -45,26 +45,6 @@ kk_mesh_gather_io(nir_intrinsic_instr *intr, struct io_slot_info *outputs)
    return true;
 }
 
-/* Slots accessed after the last info gather, such as the second slot of a
- * 64-bit vector output split into 32-bit halves, take their class from the
- * accessing intrinsics so every block declares them. */
-static void
-kk_mesh_gather_masks(nir_shader *s, const struct io_slot_info *outputs)
-{
-   for (unsigned location = 0; location < 64; ++location) {
-      const struct io_slot_info *info = &outputs[location];
-      if (info->mesh_vertex == info->mesh_primitive)
-         continue;
-      const uint64_t bit = BITFIELD64_BIT(location);
-      if (!((s->info.outputs_written | s->info.outputs_read) & bit))
-         s->info.outputs_written |= bit;
-      if (info->mesh_primitive)
-         s->info.per_primitive_outputs |= bit;
-      else
-         s->info.per_primitive_outputs &= ~bit;
-   }
-}
-
 /* Mirror the emitted native (not packed staging) field layout. A vector3 has
  * vector4 size/alignment; scalarized builtins are emitted as separate fields.
  * The generated MSL asserts equality with sizeof, not an API-size cutoff. */
@@ -219,8 +199,22 @@ kk_mesh_io_blocks(struct nir_to_msl_ctx *ctx)
    kk_mesh_io_block(ctx, "MeshVertex",
       kk_mesh_native_vertex_outputs(s, written & ~s->info.per_primitive_outputs), true, false);
    kk_mesh_io_block(ctx, "MeshPrimitive", written & s->info.per_primitive_outputs, false, false);
-   kk_mesh_io_block(ctx, "MeshVertexStorage", written & ~s->info.per_primitive_outputs, true, true);
-   kk_mesh_io_block(ctx, "MeshPrimitiveStorage", written & s->info.per_primitive_outputs, false, true);
+   /* Outputs that only the Mesh shader reads back carry no FS varying, so
+    * linking may pack a per-vertex one into a slot of per-primitive outputs.
+    * Staging declares each slot in every class whose intrinsics access it. */
+   uint64_t vertex_access = 0, primitive_access = 0;
+   for (unsigned location = 0; location < 64; ++location) {
+      if (ctx->outputs_info[location].mesh_vertex)
+         vertex_access |= BITFIELD64_BIT(location);
+      if (ctx->outputs_info[location].mesh_primitive)
+         primitive_access |= BITFIELD64_BIT(location);
+   }
+   const uint64_t staged = ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT);
+   kk_mesh_io_block(ctx, "MeshVertexStorage",
+      (written & ~s->info.per_primitive_outputs) | (vertex_access & staged), true, true);
+   kk_mesh_io_block(ctx, "MeshPrimitiveStorage",
+      (written & s->info.per_primitive_outputs) | (primitive_access & staged), false, true);
    if (!ctx->mesh.retained_fields[2][0]) {
       ctx->mesh.retained_fields[2][0] = 4u;
       ctx->mesh.retained_fields[2][2] = nir_type_uint32;
