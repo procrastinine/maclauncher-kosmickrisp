@@ -29,6 +29,16 @@ kk_mesh_native_vertex_outputs(const nir_shader *s, uint64_t mask)
       mask & ~VARYING_BIT_PSIZ;
 }
 
+/* Point output without a point size write draws points of size 1
+ * (VK_KHR_maintenance5); the native vertex carries that size. */
+static inline bool
+kk_mesh_default_point_size(const nir_shader *s)
+{
+   return s->info.stage == MESA_SHADER_MESH &&
+      s->info.mesh.primitive_type == MESA_PRIM_POINTS &&
+      !(s->info.outputs_written & VARYING_BIT_PSIZ);
+}
+
 struct kk_mesh_msl_info {
    bool queries;
    uint32_t retained_vertex_stride, retained_primitive_stride;

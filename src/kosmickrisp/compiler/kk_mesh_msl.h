@@ -166,6 +166,8 @@ kk_mesh_emit_copy_outputs(struct nir_to_msl_ctx *ctx)
       msl_output_name(ctx, VARYING_SLOT_CLIP_DIST0 + c / 4, c % 4, false);
       P(ctx, ";\n");
    }
+   if (kk_mesh_default_point_size(s))
+      P_IND(ctx, "kk_vertex.kk_point_size = 1.0f;\n");
    P(ctx, "#ifdef KK_MESH_RETAINED_CAPTURE\n");
    P_IND(ctx, "*((device MeshVertex *)(kk_cache + KK_RETAINED_VERTICES + ulong(i) * KK_RETAINED_VERTEX_STRIDE)) = kk_vertex;\n");
    P(ctx, "#else\n");

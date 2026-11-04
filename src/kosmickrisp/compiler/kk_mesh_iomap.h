@@ -95,6 +95,8 @@ kk_mesh_native_layout(struct nir_to_msl_ctx *ctx, uint64_t mask, bool vertex)
    if (vertex && ctx->shader->info.clip_distance_array_size)
       kk_mesh_layout_field(&size, &alignment,
          4u * ctx->shader->info.clip_distance_array_size, 4u);
+   if (vertex && kk_mesh_default_point_size(ctx->shader))
+      kk_mesh_layout_field(&size, &alignment, 4u, 4u);
    if (!vertex && ctx->shader->info.cull_distance_array_size &&
        !(mask & BITFIELD64_BIT(VARYING_SLOT_CULL_PRIMITIVE)))
       kk_mesh_layout_field(&size, &alignment, 1u, 1u);
@@ -165,6 +167,8 @@ kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
    if (!storage && vertex && ctx->shader->info.clip_distance_array_size)
       P_IND(ctx, "float gl_ClipDistance [[clip_distance]] [%u];\n",
             ctx->shader->info.clip_distance_array_size);
+   if (!storage && vertex && kk_mesh_default_point_size(ctx->shader))
+      P_IND(ctx, "float kk_point_size [[point_size]];\n");
    if (!storage && !vertex && ctx->shader->info.cull_distance_array_size &&
        !(mask & BITFIELD64_BIT(VARYING_SLOT_CULL_PRIMITIVE)))
       P_IND(ctx, "bool kk_culled [[primitive_culled]];\n");
