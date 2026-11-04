@@ -27,6 +27,7 @@
 struct lower_descriptors_ctx {
    const struct kk_descriptor_set_layout *set_layouts[KK_MAX_SETS];
 
+   bool robust_msaa_defaults;
    bool clamp_desc_array_bounds;
    nir_address_format ubo_addr_format;
    nir_address_format ssbo_addr_format;
@@ -435,6 +436,8 @@ kk_lower_buffer64(nir_builder *b, nir_intrinsic_instr *intr,
 
 #include "kk_maintenance11.h"
 
+#include "kk-writable-msaa-nir.h"
+
 static bool
 lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
                    const struct lower_descriptors_ctx *ctx)
@@ -497,6 +500,9 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
          sparse_array_dimension && nir_intrinsic_image_array(intr));
       nir_src_rewrite(&intr->src[3], lod);
    }
+
+   if (kk_lower_msaa_storage(b, intr, ctx))
+      return true;
 
    nir_alu_type type;
    if (nir_intrinsic_has_atomic_op(intr)) {
@@ -806,6 +812,9 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
          if (lod_source >= 0) nir_src_rewrite(&tex->src[lod_source].src, lod);
          else nir_tex_instr_add_src(tex, nir_tex_src_lod, lod);
       }
+      if (kk_lower_msaa_fetch(b, tex, texture, ctx))
+         return true;
+
       nir_def *handle = NULL;
       if (tex->is_shadow) {
          handle = nir_load_depth_texture_kk(b, 1, 64, resource_addr,
@@ -1099,6 +1108,8 @@ kk_nir_lower_descriptors(nir_shader *nir,
          rs->uniform_buffers !=
             VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED ||
          rs->images != VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DISABLED,
+      .robust_msaa_defaults = rs->images ==
+         VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2,
       .ssbo_addr_format = kk_buffer_addr_format(rs->storage_buffers),
       .ubo_addr_format = kk_buffer_addr_format(rs->uniform_buffers),
    };

@@ -6,6 +6,7 @@
  */
 
 #include "kk_image.h"
+#include "kk-writable-msaa.h"
 #include "kk_external_memory_fd.h"
 #include "kk_descriptor_set.h"
 
@@ -404,7 +405,10 @@ kk_GetPhysicalDeviceImageFormatProperties2(
        (features & (VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
                     VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
        !(create_flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) &&
-       !(all_usage & VK_IMAGE_USAGE_STORAGE_BIT)) {
+       (!(all_usage & VK_IMAGE_USAGE_STORAGE_BIT) ||
+        !(create_flags & (VK_IMAGE_CREATE_SPARSE_BINDING_BIT |
+                          VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
+                          VK_IMAGE_CREATE_SPARSE_ALIASED_BIT)))) {
       enum pipe_format format = vk_format_to_pipe_format(pImageFormatInfo->format);
       const struct kk_va_format *caps = kk_get_va_format(format);
       bool integer32 = util_format_is_pure_integer(format) &&
@@ -412,6 +416,9 @@ kk_GetPhysicalDeviceImageFormatProperties2(
       if (caps->msaa && (!integer32 || pdev->info.supports_32bit_msaa))
          sampleCounts = pdev->info.supported_sample_counts;
    }
+   if (all_usage & VK_IMAGE_USAGE_STORAGE_BIT)
+      sampleCounts &= VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT |
+                      VK_SAMPLE_COUNT_4_BIT;
 
    if (create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
       sampleCounts = VK_SAMPLE_COUNT_1_BIT;
@@ -617,6 +624,7 @@ static VkResult
 kk_image_init(struct kk_device *dev, struct kk_image *image,
               const VkImageCreateInfo *pCreateInfo)
 {
+   image->writable_msaa = NULL;
    vk_image_init(&dev->vk, &image->vk, pCreateInfo);
    image->application_usage = vk_image_usage_flags(pCreateInfo);
    if ((image->vk.external_handle_types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT) &&
@@ -652,6 +660,12 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
    image->disjoint = image->plane_count > 1 &&
                      (image->vk.create_flags & VK_IMAGE_CREATE_DISJOINT_BIT);
 
+   struct vk_image native_layout = image->vk;
+   if (kk_writable_msaa_requested(&image->vk)) {
+      native_layout.usage &= ~VK_IMAGE_USAGE_STORAGE_BIT;
+      native_layout.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+      native_layout.create_flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+   }
    const struct vk_format_ycbcr_info *ycbcr_info =
       vk_format_get_ycbcr_info(pCreateInfo->format);
    for (uint8_t plane = 0; plane < image->plane_count; plane++) {
@@ -661,14 +675,18 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
          ycbcr_info ? ycbcr_info->planes[plane].denominator_scales[0] : 1;
       const uint8_t height_scale =
          ycbcr_info ? ycbcr_info->planes[plane].denominator_scales[1] : 1;
-      kk_image_layout_init(dev, &image->vk,
+      kk_image_layout_init(dev, &native_layout,
          vk_format_to_pipe_format(format), width_scale, height_scale,
          &image->planes[plane].layout, pCreateInfo->initialLayout);
    }
 
    if (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
       return kk_sparse_image_init(dev, image, vk_image_usage_flags(pCreateInfo));
-   return VK_SUCCESS;
+   VkResult result = kk_writable_msaa_image_init(dev, image,
+                                                       pCreateInfo->initialLayout);
+   if (result != VK_SUCCESS)
+      vk_image_finish(&image->vk);
+   return result;
 }
 
 static void
@@ -676,8 +694,10 @@ kk_image_plane_size_align_B(struct kk_device *dev, const struct kk_image *image,
                             const struct kk_image_plane *plane,
                             uint64_t *size_B_out, uint64_t *align_B_out)
 {
-   *size_B_out = plane->layout.size_B;
-   *align_B_out = plane->layout.align_B;
+   *size_B_out = image->writable_msaa ? image->writable_msaa->total_size_B
+                                          : plane->layout.size_B;
+   *align_B_out = image->writable_msaa ? image->writable_msaa->align_B
+                                           : plane->layout.align_B;
 }
 
 static void
@@ -697,6 +717,7 @@ static void
 kk_image_finish(struct kk_device *dev, struct kk_image *image,
                 const VkAllocationCallbacks *pAllocator)
 {
+   kk_writable_msaa_image_finish(dev, image);
    kk_descriptor_heap_image_finish(dev, image);
    kk_sparse_image_finish(dev, image);
    for (uint8_t plane = 0; plane < image->plane_count; plane++) {
@@ -1098,7 +1119,7 @@ kk_bind_image_memory(struct kk_device *dev, const VkBindImageMemoryInfo *info)
       }
    }
 
-   return VK_SUCCESS;
+   return kk_writable_msaa_image_bind(dev, image);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -1346,3 +1367,5 @@ kk_image_set_label(struct kk_image *image, const char *label)
 }
 
 #include "kk_transient.h"
+
+#include "kk-writable-msaa-image.h"

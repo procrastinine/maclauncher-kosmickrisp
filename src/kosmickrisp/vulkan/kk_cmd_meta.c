@@ -14,6 +14,7 @@
 #include "kk_physical_device.h"
 #include "kk_image.h"
 #include "kk_image_view.h"
+#include "kk-writable-msaa.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 
@@ -381,3 +382,5 @@ kk_meta_expand_msrtss(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
       src->vk.view_format, VK_IMAGE_LAYOUT_GENERAL, 1, &region, VK_FILTER_NEAREST);
    kk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
 }
+
+#include "kk-writable-msaa-meta.h"

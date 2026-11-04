@@ -1631,6 +1631,15 @@ can_use_attachment_initial_layout(struct vk_command_buffer *cmd_buffer,
    return true;
 }
 
+const struct vk_image_view *
+vk_command_buffer_get_attachment_view(const struct vk_command_buffer *cmd_buffer,
+                                       uint32_t attachment)
+{
+   assert(cmd_buffer->render_pass);
+   assert(attachment < cmd_buffer->render_pass->attachment_count);
+   return cmd_buffer->attachments[attachment].image_view;
+}
+
 uint32_t
 vk_command_buffer_get_attachment_layout(const struct vk_command_buffer *cmd_buffer,
                                         const struct vk_image *image,

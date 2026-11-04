@@ -15,6 +15,7 @@
 #include "kk_device.h"
 #include "kk_entrypoints.h"
 #include "kk_image_view.h"
+#include "kk-writable-msaa.h"
 #include "kk_physical_device.h"
 #include "kk_sampler.h"
 #define KK_MAINTENANCE11_DESCRIPTOR
@@ -98,6 +99,8 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
          float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0);
          desc[plane].image_min_lod_fp16 = _mesa_float_to_half(min_lod);
          desc[plane].image_min_lod_uint16 = min_lod;
+         kk_writable_msaa_sampled_descriptor(&desc[plane], view,
+                                             is_input_attachment);
       }
       if (sparse_query) desc[0].image_min_lod_uint16 |= KK_IMAGE_QUERY_RECORD_TAG;
       if (view->plane_count > 1) {
@@ -208,6 +211,7 @@ get_storage_image_view_desc(
       kk_alias_storage_descriptor(&desc, view);
       kk_sliced_3d_descriptor(&desc, &view->vk);
       kk_sparse_storage_descriptor(&desc, view);
+      kk_writable_msaa_storage_descriptor(&desc, view);
    }
 
    assert(sizeof(desc) <= dst_size);

@@ -1083,6 +1083,7 @@ gather_shader_info(struct kk_shader *shader, nir_shader *nir,
        * which is not a valid Metal layout */
       if (nir->info.fs.depth_layout == FRAG_DEPTH_LAYOUT_NONE)
          nir->info.fs.depth_layout = FRAG_DEPTH_LAYOUT_ANY;
+      shader->info.outputs_written = nir->info.outputs_written;
       shader->info.fs.flat_outputs = fs_flat_output_mask(nir);
       shader->info.fs.uses_flat_varyings = shader->info.fs.flat_outputs != 0;
    } else if (nir->info.stage == MESA_SHADER_COMPUTE) {

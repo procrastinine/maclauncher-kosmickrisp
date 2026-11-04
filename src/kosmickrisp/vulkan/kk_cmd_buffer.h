@@ -191,6 +191,7 @@ struct kk_rendering_state {
    uint32_t sample_locations_count;
    VkSampleLocationEXT sample_locations[KK_MAX_SAMPLES];
    bool force_attachment_store;
+   bool writable_msaa_loaded;
    bool rendering_to_whole_framebuffer;
 };
 
@@ -348,6 +349,9 @@ struct kk_cmd_buffer {
    struct util_dynarray mesh_allocators;
    uint32_t mesh_batches_in_part, mesh_draws_in_part;
    /* Pending timestamp resolves (struct kk_ts_resolve), flushed at cs_end. */
+   bool writable_msaa_meta;
+   uint32_t writable_msaa_render_attachments;
+   uint32_t writable_msaa_render_writes;
    struct util_dynarray msrtss_images;
    struct util_dynarray ts_resolves;
    /* Timestamps already sampled by the current render encoder. (struct

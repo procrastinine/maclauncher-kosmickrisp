@@ -6,6 +6,7 @@
  */
 
 #include "kk_image_view.h"
+#include "kk-writable-msaa.h"
 
 #include "kk_device.h"
 #include "kk_entrypoints.h"
@@ -286,12 +287,16 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
       }
    }
 
-   return VK_SUCCESS;
+   VkResult result = kk_writable_msaa_view_init(dev, view);
+   if (result != VK_SUCCESS)
+      kk_image_view_finish(dev, view);
+   return result;
 }
 
 void
 kk_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
 {
+   kk_writable_msaa_view_finish(dev, view);
    for (uint8_t plane = 0; plane < view->plane_count; plane++) {
       if (view->planes[plane].mtl_handle_cube_face)
          mtl_release(view->planes[plane].mtl_handle_cube_face);
@@ -370,3 +375,5 @@ kk_image_view_set_label(struct kk_image_view *iview, const char *label)
       /* mtl_handle_render and mtl_handle_input might be the VkImage's handle */
    }
 }
+
+#include "kk-writable-msaa-view.h"

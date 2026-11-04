@@ -461,6 +461,10 @@ vk_subpass_dependency_is_fb_local(const VkSubpassDependency2 *dep,
    return dep->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT;
 }
 
+const struct vk_image_view *
+vk_command_buffer_get_attachment_view(const struct vk_command_buffer *cmd_buffer,
+                                       uint32_t attachment);
+
 uint32_t
 vk_command_buffer_get_attachment_layout(const struct vk_command_buffer *cmd_buffer,
                                         const struct vk_image *image,

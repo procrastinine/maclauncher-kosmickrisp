@@ -11,6 +11,7 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "kk-writable-msaa.h"
 #include "kk_conservative.h"
 #include "kk_dgc.h"
 #include "kosmickrisp/libkk/kk_tess_grid.h"
@@ -1975,6 +1976,7 @@ static void
 kk_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data data)
 {
    mtl_render_encoder *enc = cs_get_render(cmd);
+   kk_writable_msaa_record_draw(cmd);
 
    if (kk_grid_is_indirect(data.grid)) {
       if (data.index.el_size_B) {

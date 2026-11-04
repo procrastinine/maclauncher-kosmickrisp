@@ -306,6 +306,7 @@ kk_get_device_features(
       .shaderSampledImageArrayDynamicIndexing = true,
       .shaderStorageBufferArrayDynamicIndexing = true,
       .shaderStorageImageArrayDynamicIndexing = true,
+      .shaderStorageImageMultisample = true,
       .shaderStorageImageExtendedFormats = true,
       .shaderStorageImageReadWithoutFormat = true,
       .shaderStorageImageWriteWithoutFormat = true,
@@ -803,7 +804,8 @@ kk_get_device_properties(
       .sampledImageDepthSampleCounts = sample_counts,
       .sampledImageStencilSampleCounts = sample_counts,
       .dynamicRenderingLocalReadMultisampledAttachments = true,
-      .storageImageSampleCounts = VK_SAMPLE_COUNT_1_BIT,
+      .storageImageSampleCounts = pdev->info.supported_sample_counts &
+         (VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT),
       .maxSampleMaskWords = 1,
       .timestampComputeAndGraphics = true,
       .timestampPeriod = timestamp_period,

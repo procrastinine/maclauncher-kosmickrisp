@@ -6,6 +6,7 @@
  */
 
 #include "kk_cmd_buffer.h"
+#include "kk-writable-msaa.h"
 
 #include "kk_bo.h"
 #include "kk_buffer.h"
@@ -356,6 +357,9 @@ kk_CmdCopyImage2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_image, src, pCopyImageInfo->srcImage);
    VK_FROM_HANDLE(kk_image, dst, pCopyImageInfo->dstImage);
+
+   if (kk_writable_msaa_copy_image(cmd, pCopyImageInfo))
+      return;
 
    size_t buffer_size = 0u;
 

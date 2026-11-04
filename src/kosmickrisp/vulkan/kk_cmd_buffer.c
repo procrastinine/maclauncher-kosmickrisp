@@ -6,6 +6,7 @@
  */
 
 #include "kk_cmd_buffer.h"
+#include "kk-writable-msaa.h"
 #include "kk_sparse.h"
 #include "kk_dgc.h"
 
@@ -335,6 +336,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
 
    /* Ensure no other active encoder, aka compute */
    cs_end(cmd);
+   kk_writable_msaa_prepare_render(cmd);
 
    cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
       cmd->metal.cmd_buf, state->render_pass_descriptor);
@@ -446,6 +448,7 @@ cs_end(struct kk_cmd_buffer *cmd)
       /* The stage map is only valid for the current render encoder */
       util_dynarray_clear(&cmd->ts_stage_map);
       flush_post_render_writes(cmd);
+      kk_writable_msaa_publish_render(cmd);
    }
 
    if (cmd->metal.compute) {
@@ -1046,6 +1049,9 @@ kk_get_attachment_store_op(const struct kk_attachment *attachment,
                            bool rendering_to_whole_framebuffer,
                            VkImageAspectFlags aspect)
 {
+   if (attachment->iview && aspect == VK_IMAGE_ASPECT_COLOR_BIT)
+      force_store |= container_of(attachment->iview->vk.image,
+                                   struct kk_image, vk)->writable_msaa != NULL;
    bool renderpass_resolve = kk_attachment_do_renderpass_resolve(
       attachment, rendering_to_whole_framebuffer, aspect);
    force_store |=
