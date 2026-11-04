@@ -113,9 +113,13 @@ mtl_timestamp_arena_take(struct mtl_timestamp_arena *arena, uint32_t count,
       return false;
 
    simple_mtx_lock(&arena->lock);
-   /* A request beyond every heap the arena may still add fails without adding them. */
+   const uint32_t heaps_before = arena->heap_count;
+   /* The first heap settles the heap size. A request beyond every heap the
+    * arena may still add then fails without adding them. */
+   if (!arena->units_per_heap && arena->free_count < count)
+      add_heap(arena);
    const bool fits =
-      !arena->units_per_heap ||
+      arena->units_per_heap &&
       count - MIN2(count, arena->free_count) <=
          (uint64_t)(arena->max_heaps - arena->heap_count) * arena->units_per_heap;
    while (fits && arena->free_count < count && add_heap(arena))
@@ -124,6 +128,14 @@ mtl_timestamp_arena_take(struct mtl_timestamp_arena *arena, uint32_t count,
    if (taken) {
       for (uint32_t i = 0; i < count; ++i)
          units[i] = arena->free_units[--arena->free_count];
+   } else {
+      /* Release the heaps this request added, so a request Metal cannot hold
+       * leaves the process's heaps to other users. Their units are the top of
+       * the free list. */
+      while (arena->heap_count > heaps_before) {
+         arena->free_count -= arena->units_per_heap;
+         mtl_release(arena->heaps[--arena->heap_count]);
+      }
    }
    simple_mtx_unlock(&arena->lock);
    return taken;
