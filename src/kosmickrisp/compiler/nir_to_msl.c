@@ -2909,8 +2909,10 @@ msl_optimize_nir(struct nir_shader *nir)
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
    NIR_PASS(_, nir, msl_nir_lower_algebraic_late);
    NIR_PASS(_, nir, nir_convert_from_ssa, true, false);
-   NIR_PASS(_, nir, nir_trivialize_registers);
    NIR_PASS(_, nir, nir_opt_copy_prop);
+   /* Register loads are inlined into their uses by the MSL emitter. Keep
+    * their snapshot copies after any pass that propagates moves. */
+   NIR_PASS(_, nir, nir_trivialize_registers);
 
    return progress;
 }
