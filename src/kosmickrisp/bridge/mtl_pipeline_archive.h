@@ -1085,7 +1085,9 @@ mtl_compiler_cache_recapture(mtl_compiler *compiler, unsigned limit)
    if (!cache || !__atomic_load_n(&cache->recapture_count, __ATOMIC_ACQUIRE)) return;
    for (unsigned i = 0; i < limit; ++i) @autoreleasepool {
       NSArray *entry = nil;
-      if (__atomic_load_n(&cache->draining, __ATOMIC_ACQUIRE)) break;
+      /* Per-compile batches yield to a drain; the unbounded call made at
+       * teardown, after the last client, captures everything left. */
+      if (limit != UINT_MAX && __atomic_load_n(&cache->draining, __ATOMIC_ACQUIRE)) break;
       @synchronized(cache) {
          if (cache->finished || !cache->recapture.count) break;
          entry = [[cache->recapture objectAtIndex:0] retain];
