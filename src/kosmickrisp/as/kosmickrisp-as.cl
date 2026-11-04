@@ -201,6 +201,26 @@ kk_as_convert_leaves(global struct kk_as_header *h,
       vstore3(bounds_min, 0, n->min);
       vstore3(bounds_max, 0, n->max);
       n->type = KK_AS_NODE_TRIANGLE;
+      /* Opacity micromap reference: the micromap triangle index (base added
+       * to non-negative indices; -1..-4 are special indices) and the
+       * micromap's canonical address. Index size 1 means no index buffer:
+       * the triangle's own index is used. */
+      if (in.micromap_index_size) {
+         int index = (int)primitive;
+         if (in.micromap_index_size > 1) {
+            global const uchar *entry = (global const uchar *)(uintptr_t)
+               (in.micromap_indices + primitive * in.micromap_index_stride);
+            index = in.micromap_index_size == 4 ? *(global const int *)entry :
+                                                  (int)*(global const short *)entry;
+         }
+         if (index >= 0)
+            index += (int)in.micromap_base;
+         if (index >= -4 && (index < 0 || in.micromap)) {
+            ((global uint *)payload->data)[9] = (uint)index;
+            *(global uint64_t *)(payload->data + 10) = in.micromap;
+            n->flags |= KK_AS_NODE_FLAG_OPACITY_MICROMAP;
+         }
+      }
    } else if (in.type == KK_AS_NODE_AABB) {
       global const float *aabb = (global const float *)(uintptr_t)
          (in.data + in.primitive_offset + primitive * in.stride);
@@ -246,6 +266,57 @@ kk_as_convert_leaves(global struct kk_as_header *h,
       vstore3(bounds_max, 0, n->max);
       n->type = KK_AS_NODE_INSTANCE;
    }
+}
+
+/* One invocation packs the micromap triangle records: each triangle's states
+ * take the next free range of the packed data, in triangle order. A record
+ * outside the sizes given at build-size time keeps no states. */
+KERNEL(1)
+kk_as_micromap_records(global struct kk_as_header *dst,
+                       constant struct kk_as_header *layout,
+                       global const struct kk_as_input *input)
+{
+   *dst = *layout;
+   global struct kk_as_micromap_triangle *records = (global struct kk_as_micromap_triangle *)
+      ((global uchar *)dst + layout->payload_offset);
+   uint64_t capacity = layout->canonical_size - layout->geometry_offset, cursor = 0;
+   for (uint64_t i = 0; i < layout->primitive_count; ++i) {
+      global const uchar *src = (global const uchar *)(uintptr_t)
+         (input->indices + i * input->stride);
+      uint level = *(global const ushort *)(src + 4);
+      uint format = *(global const ushort *)(src + 6);
+      uint64_t bytes = level <= KK_AS_MAX_MICROMAP_LEVEL && (format == 1 || format == 2) ?
+         kk_as_micromap_triangle_bytes(level, format) : 0;
+      if (!bytes || bytes > capacity - cursor) {
+         records[i] = (struct kk_as_micromap_triangle){(uint)cursor, 0, 0};
+         continue;
+      }
+      records[i] = (struct kk_as_micromap_triangle){(uint)cursor, (ushort)level, (ushort)format};
+      cursor += bytes;
+   }
+}
+
+/* One invocation per micromap triangle copies its states from the
+ * application's data offset to the packed range. */
+KERNEL(64)
+kk_as_micromap_copy(global struct kk_as_header *dst,
+                    global const struct kk_as_input *input)
+{
+   uint64_t id = kk_as_id();
+   if (id >= dst->primitive_count)
+      return;
+   global const struct kk_as_micromap_triangle *record =
+      (global const struct kk_as_micromap_triangle *)((global uchar *)dst + dst->payload_offset) + id;
+   if (!record->format)
+      return;
+   global const uchar *triangle = (global const uchar *)(uintptr_t)
+      (input->indices + id * input->stride);
+   global const uchar *src = (global const uchar *)(uintptr_t)
+      (input->data + *(global const uint *)triangle);
+   global uchar *out = (global uchar *)dst + dst->geometry_offset + record->data_offset;
+   uint64_t bytes = kk_as_micromap_triangle_bytes(record->subdivision_level, record->format);
+   for (uint64_t i = 0; i < bytes; ++i)
+      out[i] = src[i];
 }
 
 static inline int

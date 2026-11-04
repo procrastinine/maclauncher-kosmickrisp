@@ -62,6 +62,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_ray_tracing_maintenance1 = true,
       .KHR_pipeline_library = true,
       .EXT_pipeline_library_group_handles = true,
+      .KHR_opacity_micromap = true,
       .KHR_cooperative_matrix = pdev->info.gpu_apple_family >= 7,
       .EXT_shader_float8 = true,
       .EXT_shader_long_vector = true,
@@ -275,6 +276,7 @@ kk_get_device_features(
       .rayQuery = true,
       .rayTracingMaintenance1 = true,
       .rayTracingPipelineTraceRaysIndirect2 = true,
+      .micromap = true,
       .pipelineLibraryGroupHandles = true,
       .longVector = true,
       /* Vulkan 1.0 */
@@ -1197,6 +1199,11 @@ kk_get_device_properties(
    properties->maxShaderGroupStride = 4096;
    properties->maxRayRecursionDepth = 31;
    properties->maxRayHitAttributeSize = 32;
+   properties->maxOpacity2StateSubdivisionLevel = KK_AS_MAX_MICROMAP_LEVEL;
+   properties->maxOpacity4StateSubdivisionLevel = KK_AS_MAX_MICROMAP_LEVEL;
+   /* Lossy micromap builds keep the exact states. */
+   properties->maxOpacityLossy4StateSubdivisionLevel = KK_AS_MAX_MICROMAP_LEVEL;
+   properties->maxMicromapTriangles = KK_AS_MAX_PRIMITIVES;
    properties->maxRayDispatchInvocationCount = 1u << 30;
    properties->subgroupSupportedStages |=
       VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR |

@@ -98,12 +98,46 @@ kk_as_direct_grid(uint64_t count)
    return kk_grid_3d(grid[0], grid[1], grid[2]);
 }
 
+static const VkAccelerationStructureGeometryKHR *
+kk_as_geometry(const VkAccelerationStructureBuildGeometryInfoKHR *info, uint32_t g)
+{
+   return info->pGeometries ? &info->pGeometries[g] : info->ppGeometries[g];
+}
+
+/* An opacity micromap is sized by its usage counts: the number of micromap
+ * triangles and their packed state bytes. */
+static bool
+kk_as_micromap_layout(const VkAccelerationStructureBuildGeometryInfoKHR *info,
+                      struct kk_as_layout *layout)
+{
+   const VkAccelerationStructureGeometryMicromapDataKHR *data = info->geometryCount ?
+      vk_find_struct_const(kk_as_geometry(info, 0)->pNext,
+                           ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR) : NULL;
+   uint64_t triangles = 0, bytes = 0;
+   for (uint32_t i = 0; data && i < data->usageCountsCount; ++i) {
+      const VkMicromapUsageKHR *usage = data->pUsageCounts ? &data->pUsageCounts[i] :
+                                                            data->ppUsageCounts[i];
+      if (usage->subdivisionLevel > KK_AS_MAX_MICROMAP_LEVEL)
+         return false;
+      uint64_t usage_bytes;
+      if (!kk_as_u64_mul(usage->count,
+                         kk_as_micromap_triangle_bytes(usage->subdivisionLevel, usage->format),
+                         &usage_bytes) ||
+          !kk_as_u64_add(triangles, usage->count, &triangles) ||
+          !kk_as_u64_add(bytes, usage_bytes, &bytes))
+         return false;
+   }
+   return kk_as_compute_micromap_layout(info->flags, triangles, bytes, layout);
+}
+
 static bool
 kk_as_info_layout(const VkAccelerationStructureBuildGeometryInfoKHR *info,
                    const uint32_t *max_counts,
                    const VkAccelerationStructureBuildRangeInfoKHR *ranges,
                    struct kk_as_layout *layout)
 {
+   if (info->type == VK_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP_KHR)
+      return kk_as_micromap_layout(info, layout);
    uint64_t primitives = 0;
    for (uint32_t g = 0; g < info->geometryCount; ++g) {
       if (!kk_as_u64_add(primitives, ranges ? ranges[g].primitiveCount : max_counts[g], &primitives))
@@ -166,6 +200,20 @@ kk_as_make_input(const VkAccelerationStructureGeometryKHR *geometry,
       if (t->transformData.deviceAddress &&
           !kk_as_u64_add(t->transformData.deviceAddress, range->transformOffset, &out->transform))
          return false;
+      const VkAccelerationStructureTrianglesOpacityMicromapKHR *omm =
+         vk_find_struct_const(t->pNext, ACCELERATION_STRUCTURE_TRIANGLES_OPACITY_MICROMAP_KHR);
+      if (!omm)
+         omm = vk_find_struct_const(geometry->pNext, ACCELERATION_STRUCTURE_TRIANGLES_OPACITY_MICROMAP_KHR);
+      if (omm) {
+         VK_FROM_HANDLE(vk_acceleration_structure, micromap, omm->micromap);
+         out->micromap = micromap ? vk_acceleration_structure_get_va(micromap) : 0;
+         out->micromap_indices = omm->indexBuffer;
+         out->micromap_index_size = omm->indexType == VK_INDEX_TYPE_UINT32 ? 4 :
+                                    omm->indexType == VK_INDEX_TYPE_UINT16 ? 2 : 1;
+         out->micromap_index_stride = omm->indexStride ? omm->indexStride :
+                                      out->micromap_index_size;
+         out->micromap_base = omm->baseTriangle;
+      }
       break;
    }
    case VK_GEOMETRY_TYPE_AABBS_KHR:
@@ -183,6 +231,43 @@ kk_as_make_input(const VkAccelerationStructureGeometryKHR *geometry,
    return true;
 }
 
+/* A micromap is written in place: the packed triangle records first (one
+ * invocation), then each triangle's states. */
+static void
+kk_as_build_micromap(struct kk_cmd_buffer *cmd,
+                     const VkAccelerationStructureBuildGeometryInfoKHR *info,
+                     const struct kk_as_layout *layout,
+                     const struct vk_acceleration_structure *dst, uint64_t dst_address)
+{
+   if (!kk_as_range_fits(0, layout->header.canonical_size, dst->size) ||
+       !kk_as_address_range_fits(dst_address, layout->header.canonical_size)) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return;
+   }
+   const VkAccelerationStructureGeometryMicromapDataKHR *data = info->geometryCount ?
+      vk_find_struct_const(kk_as_geometry(info, 0)->pNext,
+                           ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR) : NULL;
+   struct kk_as_input in = {
+      .primitive_count = layout->header.primitive_count,
+      .data = data ? data->data : 0,
+      .indices = data ? data->triangleArray : 0,
+      .stride = data && data->triangleArrayStride ? data->triangleArrayStride :
+                sizeof(VkMicromapTriangleKHR),
+   };
+   struct kk_ptr input = kk_pool_upload(cmd, &in, sizeof(in), 16);
+   struct kk_ptr header = kk_pool_upload(cmd, &layout->header, sizeof(layout->header), 16);
+   if (!input.gpu || !header.gpu)
+      return;
+   struct kk_as_micromap_records_args records = {dst_address, header.gpu, input.gpu};
+   if (!kk_as_dispatch(cmd, kk_grid_1d(1), KK_AS_MICROMAP_RECORDS, &records, sizeof(records)))
+      return;
+   if (layout->header.primitive_count) {
+      struct kk_as_micromap_copy_args copy = {dst_address, input.gpu};
+      kk_as_dispatch(cmd, kk_as_direct_grid(layout->header.primitive_count), KK_AS_MICROMAP_COPY,
+                     &copy, sizeof(copy));
+   }
+}
+
 VKAPI_ATTR void VKAPI_CALL
 kk_CmdBuildAccelerationStructuresKHR(VkCommandBuffer commandBuffer, uint32_t infoCount,
    const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
@@ -198,6 +283,10 @@ kk_CmdBuildAccelerationStructuresKHR(VkCommandBuffer commandBuffer, uint32_t inf
       }
       VK_FROM_HANDLE(vk_acceleration_structure, dst, info->dstAccelerationStructure);
       uint64_t dst_address = vk_acceleration_structure_get_va(dst);
+      if (info->type == VK_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP_KHR) {
+         kk_as_build_micromap(cmd, info, &layout, dst, dst_address);
+         continue;
+      }
       if (!kk_as_range_fits(0, layout.header.canonical_size, dst->size) ||
           !kk_as_address_range_fits(dst_address, layout.header.canonical_size) ||
           !kk_as_address_range_fits(info->scratchData.deviceAddress, layout.scratch_size)) {
@@ -216,8 +305,7 @@ kk_CmdBuildAccelerationStructuresKHR(VkCommandBuffer commandBuffer, uint32_t inf
          return;
       uint64_t first = 0;
       for (uint32_t g = 0; g < info->geometryCount; ++g) {
-         const VkAccelerationStructureGeometryKHR *geometry = info->pGeometries ?
-            &info->pGeometries[g] : info->ppGeometries[g];
+         const VkAccelerationStructureGeometryKHR *geometry = kk_as_geometry(info, g);
          if (!kk_as_make_input(geometry, &ppBuildRangeInfos[b][g], first,
                                &((struct kk_as_input *)input.cpu)[g])) {
             vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);

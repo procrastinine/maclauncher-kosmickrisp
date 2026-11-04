@@ -146,6 +146,8 @@ static const struct spirv_capabilities implemented_capabilities = {
    .RayQueryKHR = true,
    .RayQueryPositionFetchKHR = true,
    .RayTracingKHR = true,
+   .RayTracingOpacityMicromapKHR = true,
+   .RayTracingOpacityMicromapExecutionModeKHR = true,
    .RayTracingPositionFetchKHR = true,
    .RayTraversalPrimitiveCullingKHR = true,
    .ReplicatedCompositesEXT = true,
@@ -5543,6 +5545,7 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
    case SpvExecutionModeLocalSizeId:
    case SpvExecutionModeLocalSizeHintId:
    case SpvExecutionModeSubgroupsPerWorkgroupId:
+   case SpvExecutionModeOpacityMicromapIdKHR:
    case SpvExecutionModeFPFastMathDefault:
    case SpvExecutionModeMaxNodeRecursionAMDX:
    case SpvExecutionModeStaticNumWorkgroupsAMDX:
@@ -5658,6 +5661,15 @@ vtn_handle_execution_mode_id(struct vtn_builder *b, struct vtn_value *entry_poin
       vtn_assert(b->shader->info.stage == MESA_SHADER_KERNEL);
       b->shader->info.num_subgroups = vtn_constant_uint(b, mode->operands[0]);
       break;
+
+   case SpvExecutionModeOpacityMicromapIdKHR: {
+      struct vtn_value *enable = vtn_value(b, mode->operands[0], vtn_value_type_constant);
+      vtn_fail_if(enable->type->base_type != vtn_base_type_scalar ||
+                  !glsl_type_is_boolean(enable->type->type),
+                  "OpacityMicromapIdKHR requires a boolean constant");
+      b->shader->info.ray_query_opacity_micromap = enable->constant->values[0].b;
+      break;
+   }
 
    case SpvExecutionModeFPFastMathDefault: {
       struct vtn_type *type = vtn_get_type(b, mode->operands[0]);

@@ -133,4 +133,35 @@ kk_as_compute_layout(uint32_t type, uint32_t flags, uint64_t geometries,
    *result = out;
    return true;
 }
+
+static inline bool
+kk_as_compute_micromap_layout(uint32_t flags, uint64_t triangles, uint64_t data_bytes,
+                              struct kk_as_layout *result)
+{
+   if (triangles > KK_AS_MAX_PRIMITIVES)
+      return false;
+   struct kk_as_layout out = {0};
+   struct kk_as_header *h = &out.header;
+   h->magic = KK_AS_MAGIC;
+   h->abi_version = KK_AS_ABI_VERSION;
+   h->type = KK_AS_TYPE_OPACITY_MICROMAP;
+   h->status = KK_AS_STATUS_COMPLETE;
+   h->build_flags = flags;
+   h->primitive_count = triangles;
+   uint64_t cursor = sizeof(*h);
+   if (!kk_as_append(&cursor, triangles, sizeof(struct kk_as_micromap_triangle),
+                     KK_AS_ALIGNMENT, &h->payload_offset) ||
+       !kk_as_append(&cursor, data_bytes, 1, KK_AS_ALIGNMENT, &h->geometry_offset) ||
+       !kk_as_u64_align(cursor, KK_AS_ALIGNMENT, &h->canonical_size))
+      return false;
+   cursor = KK_AS_SERIAL_PREFIX_SIZE;
+   if (!kk_as_u64_align(cursor, KK_AS_ALIGNMENT, &cursor) ||
+       !kk_as_u64_add(cursor, h->canonical_size, &h->serialization_size))
+      return false;
+   /* The build writes the destination directly; Vulkan still receives a
+    * nonzero scratch size. */
+   out.scratch_size = KK_AS_SCRATCH_ALIGNMENT;
+   *result = out;
+   return true;
+}
 #endif

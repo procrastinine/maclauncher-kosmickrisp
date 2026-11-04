@@ -328,6 +328,12 @@ typedef struct shader_info {
     */
    bool maximally_reconverges:1;
 
+   /**
+    * Ray queries in this shader honour opacity micromaps
+    * (SPV_KHR_opacity_micromap execution mode OpacityMicromapIdKHR).
+    */
+   bool ray_query_opacity_micromap:1;
+
    /* Use ACO instead of LLVM on AMD. */
    bool use_aco_amd:1;
 

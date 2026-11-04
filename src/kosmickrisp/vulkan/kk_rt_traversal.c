@@ -48,6 +48,8 @@ nir_shader *kk_rt_build_traversal(void *mem_ctx, uint32_t pipeline_ray_flags){
    b.impl->function->params[0]=(nir_parameter){.num_components=1,.bit_size=64};
    nir_variable *query=nir_local_variable_create(b.impl,glsl_uint64_t_type(),"traversal");query->data.ray_query=true;
    nir_def *q=&nir_build_deref_var(&b,query)->def;
+   b.shader->info.ray_query_opacity_micromap=(pipeline_ray_flags&KK_RT_PIPELINE_OPACITY_MICROMAP)!=0;
+   pipeline_ray_flags&=~KK_RT_PIPELINE_OPACITY_MICROMAP;
    nir_rq_initialize(&b,q,L(acceleration_structure,1,64),nir_ior_imm(&b,L(flags,1,32),pipeline_ray_flags),L(cull_mask,1,32),L(origin,3,32),L(tmin,1,32),L(direction,3,32),L(tmax,1,32));
    nir_loop *outer=nir_push_loop(&b);
    nir_push_if(&b,nir_inot(&b,nir_rq_proceed(&b,1,q)));nir_jump(&b,nir_jump_break);nir_pop_if(&b,NULL);

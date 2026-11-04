@@ -20,12 +20,17 @@
 
 #define KK_AS_TYPE_TOP_LEVEL 0u
 #define KK_AS_TYPE_BOTTOM_LEVEL 1u
+#define KK_AS_TYPE_OPACITY_MICROMAP 2u
 #define KK_AS_NODE_INTERNAL 0u
 #define KK_AS_NODE_TRIANGLE 1u
 #define KK_AS_NODE_AABB 2u
 #define KK_AS_NODE_INSTANCE 3u
 #define KK_AS_NODE_INACTIVE 4u
 #define KK_AS_STATUS_COMPLETE 1u
+/* Leaf flag beside the geometry flags: the triangle payload holds an opacity
+ * micromap reference (payload floats 9..11). */
+#define KK_AS_NODE_FLAG_OPACITY_MICROMAP (1u << 16)
+#define KK_AS_MAX_MICROMAP_LEVEL 12u
 
 /* Explicit scalar arrays avoid host/OpenCL float3 alignment differences. */
 struct __attribute__((aligned(16))) kk_as_header {
@@ -84,6 +89,23 @@ struct __attribute__((aligned(16))) kk_as_payload {
    float data[24];
 };
 
+/* A canonical opacity micromap: the header, then one record per micromap
+ * triangle at payload_offset, then the packed state bytes at geometry_offset.
+ * data_offset is relative to the packed bytes. */
+struct kk_as_micromap_triangle {
+   uint32_t data_offset;
+   uint16_t subdivision_level;
+   uint16_t format;
+};
+
+/* Bytes of one micromap triangle's states: 4^level states of 1 bit
+ * (VK_OPACITY_MICROMAP_FORMAT_2_STATE_KHR = 1) or 2 bits (4-state = 2). */
+static inline uint64_t
+kk_as_micromap_triangle_bytes(uint32_t level, uint32_t format)
+{
+   return ((((uint64_t)1) << (2 * level)) * (format == 2 ? 2 : 1) + 7) / 8;
+}
+
 struct kk_as_serial_header {
    uint8_t driver_uuid[16];
    uint8_t format_uuid[16];
@@ -108,6 +130,14 @@ struct kk_as_input {
    uint32_t index_size;
    uint32_t flags;
    uint32_t array_of_pointers;
+   /* Triangles: the attached opacity micromap (canonical address or 0), its
+    * index buffer, stride and index size (0 for none) and base triangle. A
+    * micromap build uses data, indices (triangle array) and stride. */
+   uint64_t micromap;
+   uint64_t micromap_indices;
+   uint64_t micromap_index_stride;
+   uint32_t micromap_index_size;
+   uint32_t micromap_base;
 };
 
 /* GPU input ABI of VkAccelerationStructureInstanceKHR without C bitfields. */
@@ -156,5 +186,6 @@ _Static_assert(offsetof(struct kk_as_node, geometry_id) == 64, "AS primitive ABI
 _Static_assert(sizeof(struct kk_as_geometry) == 32, "AS geometry ABI");
 _Static_assert(sizeof(struct kk_as_payload) == 96, "AS payload ABI");
 _Static_assert(sizeof(struct kk_as_serial_header) == KK_AS_SERIAL_PREFIX_SIZE, "AS serialization ABI");
-_Static_assert(sizeof(struct kk_as_input) == 80, "AS input ABI");
+_Static_assert(sizeof(struct kk_as_input) == 112, "AS input ABI");
+_Static_assert(sizeof(struct kk_as_micromap_triangle) == 8, "micromap triangle ABI");
 #endif

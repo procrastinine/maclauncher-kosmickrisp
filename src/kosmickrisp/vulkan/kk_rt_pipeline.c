@@ -4,6 +4,7 @@
 #include "kosmickrisp-rt-commands.h"
 #include "kosmickrisp-rt-shader.h"
 #include "kosmickrisp-rt-dispatch.h"
+#include "kosmickrisp-rt-cps.h"
 #include "kk_cmd_buffer.h"
 #include "kk_device.h"
 #include "kk_physical_device.h"
@@ -119,7 +120,8 @@ kk_rt_pipeline_realize(struct vk_device *device, const struct vk_pipeline *commo
    pipeline->program_count = pipeline->traversal_program+1;
    uint32_t pipeline_ray_flags =
       ((common->flags & VK_PIPELINE_CREATE_2_RAY_TRACING_SKIP_TRIANGLES_BIT_KHR) ? SpvRayFlagsSkipTrianglesKHRMask : 0) |
-      ((common->flags & VK_PIPELINE_CREATE_2_RAY_TRACING_SKIP_AABBS_BIT_KHR) ? SpvRayFlagsSkipAABBsKHRMask : 0);
+      ((common->flags & VK_PIPELINE_CREATE_2_RAY_TRACING_SKIP_AABBS_BIT_KHR) ? SpvRayFlagsSkipAABBsKHRMask : 0) |
+      ((common->flags & VK_PIPELINE_CREATE_2_RAY_TRACING_OPACITY_MICROMAP_BIT_KHR) ? KK_RT_PIPELINE_OPACITY_MICROMAP : 0);
    result=kk_rt_compile_traversal(device,alloc,&pipeline->traversal,kk_compile_msl,pipeline_ray_flags);
    if(result!=VK_SUCCESS)return result;
    uint64_t bytes;

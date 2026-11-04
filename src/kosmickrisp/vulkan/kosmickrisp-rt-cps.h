@@ -28,6 +28,9 @@ bool kk_rt_prepare_context(nir_shader *shader);
 struct nir_builder;
 nir_def *kk_rt_load_embedded_sampler_table(struct nir_builder *b);
 bool kk_rt_shader_frame_fits(nir_shader *shader);
+/* Internal bit of pipeline_ray_flags, outside the SPIR-V ray flags: the
+ * pipeline was created with the opacity micromap flag. */
+#define KK_RT_PIPELINE_OPACITY_MICROMAP (1u << 31)
 nir_shader *kk_rt_build_traversal(void *mem_ctx, uint32_t pipeline_ray_flags);
 bool kk_rt_split_shader_mode(nir_shader *shader, void *mem_ctx, struct kk_rt_shader_parts *parts, bool internal);
 #endif

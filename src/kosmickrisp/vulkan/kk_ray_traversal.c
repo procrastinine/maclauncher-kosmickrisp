@@ -6,6 +6,7 @@
 #include "kk_ray_tracing.h"
 #include "kosmickrisp/as/kosmickrisp-as-types.h"
 #include "compiler/spirv/spirv.h"
+#include "vulkan/vulkan_core.h"
 #include <float.h>
 #include <math.h>
 
@@ -100,6 +101,84 @@ kk_rt_leaf(nir_builder *b, nir_def *node, const struct kk_rt_ray_traversal_args 
    return hit;
 }
 
+/* Exclusive prefix XOR within each 16-bit lane, and bit interleaving of a
+ * 16-bit value: the bird-curve helpers of opacity micromap indexing. */
+static nir_def *
+kk_rt_prefix_xor(nir_builder *b, nir_def *x)
+{
+   static const uint32_t masks[] = {0x7fff7fff, 0x3fff3fff, 0x0fff0fff, 0x00ff00ff};
+   for (unsigned i = 0; i < ARRAY_SIZE(masks); ++i)
+      x = nir_ixor(b, x, nir_iand_imm(b, nir_ushr_imm(b, x, 1u << i), masks[i]));
+   return x;
+}
+
+static nir_def *
+kk_rt_interleave(nir_builder *b, nir_def *x)
+{
+   static const uint32_t masks[] = {0x00ff00ff, 0x0f0f0f0f, 0x33333333, 0x55555555};
+   for (unsigned i = 0; i < ARRAY_SIZE(masks); ++i)
+      x = nir_iand_imm(b, nir_ior(b, x, nir_ishl_imm(b, x, 8u >> i)), masks[i]);
+   return x;
+}
+
+/* Index of the micro-triangle that contains barycentrics (u, v) at a
+ * subdivision level: discrete barycentrics, then the bird-curve position. */
+static nir_def *
+kk_rt_micro_triangle(nir_builder *b, nir_def *bary, nir_def *level)
+{
+   nir_def *n = nir_u2f32(b, nir_ishl(b, nir_imm_int(b, 1), level));
+   nir_def *mask = nir_iadd_imm(b, nir_ishl(b, nir_imm_int(b, 1), level), -1);
+   nir_def *u = nir_channel(b, bary, 0), *v = nir_channel(b, bary, 1);
+   nir_def *w = nir_fsub(b, nir_fsub_imm(b, 1.0f, u), v);
+   nir_def *d[3];
+   nir_def *c[3] = {u, v, w};
+   for (unsigned i = 0; i < 3; ++i)
+      d[i] = nir_umin(b, nir_f2u32(b, nir_fmax(b, nir_ffloor(b, nir_fmul(b, c[i], n)),
+                                              nir_imm_float(b, 0))), mask);
+   nir_def *b0 = nir_iand(b, nir_inot(b, nir_ixor(b, d[0], d[2])), mask);
+   nir_def *t = nir_iand(b, nir_ixor(b, d[0], d[1]), b0);
+   nir_def *f = nir_ixor(b, kk_rt_prefix_xor(b, t), d[0]);
+   nir_def *b1 = nir_iand(b, nir_ior(b, nir_iand(b, f, nir_inot(b, b0)), t), mask);
+   return nir_ior(b, kk_rt_interleave(b, b0), nir_ishl_imm(b, kk_rt_interleave(b, b1), 1));
+}
+
+/* Opacity micromap state of a triangle hit: 0 transparent, 1 opaque,
+ * 2 unknown transparent, 3 unknown opaque. Special indices -1..-4 give the
+ * state directly (state = ~index). */
+static nir_def *
+kk_rt_micromap_state(nir_builder *b, nir_def *payload, nir_def *bary)
+{
+   nir_def *index = kk_rt_load(b, payload, 9 * sizeof(float), 1, 32);
+   nir_push_if(b, nir_ilt_imm(b, index, 0));
+   nir_def *special = nir_iand_imm(b, nir_inot(b, index), 3);
+   nir_push_else(b, NULL);
+   nir_def *micromap = kk_rt_load(b, payload, 10 * sizeof(float), 1, 64);
+   nir_def *records = nir_iadd(b, micromap,
+      kk_rt_load(b, micromap, offsetof(struct kk_as_header, payload_offset), 1, 64));
+   nir_def *record = nir_iadd(b, records, nir_imul_imm(b, nir_u2u64(b, index),
+      sizeof(struct kk_as_micromap_triangle)));
+   nir_def *data_offset = kk_rt_load(b, record, 0, 1, 32);
+   nir_def *word = kk_rt_load(b, record, 4, 1, 32);
+   nir_def *level = nir_iand_imm(b, word, 0xffff);
+   nir_def *format = nir_ushr_imm(b, word, 16);
+   nir_def *micro = kk_rt_micro_triangle(b, bary, level);
+   nir_def *four = nir_ieq_imm(b, format, 2);
+   nir_def *bit = nir_bcsel(b, four, nir_ishl_imm(b, micro, 1), micro);
+   nir_def *data = nir_iadd(b, micromap,
+      kk_rt_load(b, micromap, offsetof(struct kk_as_header, geometry_offset), 1, 64));
+   /* The packed states start 16-byte aligned; read the containing word. */
+   nir_def *byte_index = nir_iadd(b, data_offset, nir_ushr_imm(b, bit, 3));
+   nir_def *address = nir_iadd(b, data, nir_u2u64(b, nir_iand_imm(b, byte_index, ~3u)));
+   nir_def *shift = nir_iadd(b, nir_ishl_imm(b, nir_iand_imm(b, byte_index, 3), 3),
+                             nir_iand_imm(b, bit, 7));
+   nir_def *bits = nir_ushr(b, kk_rt_load(b, address, 0, 1, 32), shift);
+   nir_def *stored = nir_bcsel(b, four, nir_iand_imm(b, bits, 3), nir_iand_imm(b, bits, 1));
+   /* A record without states (format 0) reads as unknown opaque. */
+   stored = nir_bcsel(b, nir_ieq_imm(b, format, 0), nir_imm_int(b, 3), stored);
+   nir_pop_if(b, NULL);
+   return nir_if_phi(b, special, stored);
+}
+
 static void
 kk_rt_triangle(nir_builder *b, nir_def *node, const struct kk_rt_ray_traversal_args *args,
                   const struct kk_rt_ray_flags *flags)
@@ -118,6 +197,32 @@ kk_rt_triangle(nir_builder *b, nir_def *node, const struct kk_rt_ray_traversal_a
    hit.base.node_addr = payload;
    hit.t = nir_channel(b, result, 0);
    hit.barycentrics = nir_channels(b, result, 0xc);
+   nir_def *transparent = NULL;
+   if (b->shader->info.ray_query_opacity_micromap) {
+      /* The micromap state replaces the geometry's opaque bit; instance and
+       * ray force-opaque flags still apply on top, and transparent
+       * micro-triangles are skipped. */
+      nir_def *instance = nir_load_deref(b, args->vars.sbt_offset_and_flags);
+      nir_def *active = nir_iand(b,
+         nir_test_mask(b, kk_rt_load(b, node, offsetof(struct kk_as_node, flags), 1, 32),
+                       KK_AS_NODE_FLAG_OPACITY_MICROMAP),
+         nir_inot(b, nir_test_mask(b, instance,
+                  VK_GEOMETRY_INSTANCE_DISABLE_OPACITY_MICROMAPS_BIT_KHR << 24)));
+      nir_push_if(b, active);
+      nir_def *state = kk_rt_micromap_state(b, payload, hit.barycentrics);
+      nir_def *two_state = nir_ior(b, nir_test_mask(b, args->flags, SpvRayFlagsForceOpacityMicromap2StateKHRMask),
+         nir_test_mask(b, instance, VK_GEOMETRY_INSTANCE_FORCE_OPACITY_MICROMAP_2_STATE_BIT_KHR << 24));
+      state = nir_bcsel(b, two_state, nir_iand_imm(b, state, 1), state);
+      nir_def *geometry = nir_iand_imm(b, hit.base.geometry_id_and_flags, ~(1u << 31));
+      geometry = nir_ior(b, geometry, nir_bcsel(b, nir_ieq_imm(b, state, 1),
+                                                nir_imm_int(b, 1u << 31), nir_imm_int(b, 0)));
+      nir_def *opaque = kk_rt_opaque(b, geometry, args, flags);
+      nir_def *skip = nir_ieq_imm(b, state, 0);
+      nir_pop_if(b, NULL);
+      hit.base.geometry_id_and_flags = nir_if_phi(b, geometry, hit.base.geometry_id_and_flags);
+      hit.base.opaque = nir_if_phi(b, opaque, hit.base.opaque);
+      transparent = nir_if_phi(b, skip, nir_imm_false(b));
+   }
    hit.frontface = nir_ixor(b, nir_fgt_imm(b, nir_channel(b, result, 1), 0),
       nir_test_mask(b, nir_load_deref(b, args->vars.sbt_offset_and_flags), 2u << 24));
    nir_def *not_culled = nir_ior(b,
@@ -126,6 +231,8 @@ kk_rt_triangle(nir_builder *b, nir_def *node, const struct kk_rt_ray_traversal_a
    not_culled = nir_iand(b, not_culled, flags->no_skip_triangles);
    not_culled = nir_iand(b, not_culled,
       nir_bcsel(b, hit.base.opaque, flags->no_cull_opaque, flags->no_cull_no_opaque));
+   if (transparent)
+      not_culled = nir_iand(b, not_culled, nir_inot(b, transparent));
    nir_push_if(b, nir_iand(b, not_culled,
       nir_iand(b, nir_flt(b, args->tmin, hit.t),
                   nir_flt(b, hit.t, nir_load_deref(b, args->vars.tmax)))));

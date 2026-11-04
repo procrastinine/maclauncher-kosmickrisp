@@ -39,6 +39,15 @@
      - Ray-tracing interfaces require explicit selection.
      - Vulkan acceleration-structure, ray-query and ray-tracing pipeline interfaces and D3D12 DXR are unavailable; the RTXPT DXR path cannot run.
      - ``performance,+ray_tracing``
+   * - ``opacity_micromap``
+     - Opacity micromaps: per-micro-triangle opacity states for ray-traced triangles.
+       Controls: ``VK_KHR_opacity_micromap``, ``micromap``, ``maxOpacity2StateSubdivisionLevel``, ``maxOpacity4StateSubdivisionLevel``, ``maxOpacityLossy4StateSubdivisionLevel``, ``maxMicromapTriangles``.
+     - compute build / software traversal. A micromap build packs the triangle records in one invocation, then copies the states with one invocation per micromap triangle. Traversals compiled for pipelines created with the opacity micromap flag, and ray queries in shaders that declare the opacity micromap execution mode, test one flag per triangle candidate; a triangle with a micromap adds an index load, the micro-triangle index computation and one state load. Other ray-tracing shaders are compiled without the lookup.
+     - No Apple family
+     - Off
+     - Opacity micromaps require ray tracing, which requires explicit selection.
+     - VK_KHR_opacity_micromap is unavailable; vkd3d-proton reports at most ray tracing tier 1.1 and shader model 6.8.
+     - ``performance,+opacity_micromap``
    * - ``pixel_interlock``
      - Pixel interlock with cross-sample ordering for multisampled rendering.
        Controls: ``fragmentShaderPixelInterlock``.
