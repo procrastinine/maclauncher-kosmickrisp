@@ -147,6 +147,8 @@ void msl_gather_io_info(struct nir_to_msl_ctx *ctx,
 void msl_input_name(struct nir_to_msl_ctx *ctx, unsigned location,
                     unsigned component);
 
+void msl_mesh_line_primitive(struct nir_to_msl_ctx *ctx);
+void msl_mesh_line_copy_primitive(struct nir_to_msl_ctx *ctx);
 void msl_output_name(struct nir_to_msl_ctx *ctx, unsigned location,
                      unsigned component, bool from_input);
 

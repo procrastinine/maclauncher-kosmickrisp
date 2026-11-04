@@ -113,7 +113,7 @@ kk_mesh_native_layout(struct nir_to_msl_ctx *ctx, uint64_t mask, bool vertex)
 
 static void
 kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
-                  bool vertex, bool storage)
+                  bool vertex, bool storage, bool line)
 {
    P(ctx, "struct %s {\n", name);
    ctx->indentlevel++;
@@ -177,6 +177,10 @@ kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
       P_IND(ctx, "bool kk_retained_culled [[primitive_culled]];\n");
       P(ctx, "#endif\n");
    }
+   if (line) {
+      P_IND(ctx, "float4 kk_line_endpoints [[user(polygon_line_coord)]];\n");
+      P_IND(ctx, "float kk_line_width [[user(polygon_point_coord)]];\n");
+   }
    ctx->indentlevel--;
    P(ctx, "};\n");
 }
@@ -193,10 +197,10 @@ kk_mesh_io_blocks(struct nir_to_msl_ctx *ctx)
    ctx->mesh.retained_primitive_stride = kk_mesh_native_layout(ctx,
       written & s->info.per_primitive_outputs, false);
    kk_mesh_io_block(ctx, "MeshVertex",
-      kk_mesh_native_vertex_outputs(s, written & ~s->info.per_primitive_outputs), true, false);
-   kk_mesh_io_block(ctx, "MeshPrimitive", written & s->info.per_primitive_outputs, false, false);
-   kk_mesh_io_block(ctx, "MeshVertexStorage", written & ~s->info.per_primitive_outputs, true, true);
-   kk_mesh_io_block(ctx, "MeshPrimitiveStorage", written & s->info.per_primitive_outputs, false, true);
+      kk_mesh_native_vertex_outputs(s, written & ~s->info.per_primitive_outputs), true, false, false);
+   kk_mesh_io_block(ctx, "MeshPrimitive", written & s->info.per_primitive_outputs, false, false, false);
+   kk_mesh_io_block(ctx, "MeshVertexStorage", written & ~s->info.per_primitive_outputs, true, true, false);
+   kk_mesh_io_block(ctx, "MeshPrimitiveStorage", written & s->info.per_primitive_outputs, false, true, false);
    if (!ctx->mesh.retained_fields[2][0]) {
       ctx->mesh.retained_fields[2][0] = 4u;
       ctx->mesh.retained_fields[2][2] = nir_type_uint32;
@@ -211,6 +215,42 @@ kk_mesh_io_blocks(struct nir_to_msl_ctx *ctx)
    P(ctx, "using MeshOutput = mesh<MeshVertex, MeshPrimitive, %u, %u, topology::%s>;\n",
      MAX2(1, s->info.mesh.max_vertices_out),
      MAX2(1, s->info.mesh.max_primitives_out), topology);
+}
+
+void
+msl_mesh_line_primitive(struct nir_to_msl_ctx *ctx)
+{
+   kk_mesh_io_block(ctx, "LinePrimitive", ctx->shader->info.outputs_written &
+      ctx->shader->info.per_primitive_outputs &
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT), false, false, true);
+}
+
+void
+msl_mesh_line_copy_primitive(struct nir_to_msl_ctx *ctx)
+{
+   nir_shader *s = ctx->shader;
+   uint64_t mask = s->info.outputs_written & s->info.per_primitive_outputs &
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT);
+   if (ctx->mesh.flat_heap) {
+      P(ctx, "primitive.");msl_output_name(ctx,VARYING_SLOT_VAR0,0,false);
+      P(ctx, " = source.");msl_output_name(ctx,VARYING_SLOT_VAR0,0,false);P(ctx,";\n");
+      mask &= ~(BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1) & ~BITFIELD64_MASK(VARYING_SLOT_VAR0));
+   }
+   u_foreach_bit64(slot, mask) {
+      unsigned components = VARYING_SLOT_INFO[slot].scalarized ? ctx->outputs_info[slot].num_components : 1;
+      for (unsigned c = 0; c < components; ++c) {
+         P(ctx,"primitive.");msl_output_name(ctx,slot,c,false);
+         P(ctx," = source.");msl_output_name(ctx,slot,c,false);P(ctx,";\n");
+      }
+   }
+   if (!(mask & BITFIELD64_BIT(VARYING_SLOT_CULL_PRIMITIVE))) {
+      const char *culled = s->info.cull_distance_array_size ? "kk_culled" : "kk_retained_culled";
+      P(ctx, "primitive.%s = source.%s;\n", culled, culled);
+   }
+   if (ctx->mesh.view_mask && !(mask & VARYING_BIT_LAYER))
+      P(ctx, "primitive.kk_mesh_view_layer = source.kk_mesh_view_layer;\n");
 }
 
 #endif

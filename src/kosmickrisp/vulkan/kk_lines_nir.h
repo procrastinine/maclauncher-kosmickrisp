@@ -235,6 +235,43 @@ kk_line_fragment(nir_shader *nir, bool expanded,
                               nir_metadata_control_flow, coverage);
 }
 
+/* Mesh readers carry the original endpoints and width per primitive. Only
+ * the selected triangle reader uses this fragment program; native lines keep
+ * their original entry point and contain no coverage loads or arithmetic. */
+static void
+kk_mesh_line_fragment(nir_shader *nir)
+{
+   nir_builder b = nir_builder_at(nir_before_impl(nir_shader_get_entrypoint(nir)));
+   nir_def *ends = nir_load_per_primitive_input(&b, 4, 32, nir_imm_int(&b, 0),
+      .dest_type = nir_type_float32, .io_semantics.location = VARYING_SLOT_FOGC,
+      .io_semantics.num_slots = 1);
+   nir_def *width = nir_load_per_primitive_input(&b, 1, 32, nir_imm_int(&b, 0),
+      .dest_type = nir_type_float32, .io_semantics.location = VARYING_SLOT_PNTC,
+      .io_semantics.num_slots = 1);
+   nir_def *a = nir_trim_vector(&b, ends, 2);
+   nir_def *delta = nir_fsub(&b, nir_channels(&b, ends, 0xc), a);
+   nir_def *length = nir_fsqrt(&b, nir_fdot2(&b, delta, delta));
+   nir_def *tangent = nir_fdiv(&b, delta, nir_fmax(&b, length,
+      nir_imm_float(&b, 1.0e-15f)));
+   nir_def *pixel = nir_fadd_imm(&b, nir_ffloor(&b,
+      nir_trim_vector(&b, nir_load_frag_coord(&b), 2)), 0.5f);
+   nir_def *offset = nir_fsub(&b, pixel, a);
+   nir_def *along = nir_fdot2(&b, offset, tangent);
+   nir_def *perp = nir_fsub(&b,
+      nir_fmul(&b, nir_channel(&b, offset, 1), nir_channel(&b, tangent, 0)),
+      nir_fmul(&b, nir_channel(&b, offset, 0), nir_channel(&b, tangent, 1)));
+   nir_def *edge = nir_fsat(&b, nir_fsub(&b,
+      nir_fadd_imm(&b, nir_fmul_imm(&b, width, 0.5f), 0.5f), nir_fabs(&b, perp)));
+   nir_def *start = nir_fsat(&b, nir_fadd_imm(&b, along, 0.5f));
+   nir_def *end = nir_fsat(&b, nir_fadd_imm(&b, nir_fsub(&b, length, along), 0.5f));
+   nir_def *coverage = nir_fmul(&b, edge, nir_fmul(&b, start, end));
+   nir_shader_intrinsics_pass(nir, kk_line_resolve_coverage,
+      nir_metadata_control_flow, coverage);
+   nir->info.inputs_read |= VARYING_BIT_FOGC | VARYING_BIT_PNTC;
+   nir->info.per_primitive_inputs |= VARYING_BIT_FOGC | VARYING_BIT_PNTC;
+   BITSET_SET(nir->info.system_values_read, SYSTEM_VALUE_FRAG_COORD);
+}
+
 static bool
 kk_line_remove_early_exports(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {

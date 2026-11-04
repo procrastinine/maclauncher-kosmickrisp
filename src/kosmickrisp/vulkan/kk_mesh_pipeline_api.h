@@ -47,6 +47,9 @@ struct kk_mesh_fragment_program {
       struct kk_pipeline_handles *pipeline, unsigned kind);
 };
 
+VkResult kk_mesh_get_line_pipeline(struct kk_device *, struct kk_shader *,
+   struct kk_pipeline_handles **);
+
 struct kk_cmd_buffer;
 /* Begin after resolving the original Mesh executable and binding layer0.
  * The callback owns only attachments. End at every original draw exit. */

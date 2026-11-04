@@ -954,8 +954,14 @@ static void kk_draw_mesh(struct kk_cmd_buffer *, struct mtl_size,
 /* Original-view execution belongs here, outside attachment alias repetition.
  * Once per selected Vulkan view, never once per alias layer. Effective Layer
  * is that actual ViewIndex; application Layer is not added to it. */
+#include "kk_mesh_line_draw.h"
+
+static void kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct,
+   uint64_t indirect, uint64_t count, uint32_t draw_count,
+   uint32_t stride, bool force_virtual);
+
 static void
-kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct,
+kk_draw_mesh_native(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    uint64_t indirect, uint64_t count, uint32_t draw_count,
    uint32_t stride, bool force_virtual)
 {
@@ -1014,6 +1020,22 @@ layered_bc_mesh_error:
 layered_bc_mesh_done:
    if (cmd->state.gfx.render.layered_bc && cmd->state.gfx.layer_replay.bind)
       kk_mesh_layer_replay_end(cmd);
+}
+
+/* Select the retained reader only for an actual smooth-line draw. Native
+ * line modes and all triangle/point Mesh shaders retain their native route. */
+static void
+kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct, uint64_t indirect,
+   uint64_t count, uint32_t draw_count, uint32_t stride, bool force_virtual)
+{
+   bool selected = kk_mesh_line_selected(cmd) &&
+      !cmd->state.gfx.mesh_retained_consumer.consume;
+   if (selected && !kk_mesh_retained_raster_begin(cmd, kk_mesh_line_consume, NULL)) {
+      vk_command_buffer_set_error(&cmd->vk,VK_ERROR_INITIALIZATION_FAILED);
+      return;
+   }
+   kk_draw_mesh_native(cmd,direct,indirect,count,draw_count,stride,force_virtual);
+   if (selected) kk_mesh_retained_raster_end(cmd);
 }
 
 VKAPI_ATTR void VKAPI_CALL

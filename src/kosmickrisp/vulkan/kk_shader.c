@@ -825,7 +825,8 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
    nir->info.fs.uses_sample_shading |=
       state->ms && state->ms->sample_shading_enable;
 
-   if (kk_line_effects_possible(state) &&
+   if ((kk_line_effects_possible(state) ||
+        (state && state->rs && (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT))) &&
        (state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE)))
       nir_shader_intrinsics_pass(nir, kk_line_alpha, nir_metadata_control_flow, NULL);
@@ -1588,6 +1589,8 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
          if (runtime->retained[i])
             kk_mesh_release_pipeline(dev, shader, runtime->retained[i],
                i ? KK_PIPELINE_MESH_READER : KK_PIPELINE_MESH_CAPTURE);
+      if (runtime->line)
+         kk_mesh_release_pipeline(dev, shader, runtime->line, KK_PIPELINE_MESH_LINE);
       if (runtime->virtual)
          kk_mesh_release_pipeline(dev, shader, runtime->virtual, KK_PIPELINE_MESH_VIRTUAL);
       for (unsigned i = 0; i < 2; ++i)
@@ -2067,8 +2070,28 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       }
    }
 
-   if (stage == MESA_SHADER_FRAGMENT && state->rs)
-      kk_line_fragment(nir, false, state);
+   if (stage == MESA_SHADER_FRAGMENT && prev_stage &&
+       prev_stage->info.stage == MESA_SHADER_MESH &&
+       prev_stage->mesh->info.primitive == MESA_PRIM_LINES &&
+       state && state->rs &&
+       (state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE))) {
+      nir_shader *line_fs = nir_shader_clone(NULL, nir);
+      kk_mesh_line_fragment(line_fs);
+      NIR_PASS(_, line_fs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
+      kk_compile_msl(dev, line_fs, state, &shader->polygon[3]);
+      shader->info.mesh_line = true;
+   }
+
+   if (stage == MESA_SHADER_FRAGMENT) {
+      if (state && (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT)) {
+         nir_builder b = nir_builder_at(nir_before_impl(nir_shader_get_entrypoint(nir)));
+         nir_shader_intrinsics_pass(nir, kk_line_resolve_coverage,
+            nir_metadata_control_flow, nir_imm_float(&b, 1));
+      } else if (state && state->rs) {
+         kk_line_fragment(nir, false, state);
+      }
+   }
 
    unsigned num_cull_distances =
       prev_stage ? prev_stage->info.num_cull_distances : 0;
@@ -2888,6 +2911,10 @@ gather_graphics_pipeline_create_info(
       info->vs.additional_stages_bits |= BITFIELD_BIT(stage);
       if (stage == MESA_SHADER_FRAGMENT && (info->polygon_point || info->poly_layer_replay || info->interlock_envelope))
          kk_msl_copy(&vs->polygon[3], &s->polygon[3]);
+      if (stage == MESA_SHADER_FRAGMENT && s->info.mesh_line) {
+         info->mesh_line = true;
+         kk_msl_copy(&vs->polygon[3], &s->polygon[3]);
+      }
       if (stage == MESA_SHADER_FRAGMENT && info->conservative)
          kk_msl_copy(&vs->polygon[5], &s->polygon[5]);
       if (stage == MESA_SHADER_FRAGMENT)
@@ -3017,7 +3044,8 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
       cache->sampler_stages[kind] = sampler_stages;
       cache->sampler_required[kind] = sampler_required;
       if (sampler_stages) p_atomic_set(&cache->sampler_render, true);
-      cache->topology[kind] = kind == KK_PIPELINE_CONSERVATIVE ?
+      cache->topology[kind] = (kind == KK_PIPELINE_CONSERVATIVE ||
+                               kind == KK_PIPELINE_MESH_LINE) ?
          MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE : kind == KK_PIPELINE_POLYGON ?
          shader->info.vs.polygon_topology : shader->info.vs.topology;
    }
@@ -4716,7 +4744,7 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
 
    u_foreach_bit(i, shader->info.gs_aux_mask)
       kk_msl_serialize(&shader->gs_aux[i], blob);
-   if (shader->info.polygon_point || shader->info.poly_layer_replay || shader->info.interlock_envelope) {
+   if (shader->info.polygon_point || shader->info.poly_layer_replay || shader->info.interlock_envelope || shader->info.mesh_line) {
       for (unsigned i = 0; i < ARRAY_SIZE(shader->polygon); ++i) {
          blob_write_uint8(blob, shader->polygon[i].code != NULL);
          if (shader->polygon[i].code) kk_msl_serialize(&shader->polygon[i], blob);
@@ -4867,7 +4895,7 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
       result = kk_msl_deserialize(blob, &shader->gs_aux[i]);
       if (result != VK_SUCCESS) goto fail;
    }
-   if (info.polygon_point || info.poly_layer_replay || info.interlock_envelope) {
+   if (info.polygon_point || info.poly_layer_replay || info.interlock_envelope || info.mesh_line) {
       for (unsigned i = 0; i < ARRAY_SIZE(shader->polygon); ++i) {
          if (!blob_read_uint8(blob)) continue;
          result = kk_msl_deserialize(blob, &shader->polygon[i]);

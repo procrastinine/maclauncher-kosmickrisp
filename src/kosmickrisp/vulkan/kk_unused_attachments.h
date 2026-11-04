@@ -413,7 +413,8 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
       ? shader->pipeline.gfx.fsr_coarse_render : kind == KK_PIPELINE_MESH_VIRTUAL
       ? shader->mesh->runtime->virtual->gfx.render : kind == KK_PIPELINE_MESH_CAPTURE
       ? shader->mesh->runtime->retained[0]->gfx.render : kind == KK_PIPELINE_MESH_READER
-      ? shader->mesh->runtime->retained[1]->gfx.render : kind == KK_PIPELINE_MESH_SLICED
+      ? shader->mesh->runtime->retained[1]->gfx.render : kind == KK_PIPELINE_MESH_LINE
+      ? shader->mesh->runtime->line->gfx.render : kind == KK_PIPELINE_MESH_SLICED
       ? shader->mesh->runtime->sliced[0]->gfx.render : kind == KK_PIPELINE_MESH_VIRTUAL_SLICED
       ? shader->mesh->runtime->sliced[1]->gfx.render : kind == KK_PIPELINE_CONSERVATIVE
       ? shader->pipeline.gfx.conservative_render : kind == KK_PIPELINE_POLYGON
@@ -540,7 +541,7 @@ kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
          formats[location] = vk_format_to_mtl_pixel_format(render->color_att[i].vk_format);
    }
    uint32_t samples = MAX2(cmd->vk.dynamic_graphics_state.ms.rasterization_samples, 1);
-   enum mtl_primitive_topology_class topology = kind == KK_PIPELINE_CONSERVATIVE ?
+   enum mtl_primitive_topology_class topology = (kind == KK_PIPELINE_CONSERVATIVE || kind == KK_PIPELINE_MESH_LINE) ?
       MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE : kind == KK_PIPELINE_POLYGON && shader->info.polygon_point ?
       kk_polygon_raster_topology(shader->info.polygon.primitive_vertices,
          cmd->vk.dynamic_graphics_state.rs.polygon_mode,
