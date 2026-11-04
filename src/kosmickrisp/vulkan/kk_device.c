@@ -20,6 +20,7 @@
 #include "kk_instance.h"
 #include "kk_physical_device.h"
 #include "kk_shader.h"
+#include "kk_fragment_shading_rate_cache.h"
 #include "kk_interlock_device.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -354,6 +355,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       dev->vk.enabled_extensions.EXT_sampler_filter_minmax;
 
    kk_descriptor_heap_init(dev);
+   result = kk_vrs_device_init(dev);
+   if (result != VK_SUCCESS) goto fail_init;
    dev->vk.shader_ops = &kk_device_shader_ops;
    dev->mtl_handle = pdev->mtl_dev_handle;
    dev->vk.command_buffer_ops = &kk_cmd_buffer_ops;
@@ -490,6 +493,7 @@ fail_vab_memory:
 fail_compiler:
    kk_release_compiler(dev);
 fail_init:
+   kk_vrs_device_finish(dev);
    kk_descriptor_heap_finish(dev);
    vk_device_finish(&dev->vk);
 fail_alloc:
@@ -529,6 +533,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_dgc_finish(dev);
    kk_device_finish_lib(dev);
    kk_interlock_device_finish(dev);
+   kk_vrs_device_finish(dev);
    kk_query_table_finish(dev, &dev->occlusion_queries);
    kk_descriptor_heap_finish(dev);
    kk_destroy_sampler_heap(dev, &dev->samplers);

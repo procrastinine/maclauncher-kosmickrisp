@@ -18,6 +18,7 @@
 #include "poly/nir/poly_nir.h"
 
 #include "vk_pipeline_cache.h"
+#include "kk_fragment_shading_rate_cache.h"
 
 #include "vk_shader.h"
 
@@ -35,6 +36,7 @@ enum kk_feature_bit {
    KK_FEAT_SPARSE_REPLAY,
    KK_FEAT_MESH_QUERIES,
    KK_FEAT_POLY_LAYER_REPLAY,
+   KK_FEAT_FRAGMENT_SHADING_RATE,
    KK_FEAT_COUNT,
 };
 
@@ -246,6 +248,7 @@ struct kk_shader {
    struct vk_sampler_state *embedded_sampler_states;
    uint64_t embedded_sampler_table;
    struct kk_sparse_shader_state *sparse;
+   struct kk_vrs_source *vrs_source;
 
    struct kk_attachment_pipelines *attachment_pipelines;
    mtl_compute_pipeline_state *dgc_compute;

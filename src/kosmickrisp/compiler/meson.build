@@ -4,6 +4,7 @@
 
 libmsl_compiler_files = files(
     'nir_to_msl.c',
+    'kk_fragment_shading_rate.c',
     'msl_type_inference.c',
     'msl_iomap.c',
     'msl_nir_gather_common.c',

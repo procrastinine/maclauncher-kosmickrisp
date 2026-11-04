@@ -41,6 +41,7 @@
 #include "kk_image_view.h"
 #include "kk_dgc.h"
 #include "kk_unused_attachments.h"
+#include "kk_fragment_shading_rate_pipeline.h"
 #include "kk_dgc_pipeline.h"
 
 static const nir_shader_compiler_options *
@@ -212,6 +213,9 @@ static kk_feature_key
 kk_make_feature_key(const struct vk_features *feats)
 {
    kk_feature_key key = 0;
+   if (feats->pipelineFragmentShadingRate || feats->primitiveFragmentShadingRate ||
+       feats->attachmentFragmentShadingRate)
+      key |= BITFIELD_BIT(KK_FEAT_FRAGMENT_SHADING_RATE);
    if (feats->customBorderColors)
       key |= BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER);
    /* Cache entries with a replay input cannot alias entries without it.
@@ -638,8 +642,6 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, kk_nir_swizzle_fragment_output,
             nir_metadata_control_flow, (void *)state);
 
-   NIR_PASS(_, nir, msl_nir_fs_io_types);
-
    if (kk_fs_has_sample_mask(state)) {
 
       /* KK_WORKAROUND_7 */
@@ -772,6 +774,56 @@ kk_fs_needs_forced_depth_write(const nir_shader *nir,
 
 #include "kk_mesh_nir.h"
 static void kk_poly_layer_lower_fs(nir_shader *nir);
+
+static void
+kk_finish_nir(struct kk_device *dev, nir_shader *nir,
+              const struct vk_pipeline_robustness_state *rs,
+              uint32_t set_layout_count,
+              struct vk_descriptor_set_layout *const *set_layouts,
+              kk_feature_key features)
+{
+   struct kk_physical_device *pdev = kk_device_physical(dev);
+   if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
+      NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
+
+   NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts);
+   NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
+      (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10,
+      features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER));
+   NIR_PASS(_, nir, kk_nir_lower_sparse_sample_views, set_layout_count, set_layouts,
+      (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10);
+
+
+   /* Descriptor lowering needs to happen after lowering blend since we will
+    * generate a nir_intrinsic_load_blend_const_color_rgba which gets lowered by
+    * the lower descriptor pass
+    */
+   NIR_PASS(_, nir, kk_nir_lower_descriptors, rs, set_layout_count,
+            set_layouts);
+
+   NIR_PASS(_, nir, kk_nir_lower_sliced_3d);
+
+   /* KK_WORKAROUND_16 - must be called after kk_nir_lower_descriptors(), which
+    * lowers all image intrinsics to be bindless */
+   if (rs->images ==
+          VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2 &&
+       !(pdev->settings.disabled_workarounds & BITFIELD64_BIT(16)))
+      NIR_PASS(_, nir, msl_lower_robustness2_images);
+
+   /* KK_WORKAROUND_18 */
+   if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(18)))
+      NIR_PASS(_, nir, kk_nir_add_device_barrier_workaround);
+
+   NIR_PASS(_, nir, kk_nir_lower_textures);
+
+   if (features & BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR))
+      NIR_PASS(_, nir, kk_nir_lower_null_images);
+
+   NIR_PASS(_, nir, kk_nir_lower_sparse);
+
+   kk_lower_compute_derivatives(nir);
+   NIR_PASS(_, nir, nir_lower_global_vars_to_local);
+}
 
 static void
 kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
@@ -926,49 +978,11 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
             : state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
       kk_lower_hw_vs(nir, state, is_point);
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      kk_lower_fs(dev, nir, state);
+      NIR_PASS(_, nir, msl_nir_fs_io_types);
    }
 
-   if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
-      NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
-
-   NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts);
-   NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
-      (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10,
-      features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER));
-   NIR_PASS(_, nir, kk_nir_lower_sparse_sample_views, set_layout_count, set_layouts,
-      (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10);
-
-
-   /* Descriptor lowering needs to happen after lowering blend since we will
-    * generate a nir_intrinsic_load_blend_const_color_rgba which gets lowered by
-    * the lower descriptor pass
-    */
-   NIR_PASS(_, nir, kk_nir_lower_descriptors, rs, set_layout_count,
-            set_layouts);
-
-   NIR_PASS(_, nir, kk_nir_lower_sliced_3d);
-
-   /* KK_WORKAROUND_16 - must be called after kk_nir_lower_descriptors(), which
-    * lowers all image intrinsics to be bindless */
-   if (rs->images ==
-          VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2 &&
-       !(pdev->settings.disabled_workarounds & BITFIELD64_BIT(16)))
-      NIR_PASS(_, nir, msl_lower_robustness2_images);
-
-   /* KK_WORKAROUND_18 */
-   if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(18)))
-      NIR_PASS(_, nir, kk_nir_add_device_barrier_workaround);
-
-   NIR_PASS(_, nir, kk_nir_lower_textures);
-
-   if (features & BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR))
-      NIR_PASS(_, nir, kk_nir_lower_null_images);
-
-   NIR_PASS(_, nir, kk_nir_lower_sparse);
-
-   kk_lower_compute_derivatives(nir);
-   NIR_PASS(_, nir, nir_lower_global_vars_to_local);
+   if (nir->info.stage != MESA_SHADER_FRAGMENT)
+      kk_finish_nir(dev, nir, rs, set_layout_count, set_layouts, features);
 }
 
 static const struct vk_shader_ops kk_shader_ops;
@@ -1052,6 +1066,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    ralloc_free((void *)shader->gs_main.entrypoint_name);
    ralloc_free((void *)shader->gs_main.code);
 
+   kk_vrs_source_destroy(dev, shader->vrs_source);
    vk_shader_free(&dev->vk, pAllocator, &shader->vk);
 }
 
@@ -1277,6 +1292,25 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
 #include "kk_polygon_scalar_io.h"
 #include "kk_poly_layer_replay_nir.h"
 
+static void
+kk_vrs_finish_captured_fragment(nir_shader *point_fs,
+   const struct kk_shader *prev_stage, const struct vk_graphics_pipeline_state *state,
+   const struct kk_compile_options *opts,
+   const struct vk_pipeline_robustness_state *robustness, bool pixel_envelope)
+{
+      bool point_line_effects = state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+         state->rs->line.stipple.enable ||
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
+      if (!opts->poly_layer_replay || (prev_stage && prev_stage->info.polygon_point))
+      if (!prev_stage || prev_stage->info.polygon.primitive_vertices != 1)
+      nir_shader_intrinsics_pass(point_fs, kk_polygon_point_coord,
+                                 nir_metadata_control_flow, point_line_effects ? (void *)1 : NULL);
+      kk_line_fragment(point_fs, true, state);
+      if (opts->poly_layer_replay) kk_poly_layer_lower_fs(point_fs);
+      NIR_PASS(_, point_fs, kk_nir_lower_descriptors, robustness, 0, NULL);
+}
+
 static VkResult
 kk_compile_shader(struct kk_device *dev, nir_shader *nir,
                   struct kk_shader *prev_stage,
@@ -1298,9 +1332,11 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    VkResult result = VK_SUCCESS;
 
    mesa_shader_stage stage = nir->info.stage;
+   bool vrs_captured_required = false;
    shader = vk_shader_zalloc(&dev->vk, &kk_shader_ops, stage, pAllocator,
                              sizeof(*shader));
    if (shader == NULL) {
+      ralloc_free(opts->vrs_source);
       ralloc_free(nir);
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
@@ -1352,22 +1388,29 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
        (kk_polygon_possible(dev, state) || opts->poly_layer_replay)) {
       shader->info.fs.noperspective_outputs = kk_polygon_noperspective_outputs(nir);
       nir_shader *point_fs = nir_shader_clone(NULL, nir);
-      bool point_line_effects = state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
-         state->rs->line.stipple.enable ||
-         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
-         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
-      if (!opts->poly_layer_replay || (prev_stage && prev_stage->info.polygon_point))
-      if (!prev_stage || prev_stage->info.polygon.primitive_vertices != 1)
-      nir_shader_intrinsics_pass(point_fs, kk_polygon_point_coord,
-                                 nir_metadata_control_flow, point_line_effects ? (void *)1 : NULL);
-      kk_line_fragment(point_fs, true, state);
-      if (opts->poly_layer_replay) kk_poly_layer_lower_fs(point_fs);
-      NIR_PASS(_, point_fs, kk_nir_lower_descriptors, robustness, 0, NULL);
+      kk_vrs_finish_captured_fragment(point_fs, prev_stage, state, opts,
+         robustness, pixel_envelope);
       shader->info.polygon_point = true;
-      if (kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay)
+      if (pixel_envelope || kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay) {
+         vrs_captured_required = dev->vrs && opts->vrs_source && !pixel_envelope;
+         nir_shader *captured = vrs_captured_required ?
+            nir_shader_clone(NULL, opts->vrs_source) : NULL;
+         if (captured) {
+            /* The retained named source predates ordinary DCE. Drop only its
+             * dead descriptor nodes before the one captured-reader finish. */
+            NIR_PASS(_, captured, nir_opt_dce);
+            kk_vrs_finish_captured_fragment(captured, prev_stage, state, opts,
+               robustness, pixel_envelope);
+         }
          kk_compile_msl(pdev, point_fs, state, &shader->polygon[3]);
-      else
+         if (captured) {
+            shader->vrs_source = kk_vrs_source_capture(dev, captured,
+               per_vertex_map, state, &shader->polygon[3]);
+            ralloc_free(captured);
+         }
+      } else {
          ralloc_free(point_fs);
+      }
       if (conservative_fs) {
          kk_conservative_lower_fs(conservative_fs, &prev_stage->info.polygon);
          if (opts->poly_layer_replay) kk_poly_layer_lower_fs(conservative_fs);
@@ -1573,6 +1616,18 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    kk_compile_msl_options(pdev, nir, state, &shader->msl_data[stage], opts,
                           &shader->info.has_framebuffer_reads);
 
+   if (opts->vrs_source) {
+      struct kk_vrs_source *source = kk_vrs_source_capture(dev, opts->vrs_source,
+         per_vertex_map, state, &shader->msl_data[stage]);
+      ralloc_free(opts->vrs_source);
+      if (!source || (vrs_captured_required && !shader->vrs_source)) {
+         kk_vrs_source_destroy(dev, source);
+         kk_shader_destroy(&dev->vk, shader, pAllocator);
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      }
+      kk_vrs_source_attach_captured(source, shader->vrs_source);
+      shader->vrs_source = source;
+   }
    *shader_out = shader;
 
    return result;
@@ -2235,6 +2290,9 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    bool dgc_replay = false;
    uint32_t heap_push_size = 0;
    nir_shader *nir_shaders[shader_count + 2u];
+   nir_shader *vrs_sources[shader_count + 2u];
+   memset(vrs_sources, 0, sizeof(vrs_sources));
+   nir_shader *fs_to_finish = NULL;
    struct kk_shader *shaders[shader_count + 2u];
 
    bool poly_layer_replay = false;
@@ -2287,6 +2345,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       emulated_stage |= (nir->xfb_info || kk_polygon_possible(dev, state) || poly_layer_replay) && (nir->info.stage == MESA_SHADER_VERTEX ||
                                          nir->info.stage == MESA_SHADER_TESS_EVAL);
       msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
+      if (nir->info.stage == MESA_SHADER_FRAGMENT && !nir->info.io_lowered)
+         fs_to_finish = nir;
       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
                    info->set_layout_count, info->set_layouts, state, features, info, NULL);
       if (nir->info.stage == MESA_SHADER_FRAGMENT &&
@@ -2390,6 +2450,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    }
    if (state && nir_shaders[total_shaders - 1]->info.stage != MESA_SHADER_FRAGMENT) {
       nir_shaders[total_shaders] = get_empty_nir(dev, MESA_SHADER_FRAGMENT, state, features);
+      fs_to_finish = nir_shaders[total_shaders];
       ++total_shaders;
    }
 
@@ -2416,6 +2477,28 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    nir_opt_varyings_bulk(nir_shaders, total_shaders, true, UINT32_MAX,
                          UINT32_MAX, nir_opts, NULL);
 
+   /* Link original inputs before the fine epilogue; its complete native
+    * inputs must exist before the one mesh/per-vertex packing decision. */
+   for (unsigned i = 0; i < total_shaders; i++) {
+      nir_shader *fs = nir_shaders[i];
+      if (fs->info.stage != MESA_SHADER_FRAGMENT || fs != fs_to_finish) continue;
+      const struct vk_shader_compile_info *info = NULL;
+      for (unsigned j = 0; j < shader_count; j++)
+         if (infos[j].stage == MESA_SHADER_FRAGMENT) info = &infos[j];
+      /* One callable program receives the fine epilogue and descriptor tail.
+       * Retention copies only finished source; compilation flattens it once. */
+      bool callable = kk_nir_vrs_split_application(fs);
+      kk_lower_fs(dev, fs, state);
+      kk_finish_nir(dev, fs, info ? info->robustness : &rs_none,
+         info ? info->set_layout_count : 0, info ? info->set_layouts : NULL, features);
+      if (dev->vrs && callable && (!info || !info->embedded_sampler_count))
+         vrs_sources[i] = nir_shader_clone(NULL, fs);
+      kk_nir_vrs_flatten(fs);
+      kk_nir_vrs_lower_fine_rate(fs);
+      nir_opts(fs, NULL);
+      nir_shader_gather_info(fs, nir_shader_get_entrypoint(fs));
+   }
+
    nir_shader *conservative_fs = kk_conservative_possible(state) &&
       nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT
       ? nir_shader_clone(NULL, nir_shaders[total_shaders - 1u]) : NULL;
@@ -2436,13 +2519,21 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          &per_vertex_map);
 
    if (per_vertex_map.out_of_slots) {
-      for (uint32_t i = 0; i < total_shaders; i++)
+      for (uint32_t i = 0; i < total_shaders; i++) {
          ralloc_free(nir_shaders[i]);
+         ralloc_free(vrs_sources[i]);
+      }
       memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
       return vk_errorf(dev, VK_ERROR_UNKNOWN,
                        "Out of varying slots for barycentric emulation");
    }
 
+   for (unsigned i = 0; i < total_shaders; i++) {
+      if (vrs_sources[i] && per_vertex_map.active) {
+         struct kk_per_vertex_map retained_map = per_vertex_map;
+         kk_nir_apply_fs_per_vertex_map(vrs_sources[i], &retained_map);
+      }
+   }
    const struct kk_compile_options compile_options = {
       .poly_layer_replay = poly_layer_replay,
       .per_vertex_map = &per_vertex_map,
@@ -2451,9 +2542,12 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    };
    for (uint32_t i = 0; i < total_shaders; i++) {
       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
+      struct kk_compile_options stage_options = compile_options;
+      stage_options.vrs_source = vrs_sources[i];
+      vrs_sources[i] = NULL;
       result =
          kk_compile_shader(dev, nir_shaders[i], prev_stage, vertex_robustness,
-                           state, &compile_options, pAllocator, &shaders[i]);
+                           state, &stage_options, pAllocator, &shaders[i]);
       if (result == VK_SUCCESS) {
          for (uint32_t input = 0; input < shader_count; ++input) {
             if (infos[input].stage != shaders[i]->vk.stage) continue;
@@ -2473,8 +2567,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
             kk_shader_destroy(&dev->vk, shaders[j], pAllocator);
 
          /* Clean up all the NIR after this point */
-         for (uint32_t j = i + 1; j < total_shaders; j++)
+         for (uint32_t j = i + 1; j < total_shaders; j++) {
             ralloc_free(nir_shaders[j]);
+            ralloc_free(vrs_sources[j]);
+         }
 
          ralloc_free(native_pair[0]);
       ralloc_free(native_pair[1]);
@@ -2621,6 +2717,10 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
       kk_msl_serialize(&shader->polygon_native, blob);
       kk_msl_serialize(&shader->polygon_native_fs, blob);
    }
+   if (vk_dev->enabled_features.pipelineFragmentShadingRate ||
+       vk_dev->enabled_features.primitiveFragmentShadingRate ||
+       vk_dev->enabled_features.attachmentFragmentShadingRate)
+      kk_vrs_source_serialize(shader->vrs_source, blob);
    return !blob->out_of_memory;
 }
 
@@ -2646,6 +2746,8 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
 
    return VK_SUCCESS;
 }
+
+#include "kk_fragment_shading_rate_cache_impl.h"
 
 static VkResult
 kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
@@ -2707,6 +2809,10 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
       result = kk_msl_deserialize(blob, &shader->polygon_native);
       if (result != VK_SUCCESS) goto fail;
       result = kk_msl_deserialize(blob, &shader->polygon_native_fs);
+      if (result != VK_SUCCESS) goto fail;
+   }
+   if (dev->vrs) {
+      result = kk_vrs_source_deserialize(dev, blob, &shader->vrs_source);
       if (result != VK_SUCCESS) goto fail;
    }
    if (info.stage == MESA_SHADER_COMPUTE) {

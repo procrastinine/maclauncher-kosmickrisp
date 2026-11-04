@@ -19,6 +19,7 @@ if host_machine.system() == 'darwin'
     'mtl_mesh.m',
     'mtl_device.m',
     'mtl_encoder.m',
+    'mtl_fragment_shading_rate.m',
     'mtl_heap.m',
     'mtl_render_state.m',
     'mtl_residency_set.m',

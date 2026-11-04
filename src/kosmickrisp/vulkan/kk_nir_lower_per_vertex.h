@@ -64,6 +64,8 @@ enum kk_barycentric_usage kk_nir_barycentric_usage(nir_shader *fs);
 /* prev == NULL selects the canonical ABI when force or interface pressure
  * requires emulation. Linked/LTO callers keep passing their previous NIR.
  * The caller initializes map to zero; a false return leaves it inactive. */
+bool kk_nir_apply_fs_per_vertex_map(nir_shader *fs, struct kk_per_vertex_map *map);
+
 bool kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev,
                                        bool force,
                                        struct kk_per_vertex_map *map);

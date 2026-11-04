@@ -98,6 +98,7 @@ struct kk_device {
    struct kk_heap_border *heap_borders;
    struct kk_buffer *heap_buffers;
 
+   struct kk_vrs_device *vrs;
    struct kk_dgc_metal *dgc;
    mtl_device *mtl_handle;
    mtl_compiler *mtl_compiler_handle;

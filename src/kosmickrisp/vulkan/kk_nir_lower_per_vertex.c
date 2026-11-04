@@ -40,7 +40,7 @@ kk_native_interface_components(nir_shader *fs, nir_shader *prev, uint8_t *out_wi
    bool primitive_id = false, point_coord = false, layer = false;
    bool subgroup_size = false, subgroup_invocation = false;
    bool barycentric[2] = {false, false};
-   nir_foreach_block(block, nir_shader_get_entrypoint(fs)) {
+   nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {
          if (instr->type != nir_instr_type_intrinsic)
             continue;
@@ -145,7 +145,7 @@ enum kk_barycentric_usage
 kk_nir_barycentric_usage(nir_shader *fs)
 {
    bool persp = false, linear = false, exact = false;
-   nir_foreach_block(block, nir_shader_get_entrypoint(fs)) {
+   nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {
          if (instr->type != nir_instr_type_intrinsic)
             continue;
@@ -165,7 +165,7 @@ kk_nir_barycentric_usage(nir_shader *fs)
 }
 
 static void
-gather_flat_locations(nir_function_impl *impl, struct kk_per_vertex_map *map)
+gather_flat_locations(nir_shader *fs, struct kk_per_vertex_map *map)
 {
    uint64_t emulated = 0;
    u_foreach_bit64(location, map->locations) {
@@ -178,7 +178,7 @@ gather_flat_locations(nir_function_impl *impl, struct kk_per_vertex_map *map)
    }
    if (map->buffer_slot)
       emulated |= BITFIELD64_BIT(map->buffer_slot);
-   nir_foreach_block(block, impl) {
+   nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {
          if (instr->type != nir_instr_type_intrinsic)
             continue;
@@ -340,7 +340,7 @@ make_buffer_interface_room(nir_shader *fs, nir_shader *prev,
       ~map->unused_locations;
    uint8_t width[VARYING_SLOT_MAX];
    unsigned components = kk_native_interface_components(fs, prev, width);
-   nir_foreach_block(block, nir_shader_get_entrypoint(fs)) {
+   nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {
          unsigned free = 32 - util_bitcount64(used & generic & ~map->locations);
          unsigned modes = uses_barycentric[0] + uses_barycentric[1];
@@ -412,6 +412,45 @@ load_buffered_input(nir_builder *b, nir_intrinsic_instr *intr,
 }
 
 bool
+kk_nir_apply_fs_per_vertex_map(nir_shader *fs, struct kk_per_vertex_map *map)
+{
+   nir_function_impl *impl = nir_shader_get_entrypoint(fs);
+   nir_builder b = nir_builder_create(impl);
+   nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
+      b.impl = body;
+      nir_foreach_instr_safe(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         b.cursor = nir_before_instr(instr);
+         if (is_per_vertex_input(intr) && map->buffer) {
+            nir_def_replace(&intr->def,
+                            load_per_vertex_buffer_value(&b, intr, map));
+         } else if (is_per_vertex_input(intr)) {
+            nir_def_replace(&intr->def, load_per_vertex_value(&b, intr, map));
+         } else if ((intr->intrinsic == nir_intrinsic_load_input ||
+                     intr->intrinsic == nir_intrinsic_load_per_primitive_input ||
+                     intr->intrinsic == nir_intrinsic_load_interpolated_input) &&
+                    (map->buffered_locations & BITFIELD64_BIT(io_location(intr,
+                       intr->intrinsic == nir_intrinsic_load_interpolated_input ? 1 : 0)))) {
+            nir_def_replace(&intr->def, load_buffered_input(&b, intr, map));
+         } else if (is_barycentric_coord(intr)) {
+            nir_def_replace(&intr->def, load_barycentric_value(&b, intr, map));
+         }
+      }
+   }
+
+   /* Run after per-vertex lowering has introduced its basis inputs. */
+   kk_nir_lower_fs_offset_planes(fs);
+   map->active = true;
+   gather_flat_locations(fs, map);
+   nir_foreach_function_impl(body, fs)
+      nir_progress(true, body, nir_metadata_control_flow);
+   nir_shader_gather_info(fs, impl);
+   return true;
+}
+
+bool
 kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev, bool force,
                                   struct kk_per_vertex_map *map)
 {
@@ -422,7 +461,7 @@ kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev, bool force,
    bool projected = map->projected_basis;
    memset(map, 0, sizeof(*map));
    bool uses_barycentric[2] = {false, false};
-   nir_foreach_block(block, impl) {
+   nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {
          if (instr->type != nir_instr_type_intrinsic)
             continue;
@@ -494,37 +533,7 @@ kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev, bool force,
       map->projected_basis = true;
       map->barycentric_slot[0] = map->barycentric_slot[1] = KK_CANONICAL_PROJECTED_POINT;
    }
-   nir_builder b = nir_builder_create(impl);
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr_safe(instr, block) {
-         if (instr->type != nir_instr_type_intrinsic)
-            continue;
-         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-         b.cursor = nir_before_instr(instr);
-         if (is_per_vertex_input(intr) && map->buffer) {
-            nir_def_replace(&intr->def,
-                            load_per_vertex_buffer_value(&b, intr, map));
-         } else if (is_per_vertex_input(intr)) {
-            nir_def_replace(&intr->def, load_per_vertex_value(&b, intr, map));
-         } else if ((intr->intrinsic == nir_intrinsic_load_input ||
-                     intr->intrinsic == nir_intrinsic_load_per_primitive_input ||
-                     intr->intrinsic == nir_intrinsic_load_interpolated_input) &&
-                    (map->buffered_locations & BITFIELD64_BIT(io_location(intr,
-                       intr->intrinsic == nir_intrinsic_load_interpolated_input ? 1 : 0)))) {
-            nir_def_replace(&intr->def, load_buffered_input(&b, intr, map));
-         } else if (is_barycentric_coord(intr)) {
-            nir_def_replace(&intr->def, load_barycentric_value(&b, intr, map));
-         }
-      }
-   }
-
-   /* Run after per-vertex lowering has introduced its basis inputs. */
-   kk_nir_lower_fs_offset_planes(fs);
-   map->active = true;
-   gather_flat_locations(impl, map);
-   nir_progress(true, impl, nir_metadata_control_flow);
-   nir_shader_gather_info(fs, impl);
-   return true;
+   return kk_nir_apply_fs_per_vertex_map(fs, map);
 }
 
 static nir_def *
@@ -917,7 +926,7 @@ kk_nir_lower_mesh_flat_inputs(nir_shader *fs, nir_shader *mesh,
    assert(mesh->info.stage == MESA_SHADER_MESH);
    if (!kk_nir_needs_interface_packing(fs, mesh))
       return false;
-   nir_foreach_block(block, nir_shader_get_entrypoint(fs)) {
+   nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {
          if (instr->type != nir_instr_type_intrinsic)
             continue;

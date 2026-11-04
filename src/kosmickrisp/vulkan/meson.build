@@ -64,6 +64,8 @@ kk_files = files(
   'kk_cmd_dgc.c',
   'kk_dgc.m',
   'kk_cmd_draw.c',
+  'kk_fragment_shading_rate_command.c',
+  'kk_fragment_shading_rate_resources.c',
   'kk_cmd_meta.c',
   'kk_cmd_pool.h',
   'kk_cmd_pool.c',

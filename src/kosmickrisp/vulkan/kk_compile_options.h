@@ -11,6 +11,7 @@ struct nir_to_msl_options;
 struct kk_compile_options {
    const struct kk_per_vertex_map *per_vertex_map;
    struct nir_shader *conservative_fs;
+   struct nir_shader *vrs_source;
    bool independent_interface;
    bool poly_layer_replay;
    bool mesh_queries;
