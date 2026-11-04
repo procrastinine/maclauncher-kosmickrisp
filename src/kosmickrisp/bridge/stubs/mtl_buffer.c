@@ -31,3 +31,11 @@ mtl_new_texture_with_descriptor_linear(mtl_buffer *buffer,
 {
    return NULL;
 }
+
+mtl_buffer *
+mtl_new_buffer_with_memory_fd(mtl_device *device, int fd, void *mapping,
+   uint64_t mapping_size, uint64_t payload_offset, uint64_t payload_size)
+{
+   return NULL;
+}
+int mtl_buffer_export_memory_fd(mtl_buffer *buffer) { return -1; }

@@ -6,6 +6,14 @@
  */
 
 #include "kk_device_memory.h"
+#include "kk_buffer.h"
+#include "kk_image.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "kk_device.h"
 #include "kk_entrypoints.h"
@@ -22,6 +30,189 @@
 #include <inttypes.h>
 #include <string.h>
 #include <sys/mman.h>
+
+
+/* OPAQUE_FD is an owning capability for this allocation, not a host pointer.
+ * All supported Darwin CPUs are little-endian. The v1 header consists only
+ * of fixed-width fields, with no native pointers or compiler-dependent enums.
+ */
+#define KK_FD_PAYLOAD_OFFSET UINT64_C(65536)
+struct kk_fd_memory_header {
+   uint64_t magic, version, allocation_size, payload_size, memory_type;
+   uint8_t device_uuid[VK_UUID_SIZE], driver_uuid[VK_UUID_SIZE];
+   uint64_t dedicated[12];
+};
+_Static_assert(sizeof(struct kk_fd_memory_header) < KK_FD_PAYLOAD_OFFSET,
+               "External memory header must fit before the payload");
+
+const VkExternalMemoryProperties kk_fd_mem_props = {
+   .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT |
+                             VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT,
+   .exportFromImportedHandleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+   .compatibleHandleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+};
+
+static void
+kk_fd_dedicated_description(const VkMemoryAllocateInfo *info, uint64_t out[12])
+{
+   const VkMemoryDedicatedAllocateInfo *dedicated =
+      vk_find_struct_const(info->pNext, MEMORY_DEDICATED_ALLOCATE_INFO);
+   if (!dedicated)
+      return;
+   if (dedicated->image) {
+      VK_FROM_HANDLE(kk_image, image, dedicated->image);
+      const struct vk_image *v = &image->vk;
+      out[0] = 1;
+      out[1] = v->format;
+      out[2] = v->extent.width;
+      out[3] = v->extent.height;
+      out[4] = v->extent.depth;
+      out[5] = v->mip_levels;
+      out[6] = v->array_layers;
+      out[7] = v->samples;
+      out[8] = v->tiling;
+      out[9] = v->usage;
+      out[10] = v->create_flags;
+      out[11] = v->stencil_usage;
+   } else if (dedicated->buffer) {
+      VK_FROM_HANDLE(kk_buffer, buffer, dedicated->buffer);
+      out[0] = 2;
+      out[1] = buffer->vk.size;
+      out[2] = buffer->vk.usage;
+      out[3] = buffer->vk.create_flags;
+   }
+}
+
+static VkResult
+kk_allocate_fd_memory(struct kk_device *dev, const VkMemoryAllocateInfo *info,
+                      const VkImportMemoryFdInfoKHR *import,
+                      struct kk_device_memory *mem)
+{
+   struct kk_physical_device *pdev = kk_device_physical(dev);
+   uint64_t page_size;
+   os_get_page_size(&page_size);
+   if (!info->allocationSize || info->allocationSize > pdev->info.max_buffer_size ||
+       KK_FD_PAYLOAD_OFFSET % page_size)
+      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+
+   const uint64_t payload_size = align64(info->allocationSize, page_size);
+   if (payload_size > SIZE_MAX - KK_FD_PAYLOAD_OFFSET)
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   const size_t mapping_size = KK_FD_PAYLOAD_OFFSET + payload_size;
+   const bool importing = import && import->handleType;
+   struct kk_fd_memory_header expected = {
+      .magic = UINT64_C(0x3144464d454d4b4b),
+      .version = 1,
+      .allocation_size = info->allocationSize,
+      .payload_size = payload_size,
+      .memory_type = info->memoryTypeIndex,
+   };
+   memcpy(expected.device_uuid, pdev->vk.properties.deviceUUID, VK_UUID_SIZE);
+   memcpy(expected.driver_uuid, pdev->vk.properties.driverUUID, VK_UUID_SIZE);
+   kk_fd_dedicated_description(info, expected.dedicated);
+
+   int fd = -1;
+   if (importing) {
+      if (import->handleType != VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT ||
+          import->fd < 0)
+         return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+      struct stat stat;
+      if (fstat(import->fd, &stat) || stat.st_size < 0 ||
+          (uint64_t)stat.st_size != mapping_size)
+         return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+      /* Until the complete import succeeds the caller retains its descriptor. */
+      fd = fcntl(import->fd, F_DUPFD_CLOEXEC, 0);
+   } else {
+      char name[32];
+      for (unsigned attempt = 0; attempt < 16; ++attempt) {
+         snprintf(name, sizeof(name), "/kk-%08x%08x", arc4random(), arc4random());
+         fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+         if (fd >= 0 || errno != EEXIST)
+            break;
+      }
+      if (fd >= 0) {
+         if (shm_unlink(name) || fcntl(fd, F_SETFD, FD_CLOEXEC) ||
+             ftruncate(fd, mapping_size)) {
+            close(fd);
+            return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         }
+      }
+   }
+   if (fd < 0)
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   void *mapping = mmap(NULL, mapping_size, PROT_READ | PROT_WRITE,
+                         MAP_SHARED, fd, 0);
+   if (mapping == MAP_FAILED) {
+      close(fd);
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
+   if (importing) {
+      if (memcmp(mapping, &expected, sizeof(expected))) {
+         munmap(mapping, mapping_size);
+         close(fd);
+         return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+      }
+   } else {
+      memcpy(mapping, &expected, sizeof(expected));
+      /* A fresh shm object is zero-filled, including the entire payload.
+       * Imported contents are never overwritten or reinitialized. */
+   }
+
+   struct kk_bo *bo = CALLOC_STRUCT(kk_bo);
+   if (!bo) {
+      munmap(mapping, mapping_size);
+      close(fd);
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
+   bo->map = mtl_new_buffer_with_memory_fd(dev->mtl_handle, fd, mapping,
+                                           mapping_size, KK_FD_PAYLOAD_OFFSET,
+                                           payload_size);
+   if (!bo->map) {
+      FREE(bo);
+      munmap(mapping, mapping_size);
+      close(fd);
+      return vk_error(dev, importing ? VK_ERROR_INVALID_EXTERNAL_HANDLE :
+                                      VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   }
+   /* The native buffer now owns its FD and mapping through final release.
+    * Exported descriptors own additional kernel references independently. */
+   bo->size_B = payload_size;
+   bo->gpu = mtl_buffer_get_gpu_address(bo->map);
+   if (pdev->mem_types[info->memoryTypeIndex].propertyFlags &
+       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+      bo->cpu = mtl_get_contents(bo->map);
+   kk_device_add_buffer_to_residency_set(dev, bo->map);
+   mem->bo = bo;
+   if (importing)
+      close(import->fd);
+   return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+kk_GetMemoryFdKHR(VkDevice device, const VkMemoryGetFdInfoKHR *info, int *fd)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   VK_FROM_HANDLE(kk_device_memory, mem, info->memory);
+   if (info->handleType != VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT ||
+       !(mem->vk.export_handle_types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT))
+      return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+   *fd = mtl_buffer_export_memory_fd(mem->bo->map);
+   if (*fd < 0)
+      return vk_error(dev, errno == EMFILE || errno == ENFILE ?
+                            VK_ERROR_TOO_MANY_OBJECTS : VK_ERROR_OUT_OF_HOST_MEMORY);
+   return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+kk_GetMemoryFdPropertiesKHR(VkDevice device,
+                            VkExternalMemoryHandleTypeFlagBits handleType,
+                            int fd, VkMemoryFdPropertiesKHR *properties)
+{
+   /* OPAQUE_FD is expressly excluded from this query by VUID-00674.
+    * No other memory-FD type is advertised by this driver. */
+   return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+}
 
 /* Supports mtlheap only */
 const VkExternalMemoryProperties kk_mtlheap_mem_props = {
@@ -185,6 +376,23 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
                                  sizeof(*mem));
    if (!mem)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   const VkImportMemoryFdInfoKHR *fd_info =
+      vk_find_struct_const(pAllocateInfo->pNext, IMPORT_MEMORY_FD_INFO_KHR);
+   if ((fd_info && fd_info->handleType) ||
+       (mem->vk.export_handle_types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT)) {
+      if ((metal_info && metal_info->handleType) ||
+          (host_info && host_info->handleType) ||
+          (mem->vk.export_handle_types & ~VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT)) {
+         result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+         goto fail_alloc;
+      }
+      result = kk_allocate_fd_memory(dev, pAllocateInfo, fd_info, mem);
+      if (result != VK_SUCCESS)
+         goto fail_alloc;
+      *pMem = kk_device_memory_to_handle(mem);
+      return VK_SUCCESS;
+   }
 
    bool import_metal = metal_info && metal_info->handleType;
    bool import_host = host_info && host_info->handleType;

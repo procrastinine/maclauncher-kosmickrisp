@@ -5,6 +5,7 @@
  */
 
 #include "kk_image_layout.h"
+#include "kk_external_memory_fd.h"
 #include "kk_zero_init.h"
 
 #include "kk_debug.h"
@@ -275,12 +276,16 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
    layout->depth_px = image->extent.depth;
    layout->layers = image->array_layers;
    layout->levels = image->mip_levels;
-   layout->linear = image->tiling != VK_IMAGE_TILING_OPTIMAL;
+   const bool external_fd = image->external_handle_types &
+                            VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+   layout->linear = image->tiling != VK_IMAGE_TILING_OPTIMAL || external_fd;
    layout->optimized_layout = kk_zero_init_optimized_layout(
       kk_image_layout_can_optimize(pdev, usage, image->tiling,
                                     image->create_flags, format),
       initial_layout) &&
       !(image->compr_flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
+   if (external_fd)
+      layout->optimized_layout = false;
    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(
       usage, image->create_flags, supported_format->atomic);
    layout->create_flags = image->create_flags;

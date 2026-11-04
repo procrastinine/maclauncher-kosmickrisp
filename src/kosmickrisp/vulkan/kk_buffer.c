@@ -142,6 +142,9 @@ kk_GetPhysicalDeviceExternalBufferProperties(
       goto unsupported;
 
    switch (pExternalBufferInfo->handleType) {
+   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT:
+      pExternalBufferProperties->externalMemoryProperties = kk_fd_mem_props;
+      return;
    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT:
       pExternalBufferProperties->externalMemoryProperties =
          kk_mtlheap_mem_props;

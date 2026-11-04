@@ -6,6 +6,7 @@
  */
 
 #include "kk_image.h"
+#include "kk_external_memory_fd.h"
 #include "kk_descriptor_set.h"
 
 #include "kk_device.h"
@@ -442,6 +443,15 @@ kk_GetPhysicalDeviceImageFormatProperties2(
       /* We only support heaps since that's the backing for all our memory and
        * simplifies implementation */
       switch (external_info->handleType) {
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT:
+         if (!kk_fd_image_supported(pImageFormatInfo->format,
+               pImageFormatInfo->type, pImageFormatInfo->tiling, all_usage,
+               create_flags))
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+         maxArraySize = maxMipLevels = 1;
+         sampleCounts = VK_SAMPLE_COUNT_1_BIT;
+         ext_mem_props = &kk_fd_mem_props;
+         break;
       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT:
          ext_mem_props = &kk_mtlheap_mem_props;
          break;
@@ -528,7 +538,10 @@ kk_GetPhysicalDeviceImageFormatProperties2(
       .maxMipLevels = maxMipLevels,
       .maxArrayLayers = maxArraySize,
       .sampleCounts = sampleCounts,
-      .maxResourceSize = UINT32_MAX, /* TODO */
+      .maxResourceSize = external_info &&
+         external_info->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT
+            ? MIN2((uint64_t)UINT32_MAX, pdev->info.max_buffer_size)
+            : UINT32_MAX, /* TODO: ordinary upstream resource limit */
    };
 
    vk_foreach_struct(sType, s, pImageFormatProperties->pNext) {
@@ -605,6 +618,15 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
               const VkImageCreateInfo *pCreateInfo)
 {
    vk_image_init(&dev->vk, &image->vk, pCreateInfo);
+   if ((image->vk.external_handle_types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT) &&
+       (!kk_fd_image_supported(image->vk.format, image->vk.image_type,
+                              image->vk.tiling, image->vk.usage,
+                              image->vk.create_flags) ||
+        image->vk.array_layers != 1 || image->vk.mip_levels != 1 ||
+        image->vk.samples != VK_SAMPLE_COUNT_1_BIT)) {
+      vk_image_finish(&image->vk);
+      return vk_error(dev, VK_ERROR_FORMAT_NOT_SUPPORTED);
+   }
 
    if ((image->vk.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
