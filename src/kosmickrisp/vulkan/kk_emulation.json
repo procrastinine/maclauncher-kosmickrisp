@@ -1,0 +1,73 @@
+[
+  {
+    "name": "denorm_preserve",
+    "description": "Gradual underflow for requested floating-point preservation modes.",
+    "cost_class": "mixed native / software",
+    "cost_note": "FP16 uses native half arithmetic; FP32 replaces most arithmetic and comparisons with software; FP64 uses software binary64. About 7x GPU time was reported for a workload requesting FP32 preservation. Per-operation cost is unmeasured.",
+    "extensions": [],
+    "features": [],
+    "properties": [
+      "shaderDenormPreserveFloat16",
+      "shaderDenormPreserveFloat32",
+      "shaderDenormPreserveFloat64"
+    ]
+  },
+  {
+    "name": "denorm_flush",
+    "description": "Flush subnormal results to zero in requested floating-point modes.",
+    "cost_class": "native arithmetic / ALU fixups",
+    "cost_note": "FP32 adds exponent-mask fixups to selected operations; no full software FP32 replacement. Per-operation cost is unmeasured. FTZ16 and FTZ64 are unsupported.",
+    "extensions": [],
+    "features": [],
+    "properties": [
+      "shaderDenormFlushToZeroFloat16",
+      "shaderDenormFlushToZeroFloat32",
+      "shaderDenormFlushToZeroFloat64"
+    ]
+  },
+  {
+    "name": "ray_tracing",
+    "description": "Acceleration structures, ray queries and continuation-based ray-tracing pipelines.",
+    "cost_class": "compute / software traversal",
+    "cost_note": "AS construction and traversal use compute and continuation dispatch. Work is selected by RT commands and shaders. Runtime cost is unmeasured.",
+    "extensions": [
+      "VK_KHR_acceleration_structure",
+      "VK_KHR_ray_tracing_pipeline",
+      "VK_KHR_ray_query",
+      "VK_KHR_ray_tracing_maintenance1",
+      "VK_KHR_pipeline_library"
+    ],
+    "features": [
+      "accelerationStructure",
+      "descriptorBindingAccelerationStructureUpdateAfterBind",
+      "rayTracingPipeline",
+      "rayTracingPipelineTraceRaysIndirect",
+      "rayTraversalPrimitiveCulling",
+      "rayQuery",
+      "rayTracingMaintenance1",
+      "rayTracingPipelineTraceRaysIndirect2"
+    ],
+    "properties": [
+      "maxGeometryCount",
+      "maxInstanceCount",
+      "maxPrimitiveCount",
+      "maxPerStageDescriptorAccelerationStructures",
+      "maxPerStageDescriptorUpdateAfterBindAccelerationStructures",
+      "maxDescriptorSetAccelerationStructures",
+      "maxDescriptorSetUpdateAfterBindAccelerationStructures",
+      "minAccelerationStructureScratchOffsetAlignment",
+      "shaderGroupHandleSize",
+      "shaderGroupHandleAlignment",
+      "shaderGroupBaseAlignment",
+      "maxShaderGroupStride",
+      "maxRayRecursionDepth",
+      "maxRayHitAttributeSize",
+      "maxRayDispatchInvocationCount",
+      "shaderGroupHandleCaptureReplaySize"
+    ],
+    "property_bits": {
+      "subgroupSupportedStages": "VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_INTERSECTION_BIT_KHR | VK_SHADER_STAGE_CALLABLE_BIT_KHR"
+    },
+    "format_feature": "VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR"
+  }
+]

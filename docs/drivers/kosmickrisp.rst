@@ -75,11 +75,6 @@ Environment variables
 
 KosmicKrisp specific environment variables:
 
-``KK_EXPOSE_RAY_TRACING=1`` exposes the ray-tracing pipeline, acceleration
-structure, ray-query and ray-tracing-maintenance interfaces to an explicitly
-opted-in test process. Only the exact value ``1`` enables this setting; it is
-sampled at physical-device creation. The interfaces are disabled by default
-and are separate from ``MESA_KK_EXPERIMENTAL``.
 
 - ``MESA_KK_DEBUG``: ``msl`` to log all generated Metal Shading Language (MSL) shaders. ``force_robustness`` to force robustness on all shaders.
 - ``MESA_KK_GPU_CAPTURE``: Starts Metal capture at device create and ends it at device destroy. Set to ``1`` to activate.
@@ -89,6 +84,26 @@ and are separate from ``MESA_KK_EXPERIMENTAL``.
   - ``custom_border`` to advertise ``VK_EXT_custom_border_color`` and ``VK_EXT_border_color_swizzle``.
   - ``image_view_min_lod`` to advertise ``VK_EXT_image_view_min_lod``.
   - ``optimize_e5r9g9b9`` to use allowGPUOptimizedContents with this format, which causes some CTS tests for vkCmdCopyImage() to fail
+
+Slow but correct features
+*************************
+
+``KK_EMULATION`` controls software-backed capability advertisement. It is read
+once at physical-device creation. The default is ``performance``, which hides
+all registry entries. ``conformance`` retains all implemented capabilities.
+An entry is enabled with ``+name`` and disabled with ``-name``; the last override
+for an entry wins. For example, ``performance,+denorm_preserve`` enables only
+preservation, and ``conformance,-ray_tracing`` excludes ray tracing. Enabling an
+entry does not add unsupported hardware modes; FTZ16 and FTZ64 remain false.
+
+``-VK_extension_name`` removes an extension and its associated feature and
+property fields, including promoted query aliases. For example,
+``conformance,-VK_KHR_ray_query`` removes ray-query advertisement. These removals
+apply after named entry selection. Unknown tokens produce one stderr line per
+token and are ignored. The setting changes capability reports; rendering and
+shader compilation do not parse it. Ray tracing remains outside release scope.
+
+.. include:: kosmickrisp/emulation.rst
 
 Compile timing
 **************

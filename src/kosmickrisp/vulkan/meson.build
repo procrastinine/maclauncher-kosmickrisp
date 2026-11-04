@@ -50,7 +50,21 @@ idep_kk_device_dispatch_table = declare_dependency(
   link_whole : [libkk_device_dispatch_table, libkk_device_cmd_dispatch_table]
 )
 
-kk_files = files(
+kk_emulation_generated = custom_target(
+  'kk_emulation_generated',
+  input : ['kk_emulation_gen.py', 'kk_emulation.json', vk_api_xml],
+  output : 'kk_emulation_generated.h',
+  command : [prog_python, '@INPUT0@', '--registry', '@INPUT1@',
+             '--xml', '@INPUT2@', '--out', '@OUTPUT@',
+             '--beta', with_vulkan_beta.to_string()],
+  depend_files : [vk_physical_device_features_gen,
+                  vk_physical_device_features_gen_depend_files,
+                  '../..' / 'vulkan/util/vk_physical_device_properties_gen.py'],
+)
+
+kk_files = [kk_emulation_generated] + files(
+  'kk_emulation.c',
+  'kk_emulation.h',
   'kk_bo.h',
   'kk_bo.c',
   'kk_buffer_view.h',
