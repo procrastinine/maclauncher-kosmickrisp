@@ -31,7 +31,8 @@ kk_native_interface_components(nir_shader *fs, nir_shader *prev, uint8_t *out_wi
 {
    const uint64_t generic = BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1) &
       ~BITFIELD64_MASK(VARYING_SLOT_VAR0);
-   uint64_t fixed_outputs = prev->info.outputs_written & ~(generic | VARYING_BIT_POS);
+   uint64_t fixed_outputs = (prev ? prev->info.outputs_written : 0) &
+      ~(generic | VARYING_BIT_POS);
    uint8_t width[VARYING_SLOT_MAX] = {0};
    bool sample_id = false, sample_mask = false, front_face = false;
    bool primitive_id = false, point_coord = false, layer = false;
@@ -75,26 +76,28 @@ kk_native_interface_components(nir_shader *fs, nir_shader *prev, uint8_t *out_wi
    }
    /* msl_gather_info supplies SampleID for sample-position and mask reads. */
    sample_id |= sample_mask;
-   nir_foreach_block(block, nir_shader_get_entrypoint(prev)) {
-      nir_foreach_instr(instr, block) {
-         if (instr->type != nir_instr_type_intrinsic)
-            continue;
-         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-         if (intr->intrinsic != nir_intrinsic_store_output)
-            continue;
-         unsigned location = io_location(intr, 1);
-         if (!(fixed_outputs & BITFIELD64_BIT(location)))
-            continue;
-         width[location] = MAX2(width[location],
-            DIV_ROUND_UP((nir_intrinsic_component(intr) + intr->num_components) *
-                         intr->src[0].ssa->bit_size, 32));
+   if (prev) {
+      nir_foreach_block(block, nir_shader_get_entrypoint(prev)) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+            if (intr->intrinsic != nir_intrinsic_store_output)
+               continue;
+            unsigned location = io_location(intr, 1);
+            if (!(fixed_outputs & BITFIELD64_BIT(location)))
+               continue;
+            width[location] = MAX2(width[location],
+               DIV_ROUND_UP((nir_intrinsic_component(intr) + intr->num_components) *
+                            intr->src[0].ssa->bit_size, 32));
+         }
       }
    }
    unsigned components = sample_id + sample_mask + front_face +
       (primitive_id && !width[VARYING_SLOT_PRIMITIVE_ID]) +
       (layer && !width[VARYING_SLOT_LAYER]) + subgroup_size + subgroup_invocation +
       2 * point_coord + 3 * (barycentric[0] + barycentric[1]) +
-      prev->info.clip_distance_array_size;
+      (prev ? prev->info.clip_distance_array_size : 0);
    for (unsigned i = 0; i < VARYING_SLOT_MAX; ++i)
       components += width[i];
    if (out_width)
@@ -107,10 +110,11 @@ kk_nir_needs_interface_packing(nir_shader *fs, nir_shader *prev)
 {
    const uint64_t generic = BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1) &
       ~BITFIELD64_MASK(VARYING_SLOT_VAR0);
-   uint64_t fixed_outputs = prev->info.outputs_written & ~(generic | VARYING_BIT_POS);
+   uint64_t fixed_outputs = (prev ? prev->info.outputs_written : 0) &
+      ~(generic | VARYING_BIT_POS);
    if ((util_bitcount64(fs->info.inputs_read & ~VARYING_BIT_POS) +
         util_bitcount64(fixed_outputs)) * 4 +
-       prev->info.clip_distance_array_size + 32 <= 124)
+       (prev ? prev->info.clip_distance_array_size : 0) + 32 <= 124)
       return false;
    return kk_native_interface_components(fs, prev, NULL) > 124;
 }
@@ -194,6 +198,8 @@ alloc_slot(uint64_t *used, uint8_t *slot)
    return false;
 }
 
+#include "kk_canonical_per_vertex.h"
+
 static nir_def *
 load_per_vertex_value(nir_builder *b, nir_intrinsic_instr *intr,
                       const struct kk_per_vertex_map *map)
@@ -267,8 +273,10 @@ static unsigned
 buffer_offset(const struct kk_per_vertex_map *map, unsigned location,
               unsigned corner)
 {
-   unsigned count = util_bitcount64(map->locations);
-   unsigned index = util_bitcount64(map->locations & BITFIELD64_MASK(location));
+   unsigned count = map->canonical_heap ? KK_CANONICAL_VARYING_COUNT
+                                        : util_bitcount64(map->locations);
+   unsigned index = map->canonical_heap ? location - VARYING_SLOT_VAR0
+      : util_bitcount64(map->locations & BITFIELD64_MASK(location));
    return (corner * count + index) * 16u;
 }
 
@@ -415,53 +423,58 @@ kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev, bool force,
    }
 
    nir_shader_gather_info(fs, impl);
-   nir_shader_gather_info(prev, nir_shader_get_entrypoint(prev));
-   /* Only the final native rasterization VS drops these stores. Earlier
-    * compute/Poly passes retain the complete capture and XFB interface. */
-   const uint64_t generic = BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1) &
-      ~BITFIELD64_MASK(VARYING_SLOT_VAR0);
-   map->unused_locations = prev->info.outputs_written & generic & ~fs->info.inputs_read;
-   uint64_t used = (fs->info.inputs_read | prev->info.outputs_written | map->locations) &
-      ~map->unused_locations;
+   if (!prev) {
+      kk_canonical_fs_map(fs, map);
+   } else {
+      nir_shader_gather_info(prev, nir_shader_get_entrypoint(prev));
+      /* Only the final native rasterization VS drops these stores. Earlier
+       * compute/Poly passes retain the complete capture and XFB interface. */
+      const uint64_t generic = BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1) &
+         ~BITFIELD64_MASK(VARYING_SLOT_VAR0);
+      map->unused_locations = prev->info.outputs_written & generic & ~fs->info.inputs_read;
+      uint64_t used = (fs->info.inputs_read | prev->info.outputs_written | map->locations) &
+         ~map->unused_locations;
 
-   bool ok = true;
-   u_foreach_bit64(location, map->locations) {
-      map->slot[location][0] = location;
-      ok &= alloc_slot(&used, &map->slot[location][1]);
-      ok &= alloc_slot(&used, &map->slot[location][2]);
-   }
-   for (unsigned i = 0u; i < 2u; ++i) {
-      if (uses_barycentric[i])
-         ok &= alloc_slot(&used, &map->barycentric_slot[i]);
-   }
-   if (!ok || full_interface || KK_DEBUG(FORCE_PER_VERTEX_BUFFER)) {
-      uint64_t locations = map->locations;
-      uint64_t unused = map->unused_locations;
-      memset(map, 0, sizeof(*map));
-      map->unused_locations = unused;
-      map->locations = locations;
-      map->buffer = true;
-      make_buffer_interface_room(fs, prev, uses_barycentric, map);
-      locations = map->locations;
-      /* The PerVertexKHR locations are read from the buffer, so only the
-       * address needs a slot. */
-      used = (fs->info.inputs_read | prev->info.outputs_written) &
-         ~(locations | map->unused_locations);
-      if (locations && !alloc_slot(&used, &map->buffer_slot)) {
-         memset(map, 0, sizeof(*map));
-         map->out_of_slots = true;
-         return nir_no_progress(impl);
+      bool ok = true;
+      u_foreach_bit64(location, map->locations) {
+         map->slot[location][0] = location;
+         ok &= alloc_slot(&used, &map->slot[location][1]);
+         ok &= alloc_slot(&used, &map->slot[location][2]);
       }
-      /* Buffering frees the original per-vertex locations. Keep native
-       * interpolants for the weights whenever those slots are available;
-       * Both weights are evaluated through the same native interpolants. */
-      for (unsigned i = 0; i < 2; ++i) {
+      for (unsigned i = 0u; i < 2u; ++i) {
          if (uses_barycentric[i])
-            if (!alloc_slot(&used, &map->barycentric_slot[i])) {
-               map->out_of_slots = true;
-               return nir_no_progress(impl);
-            }
+            ok &= alloc_slot(&used, &map->barycentric_slot[i]);
       }
+      if (!ok || full_interface || KK_DEBUG(FORCE_PER_VERTEX_BUFFER)) {
+         uint64_t locations = map->locations;
+         uint64_t unused = map->unused_locations;
+         memset(map, 0, sizeof(*map));
+         map->unused_locations = unused;
+         map->locations = locations;
+         map->buffer = true;
+         make_buffer_interface_room(fs, prev, uses_barycentric, map);
+         locations = map->locations;
+         /* The PerVertexKHR locations are read from the buffer, so only the
+          * address needs a slot. */
+         used = (fs->info.inputs_read | prev->info.outputs_written) &
+            ~(locations | map->unused_locations);
+         if (locations && !alloc_slot(&used, &map->buffer_slot)) {
+            memset(map, 0, sizeof(*map));
+            map->out_of_slots = true;
+            return nir_no_progress(impl);
+         }
+         /* Buffering frees the original per-vertex locations. Keep native
+          * interpolants for the weights whenever those slots are available;
+          * Both weights are evaluated through the same native interpolants. */
+         for (unsigned i = 0; i < 2; ++i) {
+            if (uses_barycentric[i])
+               if (!alloc_slot(&used, &map->barycentric_slot[i])) {
+                  map->out_of_slots = true;
+                  return nir_no_progress(impl);
+               }
+         }
+      }
+
    }
 
    nir_builder b = nir_builder_create(impl);
@@ -657,6 +670,13 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
                                    const struct kk_per_vertex_map *map)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   struct kk_per_vertex_map canonical;
+   if (map && map->canonical_heap) {
+      nir_shader_gather_info(nir, impl);
+      kk_canonical_map_init(&canonical);
+      canonical.locations = nir->info.outputs_written & kk_canonical_generic_mask();
+      map = &canonical;
+   }
    if (!map || !map->active)
       return nir_no_progress(impl);
 
@@ -798,7 +818,9 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
     * full, the values go to its start and are wrong. */
    nir_def *buffer = nir_imm_int64(&b, 0);
    if (map->buffer && map->locations) {
-      unsigned size = 3u * util_bitcount64(map->locations) * 16u;
+      unsigned count = map->canonical_heap ? KK_CANONICAL_VARYING_COUNT
+                                           : util_bitcount64(map->locations);
+      unsigned size = 3u * count * 16u;
       nir_def *heap = load_per_draw(&b, 64, per_draw_offset(per_vertex_heap));
       nir_push_if(&b, nir_iand(&b, nir_ieq_imm(&b, corner, 0),
                                nir_ine_imm(&b, heap, 0)));

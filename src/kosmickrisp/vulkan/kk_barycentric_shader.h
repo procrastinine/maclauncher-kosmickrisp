@@ -5,6 +5,8 @@
 static bool
 kk_state_strip_fan_or_adjacency(const struct vk_graphics_pipeline_state *state)
 {
+   if (!state || !state->ia)
+      return true;
    VkPrimitiveTopology topology = state->ia->primitive_topology;
    return BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_IA_PRIMITIVE_TOPOLOGY) ||
           topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
@@ -18,7 +20,7 @@ kk_state_strip_fan_or_adjacency(const struct vk_graphics_pipeline_state *state)
 static bool
 kk_state_provoking_last(const struct vk_graphics_pipeline_state *state)
 {
-   return !state->rs ||
+   return !state || !state->rs ||
           BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_PROVOKING_VERTEX) ||
           state->rs->provoking_vertex ==
              VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;

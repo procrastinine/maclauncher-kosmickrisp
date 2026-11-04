@@ -21,6 +21,9 @@ struct kk_per_vertex_map {
    /* Emulation is active: draws are issued as non-indexed triangle lists with
     * one vertex shader invocation per triangle corner. */
    bool active;
+   /* Independent non-LTO stage ABI. A producer request needs only this flag;
+    * VS lowering derives its complete layout without a fragment map. */
+   bool canonical_heap;
    /* Varying slots read with PerVertexKHR by the fragment shader. */
    uint64_t locations;
    /* Ordinary locations sharing the same per-corner heap storage. */
@@ -57,6 +60,9 @@ bool kk_nir_needs_interface_packing(nir_shader *fs, nir_shader *prev);
 
 enum kk_barycentric_usage kk_nir_barycentric_usage(nir_shader *fs);
 
+/* prev == NULL selects the canonical ABI when force or interface pressure
+ * requires emulation. Linked/LTO callers keep passing their previous NIR.
+ * The caller initializes map to zero; a false return leaves it inactive. */
 bool kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev,
                                        bool force,
                                        struct kk_per_vertex_map *map);
