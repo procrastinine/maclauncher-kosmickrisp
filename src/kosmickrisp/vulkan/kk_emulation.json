@@ -922,12 +922,18 @@
     "properties": [
       "blockTexelViewCompatibleMultipleLayers"
     ],
-    "performance": false,
-    "performance_reason": "DXVK has a per-layer compressed-upload fallback and does not use this optional maintenance6 property to choose D3D SM/FL or require device creation.",
+    "performance": true,
+    "performance_reason": "The layer-routing implementation is already present for individual compressed formats and internal views. Reporting multi-layer block views adds no shader operations or draw work; requested views retain their layer descriptors, filtering and raster adaptation.",
     "off_consequence": "Reported D3D SM/FL and translator device creation are unchanged; public multi-layer raw block views are unavailable and DXVK uses per-layer uploads. Other maintenance6 guarantees and internal copy paths remain available.",
     "native_from": null,
-    "performance_families": [],
-    "family_cost_note": "Off Apple7-11: Native per-layer views share backing, and shader accesses select a layer descriptor. Cube filtering can add taps; layered attachments can use retained raster readers."
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Reporting the property does not change shader lowering. Existing per-layer native views, descriptor selection, cube taps and retained layered attachment readers remain selected by actual operations and views."
   },
   {
     "name": "transform_feedback",

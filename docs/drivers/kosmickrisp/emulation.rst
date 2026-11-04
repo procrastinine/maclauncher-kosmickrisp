@@ -314,8 +314,8 @@
        Controls: ``blockTexelViewCompatibleMultipleLayers``.
      - native per-layer views / layer and raster adaptation. Native per-layer views share backing, and shader accesses select a layer descriptor. Cube filtering can add taps; layered attachments can use retained raster readers.
      - No Apple family
-     - Off
-     - DXVK has a per-layer compressed-upload fallback and does not use this optional maintenance6 property to choose D3D SM/FL or require device creation.
+     - On
+     - The layer-routing implementation is already present for individual compressed formats and internal views. Reporting multi-layer block views adds no shader operations or draw work; requested views retain their layer descriptors, filtering and raster adaptation.
      - Reported D3D SM/FL and translator device creation are unchanged; public multi-layer raw block views are unavailable and DXVK uses per-layer uploads. Other maintenance6 guarantees and internal copy paths remain available.
      - ``performance,+layered_block_views``
    * - ``transform_feedback``

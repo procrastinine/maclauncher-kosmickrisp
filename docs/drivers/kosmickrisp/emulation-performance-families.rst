@@ -242,12 +242,12 @@
      - On
      - On Apple7-11: Native Metal plain and array views share the existing backing. Shader accesses select a typed descriptor address for the view dimension.
    * - ``layered_block_views``
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off Apple7-11: Native per-layer views share backing, and shader accesses select a layer descriptor. Cube filtering can add taps; layered attachments can use retained raster readers.
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: Reporting the property does not change shader lowering. Existing per-layer native views, descriptor selection, cube taps and retained layered attachment readers remain selected by actual operations and views.
    * - ``transform_feedback``
      - On
      - On
