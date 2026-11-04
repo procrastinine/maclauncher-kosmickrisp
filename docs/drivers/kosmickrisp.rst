@@ -4,6 +4,16 @@ KosmicKrisp
 KosmicKrisp is a Vulkan 1.4 driver for Apple GPUs on macOS. It is implemented
 on top of Metal 4. iOS is not supported.
 
+Mesh multiview
+**************
+
+Task and Mesh pipelines support up to 32 multiview views when the
+``mesh_shader`` entry is selected. Each set bit of the view mask executes
+with its original ViewIndex and writes that index as the render-target layer.
+Mesh draws use this per-view path without native vertex amplification.
+The feature and its view-count limit follow the same mode and family selection
+as Mesh shading.
+
 System requirements
 *******************
 

@@ -524,6 +524,10 @@ cs_start_render(struct kk_cmd_buffer *cmd)
    KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_SETUP, setup);
    struct kk_graphics_state *state = &cmd->state.gfx;
    uint32_t view_mask = state->render.view_mask;
+   /* Mesh replays each original view and writes its Layer explicitly. Do
+    * not add the native vertex-amplification render-target offset again. */
+   if (state->shader && state->shader->info.stage == MESA_SHADER_MESH)
+      view_mask = 0;
    struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
    if (view_mask && vs && (vs->info.api_geometry ||
        state->layer_replay.bind ||
