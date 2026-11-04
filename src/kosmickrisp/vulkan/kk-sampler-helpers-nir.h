@@ -15,7 +15,7 @@ static const struct kk_sampler *
 kk_sample_static_sampler(nir_tex_instr *tex,
                          const struct kk_descriptor_set_binding_layout *binding)
 {
-   if (!binding->immutable_samplers)
+   if (!binding || !binding->immutable_samplers)
       return NULL;
    nir_deref_instr *deref = nir_get_tex_deref(tex, nir_tex_src_sampler_deref);
    unsigned index = 0;
@@ -41,12 +41,12 @@ kk_sample_mark(nir_builder *b, nir_tex_instr *tex, void *data)
    if (!deref)
       return false;
    nir_variable *var = nir_deref_instr_get_variable(deref);
-   const struct kk_descriptor_set_binding_layout *binding = get_binding_layout(
-      var->data.descriptor_set, var->data.binding, &ctx->descriptors);
+   const struct kk_descriptor_set_binding_layout *binding = var ? get_binding_layout(
+      var->data.descriptor_set, var->data.binding, &ctx->descriptors) : NULL;
    const struct kk_sampler *known = kk_sample_static_sampler(tex, binding);
    int known_mode = known ? known->reduction_mode : -1;
    int known_border = known ? known->has_border : -1;
-   if (!known && binding->immutable_samplers && binding->array_size) {
+   if (!known && binding && binding->immutable_samplers && binding->array_size) {
       known_mode = binding->immutable_samplers[0]->reduction_mode;
       known_border = binding->immutable_samplers[0]->has_border;
       for (unsigned i = 1; i < binding->array_size; ++i) {

@@ -6,6 +6,7 @@
  */
 
 #include "kk_image.h"
+#include "kk_descriptor_set.h"
 
 #include "kk_device.h"
 #include "kk_device_memory.h"
@@ -261,6 +262,12 @@ kk_GetPhysicalDeviceImageFormatProperties2(
 
    const struct vk_format_ycbcr_info *ycbcr_info =
       vk_format_get_ycbcr_info(pImageFormatInfo->format);
+   if (ycbcr_info && ycbcr_info->n_planes > 1 &&
+       (pImageFormatInfo->flags & (VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT |
+                                  VK_IMAGE_CREATE_SPARSE_BINDING_BIT |
+                                  VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
+                                  VK_IMAGE_CREATE_SPARSE_ALIASED_BIT)))
+      return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
    /* For the purposes of these checks, we don't care about all the extra
     * YCbCr features and we just want the accumulation of features available
@@ -612,6 +619,7 @@ static void
 kk_image_finish(struct kk_device *dev, struct kk_image *image,
                 const VkAllocationCallbacks *pAllocator)
 {
+   kk_descriptor_heap_image_finish(dev, image);
    for (uint8_t plane = 0; plane < image->plane_count; plane++) {
       kk_image_plane_finish(dev, &image->planes[plane], image->vk.create_flags,
                             pAllocator);

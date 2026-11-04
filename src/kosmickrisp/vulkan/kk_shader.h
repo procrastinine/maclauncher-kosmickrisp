@@ -70,6 +70,7 @@ struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
    uint32_t push_size;
+   bool descriptor_heap;
    bool dgc_replay;
    bool indirect_bindable;
    bool has_geometry;
@@ -221,6 +222,8 @@ bool kk_nir_lower_non_seamless_cube(nir_shader *nir,
 bool kk_nir_lower_sampler_minmax(nir_shader *nir,
       uint32_t set_layout_count,
       struct vk_descriptor_set_layout *const *set_layouts);
+
+bool kk_nir_prepare_descriptor_heaps(nir_shader *nir, uint32_t embedded_count, const uint64_t *embedded);
 
 bool
 kk_nir_lower_descriptors(nir_shader *nir,

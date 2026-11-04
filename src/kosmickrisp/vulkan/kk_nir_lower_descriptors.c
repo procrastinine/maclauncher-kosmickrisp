@@ -327,6 +327,8 @@ load_resource_addr(nir_builder *b, unsigned num_components, unsigned bit_size,
                    nir_deref_instr *deref, unsigned offset_B,
                    const struct lower_descriptors_ctx *ctx)
 {
+   if (deref->deref_type == nir_deref_type_cast)
+      return nir_iadd_imm(b, deref->parent.ssa, offset_B);
    uint32_t set, binding;
    nir_def *index;
    get_resource_deref_binding(b, deref, &set, &binding, &index);
@@ -353,6 +355,10 @@ load_resource_deref_desc(nir_builder *b, unsigned num_components,
                          unsigned offset_B,
                          const struct lower_descriptors_ctx *ctx)
 {
+   if (deref->deref_type == nir_deref_type_cast)
+      return nir_load_global_constant(b, num_components, bit_size,
+         nir_iadd_imm(b, deref->parent.ssa, offset_B),
+         .align_mul = MIN2(bit_size / 8, 4));
    uint32_t set, binding;
    nir_def *index;
    get_resource_deref_binding(b, deref, &set, &binding, &index);
@@ -421,14 +427,21 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
    }
 
    nir_variable *var = nir_deref_instr_get_variable(deref);
+   enum gl_access_qualifier access = var ? var->data.access : nir_intrinsic_access(intr);
    nir_def *handle = nir_load_texture_handle_kk(
       b, 1, 64, resource_addr, .dest_type = type,
       .image_dim = nir_intrinsic_image_dim(intr),
       .image_array = nir_intrinsic_image_array(intr),
-      .access = nir_intrinsic_access(intr) | var->data.access,
-      .flags = msl_convert_access_flag(var->data.access));
+      .access = nir_intrinsic_access(intr) | access,
+      .flags = msl_convert_access_flag(access));
 
-   nir_rewrite_image_intrinsic(intr, handle, nir_image_intrinsic_type_bindless);
+   if (!var) nir_src_rewrite(&intr->src[0], nir_imm_int(b, 0));
+   if (intr->intrinsic == nir_intrinsic_image_deref_levels) {
+      intr->intrinsic = nir_intrinsic_bindless_image_levels;
+      nir_src_rewrite(&intr->src[0], handle);
+   } else {
+      nir_rewrite_image_intrinsic(intr, handle, nir_image_intrinsic_type_bindless);
+   }
 
    if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF &&
        (intr->intrinsic == nir_intrinsic_bindless_image_load ||
@@ -586,6 +599,12 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       glsl_get_sampler_dim(glsl_without_array(texture_deref->type)) == GLSL_SAMPLER_DIM_CUBE;
    const uint64_t plane_offset_B =
       plane * sizeof(struct kk_sampled_image_descriptor);
+   bool heap_image = nir_src_as_deref(nir_src_for_ssa(texture))->deref_type == nir_deref_type_cast;
+   uint64_t image_plane_offset_B = heap_image ? 0 : plane_offset_B;
+   uint64_t image_id_offset_B = heap_image && plane
+      ? (plane == 1 ? offsetof(struct kk_sampled_image_descriptor, aux_resource_id)
+                    : offsetof(struct kk_sampled_image_descriptor, aux_word))
+      : plane_offset_B;
 
    kk_sample_descriptor(b, tex, sampler, plane_offset_B, ctx);
 
@@ -632,7 +651,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
 
       nir_def *min = load_resource_deref_desc(
          b, 1, 16, nir_src_as_deref(nir_src_for_ssa(texture)),
-         plane_offset_B + offs, ctx);
+         image_plane_offset_B + offs, ctx);
 
       nir_def_replace(&tex->def, min);
       return true;
@@ -671,7 +690,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
 
       nir_def *resource_addr = load_resource_addr(
          b, 1, 64, nir_src_as_deref(nir_src_for_ssa(texture)),
-         plane_offset_B + offs, ctx);
+         image_id_offset_B + offs, ctx);
 
       nir_def *handle = NULL;
       if (tex->is_shadow) {
@@ -728,9 +747,18 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
          offs = offsetof(struct kk_sampled_image_descriptor,
                          clamp_0_sampler_index_or_negative);
 
-      nir_def *index = load_resource_deref_desc(
-         b, 1, 16, nir_src_as_deref(nir_src_for_ssa(sampler)),
-         plane_offset_B + offs, ctx);
+      nir_deref_instr *sampler_deref =
+         nir_src_as_deref(nir_src_for_ssa(sampler));
+      nir_def *index;
+      if (sampler_deref->deref_type == nir_deref_type_cast) {
+         offs = clamp_to_0 ? offsetof(struct kk_sampled_image_descriptor, aux_word)
+                          : offsetof(struct kk_sampled_image_descriptor, aux_resource_id);
+         index = load_resource_addr(b, 1, 64, sampler_deref,
+                                    plane_offset_B + offs, ctx);
+      } else {
+         index = load_resource_deref_desc(b, 1, 16, sampler_deref,
+                                          plane_offset_B + offs, ctx);
+      }
 
       nir_tex_instr_add_src(tex, nir_tex_src_sampler_handle,
                             nir_load_sampler_handle_kk(b, index));
@@ -974,6 +1002,8 @@ kk_nir_lower_descriptors(nir_shader *nir,
 
    return pass_lower_descriptors || pass_lower_ssbo;
 }
+
+#include "kk_descriptor_heap_nir.h"
 
 static bool
 lower_poly(struct nir_builder *b, nir_intrinsic_instr *intrin, void *data)

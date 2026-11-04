@@ -89,6 +89,19 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
          desc[plane].image_min_lod_fp16 = _mesa_float_to_half(min_lod);
          desc[plane].image_min_lod_uint16 = min_lod;
       }
+      if (view->plane_count > 1) {
+         /* Multi-planar images own both auxiliary words. Cube and sparse
+          * images retain their words in the single-plane path. */
+         assert(!(view->vk.image->create_flags &
+                  (VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT |
+                   VK_IMAGE_CREATE_SPARSE_BINDING_BIT |
+                   VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
+                   VK_IMAGE_CREATE_SPARSE_ALIASED_BIT)));
+         assert(desc[0].aux_resource_id == 0 && desc[0].aux_word == 0);
+         desc[0].aux_resource_id = desc[1].image_gpu_resource_id;
+         if (view->plane_count > 2)
+            desc[0].aux_word = desc[2].image_gpu_resource_id;
+      }
    }
 
    if (descriptor_type == VK_DESCRIPTOR_TYPE_SAMPLER ||
@@ -123,7 +136,7 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
       if (sampler->has_border) {
          assert(sampler->plane_count == 2);
          desc[0].clamp_0_sampler_index_or_negative =
-            sampler->planes[1].hw->index;
+            sampler->native_only ? 0 : sampler->planes[1].hw->index;
 
          assert(desc[0].clamp_0_sampler_index_or_negative >= 0 &&
                 "we have a border colour");
@@ -211,10 +224,7 @@ write_buffer_desc(struct kk_descriptor_set *set,
       kk_buffer_addr_range(buffer, info->offset, info->range);
    assert(addr_range.range <= UINT32_MAX);
 
-   const struct kk_buffer_address desc = {
-      .base_addr = addr_range.addr,
-      .size = addr_range.range,
-   };
+   const struct kk_buffer_address desc = kk_buffer_descriptor(buffer, addr_range);
    write_desc(set, binding, elem, &desc, sizeof(desc));
 }
 
@@ -233,10 +243,7 @@ write_dynamic_buffer_desc(struct kk_descriptor_set *set,
 
    struct kk_buffer_address *desc =
       &set->dynamic_buffers[binding_layout->dynamic_buffer_index + elem];
-   *desc = (struct kk_buffer_address){
-      .base_addr = addr_range.addr,
-      .size = addr_range.range,
-   };
+   *desc = kk_buffer_descriptor(buffer, addr_range);
 }
 
 static void
@@ -851,3 +858,5 @@ kk_push_descriptor_set_update_template(
    };
    kk_descriptor_set_write_template(&tmp_set, template, data);
 }
+
+#include "kk_descriptor_heap_api.h"

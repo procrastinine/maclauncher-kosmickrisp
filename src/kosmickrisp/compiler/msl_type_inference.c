@@ -390,6 +390,7 @@ infer_types_from_intrinsic(struct hash_table *types, nir_intrinsic_instr *instr)
       break;
    case nir_intrinsic_load_sampler_handle_kk:
       set_type(types, &instr->def, TYPE_SAMPLER);
+      set_type(types, &instr->src[0], TYPE_UINT);
       break;
    case nir_intrinsic_store_clip_distance_kk:
       set_type(types, &instr->src[0], TYPE_FLOAT);
@@ -549,10 +550,12 @@ infer_types_from_tex(struct hash_table *types, nir_tex_instr *tex)
          set_type(types, src, TYPE_FLOAT);
          break;
       case nir_tex_src_ms_index:
+      case nir_tex_src_backend1:
          set_type(types, src, TYPE_UINT);
          break;
       case nir_tex_src_ddx:
       case nir_tex_src_ddy:
+      case nir_tex_src_backend2:
          set_type(types, src, TYPE_FLOAT);
          break;
       default:

@@ -94,6 +94,8 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
                 mtl_feedback_handler_callback callback, void *user_data)
 {
    assert(kk_cmd_buffer_has_work(cmd));
+   if (cmd->drawable)
+      mtl_command_queue_wait_for_drawable(queue->mtl_handle, cmd->drawable);
 
    mtl_commit_options *options = mtl_new_commit_options();
    mtl_commit_options_add_feedback_handler(options, callback, user_data);
@@ -101,6 +103,11 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
    mtl_command_queue_commit(queue->mtl_handle, &cmd->metal.cmd_buf, 1u,
                             options);
    mtl_release(options);
+   if (cmd->drawable) {
+      mtl_command_queue_signal_drawable(queue->mtl_handle, cmd->drawable);
+      mtl_release(cmd->drawable);
+      cmd->drawable = NULL;
+   }
 }
 
 static VkResult
@@ -198,14 +205,9 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
       struct kk_cmd_buffer *cmd_buffer =
          container_of(submit->command_buffers[i], struct kk_cmd_buffer, vk);
 
-      if (cmd_buffer->drawable) {
-         mtl_command_queue_wait_for_drawable(queue->mtl_handle,
-                                             cmd_buffer->drawable);
-      }
-
       /* Metal's command buffers are one time use, re-record multiple
        * submissions. */
-      if (cmd_buffer->submitted) {
+      if (cmd_buffer->submitted || cmd_buffer->enqueue_commands) {
          VkResult result = rerecord_and_commit_cmd_buffer(queue, cmd_buffer);
          if (result != VK_SUCCESS)
             return result;
@@ -215,12 +217,6 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
 
       cmd_buffer->submitted = true;
 
-      if (cmd_buffer->drawable) {
-         mtl_command_queue_signal_drawable(queue->mtl_handle,
-                                           cmd_buffer->drawable);
-         mtl_release(cmd_buffer->drawable);
-         cmd_buffer->drawable = NULL;
-      }
    }
 
    for (uint32_t i = 0u; i < submit->signal_count; ++i) {

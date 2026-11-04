@@ -6,6 +6,7 @@
  */
 
 #include "kk_device.h"
+#include "kk_descriptor_set.h"
 #include "kk_dgc.h"
 
 #include "kk_buffer.h"
@@ -156,9 +157,28 @@ kk_destroy_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h)
 }
 
 static VkResult
+kk_sampler_require_index(struct kk_device *dev, struct kk_sampler_heap *h,
+                         struct kk_rc_sampler *rc)
+{
+   if (rc->index != UINT16_MAX)
+      return VK_SUCCESS;
+   const struct kk_physical_device *pdev = kk_device_physical(dev);
+   if (h->indexed_count >= MIN2(pdev->info.max_sampler_count, MSL_MAX_SAMPLERS))
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   uint32_t index;
+   VkResult result = kk_query_table_add(dev, &h->table,
+      mtl_sampler_get_gpu_resource_id(rc->handle), &index);
+   if (result == VK_SUCCESS) {
+      rc->index = index;
+      ++h->indexed_count;
+   }
+   return result;
+}
+
+static VkResult
 kk_sampler_heap_add_locked(struct kk_device *dev, struct kk_sampler_heap *h,
                            struct mtl_sampler_packed desc,
-                           struct kk_rc_sampler **out)
+                           struct kk_rc_sampler **out, bool needs_index)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
@@ -166,38 +186,42 @@ kk_sampler_heap_add_locked(struct kk_device *dev, struct kk_sampler_heap *h,
    if (ent != NULL) {
       *out = ent->data;
 
+      if (needs_index) {
+         VkResult result = kk_sampler_require_index(dev, h, *out);
+         if (result != VK_SUCCESS)
+            return result;
+      }
       assert((*out)->refcount != 0);
       (*out)->refcount++;
 
       return VK_SUCCESS;
    }
 
-   /* Constrain to device max sampler count */
-   if (h->ht->entries >= pdev->info.max_sampler_count)
-      return VK_ERROR_OUT_OF_HOST_MEMORY;
-
    struct kk_rc_sampler *rc = ralloc(h->ht, struct kk_rc_sampler);
    if (!rc)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
    mtl_sampler *handle = kk_sampler_create(dev, &desc);
-   uint64_t gpu_id = mtl_sampler_get_gpu_resource_id(handle);
-
-   uint32_t index;
-   VkResult result = kk_query_table_add(dev, &h->table, gpu_id, &index);
-   if (result != VK_SUCCESS) {
-      mtl_release(handle);
+   if (!handle) {
       ralloc_free(rc);
-      return result;
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
    *rc = (struct kk_rc_sampler){
       .key = desc,
       .handle = handle,
       .refcount = 1,
-      .index = index,
+      .index = UINT16_MAX,
    };
 
+   if (needs_index) {
+      VkResult result = kk_sampler_require_index(dev, h, rc);
+      if (result != VK_SUCCESS) {
+         mtl_release(handle);
+         ralloc_free(rc);
+         return result;
+      }
+   }
    _mesa_hash_table_insert(h->ht, &rc->key, rc);
    *out = rc;
 
@@ -211,9 +235,20 @@ kk_sampler_heap_add(struct kk_device *dev, struct mtl_sampler_packed desc,
    struct kk_sampler_heap *h = &dev->samplers;
 
    simple_mtx_lock(&h->lock);
-   VkResult result = kk_sampler_heap_add_locked(dev, h, desc, out);
+   VkResult result = kk_sampler_heap_add_locked(dev, h, desc, out, true);
    simple_mtx_unlock(&h->lock);
 
+   return result;
+}
+
+VkResult
+kk_sampler_native_add(struct kk_device *dev, struct mtl_sampler_packed desc,
+                       struct kk_rc_sampler **out)
+{
+   struct kk_sampler_heap *h = &dev->samplers;
+   simple_mtx_lock(&h->lock);
+   VkResult result = kk_sampler_heap_add_locked(dev, h, desc, out, false);
+   simple_mtx_unlock(&h->lock);
    return result;
 }
 
@@ -226,7 +261,10 @@ kk_sampler_heap_remove_locked(struct kk_device *dev, struct kk_sampler_heap *h,
 
    if (rc->refcount == 0) {
       mtl_release(rc->handle);
-      kk_query_table_remove(dev, &h->table, rc->index);
+      if (rc->index != UINT16_MAX) {
+         kk_query_table_remove(dev, &h->table, rc->index);
+         --h->indexed_count;
+      }
       _mesa_hash_table_remove_key(h->ht, &rc->key);
       ralloc_free(rc);
    }
@@ -296,6 +334,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    dev->vk.enabled_features.samplerFilterMinmax |=
       dev->vk.enabled_extensions.EXT_sampler_filter_minmax;
 
+   kk_descriptor_heap_init(dev);
    dev->vk.shader_ops = &kk_device_shader_ops;
    dev->mtl_handle = pdev->mtl_dev_handle;
    dev->vk.command_buffer_ops = &kk_cmd_buffer_ops;
@@ -393,6 +432,7 @@ fail_vab_memory:
 fail_compiler:
    kk_release_compiler(dev);
 fail_init:
+   kk_descriptor_heap_finish(dev);
    vk_device_finish(&dev->vk);
 fail_alloc:
    vk_free(&dev->vk.alloc, dev);
@@ -427,6 +467,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_device_finish_lib(dev);
    kk_interlock_device_finish(dev);
    kk_query_table_finish(dev, &dev->occlusion_queries);
+   kk_descriptor_heap_finish(dev);
    kk_destroy_sampler_heap(dev, &dev->samplers);
 
    if (dev->atomic64_locks)

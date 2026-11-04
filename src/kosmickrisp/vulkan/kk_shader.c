@@ -285,6 +285,7 @@ shared_var_info(const struct glsl_type *type, unsigned *size, unsigned *align)
 struct lower_ycbcr_state {
    uint32_t set_layout_count;
    struct vk_descriptor_set_layout *const *set_layouts;
+   const struct vk_shader_compile_info *info;
 };
 
 static const struct vk_ycbcr_conversion_state *
@@ -292,6 +293,11 @@ lookup_ycbcr_conversion(const void *_state, uint32_t set, uint32_t binding,
                         uint32_t array_index)
 {
    const struct lower_ycbcr_state *state = _state;
+   if (set == VK_NIR_YCBCR_SET_IMMUTABLE_SAMPLERS) {
+      assert(state->info && binding < state->info->embedded_sampler_count);
+      const struct vk_sampler_state *sampler = &state->info->embedded_samplers[binding];
+      return sampler->has_ycbcr_conversion ? &sampler->ycbcr_conversion : NULL;
+   }
    assert(set < state->set_layout_count);
    assert(state->set_layouts[set] != NULL);
    const struct kk_descriptor_set_layout *set_layout =
@@ -745,7 +751,9 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
              uint32_t set_layout_count,
              struct vk_descriptor_set_layout *const *set_layouts,
              const struct vk_graphics_pipeline_state *state,
-             kk_feature_key features)
+             kk_feature_key features,
+             const struct vk_shader_compile_info *compile_info,
+             const uint64_t *embedded)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
@@ -759,6 +767,18 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
       .is_vulkan = true,
    };
    NIR_PASS(_, nir, nir_opt_access, &access_options);
+
+   const struct lower_ycbcr_state ycbcr_state = {
+      .set_layout_count = set_layout_count,
+      .set_layouts = set_layouts,
+      .info = compile_info,
+   };
+   NIR_PASS(_, nir, nir_vk_lower_ycbcr_tex, lookup_ycbcr_conversion,
+            &ycbcr_state);
+
+   if (compile_info && (compile_info->flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT))
+      NIR_PASS(_, nir, kk_nir_prepare_descriptor_heaps,
+               compile_info->embedded_sampler_count, embedded);
 
    /* Massage IO related variables to please Metal */
    if (nir->info.stage == MESA_SHADER_VERTEX) {
@@ -781,13 +801,6 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
       msl_nir_lower_input_attachments(nir, state->ial, state->cal,
                                       state->rp);
    }
-
-   const struct lower_ycbcr_state ycbcr_state = {
-      .set_layout_count = set_layout_count,
-      .set_layouts = set_layouts,
-   };
-   NIR_PASS(_, nir, nir_vk_lower_ycbcr_tex, lookup_ycbcr_conversion,
-            &ycbcr_state);
 
    /* Common msl texture lowering needs to happen after ycbcr lowering and
     * before descriptor lowering. */
@@ -1456,7 +1469,7 @@ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
       .null_uniform_buffer_descriptor = false,
       .null_storage_buffer_descriptor = false,
    };
-   kk_lower_nir(dev, nir, false, &no_robustness, 0u, NULL, state, features);
+   kk_lower_nir(dev, nir, false, &no_robustness, 0u, NULL, state, features, NULL, NULL);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    return nir;
@@ -1974,6 +1987,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */
    bool dgc_replay = false;
+   uint32_t heap_push_size = 0;
    nir_shader *nir_shaders[shader_count + 2u];
    struct kk_shader *shaders[shader_count + 2u];
 
@@ -1986,6 +2000,24 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
    for (uint32_t i = 0u; i < shader_count; ++i) {
       const struct vk_shader_compile_info *info = &infos[i];
       nir_shader *nir = info->nir;
+      if (info->flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT) {
+         nir_foreach_variable_with_modes(var, nir, nir_var_mem_push_const)
+            heap_push_size = MAX2(heap_push_size, MIN2(glsl_get_explicit_size(var->type, false), KK_MAX_PUSH_SIZE));
+         nir_foreach_function_impl(impl, nir) {
+            nir_foreach_block(block, impl) {
+               nir_foreach_instr(instr, block) {
+                  if (instr->type != nir_instr_type_intrinsic) continue;
+                  nir_intrinsic_instr *load = nir_instr_as_intrinsic(instr);
+                  if (load->intrinsic != nir_intrinsic_load_push_constant) continue;
+                  uint32_t end = nir_intrinsic_base(load) + nir_intrinsic_range(load);
+                  if (nir_src_is_const(load->src[0]))
+                     end = MAX2(end, nir_intrinsic_base(load) + nir_src_as_uint(load->src[0]) +
+                                load->def.num_components * load->def.bit_size / 8);
+                  heap_push_size = MAX2(heap_push_size, MIN2(end, KK_MAX_PUSH_SIZE));
+               }
+            }
+         }
+      }
       dgc_replay |= kk_dgc_shader_needs_replay(nir);
 
       /* Stages before the tessellator or a GS run as compute */
@@ -1998,8 +2030,16 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
       emulated_stage |= (nir->xfb_info || kk_polygon_possible(dev, state)) && (nir->info.stage == MESA_SHADER_VERTEX ||
                                          nir->info.stage == MESA_SHADER_TESS_EVAL);
       msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
+      uint64_t *embedded = info->embedded_sampler_count ? calloc(info->embedded_sampler_count, sizeof(uint64_t)) : NULL;
+      if (info->embedded_sampler_count && !embedded)
+         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      for (uint32_t e = 0; e < info->embedded_sampler_count; ++e) {
+         result = kk_heap_sampler_state(dev, &info->embedded_samplers[e], &embedded[e]);
+         if (result != VK_SUCCESS) { free(embedded); return result; }
+      }
       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
-                   info->set_layout_count, info->set_layouts, state, features);
+                   info->set_layout_count, info->set_layouts, state, features, info, embedded);
+      free(embedded);
       if (nir->info.stage == MESA_SHADER_FRAGMENT &&
           (features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS)))
          NIR_PASS(_, nir, kk_nir_statistics_fs);
@@ -2158,14 +2198,17 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
    uint32_t push_size = 0;
    for (uint32_t i = 0; i < shader_count; ++i) {
       const struct vk_shader_compile_info *info = &infos[i];
+      push_size = MAX2(push_size, heap_push_size);
       for (uint32_t r = 0; r < info->push_constant_range_count; ++r) {
          const VkPushConstantRange *range = &info->push_constant_ranges[r];
          if (range->stageFlags & mesa_to_vk_shader_stage(info->stage))
             push_size = MAX2(push_size, range->offset + range->size);
       }
    }
-   for (uint32_t i = 0; i < total_shaders; ++i)
+   for (uint32_t i = 0; i < total_shaders; ++i) {
       shaders[i]->info.push_size = push_size;
+      shaders[i]->info.descriptor_heap = infos[0].flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+   }
 
    /* Compile pipeline:
     * 1. Compute pipeline
@@ -2365,7 +2408,9 @@ kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
    struct kk_descriptor_state *desc = &cmd->state.cs.descriptors;
    /* Meta operations can restore an unbound compute stage. */
    uint32_t push_size = shader ? shader->info.push_size : 0;
-   desc->root_dirty |= push_size > desc->push_size;
+   bool heap = shader && shader->info.descriptor_heap;
+   desc->root_dirty |= heap != desc->descriptor_heap || push_size > desc->push_size;
+   desc->descriptor_heap = heap;
    desc->push_size = push_size;
    cmd->state.shaders[MESA_SHADER_COMPUTE] = shader;
 }
@@ -2383,7 +2428,8 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
       return;
 
    struct kk_descriptor_state *desc = &cmd->state.gfx.descriptors;
-   desc->root_dirty |= shader->info.push_size > desc->push_size;
+   desc->root_dirty |= shader->info.descriptor_heap != desc->descriptor_heap || shader->info.push_size > desc->push_size;
+   desc->descriptor_heap = shader->info.descriptor_heap;
    desc->push_size = shader->info.push_size;
 
    bool requires_dynamic_depth_stencil = shader->pipeline.gfx.ds_handle == NULL;

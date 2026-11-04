@@ -14,9 +14,15 @@
 #include "kosmickrisp/bridge/mtl_types.h"
 
 #include "vk_buffer.h"
+#include "kk_descriptor_types.h"
+
+struct kk_heap_buffer_view;
 
 struct kk_buffer {
    struct vk_buffer vk;
+   struct kk_heap_buffer_view *heap_views;
+   struct kk_buffer *heap_next;
+   bool heap_registered;
 
    struct {
       mtl_buffer *handle;
@@ -39,6 +45,21 @@ kk_buffer_addr_range(const struct kk_buffer *buffer, uint64_t offset,
    return (struct kk_addr_range){
       .addr = vk_buffer_address(&buffer->vk, offset),
       .range = vk_buffer_range(&buffer->vk, offset, range),
+   };
+}
+
+/* One bounded-buffer representation serves sets, dynamic sets and heaps.
+ * The final word is reserved for the shared residency record; zero denotes
+ * an ordinary or null buffer. */
+static inline struct kk_buffer_address
+kk_buffer_descriptor(const struct kk_buffer *buffer, struct kk_addr_range addr_range)
+{
+   (void)buffer;
+   assert(addr_range.range <= UINT32_MAX);
+   return (struct kk_buffer_address){
+      .base_addr = addr_range.addr,
+      .size = addr_range.range,
+      .zero = 0,
    };
 }
 

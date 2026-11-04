@@ -26,6 +26,7 @@
 #include "vk_command_buffer.h"
 
 #include <stdio.h>
+#include <string.h>
 
 struct kk_query_pool;
 
@@ -56,7 +57,10 @@ struct kk_root_descriptor_table {
    };
 
    /* Descriptor set base addresses */
-   uint64_t sets[KK_MAX_SETS];
+   union {
+      uint64_t sets[KK_MAX_SETS];
+      struct { uint64_t heap_resource, heap_sampler; };
+   };
 
    /* Dynamic buffer bindings */
    struct kk_buffer_address dynamic_buffers[KK_MAX_DYNAMIC_BUFFERS];
@@ -72,6 +76,8 @@ struct kk_descriptor_state {
    bool root_dirty;
    uint32_t push_size;
    struct kk_root_descriptor_table root;
+   uint64_t heap_resource, heap_sampler;
+   bool descriptor_heap;
 
    uint32_t set_sizes[KK_MAX_SETS];
    struct kk_descriptor_set *sets[KK_MAX_SETS];
@@ -79,6 +85,28 @@ struct kk_descriptor_state {
    uint32_t push_dirty;
    struct kk_push_descriptor_set *push[KK_MAX_SETS];
 };
+
+/* Set bindings stay in CPU state. Heap aliases belong only to a snapshot. */
+static inline void
+kk_descriptor_root_apply_heap(const struct kk_descriptor_state *desc,
+                              struct kk_root_descriptor_table *snapshot)
+{
+   if (desc->descriptor_heap) {
+      snapshot->heap_resource = desc->heap_resource;
+      snapshot->heap_sampler = desc->heap_sampler;
+   }
+}
+
+static inline void
+kk_descriptor_push_update(struct kk_descriptor_state *desc, uint32_t offset,
+                           const void *data, size_t size)
+{
+   assert(offset <= KK_MAX_PUSH_SIZE && size <= KK_MAX_PUSH_SIZE - offset);
+   if (size && memcmp(desc->root.push + offset, data, size)) {
+      memcpy(desc->root.push + offset, data, size);
+      desc->root_dirty = true;
+   }
+}
 
 struct kk_per_draw_data {
    uint32_t draw_id;
@@ -329,6 +357,7 @@ struct kk_cmd_buffer {
    bool uses_heap;
    /* Set at vkBeginCommandBuffer. One-time-submit buffers skip command
     * enqueueing in the trampolines since they can never be replayed. */
+   bool enqueue_commands;
    bool one_time_submit;
    /* Metal command buffers are single-shot: a resubmission must re-record
     * by replaying the enqueued commands (see rerecord_cmd_buffer). */

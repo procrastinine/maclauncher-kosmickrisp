@@ -1592,9 +1592,15 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       P(ctx, ";\n");
       break;
    case nir_intrinsic_load_sampler_handle_kk:
-      P(ctx, "sampler_table.handles[");
-      src_to_msl(ctx, &instr->src[0]);
-      P(ctx, "];\n");
+      if (instr->src[0].ssa->bit_size == 64) {
+         P(ctx, "*(constant sampler*)");
+         src_to_msl(ctx, &instr->src[0]);
+         P(ctx, ";\n");
+      } else {
+         P(ctx, "sampler_table.handles[");
+         src_to_msl(ctx, &instr->src[0]);
+         P(ctx, "];\n");
+      }
       break;
    case nir_intrinsic_load_constant_agx: {
       const char *type = msl_type_for_def(ctx->types, &instr->def);

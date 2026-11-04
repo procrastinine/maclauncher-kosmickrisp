@@ -6,6 +6,7 @@
  */
 
 #include "kk_buffer.h"
+#include "kk_descriptor_set.h"
 
 #include "kk_device.h"
 #include "kk_entrypoints.h"
@@ -46,6 +47,7 @@ kk_CreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
    if (!buffer)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
+   kk_descriptor_heap_buffer_bind(dev, buffer);
    *pBuffer = kk_buffer_to_handle(buffer);
 
    return VK_SUCCESS;
@@ -61,6 +63,7 @@ kk_DestroyBuffer(VkDevice device, VkBuffer _buffer,
    if (!buffer)
       return;
 
+   kk_descriptor_heap_buffer_finish(dev, buffer);
    if (buffer->metal.handle)
       mtl_release(buffer->metal.handle);
 
@@ -176,6 +179,7 @@ kk_bind_buffer_memory(struct kk_device *dev, const VkBindBufferMemoryInfo *info)
     * data in the GPU debugger... */
    if (mem->bo->cpu)
       mtl_get_contents(buffer->metal.handle);
+   kk_descriptor_heap_buffer_bind(dev, buffer);
 
    return VK_SUCCESS;
 }

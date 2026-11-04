@@ -6,6 +6,8 @@
  */
 
 #include "kk_physical_device.h"
+#include "kk_descriptor_types.h"
+#include "kk_descriptor_set_layout.h"
 #include "kk_zero_init.h"
 
 #include "kk_debug.h"
@@ -90,6 +92,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_uniform_buffer_standard_layout = true,
       .KHR_vulkan_memory_model = true, /* Required in Vulkan 1.3 */
       .EXT_buffer_device_address = true,
+      .EXT_descriptor_heap = true,
       .EXT_descriptor_indexing = true,
       .EXT_host_query_reset = true,
       .EXT_sampler_filter_minmax = true,
@@ -324,6 +327,8 @@ kk_get_device_features(
       .descriptorBindingUniformTexelBufferUpdateAfterBind = true,
       .descriptorBindingUpdateUnusedWhilePending = true,
       .descriptorBindingVariableDescriptorCount = true,
+      .descriptorHeap = true,
+      .descriptorHeapCaptureReplay = false,
       .descriptorIndexing = true,
       .drawIndirectCount = true,
       .hostQueryReset = true,
@@ -604,6 +609,16 @@ kk_get_device_properties(
                               ? MSL_MAX_SAMPLERS
                               : 4000;
 
+   uint32_t image_stride = 0, buffer_stride = 0, stride, alignment;
+   const VkDescriptorType image_types[] = {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER};
+   for (unsigned i = 0; i < ARRAY_SIZE(image_types); ++i) {
+      kk_descriptor_stride_align_for_type(image_types[i], NULL, &stride, &alignment);
+      image_stride = MAX2(image_stride, stride);
+   }
+   kk_descriptor_stride_align_for_type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, NULL, &stride, &alignment);
+   buffer_stride = stride;
+   kk_descriptor_stride_align_for_type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, NULL, &stride, &alignment);
+   buffer_stride = MAX2(buffer_stride, stride);
    *properties = (struct vk_properties){
       .primitiveOverestimationSize = 1.0f / 256.0f,
       .maxExtraPrimitiveOverestimationSize = 0.0f,
@@ -633,6 +648,19 @@ kk_get_device_properties(
       .maxUniformBufferRange = 65536,
       .maxStorageBufferRange = UINT32_MAX,
       .maxPushConstantsSize = KK_MAX_PUSH_SIZE,
+      .samplerHeapAlignment = 8,
+      .resourceHeapAlignment = 8,
+      .maxSamplerHeapSize = UINT32_MAX,
+      .maxResourceHeapSize = UINT32_MAX,
+      .samplerDescriptorSize = sizeof(uint64_t),
+      .imageDescriptorSize = image_stride,
+      .bufferDescriptorSize = buffer_stride,
+      .samplerDescriptorAlignment = 8,
+      .imageDescriptorAlignment = 8,
+      .bufferDescriptorAlignment = 8,
+      .maxPushDataSize = KK_MAX_PUSH_SIZE,
+      .maxDescriptorHeapEmbeddedSamplers = 2048,
+      .samplerYcbcrConversionCount = 1,
       .maxIndirectPipelineCount = 0,
       .maxIndirectShaderObjectCount = 0,
       .maxIndirectSequenceCount = 1u << 20,

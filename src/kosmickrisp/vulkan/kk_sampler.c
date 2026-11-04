@@ -154,9 +154,10 @@ kk_sampler_create(struct kk_device *dev,
    return sampler;
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL
-kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
-                 const VkAllocationCallbacks *pAllocator, VkSampler *pSampler)
+static VkResult
+kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
+                  const VkAllocationCallbacks *pAllocator, VkSampler *pSampler,
+                  bool native_only)
 {
    VK_FROM_HANDLE(kk_device, dev, device);
    struct kk_physical_device *pdev = kk_device_physical(dev);
@@ -170,7 +171,8 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
 
    /* Opaque black is a core mode. A8 and packed formats need this
     * correction even without the optional custom-border feature enabled. */
-   bool custom_border = (dev->vk.enabled_features.customBorderColors ||
+   sampler->native_only = native_only;
+   bool custom_border = (dev->vk.enabled_features.customBorderColors || dev->vk.enabled_features.descriptorHeap ||
                          pCreateInfo->borderColor == VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK) &&
                         uses_border(pCreateInfo) &&
                         is_border_color_custom(pCreateInfo->borderColor) &&
@@ -200,7 +202,7 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
       packed.lod_bias = 0;
       packed.max_anisotropy = 1;
    }
-   result = kk_sampler_heap_add(dev, packed, &sampler->planes[0].hw);
+   result = (native_only ? kk_sampler_native_add : kk_sampler_heap_add)(dev, packed, &sampler->planes[0].hw);
    if (result != VK_SUCCESS) {
       kk_DestroySampler(device, kk_sampler_to_handle(sampler), pAllocator);
       return result;
@@ -234,7 +236,7 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
           pCreateInfo->minFilter != chroma_filter) {
          packed.min_filter = packed.mag_filter =
             vk_filter_to_mtl_sampler_min_mag_filter(chroma_filter);
-         result = kk_sampler_heap_add(dev, packed, &sampler->planes[1].hw);
+         result = (native_only ? kk_sampler_native_add : kk_sampler_heap_add)(dev, packed, &sampler->planes[1].hw);
          if (result != VK_SUCCESS) {
             kk_DestroySampler(device, kk_sampler_to_handle(sampler),
                               pAllocator);
@@ -247,7 +249,7 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
        * and clamp-to-0 variants. We treat these as planes.
        */
       packed.border_color = MTL_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK;
-      result = kk_sampler_heap_add(dev, packed, &sampler->planes[1].hw);
+      result = (native_only ? kk_sampler_native_add : kk_sampler_heap_add)(dev, packed, &sampler->planes[1].hw);
       if (result != VK_SUCCESS) {
          kk_DestroySampler(device, kk_sampler_to_handle(sampler), pAllocator);
          return result;
@@ -291,6 +293,20 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
    *pSampler = kk_sampler_to_handle(sampler);
 
    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
+                  const VkAllocationCallbacks *pAllocator, VkSampler *pSampler)
+{
+   return kk_create_sampler(device, pCreateInfo, pAllocator, pSampler, false);
+}
+
+VkResult
+kk_create_heap_sampler(struct kk_device *dev, const VkSamplerCreateInfo *info,
+                        VkSampler *sampler)
+{
+   return kk_create_sampler(kk_device_to_handle(dev), info, NULL, sampler, true);
 }
 
 VKAPI_ATTR void VKAPI_CALL

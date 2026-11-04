@@ -258,6 +258,9 @@ static inline void
 enqueue_pipeline_layout(struct vk_cmd_queue *queue, VkPipelineLayout layout)
 {
    VK_FROM_HANDLE(vk_pipeline_layout, vklayout, layout);
+   if (vklayout && queue->pipeline_layouts.size &&
+       *util_dynarray_top_ptr(&queue->pipeline_layouts, void *) == vklayout)
+      return;
    vk_pipeline_layout_ref(vklayout);
    util_dynarray_append(&queue->pipeline_layouts, vklayout);
 }

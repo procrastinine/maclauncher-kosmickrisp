@@ -24,6 +24,10 @@
 #include "vk_meta.h"
 #include "vk_queue.h"
 
+struct kk_heap_sampler;
+struct kk_heap_metadata_page;
+struct kk_heap_border;
+struct kk_buffer;
 struct kk_bo;
 struct kk_physical_device;
 struct vk_pipeline_cache;
@@ -58,13 +62,14 @@ struct kk_rc_sampler {
    mtl_sampler *handle;
 
    /* Reference count for this hardware sampler, protected by the heap mutex */
-   uint16_t refcount;
+   uint32_t refcount;
 
    /* Index of this hardware sampler in the hardware sampler heap */
    uint16_t index;
 };
 
 struct kk_sampler_heap {
+   uint32_t indexed_count;
    simple_mtx_t lock;
 
    struct kk_query_table table;
@@ -79,6 +84,11 @@ struct kk_precompiled_cache {
 
 struct kk_device {
    struct vk_device vk;
+   simple_mtx_t descriptor_heap_lock;
+   struct kk_heap_sampler *heap_samplers;
+   struct kk_heap_metadata_page *heap_metadata_pages;
+   struct kk_heap_border *heap_borders;
+   struct kk_buffer *heap_buffers;
 
    struct kk_dgc_metal *dgc;
    mtl_device *mtl_handle;
@@ -140,6 +150,8 @@ mtl_sampler *kk_sampler_create(struct kk_device *dev,
 VkResult kk_sampler_heap_add(struct kk_device *dev,
                              struct mtl_sampler_packed desc,
                              struct kk_rc_sampler **out);
+VkResult kk_sampler_native_add(struct kk_device *dev,
+   struct mtl_sampler_packed desc, struct kk_rc_sampler **out);
 void kk_sampler_heap_remove(struct kk_device *dev, struct kk_rc_sampler *rc);
 
 #endif // KK_DEVICE_H

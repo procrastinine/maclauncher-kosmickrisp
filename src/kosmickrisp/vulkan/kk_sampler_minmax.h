@@ -229,9 +229,9 @@ kk_lower_minmax_sample(nir_builder *b, nir_tex_instr *tex, void *data)
       return false;
    nir_deref_instr *sampler = nir_src_as_deref(nir_src_for_ssa(sampler_src));
    nir_variable *var = nir_deref_instr_get_variable(sampler);
-   const struct kk_descriptor_set_binding_layout *binding =
-      get_binding_layout(var->data.descriptor_set, var->data.binding, ctx);
-   if (binding->immutable_samplers) {
+   const struct kk_descriptor_set_binding_layout *binding = var ?
+      get_binding_layout(var->data.descriptor_set, var->data.binding, ctx) : NULL;
+   if (binding && binding->immutable_samplers) {
       bool any = false;
       for (unsigned i = 0; i < binding->array_size; ++i)
          any |= binding->immutable_samplers[i]->reduction_mode != 0;

@@ -23,6 +23,7 @@ struct kk_sampler {
    struct vk_sampler vk;
    VkClearColorValue custom_border;
    bool has_border;
+   bool native_only;
 
    uint8_t plane_count;
    uint16_t lod_bias_fp16;
@@ -41,5 +42,8 @@ struct kk_sampler {
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(kk_sampler, vk.base, VkSampler,
                                VK_OBJECT_TYPE_SAMPLER)
+
+VkResult kk_create_heap_sampler(struct kk_device *dev,
+   const VkSamplerCreateInfo *info, VkSampler *sampler);
 
 #endif /* KK_SAMPLER_H */

@@ -42,8 +42,11 @@ struct kk_image_plane {
    uint64_t addr;
 };
 
+struct kk_heap_image_view;
+
 struct kk_image {
    struct vk_image vk;
+   struct kk_heap_image_view *heap_views;
 
    /** True if the planes are bound separately
     * * This is set based on VK_IMAGE_CREATE_DISJOINT_BIT

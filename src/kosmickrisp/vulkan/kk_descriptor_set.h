@@ -78,4 +78,15 @@ void kk_push_descriptor_set_update_template(
    struct kk_descriptor_set_layout *layout,
    const struct vk_descriptor_update_template *template, const void *data);
 
+struct vk_sampler_state;
+struct kk_image;
+struct kk_buffer;
+void kk_descriptor_heap_init(struct kk_device *dev);
+void kk_descriptor_heap_finish(struct kk_device *dev);
+void kk_descriptor_heap_image_finish(struct kk_device *dev, struct kk_image *image);
+void kk_descriptor_heap_buffer_bind(struct kk_device *dev, struct kk_buffer *buffer);
+void kk_descriptor_heap_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer);
+VkResult kk_heap_sampler_state(struct kk_device *dev,
+   const struct vk_sampler_state *state, uint64_t *gpu_address);
+
 #endif

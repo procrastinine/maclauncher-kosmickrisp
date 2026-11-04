@@ -201,6 +201,7 @@ kk_reset_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer,
    vk_command_buffer_reset(&cmd->vk);
    cmd->submitted = false;
    cmd->one_time_submit = false;
+   cmd->enqueue_commands = false;
 }
 
 const struct vk_command_buffer_ops kk_cmd_buffer_ops = {
@@ -230,8 +231,10 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    }
 
    vk_command_buffer_begin(&cmd->vk, pBeginInfo);
-   cmd->one_time_submit =
-      pBeginInfo->flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+   cmd->enqueue_commands = cmd->vk.level != VK_COMMAND_BUFFER_LEVEL_PRIMARY ||
+      kk_cmd_buffer_device(cmd)->vk.enabled_features.descriptorHeap;
+   cmd->one_time_submit = !cmd->enqueue_commands &&
+      (pBeginInfo->flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
    /* vk_command_buffer_begin will reset the command buffer meaning the
     * allocator may be returned to the pool. Request a new one. */
@@ -242,6 +245,16 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
          goto fail_allocator;
    }
    mtl_begin_command_buffer(cmd->metal.cmd_buf, cmd->metal.allocator);
+   if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY && pBeginInfo->pInheritanceInfo) {
+      const VkCommandBufferInheritanceDescriptorHeapInfoEXT *heap = vk_find_struct_const(
+         pBeginInfo->pInheritanceInfo->pNext, COMMAND_BUFFER_INHERITANCE_DESCRIPTOR_HEAP_INFO_EXT);
+      if (heap) {
+         if (heap->pSamplerHeapBindInfo)
+            vk_enqueue_cmd_bind_sampler_heap_ext(&cmd->vk.cmd_queue, heap->pSamplerHeapBindInfo);
+         if (heap->pResourceHeapBindInfo)
+            vk_enqueue_cmd_bind_resource_heap_ext(&cmd->vk.cmd_queue, heap->pResourceHeapBindInfo);
+      }
+   }
 
    return VK_SUCCESS;
 
@@ -670,8 +683,7 @@ kk_push_constants(UNUSED struct kk_cmd_buffer *cmd,
                   struct kk_descriptor_state *desc,
                   const VkPushConstantsInfoKHR *info)
 {
-   memcpy(desc->root.push + info->offset, info->pValues, info->size);
-   desc->root_dirty = true;
+   kk_descriptor_push_update(desc, info->offset, info->pValues, info->size);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -792,16 +804,23 @@ kk_pool_upload(struct kk_cmd_buffer *cmd, const void *data, uint32_t size,
    return T;
 }
 
+static struct kk_ptr
+kk_upload_descriptor_root_ptr(struct kk_cmd_buffer *cmd,
+   const struct kk_root_descriptor_table *root, uint32_t size)
+{
+   struct kk_ptr ptr = kk_pool_upload(cmd, root, size, 8u);
+   if (unlikely(!ptr.gpu)) return (struct kk_ptr){0};
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   ((struct kk_root_descriptor_table *)ptr.cpu)->addr =
+      dev->atomic64_locks ? dev->atomic64_locks->gpu : ptr.gpu;
+   return ptr;
+}
+
 uint64_t
 kk_upload_descriptor_root_data(struct kk_cmd_buffer *cmd,
    const struct kk_root_descriptor_table *root, uint32_t size)
 {
-   struct kk_ptr ptr = kk_pool_upload(cmd, root, size, 8u);
-   if (unlikely(!ptr.gpu)) return 0u;
-   struct kk_device *dev = kk_cmd_buffer_device(cmd);
-   ((struct kk_root_descriptor_table *)ptr.cpu)->addr =
-      dev->atomic64_locks ? dev->atomic64_locks->gpu : ptr.gpu;
-   return ptr.gpu;
+   return kk_upload_descriptor_root_ptr(cmd, root, size).gpu;
 }
 
 uint64_t
@@ -816,11 +835,12 @@ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
       return root->addr;
    }
    uint32_t size = offsetof(struct kk_root_descriptor_table, push) + desc->push_size;
-   uint64_t address = kk_upload_descriptor_root_data(cmd, root, size);
-   if (!address) return 0u;
-   root->addr = address;
+   struct kk_ptr ptr = kk_upload_descriptor_root_ptr(cmd, root, size);
+   if (!ptr.gpu) return 0u;
+   kk_descriptor_root_apply_heap(desc, ptr.cpu);
+   root->addr = ptr.gpu;
    desc->root_dirty = false;
-   return address;
+   return ptr.gpu;
 }
 
 void
