@@ -88,59 +88,148 @@ kk_sparse_bda_version(nir_builder *b)
    return nir_load_global(b, 1, 64, root, .align_mul = 8, .access = ACCESS_VOLATILE);
 }
 
+/* A single original IO can span records (or an ordinary gap) and pages.
+ * Locate its first interval once, then walk forward only as its scalar
+ * addresses cross intervals. Cache page status within this IO, never across
+ * accesses: version and map observations retain their volatile boundaries. */
 static nir_def *
-kk_sparse_bda_record(nir_builder *b, nir_def *version, nir_def *address)
+kk_sparse_access_mask(nir_builder *b, nir_def *source, nir_def *address,
+                      unsigned size, unsigned components, unsigned write_mask,
+                      bool range_lookup)
 {
-   nir_variable *low = nir_local_variable_create(b->impl, glsl_uint_type(), "sparse_low");
-   nir_variable *high = nir_local_variable_create(b->impl, glsl_uint_type(), "sparse_high");
-   nir_variable *found = nir_local_variable_create(b->impl,
-      glsl_uint64_t_type(), "sparse_range");
-   nir_store_var(b, low, nir_imm_int(b, 0), 1);
-   nir_store_var(b, high, nir_load_global_constant(b, 1, 32, version, .align_mul = 4), 1);
-   nir_store_var(b, found, nir_imm_int64(b, 0), 1);
-   nir_loop *loop = nir_push_loop(b);
-   nir_def *lo = nir_load_var(b, low), *hi = nir_load_var(b, high);
-   nir_if *done = nir_push_if(b, nir_uge(b, lo, hi));
+   nir_variable *cursor = nir_local_variable_create(b->impl, glsl_uint_type(), "sparse_cursor");
+   nir_variable *component = nir_local_variable_create(b->impl, glsl_uint_type(), "sparse_component");
+   nir_variable *mask = nir_local_variable_create(b->impl, glsl_uint_type(), "sparse_mask");
+   nir_variable *cached_record = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "sparse_record");
+   nir_variable *base = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "sparse_base");
+   nir_variable *limit = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "sparse_limit");
+   nir_variable *map = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "sparse_map");
+   nir_variable *page = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "sparse_page");
+   nir_variable *page_ok = nir_local_variable_create(b->impl, glsl_bool_type(), "sparse_page_ok");
+   nir_variable *page_valid = nir_local_variable_create(b->impl, glsl_bool_type(), "sparse_page_valid");
+   nir_def *count = range_lookup ? nir_load_global_constant(b, 1, 32, source, .align_mul = 4) : NULL;
+   if (range_lookup) {
+      nir_variable *high = nir_local_variable_create(b->impl, glsl_uint_type(), "sparse_high");
+      nir_store_var(b, cursor, nir_imm_int(b, 0), 1);
+      nir_store_var(b, high, count, 1);
+      /* Lower bound on interval end also identifies the next interval when
+       * the address starts in an ordinary gap. */
+      nir_loop *search = nir_push_loop(b);
+      search->control = nir_loop_control_dont_unroll;
+      nir_def *lo = nir_load_var(b, cursor), *hi = nir_load_var(b, high);
+      nir_if *done = nir_push_if(b, nir_uge(b, lo, hi));
+      nir_jump(b, nir_jump_break);
+      nir_pop_if(b, done);
+      nir_def *mid = nir_iadd(b, lo, nir_ushr_imm(b, nir_isub(b, hi, lo), 1));
+      nir_def *entry = nir_iadd(b, source,
+         nir_iadd_imm(b, nir_ishl_imm(b, nir_u2u64(b, mid), 5), 16));
+      nir_def *end = nir_load_global_constant(b, 1, 64, nir_iadd_imm(b, entry, 8), .align_mul = 8);
+      nir_if *after = nir_push_if(b, nir_uge(b, address, end));
+      nir_store_var(b, cursor, nir_iadd_imm(b, mid, 1), 1);
+      nir_push_else(b, after);
+      nir_store_var(b, high, mid, 1);
+      nir_pop_if(b, after);
+      nir_pop_loop(b, search);
+   }
+   nir_store_var(b, component, nir_imm_int(b, 0), 1);
+   nir_store_var(b, mask, nir_imm_int(b, 0), 1);
+   nir_store_var(b, cached_record, nir_imm_int64(b, 0), 1);
+   nir_store_var(b, page_valid, nir_imm_false(b), 1);
+   nir_store_var(b, page, nir_imm_int64(b, 0), 1);
+   nir_store_var(b, page_ok, nir_imm_false(b), 1);
+   nir_loop *scalars = nir_push_loop(b);
+   scalars->control = nir_loop_control_dont_unroll;
+   nir_def *c = nir_load_var(b, component);
+   nir_if *done = nir_push_if(b, nir_uge_imm(b, c, components));
    nir_jump(b, nir_jump_break);
    nir_pop_if(b, done);
-   nir_def *mid = nir_iadd(b, lo, nir_ushr_imm(b, nir_isub(b, hi, lo), 1));
-   nir_def *entry = nir_iadd(b, version,
-      nir_iadd_imm(b, nir_ishl_imm(b, nir_u2u64(b, mid), 5), 16));
-   nir_def *start = nir_load_global_constant(b, 1, 64, entry, .align_mul = 8);
-   nir_def *limit = nir_load_global_constant(b, 1, 64,
-      nir_iadd_imm(b, entry, 8), .align_mul = 8);
-   nir_if *before = nir_push_if(b, nir_ult(b, address, start));
-   nir_store_var(b, high, mid, 1);
-   nir_push_else(b, before);
-   nir_if *after = nir_push_if(b, nir_uge(b, address, limit));
-   nir_store_var(b, low, nir_iadd_imm(b, mid, 1), 1);
-   nir_push_else(b, after);
-   nir_store_var(b, found, nir_load_global_constant(b, 1, 64,
-      nir_iadd_imm(b, entry, 16), .align_mul = 8), 1);
-   nir_jump(b, nir_jump_break);
-   nir_pop_if(b, after);
-   nir_pop_if(b, before);
-   nir_pop_loop(b, loop);
-   return nir_load_var(b, found);
-}
-
-static nir_def *
-kk_sparse_bda_resident(nir_builder *b, nir_def *version, nir_def *address, unsigned size)
-{
-   nir_def *record = kk_sparse_bda_record(b, version, address);
-   nir_if *found = nir_push_if(b, nir_ine_imm(b, record, 0));
-   nir_def *map = nir_load_global(b, 1, 64, nir_iadd_imm(b, record, 16),
-      .align_mul = 8, .access = ACCESS_VOLATILE);
-   nir_push_else(b, found);
-   nir_def *none = nir_imm_int64(b, 0);
-   nir_pop_if(b, found);
-   map = nir_if_phi(b, map, none);
-   nir_if *mapped = nir_push_if(b, nir_ine_imm(b, map, 0));
-   nir_def *resident = kk_sparse_scalar_resident(b, record, address, size);
-   nir_push_else(b, mapped);
+   nir_def *bit = nir_ishl(b, nir_imm_int(b, 1), c);
+   nir_def *scalar_address = nir_iadd(b, address, nir_u2u64(b, nir_imul_imm(b, c, size)));
+   nir_if *used = nir_push_if(b, nir_ine_imm(b, nir_iand_imm(b, bit, write_mask), 0));
+   nir_def *record = source;
+   if (range_lookup) {
+      /* Preserve full64 wrap behavior without another directory search. */
+      nir_if *wrapped = nir_push_if(b, nir_ult(b, scalar_address, address));
+      nir_store_var(b, cursor, nir_imm_int(b, 0), 1);
+      nir_pop_if(b, wrapped);
+      nir_variable *found = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "sparse_found");
+      nir_store_var(b, found, nir_imm_int64(b, 0), 1);
+      nir_loop *advance = nir_push_loop(b);
+      advance->control = nir_loop_control_dont_unroll;
+      nir_def *i = nir_load_var(b, cursor);
+      nir_if *end = nir_push_if(b, nir_uge(b, i, count));
+      nir_jump(b, nir_jump_break);
+      nir_pop_if(b, end);
+      nir_def *entry = nir_iadd(b, source,
+         nir_iadd_imm(b, nir_ishl_imm(b, nir_u2u64(b, i), 5), 16));
+      nir_def *start = nir_load_global_constant(b, 1, 64, entry, .align_mul = 8);
+      nir_def *limit = nir_load_global_constant(b, 1, 64, nir_iadd_imm(b, entry, 8), .align_mul = 8);
+      nir_if *after = nir_push_if(b, nir_uge(b, scalar_address, limit));
+      nir_store_var(b, cursor, nir_iadd_imm(b, i, 1), 1);
+      nir_push_else(b, after);
+      nir_if *inside = nir_push_if(b, nir_uge(b, scalar_address, start));
+      nir_store_var(b, found, nir_load_global_constant(b, 1, 64,
+         nir_iadd_imm(b, entry, 16), .align_mul = 8), 1);
+      nir_pop_if(b, inside);
+      nir_jump(b, nir_jump_break);
+      nir_pop_if(b, after);
+      nir_pop_loop(b, advance);
+      record = nir_load_var(b, found);
+   }
+   nir_if *present = nir_push_if(b, nir_ine_imm(b, record, 0));
+   nir_if *changed = nir_push_if(b, nir_ine(b, record, nir_load_var(b, cached_record)));
+   nir_store_var(b, cached_record, record, 1);
+   nir_store_var(b, base, nir_load_global_constant(b, 1, 64, record, .align_mul = 8), 1);
+   nir_store_var(b, limit, nir_load_global_constant(b, 1, 64, nir_iadd_imm(b, record, 8), .align_mul = 8), 1);
+   nir_def *map_address = nir_iadd_imm(b, record, 16);
+   nir_store_var(b, map, range_lookup ? nir_load_global(b, 1, 64, map_address,
+      .align_mul = 8, .access = ACCESS_VOLATILE) :
+      nir_load_global_constant(b, 1, 64, map_address, .align_mul = 8), 1);
+   nir_store_var(b, page_valid, nir_imm_false(b), 1);
+   nir_pop_if(b, changed);
+   nir_def *map_value = nir_load_var(b, map);
+   nir_if *mapped = range_lookup ? nir_push_if(b, nir_ine_imm(b, map_value, 0)) : NULL;
+   nir_def *start = nir_load_var(b, base);
+   nir_def *last = nir_iadd_imm(b, scalar_address, size - 1);
+   nir_def *valid = nir_iand(b, nir_uge(b, scalar_address, start),
+      nir_iand(b, nir_ult(b, last, nir_load_var(b, limit)), nir_uge(b, last, scalar_address)));
+   nir_if *bounds = nir_push_if(b, valid);
+   nir_def *first_page = nir_ushr_imm(b, nir_isub(b, scalar_address, start), 16);
+   nir_def *last_page = nir_ushr_imm(b, nir_isub(b, last, start), 16);
+   nir_def *resident = NULL;
+   for (unsigned end = 0; end < 2; ++end) {
+      nir_def *which = end ? last_page : first_page;
+      nir_if *uncached = nir_push_if(b, nir_ior(b, nir_inot(b, nir_load_var(b, page_valid)),
+         nir_ine(b, which, nir_load_var(b, page))));
+      nir_store_var(b, page, which, 1);
+      nir_store_var(b, page_ok, nir_ine_imm(b, nir_load_global_constant(b, 1, 8,
+         nir_iadd(b, map_value, which), .align_mul = 1), 0), 1);
+      nir_store_var(b, page_valid, nir_imm_true(b), 1);
+      nir_pop_if(b, uncached);
+      nir_def *ok = nir_load_var(b, page_ok);
+      resident = end ? nir_iand(b, resident, ok) : ok;
+   }
+   nir_push_else(b, bounds);
+   nir_def *no = nir_imm_false(b);
+   nir_pop_if(b, bounds);
+   resident = nir_if_phi(b, resident, no);
+   if (range_lookup) {
+      nir_push_else(b, mapped);
+      nir_def *ordinary = nir_imm_true(b);
+      nir_pop_if(b, mapped);
+      resident = nir_if_phi(b, resident, ordinary);
+   }
+   nir_push_else(b, present);
    nir_def *ordinary = nir_imm_true(b);
-   nir_pop_if(b, mapped);
-   return nir_if_phi(b, resident, ordinary);
+   nir_pop_if(b, present);
+   resident = nir_if_phi(b, resident, ordinary);
+   nir_if *keep = nir_push_if(b, resident);
+   nir_store_var(b, mask, nir_ior(b, nir_load_var(b, mask), bit), 1);
+   nir_pop_if(b, keep);
+   nir_pop_if(b, used);
+   nir_store_var(b, component, nir_iadd_imm(b, c, 1), 1);
+   nir_pop_loop(b, scalars);
+   return nir_load_var(b, mask);
 }
 
 static bool
@@ -182,11 +271,11 @@ kk_sparse_buffer_io(nir_builder *b, nir_intrinsic_instr *intr, void *data)
       nir_builder_instr_insert(b, &raw->instr);
       nir_if *sparse = nir_push_if(b, nir_ine_imm(b, index, 0));
       nir_def *record = range_lookup ? NULL : kk_sparse_record(b, index);
+      nir_def *resident_mask = kk_sparse_access_mask(b, range_lookup ? index : record,
+         address, size, components, BITFIELD_MASK(components), range_lookup);
       nir_def *parts[NIR_MAX_VEC_COMPONENTS];
       for (unsigned c = 0; c < components; ++c) {
-         nir_def *scalar_address = nir_iadd_imm(b, address, c * size);
-         nir_def *resident = range_lookup ? kk_sparse_bda_resident(b, index, scalar_address, size) :
-            kk_sparse_scalar_resident(b, record, scalar_address, size);
+         nir_def *resident = nir_ine_imm(b, nir_iand_imm(b, resident_mask, BITFIELD_BIT(c)), 0);
          parts[c] = nir_bcsel(b, resident, nir_channel(b, &raw->def, c), nir_imm_intN_t(b, 0, bits));
       }
       nir_def *masked = nir_vec(b, parts, components);
@@ -207,10 +296,10 @@ kk_sparse_buffer_io(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    nir_def *record = range_lookup ? NULL : kk_sparse_record(b, index);
    nir_def *atomic_result = NULL;
    unsigned mask = store ? nir_intrinsic_write_mask(intr) : 1;
+   nir_def *resident_mask = kk_sparse_access_mask(b, range_lookup ? index : record,
+      address, size, components, mask, range_lookup);
    u_foreach_bit(c, mask) {
-      nir_def *scalar_address = nir_iadd_imm(b, address, c * size);
-      nir_if *mapped = nir_push_if(b, range_lookup ? kk_sparse_bda_resident(b, index, scalar_address, size) :
-         kk_sparse_scalar_resident(b, record, scalar_address, size));
+      nir_if *mapped = nir_push_if(b, nir_ine_imm(b, nir_iand_imm(b, resident_mask, BITFIELD_BIT(c)), 0));
       nir_intrinsic_instr *scalar = nir_instr_as_intrinsic(nir_instr_clone(b->shader, &intr->instr));
       if (store) {
          nir_deref_instr *component = components > 1 ? nir_build_deref_array_imm(b, deref, c) : deref;
