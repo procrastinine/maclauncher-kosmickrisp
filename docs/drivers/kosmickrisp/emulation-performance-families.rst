@@ -65,7 +65,7 @@
      - On
      - On
      - On
-     - Off Apple7-8: Metal mesh stages run without hardware mesh shading, and every mesh workgroup also stages its outputs in threadgroup memory. On Apple9-11: direct mesh-only draws and task pipelines with a provable emitted grid of at most 1024 use one native object and mesh render call with the same output staging; task pipelines without that bound run task batches as compute, and indirect, count and larger direct draws add a slice-filter compute pass, each splitting the render pass.
+     - On Apple9-11: ordinary direct Mesh and bounded direct Task use one native render call; unbounded Task uses prepare, Task compute and exact prefix/ICB expansion per real batch. Off Apple7-8: ordinary direct draws are also native, but unbounded Task still uses three compute dispatches per real batch plus a snapshot per indirect logical draw; the real overflow continuation bounds storage without removing that work.
    * - ``polygon_points``
      - On
      - On

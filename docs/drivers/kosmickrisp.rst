@@ -105,8 +105,8 @@ Two modes set the starting selection:
 
 Performance defaults are selected for the running Apple GPU family. Native
 paths and bounded compatibility work remain available; software ray traversal,
-FP64, virtual mesh dispatch and coarse fragment shading require explicit
-selection. Buffer atomic64, denormal controls, raster ordering and conservative
+FP64 and coarse fragment shading require explicit selection. Mesh dispatch
+is selected on Apple9 and later; Apple7 and Apple8 require explicit selection. Buffer atomic64, denormal controls, raster ordering and conservative
 rasterization retain their selected costs. Requested FP32 preservation uses
 native arithmetic and comparisons with subnormal guards; cold repair handles
 true or possibly flushed subnormal results. Shaders that request neither
