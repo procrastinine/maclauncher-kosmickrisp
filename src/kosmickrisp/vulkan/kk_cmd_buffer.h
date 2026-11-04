@@ -293,6 +293,8 @@ struct kk_graphics_state {
    bool polygon_points;
    bool poly_replay_active;
    bool conservative;
+   /* The coarse variant of a dynamic shading-rate pipeline is bound. */
+   bool fsr_coarse;
    bool rasterizer_discard;
    uint64_t polygon_capture;
    struct kk_ptr interlock_capture;

@@ -1036,24 +1036,6 @@ kk_fsr_log2(uint32_t size)
 }
 
 static bool
-kk_fsr_combiner_is_fine(bool a, bool b, VkFragmentShadingRateCombinerOpKHR op)
-{
-   switch (op) {
-   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR:
-      return a;
-   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR:
-      return b;
-   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MIN_KHR:
-      return a || b;
-   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR:
-   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR:
-      return a && b;
-   default:
-      return false;
-   }
-}
-
-static bool
 kk_fsr_pipeline_can_coarsen(const struct vk_graphics_pipeline_state *state,
                             bool primitive_rate, bool attachment_rate)
 {
@@ -1070,7 +1052,7 @@ kk_fsr_pipeline_can_coarsen(const struct vk_graphics_pipeline_state *state,
 
 /* Fragment shaders of pipelines that can select a rate above 1x1 run the
  * quad-group lowering. Conditions the reported properties exclude keep 1x1. */
-static void
+static bool
 kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
                  const struct vk_graphics_pipeline_state *state, bool coarse_allowed)
 {
@@ -1103,7 +1085,7 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
    if (!coarse) {
       nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
       kk_nir_vrs_lower_fine_rate(nir);
-      return;
+      return false;
    }
 
    struct kk_fsr_lower_options opts = {
@@ -1134,6 +1116,7 @@ kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
       opts.primitive_rate = primitive;
    }
    NIR_PASS(_, nir, kk_nir_lower_fsr, &opts);
+   return true;
 }
 
 static void
@@ -1230,7 +1213,8 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
              const struct vk_graphics_pipeline_state *state,
              kk_feature_key features,
              const struct vk_shader_compile_info *compile_info,
-             const uint64_t *embedded, bool depth_bounds, bool primitive_rate_output)
+             const uint64_t *embedded, bool depth_bounds, bool primitive_rate_output,
+             bool defer_fs_rate)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
@@ -1396,7 +1380,7 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
       NIR_PASS(_, nir, msl_nir_fs_io_types);
       /* The pass-through fragment has no compile info and no observable
        * per-fragment work. */
-      if (kk_fsr_device(dev))
+      if (kk_fsr_device(dev) && !defer_fs_rate)
          kk_lower_fs_rate(dev, nir, state, compile_info != NULL);
    }
 
@@ -1413,12 +1397,13 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
              const struct vk_graphics_pipeline_state *state,
              kk_feature_key features,
              const struct vk_shader_compile_info *compile_info,
-             const uint64_t *embedded, bool depth_bounds, bool primitive_rate_output)
+             const uint64_t *embedded, bool depth_bounds, bool primitive_rate_output,
+             bool defer_fs_rate)
 {
    KK_PERF_VOID(dev, KK_PERF_NIR,
       kk_lower_nir_untracked(dev, nir, emulated_stage, rs, set_layout_count,
                             set_layouts, state, features, compile_info, embedded, depth_bounds,
-                            primitive_rate_output));
+                            primitive_rate_output, defer_fs_rate));
 }
 
 static const struct vk_shader_ops kk_shader_ops;
@@ -1433,7 +1418,9 @@ kk_shader_sampler_info(struct kk_shader *shader)
 {
    bool uses = shader->gs_main.uses_sampler_emulation ||
                shader->polygon_native.uses_sampler_emulation ||
-               shader->polygon_native_fs.uses_sampler_emulation;
+               shader->polygon_native_fs.uses_sampler_emulation ||
+               shader->fsr_coarse[0].uses_sampler_emulation ||
+               shader->fsr_coarse[1].uses_sampler_emulation;
    for (unsigned i = 0; i < ARRAY_SIZE(shader->msl_data); ++i)
       uses |= shader->msl_data[i].uses_sampler_emulation;
    for (unsigned i = 0; i < ARRAY_SIZE(shader->polygon); ++i)
@@ -1471,6 +1458,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
       free(runtime);
    }
    free(shader->lazy_polygon);
+   free(shader->lazy_fsr_coarse);
    kk_attachment_pipelines_finish(shader);
    kk_interlock_pipeline_finish(shader->interlock_pipeline);
    kk_interlock_shader_finish(shader->interlock);
@@ -1520,6 +1508,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH)) {
       mtl_release(pipe->gfx.polygon_render);
       mtl_release(pipe->gfx.conservative_render);
+      mtl_release(pipe->gfx.fsr_coarse_render);
       mtl_release(pipe->gfx.polygon_capture);
       mtl_release(pipe->gfx.polygon_xfb);
    }
@@ -1531,6 +1520,10 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    ralloc_free((void *)shader->polygon_native.code);
    ralloc_free((void *)shader->polygon_native_fs.entrypoint_name);
    ralloc_free((void *)shader->polygon_native_fs.code);
+   for (unsigned i = 0; i < ARRAY_SIZE(shader->fsr_coarse); ++i) {
+      ralloc_free(shader->fsr_coarse[i].entrypoint_name);
+      ralloc_free(shader->fsr_coarse[i].code);
+   }
    ralloc_free((void *)shader->gs_main.entrypoint_name);
    ralloc_free((void *)shader->gs_main.code);
 
@@ -2265,7 +2258,7 @@ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
       .null_uniform_buffer_descriptor = false,
       .null_storage_buffer_descriptor = false,
    };
-   kk_lower_nir(dev, nir, false, &no_robustness, 0u, NULL, state, features, NULL, NULL, false, false);
+   kk_lower_nir(dev, nir, false, &no_robustness, 0u, NULL, state, features, NULL, NULL, false, false, false);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    return nir;
@@ -2883,6 +2876,7 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
 
 struct kk_lazy_polygon {
    bool gs_mesh;
+   bool fsr_coarse;
    util_once_flag once;
    VkResult result;
    struct kk_device *device;
@@ -2939,9 +2933,12 @@ kk_compile_graphics_pipeline_native_body(struct kk_device *device, struct kk_sha
       if (result != VK_SUCCESS)
          return result;
    }
-   const struct msl_compile_data *vs_data = polygon ? &vs->polygon[2 * polygon] :
+   const bool fsr_coarse = polygon == KK_PIPELINE_FSR_COARSE;
+   const struct msl_compile_data *vs_data = fsr_coarse ? &vs->fsr_coarse[0] :
+      polygon ? &vs->polygon[2 * polygon] :
       vs->info.polygon_native ? &vs->polygon_native : &vs->msl_data[vs_stage];
-   const struct msl_compile_data *fs_data = polygon ? &vs->polygon[2 * polygon + 1] :
+   const struct msl_compile_data *fs_data = fsr_coarse ? &vs->fsr_coarse[1] :
+      polygon ? &vs->polygon[2 * polygon + 1] :
       vs->info.polygon_native ? &vs->polygon_native_fs : &vs->msl_data[MESA_SHADER_FRAGMENT];
    const struct mtl_library_source sources[2] = {
       {vs_data->code, kk_msl_language_version(vs_data, pdev->info.msl_version)},
@@ -2984,7 +2981,7 @@ kk_compile_graphics_pipeline_native_body(struct kk_device *device, struct kk_sha
    /* Layered rendering in Metal requires setting primitive topology class */
    mtl_render_pipeline_descriptor_set_input_primitive_topology(
       pipeline_descriptor, polygon == 2 ? MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE :
-         polygon ? vs->info.vs.polygon_topology : vs->info.vs.topology);
+         polygon && !fsr_coarse ? vs->info.vs.polygon_topology : vs->info.vs.topology);
 
    kk_configure_render_pipeline(device, vs, pipe, pipeline_descriptor, polygon);
 
@@ -2996,7 +2993,8 @@ kk_compile_graphics_pipeline_native_body(struct kk_device *device, struct kk_sha
       (fs_data->requires_sampler_emulation ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
    mtl_render_pipeline_state *render = kk_attachment_compile_pipeline(device, vs,
       pipeline_descriptor, sampler_stages, sampler_required);
-   if (polygon == 2) pipe->gfx.conservative_render = render;
+   if (fsr_coarse) pipe->gfx.fsr_coarse_render = render;
+   else if (polygon == 2) pipe->gfx.conservative_render = render;
    else if (polygon) pipe->gfx.polygon_render = render;
    else pipe->gfx.render = render;
    if (render == NULL)
@@ -3057,11 +3055,25 @@ static void
 kk_compile_polygon_once(const void *data)
 {
    struct kk_lazy_polygon *lazy = (struct kk_lazy_polygon *)data;
-   if (lazy->gs_mesh)
+   if (lazy->fsr_coarse)
+      lazy->result = kk_compile_graphics_pipeline_native(lazy->device, lazy->shader,
+                                                         KK_PIPELINE_FSR_COARSE);
+   else if (lazy->gs_mesh)
       lazy->result = kk_compile_mesh_pipeline(lazy->device, lazy->shader, false,
                                             &lazy->shader->pipeline);
    else
       lazy->result = kk_compile_polygon_siblings(lazy->device, lazy->shader);
+}
+
+VkResult
+kk_shader_ensure_fsr_coarse(struct kk_device *dev, struct kk_shader *shader)
+{
+   struct kk_lazy_polygon *lazy = shader->lazy_fsr_coarse;
+   if (!lazy)
+      return VK_ERROR_INVALID_SHADER_NV;
+   assert(lazy->device == dev);
+   util_call_once_data(&lazy->once, kk_compile_polygon_once, lazy);
+   return lazy->result;
 }
 
 VkResult
@@ -3121,6 +3133,16 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
    VkResult result = kk_compile_graphics_pipeline_native(device, vs, false);
    if (result != VK_SUCCESS)
       return result;
+   if (vs->info.vs.fsr_coarse) {
+      /* The coarse variant compiles on the first draw that selects it. */
+      vs->lazy_fsr_coarse = calloc(1, sizeof(*vs->lazy_fsr_coarse));
+      if (!vs->lazy_fsr_coarse)
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      vs->lazy_fsr_coarse->once = (util_once_flag)UTIL_ONCE_FLAG_INIT;
+      vs->lazy_fsr_coarse->device = device;
+      vs->lazy_fsr_coarse->shader = vs;
+      vs->lazy_fsr_coarse->fsr_coarse = true;
+   }
    if (siblings && !vs->lazy_polygon) {
       result = kk_compile_polygon_siblings(device, vs);
       if (result != VK_SUCCESS)
@@ -3369,6 +3391,18 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    const bool fragment_first = pixel_candidate ||
       (linked_fragment && state && kk_fsr_device(dev));
    bool primitive_rate_output = !state;
+   /* A dynamic shading rate stays 1x1 for most draws. The ordinary vertex and
+    * fragment route keeps its fine fragment shader and adds a coarse variant
+    * that draws select only while the combined rate can exceed 1x1. */
+   const bool fsr_dual = linked_fragment && state && state->fsr && state->rs &&
+      kk_fsr_device(dev) && BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_FSR) &&
+      shader_count == 2 && infos[0].stage == MESA_SHADER_VERTEX &&
+      !infos[0].nir->xfb_info && !infos[0].nir->info.cull_distance_array_size &&
+      !(infos[0].flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT) &&
+      !depth_bounds && !pixel_candidate && !polygon_capture && !poly_layer_replay &&
+      !barycentric_inputs && !kk_polygon_native_possible(state) &&
+      !kk_depth_bias_native_possible(depth_bias_control, state);
+   nir_shader *coarse_fs = NULL;
    for (uint32_t step = 0u; step < shader_count; ++step) {
       uint32_t i = fragment_first ? (step ? step - 1u : shader_count - 1u) : step;
       const struct vk_shader_compile_info *info = &infos[i];
@@ -3430,12 +3464,23 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          fs_to_finish = nir;
       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
                    info->set_layout_count, info->set_layouts, state, features, info, NULL, depth_bounds,
-                   primitive_rate_output);
+                   primitive_rate_output, fsr_dual);
+      if (fsr_dual && nir->info.stage == MESA_SHADER_FRAGMENT) {
+         coarse_fs = nir_shader_clone(NULL, nir);
+         if (!kk_lower_fs_rate(dev, coarse_fs, state, true)) {
+            ralloc_free(coarse_fs);
+            coarse_fs = NULL;
+         }
+         kk_lower_fs_rate(dev, nir, state, false);
+      }
       if (nir->info.stage == MESA_SHADER_FRAGMENT)
          primitive_rate_output |= !!(nir->info.inputs_read & VARYING_BIT_PRIMITIVE_SHADING_RATE);
       if (nir->info.stage == MESA_SHADER_FRAGMENT &&
-          (features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS)))
+          (features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS))) {
          NIR_PASS(_, nir, kk_nir_statistics_fs);
+         if (coarse_fs)
+            NIR_PASS(_, coarse_fs, kk_nir_statistics_fs);
+      }
 
       if (nir->info.stage == MESA_SHADER_VERTEX)
          vertex_robustness = info->robustness;
@@ -3571,6 +3616,26 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
                                  nir_shaders[total_shaders - 1u]);
    }
 
+   /* The coarse pair links its own vertex clone: the main link may move
+    * fragment work into the vertex stage for the fine shader. */
+   nir_shader *coarse_pair[2] = {NULL, NULL};
+   bool fsr_primitive_rate = false;
+   struct kk_per_vertex_map coarse_map = {0};
+   if (coarse_fs) {
+      assert(total_shaders == 2 && nir_shaders[0]->info.stage == MESA_SHADER_VERTEX);
+      fsr_primitive_rate =
+         nir_shaders[0]->info.outputs_written & VARYING_BIT_PRIMITIVE_SHADING_RATE;
+      coarse_pair[0] = nir_shader_clone(NULL, nir_shaders[0]);
+      coarse_pair[1] = coarse_fs;
+      if (coarse_fs->info.inputs_read & VARYING_BIT_PRIMITIVE_SHADING_RATE)
+         NIR_PASS(_, coarse_pair[0], kk_lower_primitive_rate_default);
+      nir_opt_varyings_bulk(coarse_pair, 2, true, UINT32_MAX, UINT32_MAX, nir_opts, NULL);
+      nir_opt_varyings_bulk(coarse_pair, 2, true, UINT32_MAX, UINT32_MAX, nir_opts, NULL);
+      kk_finish_fragment_nir(dev, coarse_fs, state, &infos[1], features, false);
+      NIR_PASS(_, coarse_fs, kk_nir_lower_fs_per_vertex_inputs, coarse_pair[0], false,
+               &coarse_map);
+   }
+
    /* Preserve upstream XFB side effects through the original varying linker,
     * before Poly lowers those IO stores to Metal device writes. */
    for (unsigned i = 0; i < total_shaders; ++i) {
@@ -3630,10 +3695,12 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          nir_shaders[total_shaders - 2u], force_per_vertex,
          &per_vertex_map);
 
-   if (per_vertex_map.out_of_slots) {
+   if (per_vertex_map.out_of_slots || coarse_map.out_of_slots) {
       for (uint32_t i = 0; i < total_shaders; i++) {
          ralloc_free(nir_shaders[i]);
       }
+      ralloc_free(coarse_pair[0]);
+      ralloc_free(coarse_pair[1]);
       memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
       return vk_errorf(dev, VK_ERROR_UNKNOWN,
                        "Out of varying slots for barycentric emulation");
@@ -3679,6 +3746,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          ralloc_free(conservative_fs);
          ralloc_free(native_pair[0]);
          ralloc_free(native_pair[1]);
+         ralloc_free(coarse_pair[0]);
+         ralloc_free(coarse_pair[1]);
          memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
          return result;
       }
@@ -3717,10 +3786,46 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
             ralloc_free(nir_shaders[j]);
          }
          ralloc_free(native_pair[0]);
-      ralloc_free(native_pair[1]);
-      /* Memset the output array */
+         ralloc_free(native_pair[1]);
+         ralloc_free(coarse_pair[0]);
+         ralloc_free(coarse_pair[1]);
+         /* Memset the output array */
          memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
 
+         return result;
+      }
+   }
+
+   if (coarse_pair[0]) {
+      /* The vertex shader owns both variants. Only their MSL is kept. */
+      struct kk_compile_options coarse_options = compile_options;
+      coarse_options.per_vertex_map = &coarse_map;
+      coarse_options.native_per_vertex = NULL;
+      coarse_options.conservative_fs = NULL;
+      struct kk_shader *coarse[2] = {NULL, NULL};
+      result = kk_compile_shader(dev, coarse_pair[0], NULL, vertex_robustness, state,
+                                 &coarse_options, pAllocator, &coarse[0]);
+      if (result == VK_SUCCESS)
+         result = kk_compile_shader(dev, coarse_pair[1], coarse[0], vertex_robustness, state,
+                                    &coarse_options, pAllocator, &coarse[1]);
+      else
+         ralloc_free(coarse_pair[1]);
+      coarse_pair[0] = coarse_pair[1] = NULL;
+      if (result == VK_SUCCESS) {
+         kk_msl_copy(&shaders[0]->fsr_coarse[0], &coarse[0]->msl_data[MESA_SHADER_VERTEX]);
+         kk_msl_copy(&shaders[0]->fsr_coarse[1], &coarse[1]->msl_data[MESA_SHADER_FRAGMENT]);
+         shaders[0]->info.vs.fsr_coarse = true;
+         shaders[0]->info.vs.fsr_coarse_slots = coarse[1]->info.fs.fsr_slots;
+         shaders[0]->info.vs.fsr_primitive_rate = fsr_primitive_rate;
+      }
+      for (unsigned i = 0; i < 2; ++i)
+         if (coarse[i]) kk_shader_destroy(&dev->vk, coarse[i], pAllocator);
+      if (result != VK_SUCCESS) {
+         for (uint32_t i = 0; i < total_shaders; i++)
+            kk_shader_destroy(&dev->vk, shaders[i], pAllocator);
+         ralloc_free(native_pair[0]);
+         ralloc_free(native_pair[1]);
+         memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
          return result;
       }
    }
@@ -3902,6 +4007,10 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
       kk_msl_serialize(&shader->polygon_native, blob);
       kk_msl_serialize(&shader->polygon_native_fs, blob);
    }
+   if (shader->info.stage == MESA_SHADER_VERTEX && shader->info.vs.fsr_coarse) {
+      kk_msl_serialize(&shader->fsr_coarse[0], blob);
+      kk_msl_serialize(&shader->fsr_coarse[1], blob);
+   }
    kk_interlock_shader_serialize(shader, blob);
    if (shader->info.stage == MESA_SHADER_VERTEX && shader->info.api_geometry) {
       blob_write_uint8(blob, shader->gs_mesh != NULL);
@@ -4024,6 +4133,12 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
       if (result != VK_SUCCESS) goto fail;
       result = kk_msl_deserialize(blob, &shader->polygon_native_fs);
       if (result != VK_SUCCESS) goto fail;
+   }
+   if (info.stage == MESA_SHADER_VERTEX && info.vs.fsr_coarse) {
+      for (unsigned i = 0; i < ARRAY_SIZE(shader->fsr_coarse); ++i) {
+         result = kk_msl_deserialize(blob, &shader->fsr_coarse[i]);
+         if (result != VK_SUCCESS) goto fail;
+      }
    }
    result = kk_interlock_shader_deserialize(shader, blob);
    if (result != VK_SUCCESS) goto fail;

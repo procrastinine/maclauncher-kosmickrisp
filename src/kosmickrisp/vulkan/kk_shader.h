@@ -71,6 +71,8 @@ enum kk_pipeline_kind {
    KK_PIPELINE_MESH_VIRTUAL_SLICED,
    KK_PIPELINE_MESH_CAPTURE,
    KK_PIPELINE_MESH_READER,
+   /* Coarse fragment variant of a dynamic shading-rate pipeline. */
+   KK_PIPELINE_FSR_COARSE,
    KK_PIPELINE_KIND_COUNT,
 };
 
@@ -198,6 +200,13 @@ struct kk_shader_info {
          bool has_ds;
          bool has_depth_write;
          bool has_stencil_test;
+         /* A dynamic shading-rate pipeline draws its fine fragment shader at
+          * 1x1 and the coarse variant in fsr_coarse at other rates. */
+         bool fsr_coarse;
+         /* The coarse variant runs multisampled fragments through slots. */
+         bool fsr_coarse_slots;
+         /* The vertex stage writes PrimitiveShadingRateKHR. */
+         bool fsr_primitive_rate;
       } vs;
 
       struct {
@@ -242,6 +251,7 @@ struct kk_pipeline_handles {
          mtl_render_pipeline_state *render;
          mtl_render_pipeline_state *polygon_render;
          mtl_render_pipeline_state *conservative_render;
+         mtl_render_pipeline_state *fsr_coarse_render;
          mtl_compute_pipeline_state *polygon_capture;
          mtl_compute_pipeline_state *polygon_xfb;
          /* VS, TCS, TES and the GS compute pass at most run before the render
@@ -322,6 +332,8 @@ struct kk_shader {
 
    struct kk_attachment_pipelines *attachment_pipelines;
    struct kk_lazy_polygon *lazy_polygon;
+   /* Builds the coarse shading-rate render pipeline on its first draw. */
+   struct kk_lazy_polygon *lazy_fsr_coarse;
    struct kk_pipeline_handles pipeline;
    struct kk_shader_info info;
    struct msl_compile_data msl_data[MESA_ALL_SHADER_STAGES];
@@ -332,6 +344,8 @@ struct kk_shader {
    struct msl_compile_data polygon_native;
    struct msl_compile_data polygon_native_fs;
    struct msl_compile_data gs_aux[2];
+   /* Vertex and coarse fragment stages of the coarse shading-rate variant. */
+   struct msl_compile_data fsr_coarse[2];
 };
 
 static_assert(_Alignof(struct kk_shader) >= _Alignof(struct kk_mesh_shader_state),
@@ -479,6 +493,26 @@ VkResult kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
                                struct kk_shader **shader_out);
 
 VkResult kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader);
+VkResult kk_shader_ensure_fsr_coarse(struct kk_device *dev, struct kk_shader *shader);
+
+/* Whether a combiner keeps 1x1 when each input is known to be 1x1. */
+static inline bool
+kk_fsr_combiner_is_fine(bool a, bool b, VkFragmentShadingRateCombinerOpKHR op)
+{
+   switch (op) {
+   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR:
+      return a;
+   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR:
+      return b;
+   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MIN_KHR:
+      return a || b;
+   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR:
+   case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR:
+      return a && b;
+   default:
+      return false;
+   }
+}
 VkResult kk_shader_ensure_geometry_reports(struct kk_device *dev,
    struct kk_shader *shader, unsigned mask);
 VkResult kk_shader_get_statistics_pre_gs(struct kk_device *dev,

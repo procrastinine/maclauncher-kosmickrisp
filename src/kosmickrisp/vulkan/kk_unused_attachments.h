@@ -391,7 +391,15 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
          return NULL;
       }
    }
-   mtl_render_pipeline_state *original = kind == KK_PIPELINE_MESH_VIRTUAL
+   if (kind == KK_PIPELINE_FSR_COARSE) {
+      VkResult result = kk_shader_ensure_fsr_coarse(device, shader);
+      if (result != VK_SUCCESS) {
+         *error = result;
+         return NULL;
+      }
+   }
+   mtl_render_pipeline_state *original = kind == KK_PIPELINE_FSR_COARSE
+      ? shader->pipeline.gfx.fsr_coarse_render : kind == KK_PIPELINE_MESH_VIRTUAL
       ? shader->mesh->runtime->virtual->gfx.render : kind == KK_PIPELINE_MESH_CAPTURE
       ? shader->mesh->runtime->retained[0]->gfx.render : kind == KK_PIPELINE_MESH_READER
       ? shader->mesh->runtime->retained[1]->gfx.render : kind == KK_PIPELINE_MESH_SLICED

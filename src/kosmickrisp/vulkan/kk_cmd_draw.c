@@ -1153,6 +1153,36 @@ kk_flush_render_pass(struct kk_cmd_buffer *cmd)
    }
 }
 
+/* A dynamic shading-rate pipeline draws its coarse variant only while the
+ * combined rate can exceed 1x1: a pipeline rate above 1x1, or a combiner that
+ * applies a primitive rate the vertex stage writes or a bound attachment. */
+static unsigned
+kk_fsr_pipeline_kind(const struct kk_cmd_buffer *cmd, const struct kk_shader *vs)
+{
+   if (!vs->info.vs.fsr_coarse)
+      return KK_PIPELINE_MAIN;
+   const struct vk_fragment_shading_rate_state *fsr = &cmd->vk.dynamic_graphics_state.fsr;
+   bool fine = fsr->fragment_size.width <= 1 && fsr->fragment_size.height <= 1;
+   fine = kk_fsr_combiner_is_fine(fine, !vs->info.vs.fsr_primitive_rate, fsr->combiner_ops[0]);
+   fine = kk_fsr_combiner_is_fine(fine, !cmd->state.gfx.descriptors.root.fsr.attachment,
+                                  fsr->combiner_ops[1]);
+   return fine ? KK_PIPELINE_MAIN : KK_PIPELINE_FSR_COARSE;
+}
+
+/* Only the coarse variant reads the rate state after the push constants. */
+static void
+kk_fsr_variant_bound(struct kk_cmd_buffer *cmd, const struct kk_shader *vs, bool coarse)
+{
+   struct kk_graphics_state *gfx = &cmd->state.gfx;
+   if (!vs->info.vs.fsr_coarse && !gfx->fsr_coarse)
+      return;
+   struct kk_descriptor_state *desc = &gfx->descriptors;
+   uint32_t push_size = coarse ? KK_FSR_PUSH_SIZE : vs->info.push_size;
+   desc->root_dirty |= push_size > desc->push_size;
+   desc->push_size = push_size;
+   gfx->fsr_coarse = coarse;
+}
+
 static void
 kk_flush_pipeline(struct kk_cmd_buffer *cmd)
 {
@@ -1183,14 +1213,18 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
 
    if ((gfx->shader->info.uses_sampler_emulation &&
         kk_attachment_sampler_emulation_changed(cmd, gfx->shader)) ||
+       (gfx->shader->info.vs.fsr_coarse && IS_DIRTY(FSR)) ||
        gfx->encoder_dirty || (gfx->dirty & KK_DIRTY_FRAGMENT_STATISTICS) ||
        (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) || IS_DIRTY(RS_POLYGON_MODE) ||
        IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(COLOR_ATTACHMENT_MAP) ||
        IS_DIRTY(MS_RASTERIZATION_SAMPLES) || IS_DIRTY(RS_LINE_MODE)) {
       struct kk_shader *vs = cmd->state.gfx.shader;
-      mtl_render_pipeline_state *pipeline =
-         kk_attachment_pipeline(cmd, vs, gfx->conservative ? 2 :
-            (gfx->polygon_points || (gfx->layer_replay.bind && vs->info.poly_layer_replay)));
+      unsigned kind = gfx->conservative ? 2 :
+         (gfx->polygon_points || (gfx->layer_replay.bind && vs->info.poly_layer_replay));
+      if (kind == KK_PIPELINE_MAIN)
+         kind = kk_fsr_pipeline_kind(cmd, vs);
+      kk_fsr_variant_bound(cmd, vs, kind == KK_PIPELINE_FSR_COARSE);
+      mtl_render_pipeline_state *pipeline = kk_attachment_pipeline(cmd, vs, kind);
       if (!pipeline) {
          if (bind_dynamic_ds)
             mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
@@ -1908,7 +1942,8 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
    }
 
    struct kk_shader *rate_fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
-   if (rate_fs && rate_fs->info.fs.fsr_slots) {
+   if ((rate_fs && rate_fs->info.fs.fsr_slots) ||
+       (gfx->fsr_coarse && gfx->shader->info.vs.fsr_coarse_slots)) {
       /* Sample invocations of one fragment find each other by draw. */
       util_call_once_data(&dev->fsr_slots_once, kk_init_fsr_slots, dev);
       desc->root.fsr.serial = p_atomic_inc_return(&dev->fsr_serial);
@@ -3492,7 +3527,8 @@ void kk_dgc_selected_graphics(struct kk_cmd_buffer *cmd,
    mtl_render_pipeline_state **render, mtl_depth_stencil_state **depth)
 {
    struct kk_shader *shader = cmd->state.gfx.shader;
-   *render = kk_attachment_pipeline(cmd, shader, KK_PIPELINE_MAIN);
+   *render = kk_attachment_pipeline(cmd, shader, cmd->state.gfx.fsr_coarse ?
+      KK_PIPELINE_FSR_COARSE : KK_PIPELINE_MAIN);
    *depth = kk_cmd_selected_depth_stencil(cmd, shader);
 }
 
