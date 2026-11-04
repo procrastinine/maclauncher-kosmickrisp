@@ -379,8 +379,8 @@
       "sparseResidencyStandard3DBlockShape"
     ],
     "performance": true,
-    "performance_reason": "DXVK requires sparse buffer residency for tiled resources; removing it can lower the D3D feature-level ceiling. Translation is selected by actual sparse resources and shader interfaces.",
-    "off_consequence": "Sparse buffer residency and sparse 3D image residency are unavailable, including standard-shaped 3D blocks; DXVK tiled-resource tiers and feature levels requiring them are unavailable. Native sparse binding, aliasing, 2D residency and native texture residency status remain available when supported.",
+    "performance_reason": "DXVK and vkd3d-proton require sparse buffer residency for every tiled-resources tier, and vkd3d-proton reports tiers 3 and 4 only with standard-shaped 3D sparse residency; removing it lowers the D3D feature-level ceiling (vkd3d-proton feature level 12_2 requires tier 3). Translation is selected by actual sparse resources and shader interfaces.",
+    "off_consequence": "Sparse buffer residency and sparse 3D image residency are unavailable, including standard-shaped 3D blocks; DXVK and vkd3d-proton report no tiled-resources tier, and feature levels requiring one are unavailable (vkd3d-proton reports at most 11_1). Native sparse binding, aliasing, 2D residency and native texture residency status remain available when supported.",
     "native_from": null
   },
   {
