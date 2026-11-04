@@ -427,8 +427,8 @@ cs_get_render(struct kk_cmd_buffer *cmd)
    return cmd->metal.render;
 }
 
-mtl_compute_encoder *
-cs_get_compute(struct kk_cmd_buffer *cmd)
+static mtl_compute_encoder *
+cs_get_compute_internal(struct kk_cmd_buffer *cmd, bool preserve_pipeline)
 {
    /* If we are inside render, we need to force a restart later */
    if (cmd->metal.render) {
@@ -439,12 +439,28 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
    }
 
    if (cmd->metal.compute == NULL) {
+      cmd->state.cs.bound_pipeline = NULL;
       cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
       kk_encoder_update_debug(cmd, cmd->metal.compute);
    }
 
+   if (!preserve_pipeline)
+      cmd->state.cs.bound_pipeline = NULL;
    return cmd->metal.compute;
+}
+
+mtl_compute_encoder *
+cs_get_compute(struct kk_cmd_buffer *cmd)
+{
+   /* Internal compute work may bind a different pipeline directly. */
+   return cs_get_compute_internal(cmd, false);
+}
+
+mtl_compute_encoder *
+cs_get_compute_for_dispatch(struct kk_cmd_buffer *cmd)
+{
+   return cs_get_compute_internal(cmd, true);
 }
 
 static void

@@ -305,6 +305,7 @@ struct kk_graphics_state {
 
 struct kk_compute_state {
    struct kk_descriptor_state descriptors;
+   mtl_compute_pipeline_state *bound_pipeline;
 };
 
 struct kk_conditional_rendering_state {
@@ -459,6 +460,7 @@ kk_get_descriptors_state(struct kk_cmd_buffer *cmd,
 void cs_start_render(struct kk_cmd_buffer *cmd);
 mtl_render_encoder *cs_get_render(struct kk_cmd_buffer *cmd);
 mtl_compute_encoder *cs_get_compute(struct kk_cmd_buffer *cmd);
+mtl_compute_encoder *cs_get_compute_for_dispatch(struct kk_cmd_buffer *cmd);
 void cs_end(struct kk_cmd_buffer *cmd);
 bool kk_mesh_split_command_buffer(struct kk_cmd_buffer *cmd);
 void kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd,

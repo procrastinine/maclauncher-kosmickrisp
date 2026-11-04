@@ -21,7 +21,7 @@ static void
 kk_flush_compute_state(struct kk_cmd_buffer *cmd)
 {
    kk_sparse_refresh_shader(cmd, MESA_SHADER_COMPUTE);
-   mtl_compute_encoder *encoder = cs_get_compute(cmd);
+   mtl_compute_encoder *encoder = cs_get_compute_for_dispatch(cmd);
 
    // Fill Metal argument buffer with descriptor set addresses
    struct kk_descriptor_state *desc = &cmd->state.cs.descriptors;
@@ -34,8 +34,14 @@ kk_flush_compute_state(struct kk_cmd_buffer *cmd)
    if (desc->root.addr)
       kk_cmd_bind_root_to_argument_table(cmd, desc->root.addr);
 
-   mtl_compute_set_pipeline_state(
-      encoder, cmd->state.shaders[MESA_SHADER_COMPUTE]->pipeline.cs);
+   mtl_compute_pipeline_state *pipeline =
+      cmd->state.shaders[MESA_SHADER_COMPUTE]->pipeline.cs;
+   if (cmd->state.cs.bound_pipeline != pipeline ||
+       (cmd->state.dirty_shaders & BITFIELD_BIT(MESA_SHADER_COMPUTE))) {
+      mtl_compute_set_pipeline_state(encoder, pipeline);
+      cmd->state.cs.bound_pipeline = pipeline;
+   }
+   cmd->state.dirty_shaders &= ~BITFIELD_BIT(MESA_SHADER_COMPUTE);
 }
 
 static void
@@ -93,7 +99,7 @@ kk_CmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX,
    struct kk_shader *cs = cmd->state.shaders[MESA_SHADER_COMPUTE];
    struct mtl_size local_size = cs->info.cs.local_size;
 
-   mtl_compute_encoder *encoder = cs_get_compute(cmd);
+   mtl_compute_encoder *encoder = cs_get_compute_for_dispatch(cmd);
    if (cmd->state.cond_render.enabled) {
       /* Convert to indirect for predication */
       VkDispatchIndirectCommand indirect = {
@@ -145,7 +151,7 @@ kk_CmdDispatchIndirect2KHR(VkCommandBuffer commandBuffer,
    struct kk_shader *cs = cmd->state.shaders[MESA_SHADER_COMPUTE];
    struct mtl_size local_size = cs->info.cs.local_size;
 
-   mtl_compute_encoder *encoder = cs_get_compute(cmd);
+   mtl_compute_encoder *encoder = cs_get_compute_for_dispatch(cmd);
    if (cmd->state.cond_render.enabled) {
       struct kk_ptr patched =
          kk_pool_alloc(cmd, sizeof(VkDispatchIndirectCommand), 4u);
