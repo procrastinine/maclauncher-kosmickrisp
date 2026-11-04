@@ -3865,9 +3865,8 @@ kk_compile_fragment_body(struct kk_device *dev,
    /* One sample is owned/known here, so the ordinary multi-sample Metal
     * derivative limitation does not apply. Keep the same quad and discard
     * workarounds as the joint compiler, before final resource lowering. */
-   if ((nir->info.fs.needs_full_quad_helper_invocations ||
-        nir->info.fs.needs_coarse_quad_helper_invocations) &&
-       !(kk_device_physical(dev)->settings.disabled_workarounds & BITFIELD64_BIT(19)))
+   if (nir->info.fs.needs_full_quad_helper_invocations ||
+       nir->info.fs.needs_coarse_quad_helper_invocations)
       NIR_PASS(_, nir, msl_disable_triangle_merge);
    kk_finish_fs_invocation_workarounds(dev, nir);
    kk_finish_nir(dev, nir, info->robustness, info->set_layout_count,

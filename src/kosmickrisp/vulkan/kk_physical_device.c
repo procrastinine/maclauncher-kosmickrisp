@@ -1304,13 +1304,6 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
                           sizeof(pdev->settings.apple_family_override));
    }
 
-   /* Keep diagnostic shaders out of default application pipeline caches and
-    * shader binaries. Disk/native caches also key the workaround mask. */
-   if (pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)) {
-      static const char diagnostic[] = "triangle-merge-disabled";
-      _mesa_blake3_update(&blake3_ctx, diagnostic, sizeof(diagnostic));
-   }
-
    blake3_hash domain;
    _mesa_blake3_final(&blake3_ctx, domain);
    kk_archive_cache_digest(domain, pdev->archive_cache_digest);
