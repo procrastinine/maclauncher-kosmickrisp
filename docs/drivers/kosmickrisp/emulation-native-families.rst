@@ -12,6 +12,6 @@
    * - Apple9
      - No declared thresholds
    * - Apple10
-     - No declared thresholds
+     - ``sampler_filter_minmax``
    * - Apple11
-     - No declared thresholds
+     - ``sampler_filter_minmax``

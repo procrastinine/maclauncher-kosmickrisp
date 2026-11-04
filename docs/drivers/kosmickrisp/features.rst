@@ -1,11 +1,10 @@
 Features and Apple GPU families
-###############################
+*******************************
 
-This page lists every capability that KosmicKrisp advertises and how the
+The table lists every capability that KosmicKrisp advertises and how the
 driver provides it: natively through Metal, by emulation in shaders or compute
 passes, or natively with some cases emulated. Rows that name an entry are
-controlled by ``KK_EMULATION``; the :doc:`main driver page <../kosmickrisp>`
-lists the cost, default and
+controlled by ``KK_EMULATION``; the emulation registry table below lists the cost, default and
 reason for each entry. In the performance mode column, ``On`` and ``Off`` give
 the entry's default in the default ``performance`` mode, ``Always`` marks a
 capability advertised in every mode, and ``Experimental`` marks one that only
@@ -16,13 +15,12 @@ earliest Apple GPU family for which Apple's `Metal Feature Set Tables
 matching entry. It then states on which families KosmicKrisp takes its native
 path and on which it emulates the feature. KosmicKrisp runs only on Metal 4
 devices, which are Apple7 and later, so "all families" means Apple7 and later.
-Apple7 is M1 and A14, Apple8 is M2, A15 and A16, Apple9 is M3, M4, A17 Pro and
-A18, Apple10 is M5 and A19, and Apple11 is M6. The last column gives the
+The family-to-GPU mapping appears above. The last column gives the
 recorded effect on Direct3D translation through DXVK, vkd3d-proton or Wine
 vkd3d when an entry is disabled.
 
 Feature table
-*************
+=============
 
 .. list-table::
    :header-rows: 1
@@ -515,7 +513,7 @@ Feature table
        ``VK_EXT_pipeline_robustness``, ``VK_EXT_vertex_attribute_robustness``
      - Native with emulated cases: buffer and vertex-input accesses are
        bounds-checked in the shader. On Apple10, out-of-range LOD image reads
-       add a shader check (:doc:`workaround 16 <workarounds>`).
+       add a shader check (:doc:`workaround 16 <kosmickrisp/workarounds>`).
      - None listed; buffer checks emulated on all families.
      - —
      - Always
@@ -795,7 +793,7 @@ Feature table
      - —
 
 Capabilities without a Metal feature
-************************************
+====================================
 
 Apple's tables list no Metal feature for the following capabilities.
 KosmicKrisp emulates each of them:
@@ -817,7 +815,7 @@ KosmicKrisp emulates each of them:
   is off in the default ``performance`` mode.
 
 Tessellation
-************
+============
 
 Apple's tables list tessellation (Apple3) under the Metal 3 programming model
 only; the Metal 4 programming model has no tessellation stage. Because

@@ -89,7 +89,9 @@ language = 'en'
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = ['header-stubs', '_generated']
+exclude_patterns = ['header-stubs', '_generated',
+                    'drivers/kosmickrisp/emulation*.rst',
+                    'drivers/kosmickrisp/features.rst']
 
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = False
