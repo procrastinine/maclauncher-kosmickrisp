@@ -3,14 +3,26 @@
 #define KK_UNUSED_ATTACHMENTS_H
 
 #include "util/simple_mtx.h"
+#include "util/u_atomic.h"
 #include "kk_perf.h"
+
+static bool
+kk_attachment_reads_disabled(const struct kk_shader_info *info,
+                             const enum mtl_pixel_format *formats)
+{
+   u_foreach_bit(i, info->framebuffer_read_mask) {
+      if (formats[i] == MTL_PIXEL_FORMAT_INVALID)
+         return true;
+   }
+   return false;
+}
 
 /* The retained descriptor stays unspecialized for later format variants. */
 static mtl_render_pipeline_state *
 kk_attachment_compile_pipeline(struct kk_device *device,
    struct kk_shader *shader, mtl_render_pipeline_descriptor *descriptor)
 {
-   if (!shader->info.has_framebuffer_reads)
+   if (!kk_attachment_reads_disabled(&shader->info, shader->info.vs.rt_formats))
       return KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_render_pipeline(device->mtl_compiler_handle, descriptor));
    return KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_render_pipeline_for_attachments(device->mtl_compiler_handle,
       descriptor, shader->info.vs.rt_formats, MAX_DRAW_BUFFERS, 0,
@@ -52,8 +64,12 @@ kk_attachment_depth_stencil(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
       ((render->depth_att.iview != NULL) | ((render->stencil_att.iview != NULL) << 1));
    if (mask == pipeline_mask)
       return original;
+   mtl_depth_stencil_state *state = p_atomic_read(&cache->depth_stencil[mask]);
+   if (state)
+      return state;
    simple_mtx_lock(&cache->mutex);
-   if (!cache->depth_stencil[mask]) {
+   state = p_atomic_read(&cache->depth_stencil[mask]);
+   if (!state) {
       struct kk_shader_info info = shader->info;
       if (!(mask & 1)) {
          info.vs.has_depth_write = false;
@@ -61,9 +77,9 @@ kk_attachment_depth_stencil(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
       }
       if (!(mask & 2))
          info.vs.has_stencil_test = false;
-      cache->depth_stencil[mask] = kk_compile_ds_state(kk_cmd_buffer_device(cmd), &info);
+      state = kk_compile_ds_state(kk_cmd_buffer_device(cmd), &info);
+      p_atomic_set(&cache->depth_stencil[mask], state);
    }
-   mtl_depth_stencil_state *state = cache->depth_stencil[mask];
    simple_mtx_unlock(&cache->mutex);
    return state;
 }
@@ -103,6 +119,22 @@ kk_attachment_pipelines_finish(struct kk_shader *shader)
    free(cache);
 }
 
+/* Variants are immutable and remain alive until their shader is destroyed. */
+static mtl_render_pipeline_state *
+kk_attachment_find_variant(struct kk_attachment_pipelines *cache,
+   unsigned kind, const enum mtl_pixel_format *formats, bool indirect,
+   uint32_t samples, enum mtl_primitive_topology_class topology)
+{
+   for (struct kk_attachment_variant *v = p_atomic_read(&cache->variants);
+        v; v = v->next) {
+      if (v->kind == kind && v->indirect == indirect && v->samples == samples &&
+          v->topology == topology &&
+          !memcmp(v->formats, formats, sizeof(v->formats)))
+         return v->pipeline;
+   }
+   return NULL;
+}
+
 static mtl_render_pipeline_state *
 kk_attachment_pipeline_for_formats(struct kk_device *device,
    struct kk_shader *shader, unsigned kind, const enum mtl_pixel_format *formats,
@@ -140,14 +172,16 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
        !memcmp(formats, shader->info.vs.rt_formats, sizeof(shader->info.vs.rt_formats)))
       return original;
 
+   mtl_render_pipeline_state *cached = kk_attachment_find_variant(
+      cache, kind, formats, indirect, samples, topology);
+   if (cached)
+      return cached;
    simple_mtx_lock(&cache->mutex);
-   for (struct kk_attachment_variant *v = cache->variants; v; v = v->next) {
-      if (v->kind == kind && v->indirect == indirect && v->samples == samples &&
-          v->topology == topology &&
-          !memcmp(v->formats, formats, sizeof(shader->info.vs.rt_formats))) {
-         simple_mtx_unlock(&cache->mutex);
-         return v->pipeline;
-      }
+   cached = kk_attachment_find_variant(cache, kind, formats, indirect,
+                                       samples, topology);
+   if (cached) {
+      simple_mtx_unlock(&cache->mutex);
+      return cached;
    }
    struct kk_attachment_variant *variant = calloc(1, sizeof(*variant));
    VkResult result = VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -170,7 +204,7 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
       variant->pipeline = KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_render_pipeline_for_raster_attachments(
          device->mtl_compiler_handle,
          descriptor, formats, MAX_DRAW_BUFFERS, disabled, samples,
-         shader->info.has_framebuffer_reads, topology));
+         (shader->info.framebuffer_read_mask & disabled) != 0, topology));
       mtl_release(descriptor);
       result = VK_ERROR_INVALID_SHADER_NV;
       if (variant->pipeline) {
@@ -179,8 +213,8 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
          variant->topology = topology;
          variant->indirect = indirect;
          variant->samples = samples;
-         variant->next = cache->variants;
-         cache->variants = variant;
+         variant->next = p_atomic_read(&cache->variants);
+         p_atomic_set(&cache->variants, variant);
          simple_mtx_unlock(&cache->mutex);
          return variant->pipeline;
       }
@@ -194,6 +228,9 @@ mtl_render_pipeline_state *
 kk_attachment_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
                        unsigned kind)
 {
+   if (!shader->attachment_pipelines && kind == KK_PIPELINE_MAIN &&
+       !cmd->state.gfx.dgc_icb)
+      return shader->pipeline.gfx.render;
    const struct kk_rendering_state *render = &cmd->state.gfx.render;
    enum mtl_pixel_format formats[MAX_DRAW_BUFFERS] = {0};
    for (unsigned i = 0; i < render->color_att_count; ++i) {

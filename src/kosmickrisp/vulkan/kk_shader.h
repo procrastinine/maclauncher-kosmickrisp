@@ -124,7 +124,7 @@ struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
    struct kk_mesh_shader_info mesh;
-   bool has_framebuffer_reads;
+   uint8_t framebuffer_read_mask;
    uint32_t push_size;
    bool descriptor_heap;
    bool dgc_replay;
@@ -269,11 +269,14 @@ struct kk_shader {
    struct vk_sampler_state *embedded_sampler_states;
    uint64_t embedded_sampler_table;
    struct kk_sparse_shader_state *sparse;
-   struct kk_vrs_source *vrs_source;
+   /* Fragment and compute shaders use disjoint runtime state. */
+   union {
+      struct kk_vrs_source *vrs_source;
+      mtl_compute_pipeline_state *dgc_compute;
+   };
 
    struct kk_attachment_pipelines *attachment_pipelines;
    struct kk_lazy_polygon *lazy_polygon;
-   mtl_compute_pipeline_state *dgc_compute;
    struct kk_pipeline_handles pipeline;
    struct kk_pipeline_handles *mesh_virtual;
    struct kk_pipeline_handles *mesh_sliced[2];

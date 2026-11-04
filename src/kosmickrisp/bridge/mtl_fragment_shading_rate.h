@@ -32,6 +32,17 @@ struct mtl_vrs_pipelines *mtl_vrs_new_cached_native_pipelines(mtl_compiler *comp
    bool framebuffer_reads, enum mtl_language_version version,
    enum mtl_math_mode math, enum mtl_math_floating_point_functions functions,
    uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests);
+/* Library ownership follows the common driver pipeline cache. */
+mtl_library *mtl_vrs_new_support_library(mtl_compiler *compiler,
+   enum mtl_language_version version, enum mtl_math_mode math,
+   enum mtl_math_floating_point_functions functions);
+struct mtl_vrs_pipelines *mtl_vrs_new_shared_native_pipelines(mtl_compiler *compiler,
+   mtl_render_pipeline_descriptor *native_pipeline,
+   mtl_function_descriptor *body, mtl_function_descriptor *replay,
+   bool framebuffer_reads, enum mtl_language_version version,
+   enum mtl_math_mode math, enum mtl_math_floating_point_functions functions,
+   uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests,
+   mtl_library *support_library);
 enum mtl_vrs_phase { MTL_VRS_COVERAGE, MTL_VRS_BODY, MTL_VRS_REPLAY };
 bool mtl_vrs_pipelines_early_tests(const struct mtl_vrs_pipelines *pipelines);
 uint32_t mtl_vrs_pipelines_samples(const struct mtl_vrs_pipelines *pipelines);

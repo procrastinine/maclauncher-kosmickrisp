@@ -13,7 +13,7 @@
 static void kk_compile_msl_options(struct kk_device *dev,
    nir_shader *nir, const struct vk_graphics_pipeline_state *state,
    struct msl_compile_data *data, const struct kk_compile_options *opts,
-   bool *has_framebuffer_reads);
+   bool *has_framebuffer_reads, uint8_t *framebuffer_read_mask);
 
 static void
 kk_interlock_shader_finish(struct kk_interlock_shader *shader)
@@ -53,7 +53,7 @@ kk_interlock_compile_program(struct kk_device *dev,
    bool *framebuffer_reads = program <= KK_INTERLOCK_REPLAY ?
       &shader->info.framebuffer_reads[program] : NULL;
    kk_compile_msl_options(dev, nir, state, &shader->program[program], NULL,
-      framebuffer_reads);
+      framebuffer_reads, NULL);
    ralloc_steal(shader, shader->program[program].code);
    ralloc_steal(shader, shader->program[program].entrypoint_name);
 }

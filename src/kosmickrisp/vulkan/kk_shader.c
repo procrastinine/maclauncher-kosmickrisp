@@ -581,6 +581,7 @@ kk_lower_fs_blend(nir_shader *nir,
       .logicop_func = vk_logic_op_to_pipe(state->cb->logic_op),
    };
 
+   uint8_t unused_outputs = nir->info.outputs_written >> FRAG_RESULT_DATA0;
    static_assert(ARRAY_SIZE(opts.rt) == 8, "max RTs out of sync");
    for (unsigned i = 0; i < ARRAY_SIZE(opts.rt); ++i) {
       opts.rt[i].format = PIPE_FORMAT_NONE;
@@ -605,6 +606,8 @@ kk_lower_fs_blend(nir_shader *nir,
        * one component would retain red and discard alpha. */
       if (rt->format == PIPE_FORMAT_A8_UNORM)
          rt->format = PIPE_FORMAT_R8G8B8A8_UNORM;
+      if (rt->format != PIPE_FORMAT_NONE)
+         unused_outputs &= ~BITFIELD_BIT(logical_index);
       rt->colormask = att->write_mask;
 
       if (!att->blend_enable) {
@@ -636,8 +639,9 @@ kk_lower_fs_blend(nir_shader *nir,
    }
    /* Undefined pipeline formats discard stores even when a pass binds a
     * real attachment there. Remove them before Metal types the outputs. */
-   nir_shader_intrinsics_pass(nir, kk_discard_unused_color,
-                              nir_metadata_control_flow, &opts);
+   if (unused_outputs)
+      nir_shader_intrinsics_pass(nir, kk_discard_unused_color,
+                                 nir_metadata_control_flow, &opts);
    /* Fold constant offset srcs for IO. */
    NIR_PASS(_, nir, nir_opt_constant_folding);
    NIR_PASS(_, nir, nir_lower_blend, &opts);
@@ -1111,8 +1115,6 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
    kk_shader_embedded_samplers_finish(dev, shader);
-   if (shader->dgc_compute)
-      mtl_release(shader->dgc_compute);
    kk_sparse_shader_finish(shader);
    for (unsigned i = 0; i < 2; ++i)
       if (shader->mesh_retained[i])
@@ -1132,8 +1134,12 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    struct kk_pipeline_handles *pipe = &shader->pipeline;
 
    if (shader->info.stage == MESA_SHADER_COMPUTE) {
+      if (shader->dgc_compute)
+         mtl_release(shader->dgc_compute);
       mtl_release(pipe->cs);
       pipe->cs = NULL;
+   } else if (shader->info.stage == MESA_SHADER_FRAGMENT) {
+      kk_vrs_source_destroy(dev, shader->vrs_source);
    } else if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH)) {
       /* Pre-render compute pipelines. */
       for (uint32_t i = 0u; i < pipe->gfx.pre_render_count; ++i) {
@@ -1187,7 +1193,6 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    ralloc_free((void *)shader->gs_main.entrypoint_name);
    ralloc_free((void *)shader->gs_main.code);
 
-   kk_vrs_source_destroy(dev, shader->vrs_source);
    vk_shader_free(&dev->vk, pAllocator, &shader->vk);
 }
 
@@ -1330,7 +1335,7 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
                const struct vk_graphics_pipeline_state *state,
                struct msl_compile_data *data,
                const struct kk_compile_options *opts,
-               bool *has_framebuffer_reads)
+               bool *has_framebuffer_reads, uint8_t *framebuffer_read_mask)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
    KK_PERF_VOID(dev, KK_PERF_NIR,
@@ -1338,6 +1343,9 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    if (has_framebuffer_reads)
       *has_framebuffer_reads = nir->info.stage == MESA_SHADER_FRAGMENT &&
                                nir->info.outputs_read != 0;
+   if (framebuffer_read_mask)
+      *framebuffer_read_mask = nir->info.stage == MESA_SHADER_FRAGMENT
+         ? nir->info.outputs_read >> FRAG_RESULT_DATA0 : 0;
 
    struct nir_to_msl_options translate_options = opts && opts->msl_custom
       ? *opts->msl_custom : (struct nir_to_msl_options){0};
@@ -1402,7 +1410,7 @@ kk_compile_msl(struct kk_device *dev, nir_shader *nir,
                const struct vk_graphics_pipeline_state *state,
                struct msl_compile_data *data)
 {
-   kk_compile_msl_options(dev, nir, state, data, NULL, NULL);
+   kk_compile_msl_options(dev, nir, state, data, NULL, NULL, NULL);
 }
 
 #include "kk_conservative_nir.h"
@@ -1727,7 +1735,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             programs[i]->info.workgroup_size[1] = programs[i]->info.workgroup_size[2] = 1;
             msl_preprocess_nir(programs[i]);
             kk_compile_msl_options(dev, programs[i], state, &shader->polygon[i],
-                                   opts, NULL);
+                                   opts, NULL, NULL);
          }
       }
 
@@ -1744,13 +1752,13 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          aux[i]->info.workgroup_size[1] = aux[i]->info.workgroup_size[2] = 1;
          msl_preprocess_nir(aux[i]);
          kk_compile_msl_options(dev, aux[i], state, &shader->gs_aux[i],
-                                opts, NULL);
+                                opts, NULL, NULL);
       }
 
       nir->info.stage = MESA_SHADER_COMPUTE;
       memset(&nir->info.cs, 0, sizeof(nir->info.cs));
       nir->xfb_info = NULL;
-      kk_compile_msl_options(dev, nir, state, &shader->gs_main, opts, NULL);
+      kk_compile_msl_options(dev, nir, state, &shader->gs_main, opts, NULL, NULL);
 
       /* From here on, nir is the rasterization VS of the GS */
       nir = rast;
@@ -1795,7 +1803,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       nir_shader_intrinsics_pass(nir, kk_interlock_trim_native_output,
          nir_metadata_control_flow, (void *)state);
    kk_compile_msl_options(dev, nir, state, &shader->msl_data[stage], opts,
-                          &shader->info.has_framebuffer_reads);
+                          NULL, &shader->info.framebuffer_read_mask);
 
    if (opts->vrs_source) {
       struct kk_vrs_source *source = kk_vrs_source_capture(dev, opts->vrs_source,
@@ -2231,7 +2239,7 @@ gather_graphics_pipeline_create_info(
       }
 
       if (stage == MESA_SHADER_FRAGMENT)
-         info->has_framebuffer_reads = s->info.has_framebuffer_reads;
+         info->framebuffer_read_mask = s->info.framebuffer_read_mask;
       info->vs.additional_stages_bits |= BITFIELD_BIT(stage);
       if (stage == MESA_SHADER_FRAGMENT && (info->polygon_point || info->poly_layer_replay || info->interlock_envelope))
          kk_msl_copy(&vs->polygon[3], &s->polygon[3]);
@@ -2640,7 +2648,10 @@ kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
                        const struct vk_shader_compile_info *info,
                        kk_feature_key features, nir_shader **retained)
 {
-   bool callable = retained && dev->vrs && kk_nir_vrs_split_application(fs);
+   bool callable = retained && dev->vrs && kk_vrs_pipeline_can_coarsen(state,
+      dev->vk.enabled_features.primitiveFragmentShadingRate,
+      dev->vk.enabled_features.attachmentFragmentShadingRate) &&
+      kk_nir_vrs_split_application(fs);
    kk_lower_fs(dev, fs, state);
    kk_finish_nir(dev, fs, info ? info->robustness : &rs_none,
       info ? info->set_layout_count : 0, info ? info->set_layouts : NULL, features);
@@ -3184,7 +3195,8 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
    if (vk_dev->enabled_features.pipelineFragmentShadingRate ||
        vk_dev->enabled_features.primitiveFragmentShadingRate ||
        vk_dev->enabled_features.attachmentFragmentShadingRate)
-      kk_vrs_source_serialize(shader->vrs_source, blob);
+      kk_vrs_source_serialize(shader->info.stage == MESA_SHADER_FRAGMENT
+                                ? shader->vrs_source : NULL, blob);
    kk_interlock_shader_serialize(shader, blob);
    return !blob->out_of_memory;
 }
@@ -3279,7 +3291,10 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
       if (result != VK_SUCCESS) goto fail;
    }
    if (dev->vrs) {
-      result = kk_vrs_source_deserialize(dev, blob, &shader->vrs_source);
+      if (info.stage == MESA_SHADER_FRAGMENT)
+         result = kk_vrs_source_deserialize(dev, blob, &shader->vrs_source);
+      else if (blob_read_uint32(blob) != 0 || blob->overrun)
+         result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
       if (result != VK_SUCCESS) goto fail;
    }
    result = kk_interlock_shader_deserialize(shader, blob);

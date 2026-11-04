@@ -518,7 +518,7 @@ kk_vrs_build_linked_fragment(struct kk_device *dev,
       result = VK_ERROR_FEATURE_NOT_PRESENT;
       goto finish;
    }
-   kk_compile_msl_options(dev, nir, &state, out, NULL, framebuffer_reads);
+   kk_compile_msl_options(dev, nir, &state, out, NULL, framebuffer_reads, NULL);
    nir = NULL; /* The common compiler consumes its compilation clone. */
    if (out->requires_msl41 && pdev->info.msl_version < MTL_LANGUAGE_VERSION_4_1) {
       result = VK_ERROR_FEATURE_NOT_PRESENT;
@@ -539,6 +539,8 @@ kk_vrs_fragment_get(struct kk_device *dev, struct kk_vrs_source *source,
    return kk_vrs_artifact_get(dev, source, kind, kk_vrs_build_linked_fragment, out);
 }
 
+#include "kk_fragment_shading_rate_support_cache.h"
+
 static VkResult
 kk_vrs_pipelines_for_source(struct kk_device *dev,
    mtl_render_pipeline_descriptor *raster_descriptor, struct kk_vrs_source *source,
@@ -548,21 +550,26 @@ kk_vrs_pipelines_for_source(struct kk_device *dev,
    if (!raster_descriptor || !source)
       return VK_ERROR_FEATURE_NOT_PRESENT;
    struct kk_vrs_artifact *body = NULL, *replay = NULL;
+   struct kk_vrs_support *support = NULL;
    VkResult result = kk_vrs_fragment_get(dev, source,
                                         KK_VRS_COARSE_BODY, &body);
    if (result != VK_SUCCESS) goto finish;
    result = kk_vrs_fragment_get(dev, source, KK_VRS_FINE_REPLAY, &replay);
    if (result != VK_SUCCESS) goto finish;
+   result = kk_vrs_support_get(dev, MAX2(body->version, replay->version),
+                               body->math, body->functions, &support);
+   if (result != VK_SUCCESS) goto finish;
    /* Each get has released the compilation mutex. Enter the native attachment
     * factory only with the caller's actual producer descriptor and interface. */
-   *out = mtl_vrs_new_cached_native_pipelines(dev->mtl_compiler_handle,
+   *out = mtl_vrs_new_shared_native_pipelines(dev->mtl_compiler_handle,
       raster_descriptor, body->function, replay->function,
       replay->framebuffer_reads, MAX2(body->version, replay->version),
       body->math, body->functions, source->data.result_stride,
       source->data.uses_per_draw,
-      source->data.early_fragment_tests);
+      source->data.early_fragment_tests, support->library);
    if (!*out) result = VK_ERROR_INVALID_SHADER_NV;
 finish:
+   if (support) vk_pipeline_cache_object_unref(&dev->vk, &support->base);
    kk_vrs_artifact_unref(dev, replay);
    kk_vrs_artifact_unref(dev, body);
    return result;

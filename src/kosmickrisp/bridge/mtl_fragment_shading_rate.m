@@ -61,26 +61,30 @@ function(id<MTLLibrary> library, const char *name)
    return f;
 }
 
+mtl_library *
+mtl_vrs_new_support_library(mtl_compiler *compiler,
+   enum mtl_language_version version, enum mtl_math_mode math,
+   enum mtl_math_floating_point_functions functions)
+{
+   return mtl_new_library(compiler, support_msl, version, math, functions);
+}
+
 static struct mtl_vrs_pipelines *
 new_function_pipelines(mtl_compiler *compiler,
    mtl_render_pipeline_descriptor *native_pipeline,
    MTL4FunctionDescriptor *application, MTL4FunctionDescriptor *replay,
    bool native_application, bool replay_framebuffer_reads,
    enum mtl_language_version version, enum mtl_math_mode math,
-   enum mtl_math_floating_point_functions functions, uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests)
+   enum mtl_math_floating_point_functions functions, uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests,
+   mtl_library *support_library)
 {
    @autoreleasepool {
       id<MTL4Compiler> c = (id<MTL4Compiler>)compiler;
       NSError *error = nil;
-      MTLCompileOptions *options = [[[MTLCompileOptions alloc] init] autorelease];
-      options.languageVersion = (MTLLanguageVersion)version;
-      options.mathMode = (MTLMathMode)math;
-      options.mathFloatingPointFunctions = (MTLMathFloatingPointFunctions)functions;
-      MTL4LibraryDescriptor *desc = [[[MTL4LibraryDescriptor alloc] init] autorelease];
-      desc.options = options;
-      desc.source = [NSString stringWithUTF8String:support_msl];
-      id<MTLLibrary> support = [c newLibraryWithDescriptor:desc error:&error];
-      if (!support) { fprintf(stderr,"VRS support: %s\n",error.localizedDescription.UTF8String); return NULL; }
+      id<MTLLibrary> support = support_library
+         ? [(id<MTLLibrary>)support_library retain]
+         : (id<MTLLibrary>)mtl_vrs_new_support_library(compiler, version, math, functions);
+      if (!support) return NULL;
       struct mtl_vrs_pipelines *p = calloc(1, sizeof(*p));
       if (!p) { [support release]; return NULL; }
       p->result_stride = result_stride;
@@ -165,7 +169,7 @@ new_pipelines(mtl_compiler *compiler,
       result = new_function_pipelines(compiler, native_pipeline,
          function((id<MTLLibrary>)application, coarse_entrypoint),
          replay ? function((id<MTLLibrary>)replay, replay_entry) : nil,
-         native_application, replay_framebuffer_reads, version, math, functions, sizeof(struct kk_vrs_result), false, false);
+         native_application, replay_framebuffer_reads, version, math, functions, sizeof(struct kk_vrs_result), false, false, NULL);
    }
    mtl_release(application);
    mtl_release(replay);
@@ -183,7 +187,23 @@ mtl_vrs_new_cached_native_pipelines(mtl_compiler *compiler,
    if (!native_pipeline || !body || !replay) return NULL;
    return new_function_pipelines(compiler, native_pipeline,
       (MTL4FunctionDescriptor *)body, (MTL4FunctionDescriptor *)replay, true,
-      framebuffer_reads, version, math, functions, result_stride, uses_per_draw, early_fragment_tests);
+      framebuffer_reads, version, math, functions, result_stride, uses_per_draw, early_fragment_tests, NULL);
+}
+
+struct mtl_vrs_pipelines *
+mtl_vrs_new_shared_native_pipelines(mtl_compiler *compiler,
+   mtl_render_pipeline_descriptor *native_pipeline,
+   mtl_function_descriptor *body, mtl_function_descriptor *replay,
+   bool framebuffer_reads, enum mtl_language_version version,
+   enum mtl_math_mode math, enum mtl_math_floating_point_functions functions,
+   uint32_t result_stride, bool uses_per_draw, bool early_fragment_tests,
+   mtl_library *support_library)
+{
+   if (!native_pipeline || !body || !replay || !support_library) return NULL;
+   return new_function_pipelines(compiler, native_pipeline,
+      (MTL4FunctionDescriptor *)body, (MTL4FunctionDescriptor *)replay, true,
+      framebuffer_reads, version, math, functions, result_stride, uses_per_draw,
+      early_fragment_tests, support_library);
 }
 
 void
