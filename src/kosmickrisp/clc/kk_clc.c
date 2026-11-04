@@ -25,6 +25,8 @@
 #include "util/macros.h"
 #include <sys/mman.h>
 
+#include "kk_as_math.h"
+
 static const struct spirv_to_nir_options spirv_options = {
    .environment = NIR_SPIRV_OPENCL,
    .shared_addr_format = nir_address_format_62bit_generic,
@@ -104,6 +106,7 @@ compile(void *memctx, const uint32_t *spirv, size_t spirv_size)
    NIR_PASS(_, nir, nir_lower_returns);
    NIR_PASS(_, nir, nir_inline_functions);
    nir_remove_non_exported(nir);
+   kk_as_preserve_kernel_math(nir);
    NIR_PASS(_, nir, nir_opt_copy_prop);
    NIR_PASS(_, nir, nir_opt_deref);
 

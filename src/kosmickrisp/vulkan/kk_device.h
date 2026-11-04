@@ -173,6 +173,7 @@ kk_device_physical(const struct kk_device *dev)
 
 VkResult kk_device_init_meta(struct kk_device *dev);
 void kk_device_finish_meta(struct kk_device *dev);
+VkResult kk_build_precompiled_shader(struct kk_device *dev, const uint32_t *binary, uint32_t max_threads, struct kk_precompiled_shader *out);
 VkResult kk_device_init_lib(struct kk_device *dev);
 VkResult kk_device_init_conservative_lib(struct kk_device *dev);
 VkResult kk_device_init_primitives_generated_lib(struct kk_device *dev);

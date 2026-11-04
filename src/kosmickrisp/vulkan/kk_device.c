@@ -6,6 +6,7 @@
  */
 
 #include "kk_device.h"
+#include "kosmickrisp-rt-commands.h"
 #include "kk_perf.h"
 #include "kk_frame_capture.h"
 #include "util/disk_cache.h"
@@ -752,6 +753,11 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
                            pAllocator);
    if (result != VK_SUCCESS)
       goto fail_alloc;
+
+   if (dev->vk.enabled_features.rayTracingPipeline) {
+      kk_rt_descriptor_dispatch_init(dev);
+      kk_rt_heap_dispatch_init(dev);
+   }
 
    simple_mtx_init(&dev->depth_stencil_cache_mutex, mtx_plain);
    dev->perf = kk_perf_create();

@@ -9,6 +9,7 @@
 #include "kk_sparse.h"
 
 #include "kk_descriptor_types.h"
+#include "kk_as_descriptor.h"
 #include "kk_device.h"
 #include "kk_entrypoints.h"
 #include "kk_physical_device.h"
@@ -73,6 +74,11 @@ kk_descriptor_stride_align_for_type(
       break;
    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
       *stride = *alignment = sizeof(struct kk_storage_image_descriptor);
+      break;
+
+   case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+      *stride = sizeof(struct kk_as_descriptor);
+      *alignment = __alignof__(struct kk_as_descriptor);
       break;
 
    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:

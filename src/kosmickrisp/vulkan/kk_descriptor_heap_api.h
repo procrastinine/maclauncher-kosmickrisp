@@ -655,7 +655,8 @@ kk_GetPhysicalDeviceDescriptorSizeEXT(VkPhysicalDevice physicalDevice,
    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-   case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
+   case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+   case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
       uint32_t stride, alignment;
       kk_descriptor_stride_align_for_type(type, NULL, &stride, &alignment);
       return stride;
@@ -747,6 +748,13 @@ kk_WriteResourceDescriptorsEXT(VkDevice _device, uint32_t resourceCount,
          }
          break;
       }
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+         const VkDeviceAddressRangeEXT *range = resource->data.pAddressRange;
+         const struct kk_as_descriptor desc = kk_as_descriptor_from_range(
+            range ? range->address : 0, range ? range->size : 0);
+         memcpy(dst->address, &desc, sizeof(desc));
+         break;
+      }
       default:
          UNREACHABLE("unsupported resource heap descriptor type");
       }
@@ -791,4 +799,48 @@ kk_CmdPushDataEXT(VkCommandBuffer commandBuffer, const VkPushDataInfoEXT *info)
                               info->data.address, info->data.size);
    kk_descriptor_push_update(&cmd->state.cs.descriptors, info->offset,
                               info->data.address, info->data.size);
+}
+
+/* Global heap/push-data state also applies to RT. Only enabled devices install
+ * these handlers; no shader, allocation or binding is added to ordinary ones. */
+static VKAPI_ATTR void VKAPI_CALL
+kk_rt_CmdBindSamplerHeapEXT(VkCommandBuffer cb, const VkBindHeapInfoEXT *info)
+{
+   kk_CmdBindSamplerHeapEXT(cb, info);
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, cb);
+   if (cmd->state.rt) {
+      struct kk_descriptor_state *desc = &cmd->state.rt->descriptors;
+      desc->root_dirty |= desc->descriptor_heap && desc->heap_sampler != info->heapRange.address;
+      desc->heap_sampler = info->heapRange.address;
+   }
+}
+
+static VKAPI_ATTR void VKAPI_CALL
+kk_rt_CmdBindResourceHeapEXT(VkCommandBuffer cb, const VkBindHeapInfoEXT *info)
+{
+   kk_CmdBindResourceHeapEXT(cb, info);
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, cb);
+   if (cmd->state.rt) {
+      struct kk_descriptor_state *desc = &cmd->state.rt->descriptors;
+      desc->root_dirty |= desc->descriptor_heap && desc->heap_resource != info->heapRange.address;
+      desc->heap_resource = info->heapRange.address;
+   }
+}
+
+static VKAPI_ATTR void VKAPI_CALL
+kk_rt_CmdPushDataEXT(VkCommandBuffer cb, const VkPushDataInfoEXT *info)
+{
+   kk_CmdPushDataEXT(cb, info);
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, cb);
+   struct kk_descriptor_state *desc = kk_rt_descriptors(cmd);
+   if (desc)
+      kk_descriptor_push_update(desc, info->offset, info->data.address, info->data.size);
+}
+
+void
+kk_rt_heap_dispatch_init(struct kk_device *dev)
+{
+   dev->vk.dispatch_table.CmdBindSamplerHeapEXT = kk_rt_CmdBindSamplerHeapEXT;
+   dev->vk.dispatch_table.CmdBindResourceHeapEXT = kk_rt_CmdBindResourceHeapEXT;
+   dev->vk.dispatch_table.CmdPushDataEXT = kk_rt_CmdPushDataEXT;
 }

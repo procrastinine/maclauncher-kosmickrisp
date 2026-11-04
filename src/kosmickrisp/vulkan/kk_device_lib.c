@@ -31,11 +31,11 @@ static const enum libkk_program primitives_generated_programs[] = {
    LIBKK_PRIMITIVES_GENERATED_RESTART,
 };
 
-static VkResult
-build_precompiled_shader(struct kk_device *dev, enum libkk_program program)
+VkResult
+kk_build_precompiled_shader(struct kk_device *dev, const uint32_t *bin,
+                            uint32_t max_threads, struct kk_precompiled_shader *shader)
 {
-   const uint32_t *bin = libkk_AppleSilicon[program];
-   const struct kk_precompiled_info *info = (void *)bin;
+   const struct kk_precompiled_info *info = (const void *)bin;
    const char *msl = (const char *)bin + sizeof(*info);
 
    mtl_library *library = KK_PERF_CALL(dev, KK_PERF_METAL_LIBRARY, mtl_new_library(
@@ -44,20 +44,12 @@ build_precompiled_shader(struct kk_device *dev, enum libkk_program program)
    if (library == NULL)
       return vk_error(dev, VK_ERROR_INVALID_SHADER_NV);
 
-   struct kk_precompiled_shader *shader = &dev->precompiled_cache.shaders[program];
-
    /* TODO_KOSMICKRISP Do not hardcode the entrypoint */
    mtl_function_descriptor *function =
       mtl_new_library_function_descriptor(library, "main_entrypoint");
-   uint32_t local_size_threads = info->workgroup_size[0] *
-                                 info->workgroup_size[1] *
-                                 info->workgroup_size[2];
    shader->pipeline = KK_PERF_CALL(dev, KK_PERF_METAL_PIPELINE, mtl_new_compute_pipeline_state(
       dev->mtl_compiler_handle, function,
-      /* Preserve private temporaries in conservative preparation by
-       * leaving this compiler limit at its default. Dispatch dimensions
-       * still come from the precompiled kernel metadata. */
-      program == LIBKK_CONSERVATIVE_PREPARE ? 0 : local_size_threads));
+      max_threads));
    mtl_release(function);
    mtl_release(library);
 
@@ -66,6 +58,17 @@ build_precompiled_shader(struct kk_device *dev, enum libkk_program program)
 
    memcpy(&shader->info, info, sizeof(*info));
    return VK_SUCCESS;
+}
+
+static VkResult
+build_precompiled_shader(struct kk_device *dev, enum libkk_program program)
+{
+   const struct kk_precompiled_info *info = (const void *)libkk_AppleSilicon[program];
+   uint32_t threads = info->workgroup_size[0] * info->workgroup_size[1] * info->workgroup_size[2];
+   /* Preserve conservative preparation's accepted private-temporary limit. */
+   return kk_build_precompiled_shader(dev, libkk_AppleSilicon[program],
+      program == LIBKK_CONSERVATIVE_PREPARE ? 0 : threads,
+      &dev->precompiled_cache.shaders[program]);
 }
 
 VkResult

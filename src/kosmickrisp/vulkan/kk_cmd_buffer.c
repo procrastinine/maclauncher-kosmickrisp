@@ -8,6 +8,7 @@
 #include "kk_cmd_buffer.h"
 #include "kk_perf.h"
 #include "kk_scene.h"
+#include "kosmickrisp-rt-commands.h"
 #include "kk_depth_stencil_state.h"
 #include "kk_interlock_submit.h"
 #include "kk_interlock_heap.h"
@@ -68,6 +69,10 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    kk_cmd_release_dynamic_ds_state(cmd);
    kk_descriptor_state_fini(cmd, &cmd->state.gfx.descriptors);
    kk_descriptor_state_fini(cmd, &cmd->state.cs.descriptors);
+   if (cmd->state.rt) {
+      kk_descriptor_state_fini(cmd, &cmd->state.rt->descriptors);
+      kk_rt_command_finish(cmd);
+   }
 
    kk_cmd_pool_free_bo_list(pool, &cmd->uploader.bos);
 
@@ -1335,7 +1340,14 @@ kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INVALID_SHADER_NV);
       return;
    }
+   kk_dispatch_precompiled_shader(cmd, grid, pre_gfx, prog, data, data_size);
+}
 
+void
+kk_dispatch_precompiled_shader(struct kk_cmd_buffer *cmd, struct kk_grid grid,
+                                bool pre_gfx, const struct kk_precompiled_shader *prog,
+                                void *data, size_t data_size)
+{
    mtl_compute_encoder *encoder = cs_get_compute(cmd);
    mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
                                     MTL_STAGE_DISPATCH);
@@ -1390,6 +1402,7 @@ kk_CmdPushDescriptorSetWithTemplate2KHR(
 
    struct kk_descriptor_state *desc =
       kk_get_descriptors_state(cmd, template->bind_point);
+   if (!desc) return;
    struct kk_descriptor_set_layout *set_layout = vk_to_kk_descriptor_set_layout(
       pipeline_layout->set_layouts[pPushDescriptorSetWithTemplateInfo->set]);
    struct kk_push_descriptor_set *push_set = kk_cmd_push_descriptors(
@@ -1683,3 +1696,46 @@ kk_CmdInsertDebugUtilsLabelEXT(VkCommandBuffer _commandBuffer,
 }
 
 #include "kk_whole_pass.h"
+
+/* Installed once for RT-enabled devices. Ordinary descriptor commands retain
+ * their original handlers, with no RT branch or allocation. */
+static VKAPI_ATTR void VKAPI_CALL
+kk_rt_CmdBindDescriptorSets2KHR(VkCommandBuffer commandBuffer, const VkBindDescriptorSetsInfoKHR *pBindDescriptorSetsInfo)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   if (pBindDescriptorSetsInfo->stageFlags & KK_RT_STAGES) {
+      struct kk_descriptor_state *rt = kk_rt_descriptors(cmd);
+      if (rt) kk_bind_descriptor_sets(rt, pBindDescriptorSetsInfo);
+   }
+   kk_CmdBindDescriptorSets2KHR(commandBuffer, pBindDescriptorSetsInfo);
+}
+
+static VKAPI_ATTR void VKAPI_CALL
+kk_rt_CmdPushDescriptorSet2KHR(VkCommandBuffer commandBuffer, const VkPushDescriptorSetInfoKHR *pPushDescriptorSetInfo)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   if (pPushDescriptorSetInfo->stageFlags & KK_RT_STAGES) {
+      struct kk_descriptor_state *rt = kk_rt_descriptors(cmd);
+      if (rt) kk_push_descriptor_set(cmd, rt, pPushDescriptorSetInfo);
+   }
+   kk_CmdPushDescriptorSet2KHR(commandBuffer, pPushDescriptorSetInfo);
+}
+
+static VKAPI_ATTR void VKAPI_CALL
+kk_rt_CmdPushConstants2KHR(VkCommandBuffer commandBuffer, const VkPushConstantsInfoKHR *pPushConstantsInfo)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   if (pPushConstantsInfo->stageFlags & KK_RT_STAGES) {
+      struct kk_descriptor_state *rt = kk_rt_descriptors(cmd);
+      if (rt) kk_push_constants(cmd, rt, pPushConstantsInfo);
+   }
+   kk_CmdPushConstants2KHR(commandBuffer, pPushConstantsInfo);
+}
+
+void
+kk_rt_descriptor_dispatch_init(struct kk_device *dev)
+{
+   dev->vk.dispatch_table.CmdBindDescriptorSets2KHR = kk_rt_CmdBindDescriptorSets2KHR;
+   dev->vk.dispatch_table.CmdPushDescriptorSet2KHR = kk_rt_CmdPushDescriptorSet2KHR;
+   dev->vk.dispatch_table.CmdPushConstants2KHR = kk_rt_CmdPushConstants2KHR;
+}

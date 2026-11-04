@@ -51,7 +51,9 @@ kk_prepare_heap_instr(nir_builder *b, nir_instr *instr, void *data)
          assert(tex->sampler_index < ctx->embedded_count);
          unsigned offset = kk_root_descriptor_offset(heap_embedded_samplers) +
                            b->shader->info.stage * sizeof(uint64_t);
-         nir_def *table = load_root(b, 1, 64, nir_imm_int(b, offset), 8);
+         nir_def *table = mesa_shader_stage_is_rt(b->shader->info.stage) ?
+            kk_rt_load_embedded_sampler_table(b) :
+            load_root(b, 1, 64, nir_imm_int(b, offset), 8);
          nir_def *address = ctx->embedded_count == 1 ? table :
             nir_load_global_constant(b, 1, 64,
                nir_iadd_imm(b, table, tex->sampler_index * sizeof(uint64_t)), .align_mul = 8);

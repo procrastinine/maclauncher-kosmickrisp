@@ -366,10 +366,51 @@ struct vk_device_shader_ops {
                             uint32_t ray_queries,
                             const uint8_t *dynamic_descriptor_offsets);
 
+   /** Optional realization of common RT pipelines, including libraries.
+    *
+    * link and destroy form a checked pair; bind requires link. The callback
+    * table remains immutable while any pipeline using it is alive. Backends
+    * with all three callbacks NULL retain the common implementation.
+    *
+    * *private_data starts NULL. Any non-NULL value belongs to common code on
+    * both success and error. On error, destroy runs exactly once before the
+    * layout, groups and stages are released. A callback doing its own failure
+    * cleanup must clear *private_data. destroy accepts partially initialized
+    * objects and receives the same allocator as link.
+    *
+    * Common code owns all stage/group/library references. The pipeline and
+    * its accessors are borrowed, read-only and valid only for its lifetime.
+    * Successful NULL private data is allowed when bind supports absent state.
+    * Libraries retain their existing shaders and group identities on failure.
+    */
+   VkResult (*link_rt_pipeline)(struct vk_device *device,
+                                const struct vk_pipeline *pipeline,
+                                const VkAllocationCallbacks *alloc,
+                                void **private_data);
+   void (*destroy_rt_pipeline)(struct vk_device *device, void *private_data,
+                               const VkAllocationCallbacks *alloc);
+
+   /** Called only for a non-NULL pipeline, after common RT state/stack setup.
+    * Private data may be NULL under the link contract. Native resources use
+    * the backend's ordinary command/GPU lifetime tracking. The NULL pipeline
+    * branch only clears RT stage bits; it does not call this hook or change
+    * private binding state or other pipeline bind points.
+    */
+   void (*cmd_bind_rt_pipeline)(struct vk_command_buffer *cmd_buffer,
+                                const struct vk_pipeline *pipeline,
+                                void *private_data);
+
    /** Sets stack size for RT pipelines */
    void (*cmd_set_stack_size)(struct vk_command_buffer *cmd_buffer,
                               VkDeviceSize stack_size);
 };
+
+static inline bool
+vk_rt_pipeline_callbacks_valid(const struct vk_device_shader_ops *ops)
+{
+   return (ops->link_rt_pipeline != NULL) == (ops->destroy_rt_pipeline != NULL) &&
+          (!ops->cmd_bind_rt_pipeline || ops->link_rt_pipeline);
+}
 
 extern const struct vk_pipeline_robustness_state vk_robustness_disabled;
 

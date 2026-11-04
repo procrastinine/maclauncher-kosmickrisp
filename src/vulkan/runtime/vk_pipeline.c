@@ -2756,6 +2756,7 @@ struct vk_rt_shader_group {
 
 struct vk_rt_pipeline {
    struct vk_pipeline base;
+   void *driver_data;
 
    struct vk_pipeline_layout *layout;
 
@@ -2771,6 +2772,68 @@ struct vk_rt_pipeline {
 
    uint8_t dynamic_descriptor_offsets[MESA_VK_MAX_DESCRIPTOR_SETS];
 };
+
+static const struct vk_rt_pipeline *
+vk_pipeline_as_rt(const struct vk_pipeline *pipeline)
+{
+   assert(pipeline && pipeline->bind_point == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR);
+   return container_of(pipeline, const struct vk_rt_pipeline, base);
+}
+
+VkDeviceSize
+vk_pipeline_get_rt_stack_size(const struct vk_pipeline *pipeline)
+{ return vk_pipeline_as_rt(pipeline)->stack_size; }
+
+uint32_t
+vk_pipeline_get_rt_stage_count(const struct vk_pipeline *pipeline)
+{
+   return vk_pipeline_as_rt(pipeline)->stage_count;
+}
+
+const struct vk_shader *
+vk_pipeline_get_rt_stage(const struct vk_pipeline *pipeline, uint32_t index)
+{
+   const struct vk_rt_pipeline *rt = vk_pipeline_as_rt(pipeline);
+   assert(index < rt->stage_count);
+   return rt->stages[index].shader;
+}
+
+uint32_t
+vk_pipeline_get_rt_group_count(const struct vk_pipeline *pipeline)
+{
+   return vk_pipeline_as_rt(pipeline)->group_count;
+}
+
+void
+vk_pipeline_get_rt_group(const struct vk_pipeline *pipeline, uint32_t index,
+                          struct vk_rt_group_shader_info *group)
+{
+   const struct vk_rt_pipeline *rt = vk_pipeline_as_rt(pipeline);
+   assert(index < rt->group_count);
+   assert(group != NULL);
+   const struct vk_rt_shader_group *src = &rt->groups[index];
+   assert(src->stage_count <= ARRAY_SIZE(src->stages));
+   assert(src->stage_count <= ARRAY_SIZE(group->shaders));
+   *group = (struct vk_rt_group_shader_info){.type = src->type,
+                                           .shader_count = src->stage_count};
+   for (uint32_t i = 0; i < src->stage_count; ++i)
+      group->shaders[i] = src->stages[i].shader;
+}
+
+/* Creation validates the immutable callback pair before any allocation.
+ * Clear ownership before invoking the backend, including partial failures.
+ */
+static void
+vk_rt_pipeline_finish_driver(struct vk_device *device,
+                              struct vk_rt_pipeline *pipeline,
+                              const VkAllocationCallbacks *alloc)
+{
+   if (pipeline->driver_data) {
+      void *data = pipeline->driver_data;
+      pipeline->driver_data = NULL;
+      device->shader_ops->destroy_rt_pipeline(device, data, alloc);
+   }
+}
 
 uint32_t
 vk_pipeline_get_rt_scratch_size(struct vk_pipeline *pipeline)
@@ -2813,6 +2876,7 @@ vk_rt_pipeline_destroy(struct vk_device *device,
    struct vk_rt_pipeline *rt_pipeline =
       container_of(pipeline, struct vk_rt_pipeline, base);
 
+   vk_rt_pipeline_finish_driver(device, rt_pipeline, pAllocator);
    for (uint32_t i = 0; i < rt_pipeline->group_count; i++)
       vk_rt_shader_group_destroy(device, &rt_pipeline->groups[i]);
    for (uint32_t i = 0; i < rt_pipeline->stage_count; i++)
@@ -2841,6 +2905,8 @@ vk_rt_pipeline_cmd_bind(struct vk_command_buffer *cmd_buffer,
 
       if (rt_pipeline->stack_size > 0)
          ops->cmd_set_stack_size(cmd_buffer, rt_pipeline->stack_size);
+      if (ops->cmd_bind_rt_pipeline)
+         ops->cmd_bind_rt_pipeline(cmd_buffer, pipeline, rt_pipeline->driver_data);
 
       assert(pipeline->bind_point == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR);
       cmd_buffer->pipeline_shader_stages |= pipeline->stages;
@@ -3034,8 +3100,8 @@ vk_get_rt_pipeline_compile_info(struct vk_rt_pipeline_compile_info *info,
 
    memset(info, 0, sizeof(*info));
 
-   uint32_t libraries_stage_count = 0;
-   uint32_t libraries_group_count = 0;
+   uint64_t libraries_stage_count = 0;
+   uint64_t libraries_group_count = 0;
    const VkPipelineLibraryCreateInfoKHR *libs_info = pCreateInfo->pLibraryInfo;
    if (libs_info != NULL) {
       for (uint32_t i = 0; i < libs_info->libraryCount; i++) {
@@ -3050,6 +3116,9 @@ vk_get_rt_pipeline_compile_info(struct vk_rt_pipeline_compile_info *info,
       }
    }
 
+   if(libraries_stage_count+pCreateInfo->stageCount>UINT32_MAX ||
+      libraries_group_count+pCreateInfo->groupCount>UINT32_MAX)
+      return vk_error(device,VK_ERROR_OUT_OF_HOST_MEMORY);
    info->stage_count = libraries_stage_count + pCreateInfo->stageCount;
    info->group_count = libraries_group_count + pCreateInfo->groupCount;
 
@@ -3571,6 +3640,10 @@ vk_create_rt_pipeline(struct vk_device *device,
    int64_t pipeline_start = os_time_get_nano();
    VkResult result;
 
+   if (!vk_rt_pipeline_callbacks_valid(device->shader_ops))
+      return vk_errorf(device, VK_ERROR_INITIALIZATION_FAILED,
+                       "RT pipeline callbacks require paired link/destroy and bind requires link");
+
    struct vk_rt_pipeline_compile_info compile_info;
    result = vk_get_rt_pipeline_compile_info(&compile_info, device,
                                             pCreateInfo, pAllocator);
@@ -3620,7 +3693,7 @@ vk_create_rt_pipeline(struct vk_device *device,
 
    bool all_cache_hit = true;
 
-   uint32_t stack_max[MESA_SHADER_KERNEL] = { 0 };
+   VkDeviceSize stack_max[MESA_SHADER_KERNEL] = { 0 };
 
    uint32_t binary_index = 0;
 
@@ -3853,6 +3926,12 @@ vk_create_rt_pipeline(struct vk_device *device,
 
    if (pipeline_layout != NULL)
       pipeline->layout = vk_pipeline_layout_ref(pipeline_layout);
+   if (device->shader_ops->link_rt_pipeline) {
+      result = device->shader_ops->link_rt_pipeline(device, &pipeline->base,
+                                                   pAllocator, &pipeline->driver_data);
+      if (result != VK_SUCCESS)
+         goto fail_stages_compile;
+   }
 
    vk_release_rt_pipeline_compile_info(&compile_info, device, pAllocator);
 
@@ -3875,6 +3954,9 @@ vk_create_rt_pipeline(struct vk_device *device,
    return VK_SUCCESS;
 
  fail_stages_compile:
+   vk_rt_pipeline_finish_driver(device, pipeline, pAllocator);
+   if (pipeline->layout != NULL)
+      vk_pipeline_layout_unref(device, pipeline->layout);
    for (uint32_t i = 0; i < pipeline->group_count; i++)
       vk_rt_shader_group_destroy(device, &pipeline->groups[i]);
    for (uint32_t i = 0; i < pipeline->stage_count; i++)

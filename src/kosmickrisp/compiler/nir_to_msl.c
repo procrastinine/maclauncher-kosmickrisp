@@ -1205,6 +1205,8 @@ global_access_qualifier(struct nir_to_msl_ctx *ctx,
 
 #include "kk_mesh_runtime.h"
 #include "kk_mesh_intrinsics.h"
+#include "kk_rt_intrinsics.h"
+
 
 static void
 intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
@@ -1246,6 +1248,9 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_per_vertex_output:
    case nir_intrinsic_load_per_primitive_output:
       kk_mesh_intrinsic_to_msl(ctx, instr);
+      break;
+   case nir_intrinsic_load_param:
+      kk_rt_parameter_to_msl(ctx, instr);
       break;
    case nir_intrinsic_decl_reg: {
       const char *reg_type = msl_uint_type(nir_intrinsic_bit_size(instr),
@@ -2235,7 +2240,8 @@ jump_instr_to_msl(struct nir_to_msl_ctx *ctx, nir_jump_instr *jump)
 {
    switch (jump->type) {
    case nir_jump_halt:
-      if (ctx->shader->info.stage == MESA_SHADER_TASK) {
+      if (ctx->shader->info.stage == MESA_SHADER_TASK ||
+          mesa_shader_stage_is_rt(ctx->shader->info.stage)) {
          P_IND(ctx, "return;\n");
          break;
       }
@@ -2257,6 +2263,10 @@ jump_instr_to_msl(struct nir_to_msl_ctx *ctx, nir_jump_instr *jump)
       P_IND(ctx, "continue;\n");
       break;
    case nir_jump_return:
+      if (mesa_shader_stage_is_rt(ctx->shader->info.stage)) {
+         P_IND(ctx, "return;\n");
+         break;
+      }
       assert(!"functions should have been inlined by now");
       break;
    case nir_jump_goto:
@@ -2422,6 +2432,8 @@ rename_main_entrypoint(struct nir_shader *nir)
    /* Rename entrypoint to avoid MSL limitations after we've removed all others.
     * We don't really care what it's named as long as it's not "main"
     */
+   if (mesa_shader_stage_is_rt(nir->info.stage))
+      return;
    const char *entrypoint_name = "main_entrypoint";
    nir_function_impl *entrypoint = nir_shader_get_entrypoint(nir);
    struct nir_function *function = entrypoint->function;
@@ -2798,6 +2810,8 @@ msl_emit_constant_data(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 
 #include "kk_mesh_msl.h"
 
+#include "kk_rt_msl.h"
+
 char *
 nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
 {
@@ -2858,7 +2872,9 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (shader->info.stage == MESA_SHADER_FRAGMENT &&
        shader->info.fs.early_fragment_tests)
       P(&ctx, "[[early_fragment_tests]]\n");
-   if (shader->info.stage == MESA_SHADER_TASK || shader->info.stage == MESA_SHADER_MESH) {
+   if (mesa_shader_stage_is_rt(shader->info.stage)) {
+      kk_rt_emit_function(&ctx, impl);
+   } else if (shader->info.stage == MESA_SHADER_TASK || shader->info.stage == MESA_SHADER_MESH) {
       kk_mesh_emit_functions(&ctx, impl);
    } else {
    P(&ctx, "%s %s %s(\n", get_stage_string(shader->info.stage),

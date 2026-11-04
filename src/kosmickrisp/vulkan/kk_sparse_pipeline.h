@@ -447,6 +447,8 @@ kk_compile_shaders_untracked(struct vk_device *device, uint32_t count,
    struct vk_shader_compile_info *infos, const struct vk_graphics_pipeline_state *graphics,
    const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
+   if (count && mesa_shader_stage_is_rt(infos[0].stage))
+      return kk_compile_shaders_native(device,count,infos,graphics,features,alloc,out,features->sparseResidencyBuffer || features->sparseResidencyImage3D);
    struct kk_sparse_shader_state *state = NULL;
    uint32_t always_modes;
    uint32_t modes = kk_sparse_pipeline_modes(count, infos, features, &always_modes);
@@ -540,6 +542,7 @@ static VkResult
 kk_deserialize_shader_untracked(struct vk_device *dev, struct blob_reader *blob, uint32_t version,
    const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
+   if (kk_rt_shader_binary(blob)) return kk_rt_shader_deserialize(dev,blob,alloc,out);
    VkResult result = kk_deserialize_shader_native(dev, blob, version, alloc, out);
    if (result != VK_SUCCESS) return result;
    unsigned size = blob_read_uint32(blob);

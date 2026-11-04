@@ -236,6 +236,24 @@ void
 vk_cmd_unbind_pipelines_for_stages(struct vk_command_buffer *cmd_buffer,
                                    VkShaderStageFlags stages);
 
+/* Borrowed, read-only stage/group results. They remain valid only while
+ * the common pipeline lives. Consumers do not mutate, unref or clone its
+ * authoritative stage objects; imported library clones remain common-owned.
+ */
+struct vk_rt_group_shader_info {
+   VkRayTracingShaderGroupTypeKHR type;
+   uint32_t shader_count;
+   const struct vk_shader *shaders[3];
+};
+
+VkDeviceSize vk_pipeline_get_rt_stack_size(const struct vk_pipeline *pipeline);
+uint32_t vk_pipeline_get_rt_stage_count(const struct vk_pipeline *pipeline);
+const struct vk_shader *vk_pipeline_get_rt_stage(const struct vk_pipeline *pipeline,
+                                                uint32_t index);
+uint32_t vk_pipeline_get_rt_group_count(const struct vk_pipeline *pipeline);
+void vk_pipeline_get_rt_group(const struct vk_pipeline *pipeline, uint32_t index,
+                               struct vk_rt_group_shader_info *group);
+
 uint32_t
 vk_pipeline_get_rt_scratch_size(struct vk_pipeline *pipeline);
 

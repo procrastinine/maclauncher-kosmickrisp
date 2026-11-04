@@ -31,6 +31,8 @@
 #include <string.h>
 
 struct kk_query_pool;
+struct kk_rt_command_state;
+struct kk_descriptor_state *kk_rt_descriptors(struct kk_cmd_buffer *cmd);
 
 struct kk_root_descriptor_table {
    uint64_t addr;
@@ -454,6 +456,7 @@ struct kk_cmd_buffer {
    struct {
       struct kk_graphics_state gfx;
       struct kk_compute_state cs;
+      struct kk_rt_command_state *rt;
       uint64_t compute_statistic;
       uint64_t pipeline_statistics;
       const uint8_t *pipeline_statistic_offsets;
@@ -513,6 +516,8 @@ kk_get_descriptors_state(struct kk_cmd_buffer *cmd,
       return &cmd->state.gfx.descriptors;
    case VK_PIPELINE_BIND_POINT_COMPUTE:
       return &cmd->state.cs.descriptors;
+   case VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR:
+      return kk_rt_descriptors(cmd);
    default:
       UNREACHABLE("Unhandled bind point");
    }
@@ -659,6 +664,10 @@ kk_grid_is_indirect(struct kk_grid grid)
 void kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
                          bool pre_gfx, enum libkk_program idx, void *data,
                          size_t data_size);
+
+void kk_dispatch_precompiled_shader(struct kk_cmd_buffer *cmd, struct kk_grid grid,
+                                     bool pre_gfx, const struct kk_precompiled_shader *program,
+                                     void *data, size_t data_size);
 
 #define MESA_DISPATCH_PRECOMP kk_dispatch_precomp
 

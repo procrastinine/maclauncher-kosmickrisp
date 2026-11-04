@@ -6,6 +6,9 @@
  */
 
 #include "kk_descriptor_set.h"
+#include "kosmickrisp-rt-commands.h"
+#include "kk_as_descriptor.h"
+#include "vk_acceleration_structure.h"
 
 #include "kk_bo.h"
 #include "kk_buffer.h"
@@ -59,6 +62,28 @@ write_desc(struct kk_descriptor_set *set, uint32_t binding, uint32_t elem,
    void *dst = desc_ubo_data(set, binding, elem, &dst_size);
    assert(desc_size <= dst_size);
    memcpy(dst, desc_data, desc_size);
+}
+
+static void
+write_as_descriptor(struct kk_descriptor_set *set, VkAccelerationStructureKHR handle,
+                    uint32_t binding, uint32_t element)
+{
+   VK_FROM_HANDLE(vk_acceleration_structure, as, handle);
+   const struct kk_as_descriptor desc = as ?
+      kk_as_descriptor_from_range(vk_acceleration_structure_get_va(as), as->size) :
+      kk_as_descriptor_from_range(0, 0);
+   write_desc(set, binding, element, &desc, sizeof(desc));
+}
+
+static void
+write_as_update(struct kk_descriptor_set *set, const VkWriteDescriptorSet *write)
+{
+   const VkWriteDescriptorSetAccelerationStructureKHR *as = vk_find_struct_const(
+      write->pNext, WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+   assert(as && as->accelerationStructureCount == write->descriptorCount);
+   for (uint32_t j = 0; j < write->descriptorCount; ++j)
+      write_as_descriptor(set, as->pAccelerationStructures[j], write->dstBinding,
+                          write->dstArrayElement + j);
 }
 
 static void
@@ -328,6 +353,9 @@ kk_UpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount,
       VK_FROM_HANDLE(kk_descriptor_set, set, write->dstSet);
 
       switch (write->descriptorType) {
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+         write_as_update(set, write);
+         break;
       case VK_DESCRIPTOR_TYPE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
@@ -448,6 +476,9 @@ kk_push_descriptor_set_update(struct kk_push_descriptor_set *push_set,
       assert(write->dstSet == VK_NULL_HANDLE);
 
       switch (write->descriptorType) {
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+         write_as_update(&set, write);
+         break;
       case VK_DESCRIPTOR_TYPE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
@@ -808,6 +839,13 @@ kk_descriptor_set_write_template(
       const struct vk_descriptor_template_entry *entry = &template->entries[i];
 
       switch (entry->type) {
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+         for (uint32_t j = 0; j < entry->array_count; ++j) {
+            VkAccelerationStructureKHR handle;
+            memcpy(&handle, data + entry->offset + j * entry->stride, sizeof(handle));
+            write_as_descriptor(set, handle, entry->binding, entry->array_element + j);
+         }
+         break;
       case VK_DESCRIPTOR_TYPE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:

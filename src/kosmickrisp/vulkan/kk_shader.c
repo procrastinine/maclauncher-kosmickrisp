@@ -9,6 +9,12 @@
 #include "util/hash_table.h"
 #include "kk_depth_bias_control.h"
 #include "kk_atomic64.h"
+#include "kosmickrisp-rt-shader.h"
+#include "kosmickrisp-rt-cps.h"
+#include "kosmickrisp-rt-pipeline.h"
+#include "kosmickrisp-rt-commands.h"
+#include "kosmickrisp-rt-groups.h"
+#include "kk_ray_tracing.h"
 
 #include "kk_cmd_buffer.h"
 #include "kk_debug.h"
@@ -957,6 +963,9 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
    };
    NIR_PASS(_, nir, nir_opt_access, &access_options);
 
+   if (nir->info.ray_queries)
+      NIR_PASS(_, nir, kk_nir_lower_ray_queries);
+
    const struct lower_ycbcr_state ycbcr_state = {
       .set_layout_count = set_layout_count,
       .set_layouts = set_layouts,
@@ -1427,7 +1436,7 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    ralloc_free(nir);
 }
 
-static void
+void
 kk_compile_msl(struct kk_device *dev, nir_shader *nir,
                const struct vk_graphics_pipeline_state *state,
                struct msl_compile_data *data)
@@ -2865,6 +2874,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          if (range->stageFlags & mesa_to_vk_shader_stage(info->stage))
             push_size = MAX2(push_size, range->offset + range->size);
       }
+      if (mesa_shader_stage_is_rt(nir->info.stage) && !kk_rt_prepare_context(nir)) {
+         for (uint32_t j=0;j<shader_count;++j) ralloc_free(infos[j].nir);
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      }
       if (info->flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT) {
          nir_foreach_variable_with_modes(var, nir, nir_var_mem_push_const)
             heap_push_size = MAX2(heap_push_size, MIN2(glsl_get_explicit_size(var->type, false), KK_MAX_PUSH_SIZE));
@@ -2921,6 +2934,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
 
       nir_shaders[i] = nir;
    }
+
+   if (shader_count && mesa_shader_stage_is_rt(nir_shaders[0]->info.stage))
+      return kk_rt_compile_lowered(device, shader_count, nir_shaders, infos, heap_push_size, pAllocator,
+                                    shaders_out, kk_compile_msl);
 
    /* Since we don't support GPL nor shader objects and Metal render pipelines
     * require both vertex and fragment, we may need to provide a pass-through
@@ -3682,6 +3699,12 @@ static const struct vk_shader_ops kk_shader_ops = {
 };
 
 const struct vk_device_shader_ops kk_device_shader_ops = {
+   .link_rt_pipeline = kk_rt_pipeline_realize,
+   .write_rt_shader_group = kk_rt_write_group,
+   .cmd_set_rt_state = kk_rt_set_state,
+   .cmd_set_stack_size = kk_rt_set_stack_size,
+   .destroy_rt_pipeline = kk_rt_pipeline_destroy,
+   .cmd_bind_rt_pipeline = kk_rt_pipeline_bind,
    .get_nir_options = kk_get_nir_options,
    .require_graphics_stage_linking = kk_interlock_link_graphics,
    .get_spirv_options = kk_get_spirv_options,

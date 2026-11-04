@@ -20,6 +20,7 @@ kk_device_dispatch_table_dependencies_list = [
   idep_vulkan_wsi,
   idep_vulkan_wsi_headers,
   idep_libkk_shaders_h,
+  idep_kk_as_shaders,
 ]
 
 libkk_device_dispatch_table = static_library(
@@ -99,6 +100,19 @@ kk_files = files(
   'kk_image.c',
   'kk_instance.h',
   'kk_instance.c',
+  'kk_rt_cps.c',
+  'kk_rt_dispatch.c',
+  'kk_rt_shader.c',
+  'kk_rt_pipeline.c',
+  'kk_rt_commands.c',
+  'kk_rt_groups.c',
+  'kk_rt_traversal.c',
+  'kk_rt_metal.m',
+  'kk_as.c',
+  'kk_ray_tracing.h',
+  'kk_ray_traversal.c',
+  'kk_ray_query.c',
+  'kk_as_object.c',
   'kk_nir_lower_custom_border.c',
   'kk_nir_lower_descriptors.c',
   'kk_nir_lower_image_view_min_lod.c',

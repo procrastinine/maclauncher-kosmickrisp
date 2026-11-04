@@ -10,6 +10,7 @@
 #include "kk_descriptor_set.h"
 #include "kk_descriptor_set_layout.h"
 #include "kk_shader.h"
+#include "kosmickrisp-rt-cps.h"
 #include "kk_sparse.h"
 #include "kk_format.h"
 
@@ -233,6 +234,8 @@ load_descriptor_for_idx_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
    uint32_t binding = nir_intrinsic_binding(intrin);
    index = nir_iadd(b, index, intrin->src[0].ssa);
 
+   if (nir_intrinsic_desc_type(intrin) == nir_descriptor_type_acceleration_structure)
+      return load_descriptor(b, 1, 64, set, binding, index, 0, ctx);
    return load_descriptor(b, 4, 32, set, binding, index, 0, ctx);
 }
 

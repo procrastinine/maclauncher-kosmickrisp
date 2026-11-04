@@ -7,6 +7,7 @@ subdir('compiler')
 subdir('util')
 subdir('clc')
 subdir('libkk')
+subdir('as')
 subdir('vulkan')
 
 executable(
