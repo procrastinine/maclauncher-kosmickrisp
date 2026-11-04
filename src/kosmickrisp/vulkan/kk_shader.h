@@ -153,6 +153,8 @@ struct kk_shader_info {
          /* Data needed to start render pass and bind pipeline. */
          uint32_t attribs_read;
          bool dynamic_vi;
+         bool dynamic_multisample;
+         bool dynamic_rasterization_samples;
          uint32_t sample_count;
 
          /* Data needed for serialization. */

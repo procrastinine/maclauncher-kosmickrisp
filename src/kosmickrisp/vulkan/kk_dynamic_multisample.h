@@ -2,8 +2,21 @@
 static bool
 kk_fs_has_sample_mask(const struct vk_graphics_pipeline_state *state)
 {
-   return state && (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK) ||
-      (state->ms && state->ms->sample_mask != UINT16_MAX));
+   if (!state)
+      return false;
+   if (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK))
+      return true;
+   if (!state->ms)
+      return false;
+
+   /* Bits above the static sample count cannot affect coverage. For dynamic
+    * counts retain the complete mask, since later draws can use more samples. */
+   uint32_t active = UINT16_MAX;
+   if (!BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES)) {
+      unsigned samples = MIN2(MAX2(state->ms->rasterization_samples, 1u), 16u);
+      active = BITFIELD_MASK(samples);
+   }
+   return (state->ms->sample_mask & active) != active;
 }
 
 static nir_def *

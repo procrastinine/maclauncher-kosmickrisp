@@ -481,7 +481,6 @@ kk_lower_vs_vbo_mask(nir_shader *nir, const struct vk_graphics_pipeline_state *s
    bool robustness2 =
       rs->vertex_inputs ==
       VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2;
-   struct kk_attribute attributes[KK_MAX_ATTRIBS] = {};
    uint64_t stage_inputs = nir->info.inputs_read >> VERT_ATTRIB_GENERIC0;
    assert((stage_inputs & ~attribs_read) == 0);
    /* Root entries are packed using the owning linked shader's mask. A native
@@ -489,7 +488,13 @@ kk_lower_vs_vbo_mask(nir_shader *nir, const struct vk_graphics_pipeline_state *s
    if (stage_inputs != attribs_read)
       nir_shader_intrinsics_pass(nir, kk_native_vbo_input_slot,
                                  nir_metadata_all, &attribs_read);
-   u_foreach_bit(i, kk_vi_is_static(state) ? (state->vi->attributes_valid & attribs_read) : 0) {
+   if (!kk_vi_is_static(state)) {
+      NIR_PASS(_, nir, kk_nir_lower_vbo, NULL, robustness2);
+      return;
+   }
+
+   struct kk_attribute attributes[KK_MAX_ATTRIBS] = {};
+   u_foreach_bit(i, state->vi->attributes_valid & attribs_read) {
       const struct vk_vertex_attribute_state *attr = &state->vi->attributes[i];
       assert(state->vi->bindings_valid & BITFIELD_BIT(attr->binding));
       const struct vk_vertex_binding_state *binding =
@@ -506,8 +511,7 @@ kk_lower_vs_vbo_mask(nir_shader *nir, const struct vk_graphics_pipeline_state *s
       attributes[slot].instanced =
          binding->input_rate == VK_VERTEX_INPUT_RATE_INSTANCE;
    }
-   NIR_PASS(_, nir, kk_nir_lower_vbo,
-            kk_vi_is_static(state) ? attributes : NULL, robustness2);
+   NIR_PASS(_, nir, kk_nir_lower_vbo, attributes, robustness2);
 }
 
 static void
@@ -2059,6 +2063,11 @@ gather_graphics_pipeline_create_info(
    if (info->vs.has_ds)
       kk_gather_ds_info(state->ds, has_depth, has_stencil, info);
 
+   info->vs.dynamic_multisample =
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK) ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_ALPHA_TO_COVERAGE_ENABLE);
+   info->vs.dynamic_rasterization_samples =
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES);
    info->vs.has_ms = state->ms != NULL;
    info->vs.sample_count = 1u;
    if (info->vs.has_ms) {
@@ -2191,7 +2200,7 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
                              unsigned kind)
 {
    if (!device->vk.enabled_features.dynamicRenderingUnusedAttachments &&
-       !device->vk.enabled_features.extendedDynamicState3RasterizationSamples &&
+       !shader->info.vs.dynamic_rasterization_samples &&
        !device->vk.enabled_features.deviceGeneratedCommands &&
        !device->vk.enabled_features.drawIndirectCount &&
        !shader->info.polygon_point && !shader->info.poly_layer_replay)

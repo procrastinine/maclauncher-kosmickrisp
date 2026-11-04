@@ -1804,8 +1804,9 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       desc->root_dirty = true;
    }
 
-   if (IS_DIRTY(MS_SAMPLE_MASK) || IS_DIRTY(MS_ALPHA_TO_COVERAGE_ENABLE) ||
-       (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) || IS_SHADER_DIRTY(FRAGMENT)) {
+   if (gfx->shader->info.vs.dynamic_multisample &&
+       (IS_DIRTY(MS_SAMPLE_MASK) || IS_DIRTY(MS_ALPHA_TO_COVERAGE_ENABLE) ||
+        IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH) || IS_SHADER_DIRTY(FRAGMENT))) {
       desc->root.draw.sample_mask = dyn->ms.sample_mask;
       desc->root.draw.alpha_to_coverage = dyn->ms.alpha_to_coverage_enable;
       desc->root_dirty = true;

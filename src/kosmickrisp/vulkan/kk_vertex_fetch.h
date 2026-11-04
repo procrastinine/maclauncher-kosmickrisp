@@ -63,6 +63,9 @@ kk_vbo_encode_format(enum pipe_format format)
 static nir_def *
 fmt_field(nir_builder *b, nir_def *fmt, unsigned shift, unsigned mask)
 {
+   nir_src value = nir_src_for_ssa(fmt);
+   if (nir_src_is_const(value))
+      return nir_imm_int(b, (nir_src_as_uint(value) >> shift) & mask);
    return nir_iand_imm(b, nir_ushr_imm(b, fmt, shift), mask);
 }
 
@@ -76,6 +79,13 @@ load_root(nir_builder *b, nir_def *argbuf, unsigned bit_size, uint64_t offset)
 static nir_def *
 fetch_component(nir_builder *b, nir_def *addr, nir_def *size_log2, unsigned i)
 {
+   nir_src size = nir_src_for_ssa(size_log2);
+   if (nir_src_is_const(size)) {
+      unsigned value = nir_src_as_uint(size);
+      unsigned bytes = value == 2 ? 4 : value == 1 ? 2 : 1;
+      return nir_u2u32(b, nir_load_global_constant(
+         b, 1, bytes * 8, nir_iadd_imm(b, addr, i * bytes)));
+   }
    nir_def *v32, *v16, *v8;
 
    nir_push_if(b, nir_ieq_imm(b, size_log2, 2));
@@ -109,6 +119,35 @@ convert_float(nir_builder *b, nir_def *fmt, nir_def *size_log2, nir_def *raw,
    static const unsigned bits8[4] = {8, 8, 8, 8};
    static const unsigned bits16[4] = {16, 16, 16, 16};
    static const unsigned bits_rgb10a2[4] = {10, 10, 10, 2};
+
+   nir_src value = nir_src_for_ssa(fmt);
+   if (nir_src_is_const(value)) {
+      /* Use the shared format encoding and conversion primitives, selecting
+       * known static cases before constructing unused conversion graphs. */
+      uint32_t format = nir_src_as_uint(value);
+      unsigned size = (format >> KK_VBO_FMT_SIZE_SHIFT) & KK_VBO_FMT_SIZE_MASK;
+      bool packed = format & KK_VBO_FMT_RGB10A2;
+      const unsigned *bits = packed ? bits_rgb10a2 : size == 0 ? bits8 : bits16;
+      switch ((format >> KK_VBO_FMT_TYPE_SHIFT) & KK_VBO_FMT_TYPE_MASK) {
+      case KK_VBO_TYPE_UNORM:
+         return nir_format_unorm_to_float(b,
+            packed ? nir_format_unpack_uint(b, raw, bits_rgb10a2, 4) : u, bits);
+      case KK_VBO_TYPE_SNORM:
+         return nir_format_snorm_to_float(b,
+            packed ? nir_format_unpack_sint(b, raw, bits_rgb10a2, 4) : s, bits);
+      case KK_VBO_TYPE_USCALED:
+         return nir_u2f32(b,
+            packed ? nir_format_unpack_uint(b, raw, bits_rgb10a2, 4) : u);
+      case KK_VBO_TYPE_SSCALED:
+         return nir_i2f32(b,
+            packed ? nir_format_unpack_sint(b, raw, bits_rgb10a2, 4) : s);
+      default:
+         if (format & KK_VBO_FMT_RG11B10F)
+            return nir_pad_vector_imm_int(b,
+               nir_format_unpack_11f11f10f(b, raw), 0, 4);
+         return size == 1 ? nir_f2f32(b, nir_u2u16(b, u)) : u;
+      }
+   }
 
    nir_def *is8 = nir_ieq_imm(b, size_log2, 0);
    nir_def *is16 = nir_ieq_imm(b, size_log2, 1);
@@ -149,6 +188,17 @@ static nir_def *
 convert_int(nir_builder *b, nir_def *fmt, nir_def *raw, nir_def *u, nir_def *s)
 {
    static const unsigned bits_rgb10a2[4] = {10, 10, 10, 2};
+
+   nir_src value = nir_src_for_ssa(fmt);
+   if (nir_src_is_const(value)) {
+      uint32_t format = nir_src_as_uint(value);
+      bool signed_type = ((format >> KK_VBO_FMT_TYPE_SHIFT) & KK_VBO_FMT_TYPE_MASK)
+                         == KK_VBO_TYPE_SINT;
+      if (format & KK_VBO_FMT_RGB10A2)
+         return signed_type ? nir_format_unpack_sint(b, raw, bits_rgb10a2, 4)
+                            : nir_format_unpack_uint(b, raw, bits_rgb10a2, 4);
+      return signed_type ? s : u;
+   }
 
    nir_def *rgb10a2 = nir_test_mask(b, fmt, KK_VBO_FMT_RGB10A2);
    u =
@@ -200,16 +250,33 @@ pass(struct nir_builder *b, nir_intrinsic_instr *intr, void *data)
    nir_def *base = load_root(b, argbuf, 64,
       offsetof(struct kk_root_descriptor_table, draw.attrib_base[index]));
 
-   nir_def *instance_el = nir_bcsel(
-      b, nir_ieq_imm(b, divisor, 0), nir_imm_int(b, 0),
-      nir_udiv(b, nir_load_instance_id(b), nir_umax_imm(b, divisor, 1)));
-   instance_el = nir_iadd(b, instance_el, nir_load_base_instance(b));
-   nir_def *el = nir_bcsel(b, nir_test_mask(b, fmt, KK_VBO_FMT_INSTANCED),
-                           instance_el, nir_load_vertex_id(b));
-
-   BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_INSTANCE_ID);
-   BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_BASE_INSTANCE);
-   BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_VERTEX_ID);
+   nir_def *el;
+   if (ctx->attribs) {
+      /* Static metadata is already known; do not build the dynamic instance
+       * division/selection only to discard it during later optimization. */
+      const struct kk_attribute *a = &ctx->attribs[index];
+      if (a->instanced) {
+         el = a->divisor ? nir_udiv_imm(b, nir_load_instance_id(b), a->divisor)
+                         : nir_imm_int(b, 0);
+         el = nir_iadd(b, el, nir_load_base_instance(b));
+         if (a->divisor)
+            BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_INSTANCE_ID);
+         BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_BASE_INSTANCE);
+      } else {
+         el = nir_load_vertex_id(b);
+         BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_VERTEX_ID);
+      }
+   } else {
+      nir_def *instance_el = nir_bcsel(
+         b, nir_ieq_imm(b, divisor, 0), nir_imm_int(b, 0),
+         nir_udiv(b, nir_load_instance_id(b), nir_umax_imm(b, divisor, 1)));
+      instance_el = nir_iadd(b, instance_el, nir_load_base_instance(b));
+      el = nir_bcsel(b, nir_test_mask(b, fmt, KK_VBO_FMT_INSTANCED),
+                     instance_el, nir_load_vertex_id(b));
+      BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_INSTANCE_ID);
+      BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_BASE_INSTANCE);
+      BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_VERTEX_ID);
+   }
 
    nir_def *valid = nir_test_mask(b, fmt, KK_VBO_FMT_VALID);
    nir_def *fetch = nir_iand(b, valid, nir_ine_imm(b, base, 0));
@@ -232,10 +299,16 @@ pass(struct nir_builder *b, nir_intrinsic_instr *intr, void *data)
    {
       loaded[0] = fetch_component(b, addr, size_log2, 0);
       for (unsigned i = 1; i < 4; ++i) {
-         nir_push_if(b, nir_uge_imm(b, count_m1, i));
-         nir_def *c = fetch_component(b, addr, size_log2, i);
-         nir_pop_if(b, NULL);
-         loaded[i] = nir_if_phi(b, c, zero);
+         nir_src count = nir_src_for_ssa(count_m1);
+         if (nir_src_is_const(count)) {
+            loaded[i] = i <= nir_src_as_uint(count)
+               ? fetch_component(b, addr, size_log2, i) : zero;
+         } else {
+            nir_push_if(b, nir_uge_imm(b, count_m1, i));
+            nir_def *c = fetch_component(b, addr, size_log2, i);
+            nir_pop_if(b, NULL);
+            loaded[i] = nir_if_phi(b, c, zero);
+         }
       }
    }
    nir_pop_if(b, NULL);

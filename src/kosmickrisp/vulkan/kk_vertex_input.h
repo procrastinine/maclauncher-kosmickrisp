@@ -1,12 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /* Shared static/dynamic vertex preparation. Included after the VBO clamp helper. */
-static bool
-kk_prepare_vertex_input(struct kk_cmd_buffer *cmd,
-   const struct kk_graphics_state *gfx,
+static ALWAYS_INLINE unsigned
+kk_prepare_vertex_attributes(const struct kk_graphics_state *gfx,
    const struct vk_dynamic_graphics_state *dyn, const struct kk_shader *vs,
-   struct kk_root_descriptor_table *root)
+   struct kk_root_descriptor_table *root, struct kk_vertex_fetch *input)
 {
-   struct kk_vertex_fetch input[KK_MAX_ATTRIBS];
    unsigned slot = 0;
    u_foreach_bit(i, vs->info.vs.attribs_read) {
       if (dyn->vi->attributes_valid & BITFIELD_BIT(i)) {
@@ -18,7 +16,7 @@ kk_prepare_vertex_input(struct kk_cmd_buffer *cmd,
             vb.addr, 0, format, vb.range, stride, attr.offset,
             &root->draw.attrib_base[slot]);
          root->draw.buffer_strides[attr.binding] = stride;
-         if (vs->info.vs.dynamic_vi) {
+         if (input) {
             const struct vk_vertex_binding_state *binding =
                &dyn->vi->bindings[attr.binding];
             input[slot].format = kk_vbo_encode_format(format);
@@ -28,20 +26,45 @@ kk_prepare_vertex_input(struct kk_cmd_buffer *cmd,
             input[slot].stride = stride;
          }
       } else {
-         if (vs->info.vs.dynamic_vi)
+         if (input)
             input[slot] = (struct kk_vertex_fetch){0};
          root->draw.attrib_clamps[slot] = 0;
          root->draw.attrib_base[slot] = 0;
       }
       slot++;
    }
-   if (vs->info.vs.dynamic_vi && slot) {
-      struct kk_ptr upload = kk_pool_upload(cmd, input, slot * sizeof(input[0]), 4);
+   return slot;
+}
+
+/* Keep dynamic metadata scratch out of the ordinary static-input frame. */
+static ATTRIBUTE_NOINLINE bool
+kk_prepare_dynamic_vertex_input(struct kk_cmd_buffer *cmd,
+   const struct kk_graphics_state *gfx,
+   const struct vk_dynamic_graphics_state *dyn, const struct kk_shader *vs,
+   struct kk_root_descriptor_table *root)
+{
+   struct kk_vertex_fetch input[KK_MAX_ATTRIBS];
+   unsigned count = kk_prepare_vertex_attributes(gfx, dyn, vs, root, input);
+   if (count) {
+      struct kk_ptr upload = kk_pool_upload(cmd, input, count * sizeof(input[0]), 4);
       if (!upload.gpu)
          return false;
       root->draw.vertex_input = upload.gpu;
    }
+   return true;
+}
 
+static bool
+kk_prepare_vertex_input(struct kk_cmd_buffer *cmd,
+   const struct kk_graphics_state *gfx,
+   const struct vk_dynamic_graphics_state *dyn, const struct kk_shader *vs,
+   struct kk_root_descriptor_table *root)
+{
+   if (vs->info.vs.dynamic_vi)
+      return kk_prepare_dynamic_vertex_input(cmd, gfx, dyn, vs, root);
+
+   /* Constant NULL removes dynamic format/divisor work from this loop. */
+   kk_prepare_vertex_attributes(gfx, dyn, vs, root, NULL);
    return true;
 }
 
