@@ -78,8 +78,8 @@ rerecord_commit_callback(struct mtl_feedback_data *data)
 
    assert(queue->commits_in_flight > 0u);
    if (--queue->commits_in_flight == 0u) {
-      kk_ResetCommandPool(kk_device_to_handle(dev),
-                          kk_cmd_pool_to_handle(queue->cmd_pool), 0u);
+      /* Every private replay buffer was already reset before returning
+       * to the free list; a zero-flag pool walk adds no cleanup. */
       cnd_broadcast(&queue->cond);
    }
 
