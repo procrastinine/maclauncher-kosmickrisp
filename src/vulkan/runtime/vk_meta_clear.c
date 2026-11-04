@@ -43,6 +43,8 @@ struct vk_meta_clear_key {
 struct vk_meta_clear_push_data {
    VkClearColorValue color_values[MESA_VK_MAX_COLOR_ATTACHMENTS];
 };
+static_assert(sizeof(struct vk_meta_clear_push_data) <= VK_META_PUSH_CONSTANTS_SIZE,
+              "meta push data fits the saved prefix");
 
 static nir_shader *
 build_clear_shader(const struct vk_meta_clear_key *key)

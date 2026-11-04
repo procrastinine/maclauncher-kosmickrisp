@@ -92,7 +92,7 @@ struct kk_meta_save {
    struct kk_addr_range vb0;
    struct kk_buffer_address desc0_set_addr;
    bool has_push_desc0;
-   uint8_t push[KK_MAX_PUSH_SIZE];
+   uint8_t push[VK_META_PUSH_CONSTANTS_SIZE];
 };
 
 static void
@@ -138,8 +138,10 @@ kk_meta_begin(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
    if (save->has_push_desc0)
       save->push_desc0 = desc->push[0];
 
-   static_assert(sizeof(save->push) == sizeof(desc->root.push),
-                 "Size mismatch for push in meta_save");
+   /* Meta only overwrites the bounded prefix; inactive client bytes above it
+    * must stay untouched for a later pipeline with a larger push range. */
+   static_assert(sizeof(save->push) <= sizeof(desc->root.push),
+                 "meta push prefix fits the client push state");
    memcpy(save->push, desc->root.push, sizeof(save->push));
 
    if (kk_device_physical(kk_cmd_buffer_device(cmd))

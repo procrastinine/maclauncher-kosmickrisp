@@ -836,7 +836,8 @@ kk_cmd_push_descriptors(struct kk_cmd_buffer *cmd,
    assert(set < KK_MAX_SETS);
    uint32_t required = set_layout->non_variable_descriptor_buffer_size;
    if (unlikely(desc->push[set] == NULL || desc->push[set]->capacity < required)) {
-      uint32_t previous = desc->push[set] ? desc->push[set]->capacity : 0;
+      bool new_set = desc->push[set] == NULL;
+      uint32_t previous = new_set ? 0 : desc->push[set]->capacity;
       size_t size = sizeof(*desc->push[set]) + required;
       struct kk_push_descriptor_set *push = vk_realloc(
          &cmd->vk.pool->alloc, desc->push[set], size, 8,
@@ -845,6 +846,8 @@ kk_cmd_push_descriptors(struct kk_cmd_buffer *cmd,
          vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
          return NULL;
       }
+      if (new_set)
+         push->uploaded_data = NULL;
       memset(push->data + previous, 0, required - previous);
       push->capacity = required;
       desc->push[set] = push;
@@ -1064,19 +1067,40 @@ void
 kk_cmd_buffer_flush_push_descriptors(struct kk_cmd_buffer *cmd,
                                      struct kk_descriptor_state *desc)
 {
+   /* DGC flushes a shallow descriptor-state copy into another command buffer.
+    * Its uploads must not replace the live state's command-owned cache. */
+   bool cache_upload = desc == &cmd->state.gfx.descriptors ||
+                       desc == &cmd->state.cs.descriptors;
    u_foreach_bit(set_idx, desc->push_dirty) {
       struct kk_push_descriptor_set *push_set = desc->push[set_idx];
       uint32_t size = push_set->layout->non_variable_descriptor_buffer_size;
-      struct kk_ptr push_gpu = kk_pool_upload(
-         cmd, push_set->data, size, KK_MIN_UBO_ALIGNMENT);
-      if (unlikely(!push_gpu.gpu))
-         return;
+      uint64_t addr;
+      /* Only unchanged live pushes can reuse an immutable upload. */
+      if (cache_upload && push_set->uploaded_data &&
+          push_set->uploaded_size == size &&
+          !memcmp(push_set->uploaded_data, push_set->data, size)) {
+         addr = push_set->uploaded_addr;
+      } else {
+         struct kk_ptr push_gpu = kk_pool_upload(
+            cmd, push_set->data, size, KK_MIN_UBO_ALIGNMENT);
+         if (unlikely(!push_gpu.gpu))
+            return;
+         addr = push_gpu.gpu;
 
-      desc->root.sets[set_idx] = push_gpu.gpu;
-      desc->set_sizes[set_idx] = size;
+         if (cache_upload) {
+            push_set->uploaded_data = push_gpu.cpu;
+            push_set->uploaded_addr = addr;
+            push_set->uploaded_size = size;
+         }
+      }
+
+      if (desc->root.sets[set_idx] != addr || desc->set_sizes[set_idx] != size) {
+         desc->root.sets[set_idx] = addr;
+         desc->set_sizes[set_idx] = size;
+         desc->root_dirty = true;
+      }
    }
 
-   desc->root_dirty = true;
    desc->push_dirty = 0;
 }
 

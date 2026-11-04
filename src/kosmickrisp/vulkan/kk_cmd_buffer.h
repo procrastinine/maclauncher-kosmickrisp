@@ -118,8 +118,13 @@ kk_descriptor_push_update(struct kk_descriptor_state *desc, uint32_t offset,
 {
    assert(offset <= KK_MAX_PUSH_SIZE && size <= KK_MAX_PUSH_SIZE - offset);
    if (size && memcmp(desc->root.push + offset, data, size)) {
+      /* Keep inactive bytes for a later pipeline with a larger push range. */
+      if (offset < desc->push_size) {
+         size_t active_size = desc->push_size - offset;
+         desc->root_dirty |= size <= active_size ||
+            memcmp(desc->root.push + offset, data, active_size) != 0;
+      }
       memcpy(desc->root.push + offset, data, size);
-      desc->root_dirty = true;
    }
 }
 

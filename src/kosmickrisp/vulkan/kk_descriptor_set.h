@@ -66,6 +66,11 @@ kk_descriptor_set_addr(const struct kk_descriptor_set *set)
 struct kk_push_descriptor_set {
    uint32_t capacity;
    struct kk_descriptor_set_layout *layout;
+
+   /* Immutable upload owned by this command buffer, retired with this set. */
+   const void *uploaded_data;
+   uint64_t uploaded_addr;
+   uint32_t uploaded_size;
    uint8_t data[];
 };
 

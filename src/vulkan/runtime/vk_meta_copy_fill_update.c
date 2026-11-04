@@ -102,12 +102,18 @@ struct vk_meta_fill_buffer_info {
    uint32_t data;
    uint32_t size;
 };
+static_assert(sizeof(struct vk_meta_fill_buffer_info) <=
+                 VK_META_PUSH_CONSTANTS_SIZE,
+              "meta push data fits the saved prefix");
 
 struct vk_meta_copy_buffer_info {
    uint64_t src_addr;
    uint64_t dst_addr;
    uint32_t size;
 };
+static_assert(sizeof(struct vk_meta_copy_buffer_info) <=
+                 VK_META_PUSH_CONSTANTS_SIZE,
+              "meta push data fits the saved prefix");
 
 struct vk_meta_copy_buffer_image_info {
    struct {
@@ -132,12 +138,18 @@ struct vk_meta_copy_buffer_image_info {
       } start, end;
    } copy_id_range;
 };
+static_assert(sizeof(struct vk_meta_copy_buffer_image_info) <=
+                 VK_META_PUSH_CONSTANTS_SIZE,
+              "meta push data fits the saved prefix");
 
 struct vk_meta_copy_image_fs_info {
    struct {
       int32_t x, y, z;
    } dst_to_src_offs;
 };
+static_assert(sizeof(struct vk_meta_copy_image_fs_info) <=
+                 VK_META_PUSH_CONSTANTS_SIZE,
+              "meta push data fits the saved prefix");
 
 struct vk_meta_copy_image_cs_info {
    struct {
@@ -156,6 +168,9 @@ struct vk_meta_copy_image_cs_info {
       } start, end;
    } copy_id_range;
 };
+static_assert(sizeof(struct vk_meta_copy_image_cs_info) <=
+                 VK_META_PUSH_CONSTANTS_SIZE,
+              "meta push data fits the saved prefix");
 
 static VkOffset3D
 base_layer_as_offset(VkImageViewType view_type, VkOffset3D offset,

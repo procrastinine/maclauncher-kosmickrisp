@@ -2473,6 +2473,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    const bool dgc_graphics = infos[0].stage != MESA_SHADER_COMPUTE &&
       (features & BITFIELD_BIT(KK_FEAT_DGC_REPLAY));
    bool dgc_replay = false;
+   uint32_t push_size = 0;
    uint32_t heap_push_size = 0;
    nir_shader *nir_shaders[shader_count + 2u];
    nir_shader *vrs_sources[shader_count + 2u];
@@ -2518,6 +2519,12 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       uint32_t i = pixel_candidate ? (step ? step - 1u : shader_count - 1u) : step;
       const struct vk_shader_compile_info *info = &infos[i];
       nir_shader *nir = info->nir;
+      /* Collect the ordinary layout extent in the existing stage walk. */
+      for (uint32_t r = 0; r < info->push_constant_range_count; ++r) {
+         const VkPushConstantRange *range = &info->push_constant_ranges[r];
+         if (range->stageFlags & mesa_to_vk_shader_stage(info->stage))
+            push_size = MAX2(push_size, range->offset + range->size);
+      }
       if (info->flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT) {
          nir_foreach_variable_with_modes(var, nir, nir_var_mem_push_const)
             heap_push_size = MAX2(heap_push_size, MIN2(glsl_get_explicit_size(var->type, false), KK_MAX_PUSH_SIZE));
@@ -2809,22 +2816,11 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          dgc_replay |= shaders[i]->info.stage == MESA_SHADER_FRAGMENT &&
                        shaders[i]->info.fs.emulates_per_vertex_inputs;
    }
+   push_size = MAX2(push_size, heap_push_size);
    for (uint32_t i = 0; i < total_shaders; ++i) {
       shaders[i]->info.dgc_replay = dgc_replay;
       shaders[i]->info.indirect_bindable =
          infos[0].flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
-   }
-   uint32_t push_size = 0;
-   for (uint32_t i = 0; i < shader_count; ++i) {
-      const struct vk_shader_compile_info *info = &infos[i];
-      push_size = MAX2(push_size, heap_push_size);
-      for (uint32_t r = 0; r < info->push_constant_range_count; ++r) {
-         const VkPushConstantRange *range = &info->push_constant_ranges[r];
-         if (range->stageFlags & mesa_to_vk_shader_stage(info->stage))
-            push_size = MAX2(push_size, range->offset + range->size);
-      }
-   }
-   for (uint32_t i = 0; i < total_shaders; ++i) {
       shaders[i]->info.push_size = push_size;
       shaders[i]->info.descriptor_heap = infos[0].flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
    }

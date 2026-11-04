@@ -36,6 +36,10 @@
 extern "C" {
 #endif
 
+/* All meta push data fits the Vulkan minimum push-constant capacity. Drivers
+ * only need to preserve this prefix around a meta operation. */
+#define VK_META_PUSH_CONSTANTS_SIZE 128
+
 struct hash_table;
 struct vk_command_buffer;
 struct vk_buffer;

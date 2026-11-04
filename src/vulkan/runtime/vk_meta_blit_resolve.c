@@ -83,6 +83,8 @@ struct vk_meta_blit_push_data {
    uint32_t pad;
    uint32_t stencil_bit;
 };
+static_assert(sizeof(struct vk_meta_blit_push_data) <= VK_META_PUSH_CONSTANTS_SIZE,
+              "meta push data fits the saved prefix");
 
 static inline void
 compute_off_scale(uint32_t src_level_size,
