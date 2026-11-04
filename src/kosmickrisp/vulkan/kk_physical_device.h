@@ -9,6 +9,8 @@
 #define KK_PHYSICAL_DEVICE_H 1
 
 #include "kk_private.h"
+#include "util/mesa-blake3.h"
+#include "util/u_call_once.h"
 
 #include "kosmickrisp/bridge/mtl_types.h"
 
@@ -79,6 +81,10 @@ struct kk_physical_device {
 
    struct kk_queue_family queue_families[4];
    uint8_t queue_family_count;
+
+   /* Immutable existing namespace; opening the store waits for actual use. */
+   blake3_hash disk_cache_digest;
+   util_once_flag disk_cache_once;
 };
 
 static inline uint32_t
@@ -96,6 +102,11 @@ kk_physical_device_instance(struct kk_physical_device *pdev)
 {
    return (struct kk_instance *)pdev->vk.instance;
 }
+
+void kk_physical_device_ensure_disk_cache(struct kk_physical_device *pdev);
+
+struct disk_cache *kk_create_disk_cache(const blake3_hash driver_digest,
+   uint32_t apple_family, uint64_t disabled_workarounds);
 
 VkResult kk_enumerate_physical_devices(struct vk_instance *_instance);
 void kk_physical_device_destroy(struct vk_physical_device *vk_device);

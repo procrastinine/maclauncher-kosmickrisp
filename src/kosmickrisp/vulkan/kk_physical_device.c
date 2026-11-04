@@ -1142,6 +1142,37 @@ kk_get_device_properties(
             "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
 }
 
+struct disk_cache *
+kk_create_disk_cache(const blake3_hash driver_digest,
+                     uint32_t apple_family, uint64_t disabled_workarounds)
+{
+#ifdef ENABLE_SHADER_CACHE
+   char renderer[32], timestamp[BLAKE3_HEX_LEN];
+   snprintf(renderer, sizeof(renderer), "kosmickrisp_apple_%u", apple_family);
+   _mesa_blake3_format(timestamp, driver_digest);
+   return disk_cache_create(renderer, timestamp, disabled_workarounds);
+#else
+   return NULL;
+#endif
+}
+
+static void
+kk_physical_device_open_disk_cache(const void *data)
+{
+   struct kk_physical_device *pdev = (struct kk_physical_device *)data;
+   /* Disk caching is best effort. Disabled/unavailable stores remain NULL;
+    * pipeline construction continues through the ordinary compiler path. */
+   pdev->vk.disk_cache = kk_create_disk_cache(pdev->disk_cache_digest,
+      pdev->info.gpu_apple_family, pdev->settings.disabled_workarounds);
+}
+
+void
+kk_physical_device_ensure_disk_cache(struct kk_physical_device *pdev)
+{
+   util_call_once_data(&pdev->disk_cache_once,
+                      kk_physical_device_open_disk_cache, pdev);
+}
+
 static void
 kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
 {
@@ -1160,15 +1191,8 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
    memcpy(pdev->vk.properties.pipelineCacheUUID, blake3, VK_UUID_SIZE);
    memcpy(pdev->vk.properties.shaderBinaryUUID, blake3, VK_UUID_SIZE);
 
-#ifdef ENABLE_SHADER_CACHE
-   char renderer[32];
-   snprintf(renderer, sizeof(renderer), "kosmickrisp_apple_%u", pdev->info.gpu_apple_family);
-   char timestamp[BLAKE3_HEX_LEN];
-   /* driver_build_sha is a16-byte UUID; format its full BLAKE3 digest. */
-   _mesa_blake3_format(timestamp, blake3);
-   pdev->vk.disk_cache = disk_cache_create(renderer, timestamp,
-                                          pdev->settings.disabled_workarounds);
-#endif
+   memcpy(pdev->disk_cache_digest, blake3, sizeof(pdev->disk_cache_digest));
+   pdev->disk_cache_once = (util_once_flag)UTIL_ONCE_FLAG_INIT;
 }
 
 static void
