@@ -76,7 +76,13 @@ kk_dgc_draw_mesh_sequence(struct kk_cmd_buffer *cmd, uint64_t root, uint64_t arg
    uint64_t saved_address = gfx->descriptors.root.addr;
    gfx->generated_root = root;
    gfx->descriptors.root_dirty = true;
-   kk_draw_mesh(cmd, (struct mtl_size){0}, args, 0, 1, 12, false);
+   /* This route calls the Mesh draw directly, not through the dispatch
+    * table, so it begins the software depth-bounds transaction itself. */
+   int bounds = kk_depth_bounds_mesh_begin(kk_cmd_buffer_to_handle(cmd));
+   if (bounds >= 0) {
+      kk_draw_mesh(cmd, (struct mtl_size){0}, args, 0, 1, 12, false);
+      if (bounds) kk_mesh_retained_transaction_end(cmd);
+   }
    gfx->generated_root = saved_root;
    gfx->descriptors.root.addr = saved_address;
    gfx->descriptors.root_dirty = true;
