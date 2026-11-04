@@ -66,6 +66,7 @@ kk_tess_info_merge(struct kk_tess_info a, struct kk_tess_info b)
 struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
+   uint32_t push_size;
    bool has_geometry;
    bool api_geometry;
    bool polygon_point;

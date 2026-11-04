@@ -579,14 +579,20 @@ kk_cmd_push_descriptors(struct kk_cmd_buffer *cmd,
                         uint32_t set)
 {
    assert(set < KK_MAX_SETS);
-   if (unlikely(desc->push[set] == NULL)) {
-      size_t size = sizeof(*desc->push[set]);
-      desc->push[set] = vk_zalloc(&cmd->vk.pool->alloc, size, 8,
-                                  VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-      if (unlikely(desc->push[set] == NULL)) {
+   uint32_t required = set_layout->non_variable_descriptor_buffer_size;
+   if (unlikely(desc->push[set] == NULL || desc->push[set]->capacity < required)) {
+      uint32_t previous = desc->push[set] ? desc->push[set]->capacity : 0;
+      size_t size = sizeof(*desc->push[set]) + required;
+      struct kk_push_descriptor_set *push = vk_realloc(
+         &cmd->vk.pool->alloc, desc->push[set], size, 8,
+         VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+      if (unlikely(push == NULL)) {
          vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
          return NULL;
       }
+      memset(push->data + previous, 0, required - previous);
+      push->capacity = required;
+      desc->push[set] = push;
    }
 
    /* Pushing descriptors replaces whatever sets are bound */
@@ -767,13 +773,14 @@ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
 {
    struct kk_descriptor_state *desc = kk_get_descriptors_state(cmd, bind_point);
    struct kk_root_descriptor_table *root = &desc->root;
-   struct kk_ptr root_ptr = kk_pool_alloc(cmd, sizeof(*root), 8u);
+   uint32_t size = offsetof(struct kk_root_descriptor_table, push) + desc->push_size;
+   struct kk_ptr root_ptr = kk_pool_alloc(cmd, size, 8u);
    if (unlikely(!root_ptr.gpu))
       return 0u;
 
    root->addr = root_ptr.gpu;
 
-   memcpy(root_ptr.cpu, root, sizeof(*root));
+   memcpy(root_ptr.cpu, root, size);
    desc->root_dirty = false;
 
    return root_ptr.gpu;
@@ -785,13 +792,14 @@ kk_cmd_buffer_flush_push_descriptors(struct kk_cmd_buffer *cmd,
 {
    u_foreach_bit(set_idx, desc->push_dirty) {
       struct kk_push_descriptor_set *push_set = desc->push[set_idx];
+      uint32_t size = push_set->layout->non_variable_descriptor_buffer_size;
       struct kk_ptr push_gpu = kk_pool_upload(
-         cmd, push_set->data, sizeof(push_set->data), KK_MIN_UBO_ALIGNMENT);
+         cmd, push_set->data, size, KK_MIN_UBO_ALIGNMENT);
       if (unlikely(!push_gpu.gpu))
          return;
 
       desc->root.sets[set_idx] = push_gpu.gpu;
-      desc->set_sizes[set_idx] = sizeof(push_set->data);
+      desc->set_sizes[set_idx] = size;
    }
 
    desc->root_dirty = true;

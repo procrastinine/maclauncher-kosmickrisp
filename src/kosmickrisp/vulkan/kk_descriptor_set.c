@@ -380,10 +380,10 @@ kk_push_descriptor_set_update(struct kk_push_descriptor_set *push_set,
                               const VkWriteDescriptorSet *writes)
 {
    struct kk_descriptor_set_layout *layout = push_set->layout;
-   assert(layout->non_variable_descriptor_buffer_size < sizeof(push_set->data));
+   assert(layout->non_variable_descriptor_buffer_size <= push_set->capacity);
    struct kk_descriptor_set set = {
       .layout = push_set->layout,
-      .size = sizeof(push_set->data),
+      .size = layout->non_variable_descriptor_buffer_size,
       .mapped_ptr = push_set->data,
    };
 
@@ -840,7 +840,7 @@ kk_push_descriptor_set_update_template(
 {
    struct kk_descriptor_set tmp_set = {
       .layout = layout,
-      .size = sizeof(push_set->data),
+      .size = layout->non_variable_descriptor_buffer_size,
       .mapped_ptr = push_set->data,
    };
    kk_descriptor_set_write_template(&tmp_set, template, data);

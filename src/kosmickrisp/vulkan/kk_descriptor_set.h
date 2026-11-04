@@ -64,8 +64,9 @@ kk_descriptor_set_addr(const struct kk_descriptor_set *set)
 }
 
 struct kk_push_descriptor_set {
-   uint8_t data[KK_PUSH_DESCRIPTOR_SET_SIZE];
+   uint32_t capacity;
    struct kk_descriptor_set_layout *layout;
+   uint8_t data[];
 };
 
 void kk_push_descriptor_set_update(struct kk_push_descriptor_set *push_set,

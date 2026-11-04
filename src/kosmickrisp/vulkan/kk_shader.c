@@ -1959,6 +1959,20 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
       }
    }
 
+   /* Retain the stage-filtered layout extent in serialized shader info.
+    * Graphics stages share one root, including stages lowered through Poly. */
+   uint32_t push_size = 0;
+   for (uint32_t i = 0; i < shader_count; ++i) {
+      const struct vk_shader_compile_info *info = &infos[i];
+      for (uint32_t r = 0; r < info->push_constant_range_count; ++r) {
+         const VkPushConstantRange *range = &info->push_constant_ranges[r];
+         if (range->stageFlags & mesa_to_vk_shader_stage(info->stage))
+            push_size = MAX2(push_size, range->offset + range->size);
+      }
+   }
+   for (uint32_t i = 0; i < total_shaders; ++i)
+      shaders[i]->info.push_size = push_size;
+
    /* Compile pipeline:
     * 1. Compute pipeline
     * 2. Graphics with all stages (since we don't support GPL nor shader
@@ -2148,6 +2162,11 @@ fail:
 void
 kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
 {
+   struct kk_descriptor_state *desc = &cmd->state.cs.descriptors;
+   /* Meta operations can restore an unbound compute stage. */
+   uint32_t push_size = shader ? shader->info.push_size : 0;
+   desc->root_dirty |= push_size > desc->push_size;
+   desc->push_size = push_size;
    cmd->state.shaders[MESA_SHADER_COMPUTE] = shader;
 }
 
@@ -2162,6 +2181,10 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
    /* Relevant pipeline data is only stored in vertex shaders */
    if (stage != MESA_SHADER_VERTEX)
       return;
+
+   struct kk_descriptor_state *desc = &cmd->state.gfx.descriptors;
+   desc->root_dirty |= shader->info.push_size > desc->push_size;
+   desc->push_size = shader->info.push_size;
 
    bool requires_dynamic_depth_stencil = shader->pipeline.gfx.ds_handle == NULL;
    if (cmd->state.gfx.is_depth_stencil_dynamic) {

@@ -52,9 +52,6 @@ struct kk_root_descriptor_table {
       } cs;
    };
 
-   /* Client push constants */
-   uint8_t push[KK_MAX_PUSH_SIZE];
-
    /* Descriptor set base addresses */
    uint64_t sets[KK_MAX_SETS];
 
@@ -63,10 +60,14 @@ struct kk_root_descriptor_table {
 
    /* Start index in dynamic_buffers where each set starts */
    uint8_t set_dynamic_buffer_start[KK_MAX_SETS];
+
+   /* Client push constants: upload only the bound pipeline range. */
+   uint8_t push[KK_MAX_PUSH_SIZE];
 };
 
 struct kk_descriptor_state {
    bool root_dirty;
+   uint32_t push_size;
    struct kk_root_descriptor_table root;
 
    uint32_t set_sizes[KK_MAX_SETS];
