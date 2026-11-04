@@ -278,6 +278,21 @@ kk_mesh_pass_grid_overlap(uint64_t address, uint64_t size,
       kk_mesh_pass_ranges_overlap(address, size, grid + call->stride, 12));
 }
 
+/* MEMORY_READ expands only within the dependency's destination stages. */
+static VkAccessFlags2
+kk_mesh_pass_input_access(VkAccessFlags2 access, VkPipelineStageFlags2 stages)
+{
+   const VkPipelineStageFlags2 all = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+   VkAccessFlags2 reads = 0;
+   if ((stages & (all | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT)) &&
+       (access & (VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_MEMORY_READ_BIT)))
+      reads |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+   if ((stages & (all | VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT)) &&
+       (access & (VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT | VK_ACCESS_2_MEMORY_READ_BIT)))
+      reads |= VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT;
+   return reads;
+}
+
 static bool
 kk_mesh_pass_dependency_reads_inputs(struct kk_mesh_pass *p, uint32_t first,
    struct kk_conditional_rendering_state conditional, VkAccessFlags2 access,
@@ -298,6 +313,7 @@ kk_mesh_pass_dependency_reads_inputs(struct kk_mesh_pass *p, uint32_t first,
    }
    for (uint32_t i = first; i + 1 < p->entry_count; ++i) {
       const struct vk_cmd_queue_entry *e = &p->entries[i];
+      if (e->type == VK_CMD_NEXT_SUBPASS || e->type == VK_CMD_NEXT_SUBPASS2) break;
       kk_mesh_pass_condition(&conditional, e);
       struct kk_mesh_pass_call call;
       if (!kk_mesh_pass_call_info(e, &call) || !call.maximum) continue;
@@ -322,12 +338,12 @@ kk_mesh_pass_dependency_safe(struct kk_mesh_pass *p, uint32_t first,
    for (uint32_t i = 0; i < info->memoryBarrierCount; ++i) {
       const VkMemoryBarrier2 *b = &info->pMemoryBarriers[i];
       if (b->pNext || kk_mesh_pass_dependency_reads_inputs(p, first, conditional,
-          b->dstAccessMask, VK_NULL_HANDLE, 0, 0)) return false;
+          kk_mesh_pass_input_access(b->dstAccessMask, b->dstStageMask), VK_NULL_HANDLE, 0, 0)) return false;
    }
    for (uint32_t i = 0; i < info->bufferMemoryBarrierCount; ++i) {
       const VkBufferMemoryBarrier2 *b = &info->pBufferMemoryBarriers[i];
       if (b->pNext || kk_mesh_pass_dependency_reads_inputs(p, first, conditional,
-          b->dstAccessMask, b->buffer, b->offset, b->size)) return false;
+          kk_mesh_pass_input_access(b->dstAccessMask, b->dstStageMask), b->buffer, b->offset, b->size)) return false;
    }
    for (uint32_t i = 0; i < info->imageMemoryBarrierCount; ++i)
       if (info->pImageMemoryBarriers[i].pNext) return false;
@@ -336,17 +352,17 @@ kk_mesh_pass_dependency_safe(struct kk_mesh_pass *p, uint32_t first,
 
 static bool
 kk_mesh_pass_legacy_dependency_safe(struct kk_mesh_pass *p, uint32_t first,
-   struct kk_conditional_rendering_state conditional, uint32_t memory_count,
+   struct kk_conditional_rendering_state conditional, VkPipelineStageFlags2 stages, uint32_t memory_count,
    const VkMemoryBarrier *memory, uint32_t buffer_count,
    const VkBufferMemoryBarrier *buffers, uint32_t image_count,
    const VkImageMemoryBarrier *images)
 {
    for (uint32_t i = 0; i < memory_count; ++i)
       if (memory[i].pNext || kk_mesh_pass_dependency_reads_inputs(p, first, conditional,
-          memory[i].dstAccessMask, VK_NULL_HANDLE, 0, 0)) return false;
+          kk_mesh_pass_input_access(memory[i].dstAccessMask, stages), VK_NULL_HANDLE, 0, 0)) return false;
    for (uint32_t i = 0; i < buffer_count; ++i)
       if (buffers[i].pNext || kk_mesh_pass_dependency_reads_inputs(p, first, conditional,
-          buffers[i].dstAccessMask, buffers[i].buffer, buffers[i].offset, buffers[i].size)) return false;
+          kk_mesh_pass_input_access(buffers[i].dstAccessMask, stages), buffers[i].buffer, buffers[i].offset, buffers[i].size)) return false;
    for (uint32_t i = 0; i < image_count; ++i)
       if (images[i].pNext) return false;
    return true;
@@ -368,18 +384,51 @@ kk_mesh_pass_barrier_safe(struct kk_mesh_pass *p, uint32_t at,
       return true;
    case VK_CMD_PIPELINE_BARRIER: {
       const struct vk_cmd_pipeline_barrier *b = &e->u.pipeline_barrier;
-      return kk_mesh_pass_legacy_dependency_safe(p, at + 1, conditional,
+      return kk_mesh_pass_legacy_dependency_safe(p, at + 1, conditional, b->dst_stage_mask,
          b->memory_barrier_count, b->memory_barriers, b->buffer_memory_barrier_count,
          b->buffer_memory_barriers, b->image_memory_barrier_count, b->image_memory_barriers);
    }
    case VK_CMD_WAIT_EVENTS: {
       const struct vk_cmd_wait_events *b = &e->u.wait_events;
-      return kk_mesh_pass_legacy_dependency_safe(p, at + 1, conditional,
+      return kk_mesh_pass_legacy_dependency_safe(p, at + 1, conditional, b->dst_stage_mask,
          b->memory_barrier_count, b->memory_barriers, b->buffer_memory_barrier_count,
          b->buffer_memory_barriers, b->image_memory_barrier_count, b->image_memory_barriers);
    }
    default: return false;
    }
+}
+
+static bool
+kk_mesh_pass_subpasses_safe(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
+{
+   const struct vk_cmd_queue_entry *begin = &p->entries[0];
+   const VkRenderPassBeginInfo *info = begin->type == VK_CMD_BEGIN_RENDER_PASS2 ?
+      begin->u.begin_render_pass2.render_pass_begin : begin->u.begin_render_pass.render_pass_begin;
+   VK_FROM_HANDLE(vk_render_pass, pass, info->renderPass);
+   uint32_t subpasses = 1;
+   for (uint32_t i = 1; i + 1 < p->entry_count; ++i)
+      subpasses += p->entries[i].type == VK_CMD_NEXT_SUBPASS || p->entries[i].type == VK_CMD_NEXT_SUBPASS2;
+   if (subpasses != pass->subpass_count) return false;
+   for (uint32_t d = 0; d < pass->dependency_count; ++d) {
+      const struct vk_subpass_dependency *dep = &pass->dependencies[d];
+      /* External producers precede the prelude. Self dependencies only
+       * authorize explicit barriers, which are checked at their IR positions. */
+      if (dep->src_subpass == VK_SUBPASS_EXTERNAL || dep->dst_subpass == VK_SUBPASS_EXTERNAL ||
+          dep->src_subpass == dep->dst_subpass) continue;
+      if (dep->src_subpass >= subpasses || dep->dst_subpass >= subpasses) return false;
+      VkAccessFlags2 reads = kk_mesh_pass_input_access(dep->dst_access_mask, dep->dst_stage_mask);
+      if (!reads) continue;
+      uint32_t subpass = 0, first = 1;
+      struct kk_conditional_rendering_state conditional = cmd->state.cond_render;
+      while (first + 1 < p->entry_count && subpass < dep->dst_subpass) {
+         const struct vk_cmd_queue_entry *e = &p->entries[first++];
+         kk_mesh_pass_condition(&conditional, e);
+         subpass += e->type == VK_CMD_NEXT_SUBPASS || e->type == VK_CMD_NEXT_SUBPASS2;
+      }
+      if (kk_mesh_pass_dependency_reads_inputs(p, first, conditional, reads, VK_NULL_HANDLE, 0, 0))
+         return false;
+   }
+   return true;
 }
 
 /* Classify without invoking native methods or changing application state. */
@@ -395,10 +444,7 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
       if (kk_mesh_pass_scope_end(p->entries, p->entry_count, 0) != p->entry_count - 1)
          return false;
    } else {
-      const VkRenderPassBeginInfo *begin = p->entries[0].type == VK_CMD_BEGIN_RENDER_PASS2 ?
-         p->entries[0].u.begin_render_pass2.render_pass_begin : p->entries[0].u.begin_render_pass.render_pass_begin;
-      VK_FROM_HANDLE(vk_render_pass,pass,begin->renderPass);
-      if (pass->subpass_count != 1) return false;
+      if (!kk_mesh_pass_subpasses_safe(cmd, p)) return false;
    }
    for (uint32_t i = 1; i + 1 < p->entry_count; ++i) {
       const struct vk_cmd_queue_entry *e = &p->entries[i];
@@ -424,6 +470,8 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
 
       } else if (kk_mesh_pass_raster_command(e->type)) {
          /* Keep regular and Mesh draws in their recorded relative order. */
+      } else if (e->type == VK_CMD_NEXT_SUBPASS || e->type == VK_CMD_NEXT_SUBPASS2) {
+         if (p->entries[0].type == VK_CMD_BEGIN_RENDERING) return false;
       } else if (kk_mesh_pass_boundary(e) || e->type == VK_CMD_BEGIN_RENDERING ||
                  e->type == VK_CMD_END_RENDERING || e->type == VK_CMD_END_RENDERING2_KHR) {
          /* Complete chains were checked before scanning their draws. */
