@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT
  * Reuses the original Mesa/Poly primitive capture and polygon clipper. */
 #include "kk_conservative.h"
+#include "kk_conservative_canonical.h"
 
 static float4
 conservative_window(float4 position, global const float *vp, bool minus_one)
@@ -70,16 +71,17 @@ libkk_conservative_prepare(global struct poly_geometry_params *geometry,
       prov[polygon_slot(p, VARYING_SLOT_VIEWPORT)].x : 0;
    global const float *vp = p->viewport[viewport];
    float2 lo = (float2)(INFINITY), hi = (float2)(-INFINITY);
-   float area = 0.0f;
-   float2 previous = (float2)(0.0f), first = (float2)(0.0f);
+   long area = 0;
+   long2 previous = (long2)(0), first = (long2)(0);
    for (uint i = 0; i < count; ++i) {
       float4 pos = vload4(0, polygon[i].position);
       float2 window = conservative_window(pos, vp, p->negative_one_to_one).xy;
+      if (!all(isfinite(window))) return;
       lo = fmin(lo, window);
       hi = fmax(hi, window);
-      /* DegenerateTrianglesRasterized=false: area on the reported 8-bit
+      /* Area on the reported 8-bit
        * subpixel grid, after clipping. Translation avoids cancellation. */
-      float2 fixed = rint(window * 256.0f);
+      long2 fixed = convert_long2(rint(window * 256.0f));
       if (i == 0)
          first = fixed;
       else
@@ -87,8 +89,14 @@ libkk_conservative_prepare(global struct poly_geometry_params *geometry,
                  (previous.y - first.y) * (fixed.x - first.x);
       previous = fixed;
    }
-   if (area == 0.0f || !isfinite(area))
+   bool degenerate = area == 0;
+   bool front = !degenerate && (saved & 1);
+   if ((front && (p->cull_mode & 1)) || (!front && (p->cull_mode & 2)))
       return;
+   if (degenerate) {
+      lo = rint(lo * 256.0f) / 256.0f;
+      hi = rint(hi * 256.0f) / 256.0f;
+   }
    float2 clip_lo = lo, clip_hi = hi;
    float extra = KK_CONSERVATIVE_UNCERTAINTY + config->extra_size;
    lo = fmax(floor(lo - extra), (float2)(0.0f));
@@ -110,7 +118,8 @@ libkk_conservative_prepare(global struct poly_geometry_params *geometry,
    out->polygon = saved & ~1ul;
    out->count = count;
    out->provoking = provoking;
-   out->front = saved & 1;
+   out->front = front;
+   out->degenerate = degenerate;
    out->front_ccw = p->front_ccw;
    out->viewport_index = viewport;
    out->depth_clamp = p->depth_clamp;
@@ -125,8 +134,12 @@ libkk_conservative_prepare(global struct poly_geometry_params *geometry,
          for (uint location = VARYING_SLOT_VAR0; location <= VARYING_SLOT_VAR31; ++location) {
             if (!(config->canonical_locations & (1ul << location)))
                continue;
-            values[corner * slots + location - VARYING_SLOT_VAR0] =
-               p->outputs & (1ul << location) ? input[polygon_slot(p, location)] : (uint4)(0);
+            uint index = location - VARYING_SLOT_VAR0;
+            uint4 value = p->outputs & (1ul << location) ? input[polygon_slot(p, location)] : (uint4)(0);
+            uint mask = (config->canonical_provoking_components[index / 16] >> ((index % 16) * 4)) & 15;
+            if (degenerate && mask && (p->outputs & (1ul << location)))
+               value = kk_conservative_provoking_components(value, prov[polygon_slot(p, location)], mask);
+            values[corner * slots + index] = value;
          }
       }
       out->canonical = (uintptr_t)values;
@@ -140,6 +153,11 @@ libkk_conservative_prepare(global struct poly_geometry_params *geometry,
    out->bounds[0] = lo.x; out->bounds[1] = lo.y;
    out->bounds[2] = hi.x; out->bounds[3] = hi.y;
    out->bias = polygon_depth_bias(p, viewport, polygon, count);
+   if (degenerate && p->depth_bias_enable) {
+      float4 position = polygon_position(p, invocation, stream, vertices[provoking]);
+      float depth = conservative_window(position, vp, p->negative_one_to_one).z;
+      out->bias = polygon_depth_bias_units(p, fabs(depth), 0.0f);
+   }
    out->extra_size = extra;
    out->clip_bounds[0] = clip_lo.x; out->clip_bounds[1] = clip_lo.y;
    out->clip_bounds[2] = clip_hi.x; out->clip_bounds[3] = clip_hi.y;
@@ -151,6 +169,10 @@ libkk_conservative_prepare(global struct poly_geometry_params *geometry,
                                      p->negative_one_to_one).xy;
       float2 b = conservative_window(vload4(0, polygon[i].position),
                                      vp, p->negative_one_to_one).xy;
+      if (degenerate) {
+         a = rint(a * 256.0f) / 256.0f;
+         b = rint(b * 256.0f) / 256.0f;
+      }
       float2 edge = (float2)(a.y - b.y, b.x - a.x);
       if (area < 0.0f)
          edge = -edge;

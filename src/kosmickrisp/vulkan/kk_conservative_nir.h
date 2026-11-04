@@ -65,6 +65,10 @@ kk_conservative_weights(nir_builder *b, nir_def *packet, nir_def *xy,
       unsigned j = (i + 1) % 3, k = (i + 2) % 3;
       v[i] = nir_fsub(b, nir_fmul(b, x[j], y[k]), nir_fmul(b, x[k], y[j]));
    }
+   nir_def *degenerate = nir_ine_imm(b, cr_load(b, packet, 1, 32, degenerate), 0);
+   nir_def *provoking = cr_load(b, packet, 1, 32, provoking);
+   nir_def *prov = nir_bcsel(b, nir_ieq_imm(b, provoking, 0), p[0],
+      nir_bcsel(b, nir_ieq_imm(b, provoking, 1), p[1], p[2]));
    nir_def *sum = nir_fadd(b, nir_fadd(b, v[0], v[1]), v[2]);
    nir_def *den = nir_imm_float(b, 0), *z = nir_imm_float(b, 0);
    for (unsigned i = 0; i < 3; ++i) {
@@ -72,14 +76,17 @@ kk_conservative_weights(nir_builder *b, nir_def *packet, nir_def *xy,
       z = nir_fadd(b, z, nir_fmul(b, v[i], nir_channel(b, p[i], 2)));
    }
    if (reciprocal_w)
-      *reciprocal_w = nir_fdiv(b, sum, den);
+      *reciprocal_w = nir_bcsel(b, degenerate, nir_frcp(b, nir_channel(b, prov, 3)), nir_fdiv(b, sum, den));
    if (depth)
-      *depth = nir_fadd(b, nir_fdiv(b, z, den), cr_load(b, packet, 1, 32, bias));
+      *depth = nir_fadd(b, nir_bcsel(b, degenerate, nir_fdiv(b, nir_channel(b, prov, 2), nir_channel(b, prov, 3)), nir_fdiv(b, z, den)), cr_load(b, packet, 1, 32, bias));
    for (unsigned i = 0; i < 3; ++i) {
       if (linear)
          v[i] = nir_fmul(b, v[i], nir_channel(b, p[i], 3));
       v[i] = nir_fdiv(b, v[i], linear ? den : sum);
    }
+   for (unsigned i = 0; i < 3; ++i)
+      v[i] = nir_bcsel(b, degenerate,
+         nir_b2f32(b, nir_ieq_imm(b, provoking, i)), v[i]);
    return nir_vec3(b, v[0], v[1], v[2]);
 }
 
@@ -221,6 +228,10 @@ kk_conservative_fs_intrinsic(nir_builder *b, nir_intrinsic_instr *intr, void *da
          for (unsigned v = 0; v < 3; ++v)
             value = nir_fadd(b, value, nir_fmul(b, values[v],
                nir_f2fN(b, nir_channel(b, weights, v), intr->def.bit_size)));
+         nir_def *provoking = cr_load(b, packet, 1, 32, provoking);
+         nir_def *prov = nir_bcsel(b, nir_ieq_imm(b, provoking, 0), values[0],
+            nir_bcsel(b, nir_ieq_imm(b, provoking, 1), values[1], values[2]));
+         value = nir_bcsel(b, nir_ine_imm(b, cr_load(b, packet, 1, 32, degenerate), 0), prov, value);
       }
    }
    nir_def_replace(&intr->def, value);

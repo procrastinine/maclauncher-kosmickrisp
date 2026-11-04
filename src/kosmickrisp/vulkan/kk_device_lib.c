@@ -43,7 +43,11 @@ build_precompiled_shaders(struct kk_device *dev)
                                     info->workgroup_size[1] *
                                     info->workgroup_size[2];
       shader->pipeline = mtl_new_compute_pipeline_state(
-         dev->mtl_compiler_handle, function, local_size_threads);
+         dev->mtl_compiler_handle, function,
+         /* Preserve private temporaries in conservative preparation by
+          * leaving this compiler limit at its default. Dispatch dimensions
+          * still come from the precompiled kernel metadata. */
+         i == LIBKK_CONSERVATIVE_PREPARE ? 0 : local_size_threads);
       mtl_release(function);
       mtl_release(library);
 

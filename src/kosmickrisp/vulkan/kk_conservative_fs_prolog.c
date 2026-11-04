@@ -110,12 +110,13 @@ kk_conservative_build_fs_prolog(void *mem_ctx,
    native_color_inputs(text, tmp, fs, true);
    P("};\n"
      "static float3 kk_cr_weights(device const uchar *p, float2 xy, bool linear) {\n"
+     "   if (*(device const uint *)(p+%u)) { uint v = *(device const uint *)(p+%u); return float3(v==0,v==1,v==2); }\n"
      "   device const packed_float4 *h = (device const packed_float4 *)(p + %u);\n"
      "   float3 x = float3(h[0].x,h[1].x,h[2].x) - xy.x*float3(h[0].w,h[1].w,h[2].w);\n"
      "   float3 y = float3(h[0].y,h[1].y,h[2].y) - xy.y*float3(h[0].w,h[1].w,h[2].w);\n"
      "   float3 v = cross(x,y);\n"
      "   if (linear) v *= float3(h[0].w,h[1].w,h[2].w);\n"
-     "   return v / (v.x+v.y+v.z);\n}\n", OFFSET(positions));
+     "   return v / (v.x+v.y+v.z);\n}\n", OFFSET(degenerate), OFFSET(provoking), OFFSET(positions));
    _mesa_string_buffer_append_len(text, prefix, input - prefix);
    P("KKConservativeIn kk_original [[stage_in]]");
    const char *position = builtin(fs, SYSTEM_VALUE_FRAG_COORD);
@@ -195,10 +196,12 @@ kk_conservative_build_fs_prolog(void *mem_ctx,
             P("*(device const %s *)(corners[*(device const uint *)(kk_cr_p+%u)]+%u)",
               rawtype, OFFSET(provoking), offset);
          } else {
+            P("(*(device const uint *)(kk_cr_p+%u) ? *(device const float *)(corners[*(device const uint *)(kk_cr_p+%u)]+%u) : ",
+              OFFSET(degenerate), OFFSET(provoking), offset);
             P("dot(float3(");
             for (unsigned v = 0; v < 3; ++v)
                P("%s*(device const float *)(corners[%u]+%u)", v ? "," : "", v, offset);
-            P("),w)");
+            P("),w))");
          }
       }
       P("); }\n");
@@ -255,6 +258,44 @@ void
 kk_conservative_require_canonical(struct kk_shader *pipeline, uint64_t locations)
 {
    pipeline->info.conservative_canonical_outputs |= locations;
+}
+void
+kk_conservative_gather_canonical_components(nir_shader *fs, uint64_t components[2])
+{
+   components[0] = components[1] = 0;
+   nir_foreach_block(block, nir_shader_get_entrypoint(fs)) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic) continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         bool flat = intr->intrinsic == nir_intrinsic_load_input;
+         if (!flat && intr->intrinsic != nir_intrinsic_load_interpolated_input) continue;
+         nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
+         nir_src offset = intr->src[flat ? 0 : 1];
+         unsigned base = sem.location + (nir_src_is_const(offset) ? nir_src_as_uint(offset) : 0);
+         unsigned first = nir_intrinsic_component(intr);
+         unsigned words = intr->def.num_components * DIV_ROUND_UP(intr->def.bit_size, 32);
+         unsigned stride = DIV_ROUND_UP(first + words, 4);
+         unsigned slots = nir_src_is_const(offset) ? stride : MAX2(sem.num_slots, stride);
+         for (unsigned array_slot = 0; array_slot + stride <= slots; array_slot += stride) {
+            for (unsigned word = 0; word < words; ++word) {
+               unsigned location = base + array_slot + (first + word) / 4;
+               if (location < VARYING_SLOT_VAR0 || location > VARYING_SLOT_VAR31) continue;
+               unsigned index = location - VARYING_SLOT_VAR0;
+               unsigned component = (first + word) % 4;
+               components[index / 16] |= (uint64_t)1 << ((index % 16) * 4 + component);
+            }
+         }
+      }
+   }
+}
+
+void
+kk_conservative_require_canonical_components(struct kk_shader *pipeline,
+   uint64_t locations, const uint64_t components[2])
+{
+   kk_conservative_require_canonical(pipeline, locations);
+   pipeline->info.conservative_canonical_components[0] = components ? components[0] : 0;
+   pipeline->info.conservative_canonical_components[1] = components ? components[1] : 0;
 }
 #undef OFFSET
 #undef P

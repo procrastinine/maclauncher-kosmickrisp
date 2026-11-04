@@ -1481,6 +1481,10 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
             .samples = MAX2(dyn->ms.rasterization_samples, 1),
             .sample_mask = dyn->ms.sample_mask,
             .canonical_locations = cmd->state.shaders[MESA_SHADER_VERTEX]->info.conservative_canonical_outputs,
+            .canonical_provoking_components = {
+               cmd->state.shaders[MESA_SHADER_VERTEX]->info.conservative_canonical_components[0],
+               cmd->state.shaders[MESA_SHADER_VERTEX]->info.conservative_canonical_components[1],
+            },
          };
          params.capture = gfx->polygon_capture =
             kk_pool_upload(cmd, &conservative, sizeof(conservative), 8).gpu;

@@ -68,3 +68,11 @@ bool kk_conservative_lower_canonical_fs(
 /* Set only on the final executable, never on a shared immutable library. */
 void kk_conservative_require_canonical(struct kk_shader *pipeline,
                                        uint64_t generic_locations);
+
+/* Gather from IO-lowered FS before canonical lowering. Retain only the two
+ * words; the final executable setter copies them without retaining NIR. */
+#define KK_CONSERVATIVE_CANONICAL_COMPONENTS_API 1
+void kk_conservative_gather_canonical_components(nir_shader *fragment,
+                                                 uint64_t components[2]);
+void kk_conservative_require_canonical_components(struct kk_shader *pipeline,
+   uint64_t generic_locations, const uint64_t components[2]);

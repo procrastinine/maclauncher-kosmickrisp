@@ -92,12 +92,11 @@ polygon_triangle(global struct poly_geometry_capture *p, uint id,
    return true;
 }
 
-KERNEL(64)
-libkk_polygon_clip(global struct poly_geometry_params *geometry,
-                   global struct poly_heap *heap)
+static void
+polygon_clip_primitive(global struct poly_geometry_params *geometry,
+                       global struct poly_heap *heap, uint id, bool defer_facing)
 {
    global struct poly_geometry_capture *p = polygon_capture(geometry);
-   uint id = cl_global_id.x;
    global uint *counts = (global uint *)p->clip_counts;
    global uint64_t *clipped = (global uint64_t *)p->clipped;
    counts[id] = 0;
@@ -146,7 +145,7 @@ libkk_polygon_clip(global struct poly_geometry_params *geometry,
    /* Vulkan's signed framebuffer area has a leading minus sign. */
    area *= -p->viewport[viewport][2] * p->viewport[viewport][3];
    bool front = p->front_ccw ? area > 0 : area < 0;
-   if ((front && (p->cull_mode & 1)) || (!front && (p->cull_mode & 2)))
+   if (!defer_facing && ((front && (p->cull_mode & 1)) || (!front && (p->cull_mode & 2))))
       return;
 
    /* Count first, then prefix sum. Output vertices stay in primitive order
@@ -158,6 +157,20 @@ libkk_polygon_clip(global struct poly_geometry_params *geometry,
    clipped[id] = (uintptr_t)saved | (front ? 1ul : 0ul);
    counts[id] = p->polygon_mode == 2 ? count :
       p->polygon_mode == 1 ? count * 2 : (count - 2) * 3;
+}
+
+KERNEL(64)
+libkk_polygon_clip(global struct poly_geometry_params *geometry,
+                   global struct poly_heap *heap)
+{
+   polygon_clip_primitive(geometry, heap, cl_global_id.x, false);
+}
+
+KERNEL(64)
+libkk_conservative_clip(global struct poly_geometry_params *geometry,
+                        global struct poly_heap *heap)
+{
+   polygon_clip_primitive(geometry, heap, cl_global_id.x, true);
 }
 
 KERNEL(1024)
@@ -194,6 +207,32 @@ polygon_screen_z(global struct poly_geometry_capture *p, uint viewport,
 }
 
 static float
+polygon_depth_bias_units(global struct poly_geometry_capture *p,
+                          float maximum_z, float slope)
+{
+   int exponent = p->depth_is_float ?
+      max((int)((as_uint(maximum_z) >> 23) & 255), 1) - 127 : 0;
+   int power = exponent - (int)p->depth_mantissa_bits;
+   /* FORCE_UNORM uses mantissa bits plus one on floating-point attachments.
+    * FLOAT uses one unit of framebuffer depth. Vulkan enum values are 1/2. */
+   if (p->depth_bias_representation == 1)
+      power = -(int)(p->depth_mantissa_bits + p->depth_is_float);
+   else if (p->depth_bias_representation == 2)
+      power = 0;
+   /* Exact powers of two, including FP32 subnormal spacing, without a libcl
+    * math-library call in these standalone precompiled Mesa kernels. */
+   uint resolvable_bits = power >= -126 ? (uint)(power + 127) << 23
+                                         : 1u << (power + 149);
+   float resolvable = as_float(resolvable_bits);
+   float bias = p->depth_bias_constant * resolvable + p->depth_bias_slope * slope;
+   if (p->depth_bias_clamp > 0)
+      bias = fmin(bias, p->depth_bias_clamp);
+   else if (p->depth_bias_clamp < 0)
+      bias = fmax(bias, p->depth_bias_clamp);
+   return bias;
+}
+
+static float
 polygon_depth_bias(global struct poly_geometry_capture *p, uint viewport,
                     global struct kk_polygon_vertex *polygon, uint count)
 {
@@ -225,26 +264,7 @@ polygon_depth_bias(global struct poly_geometry_capture *p, uint viewport,
          break;
       }
    }
-   int exponent = p->depth_is_float ?
-      max((int)((as_uint(maximum_z) >> 23) & 255), 1) - 127 : 0;
-   int power = exponent - (int)p->depth_mantissa_bits;
-   /* FORCE_UNORM uses mantissa bits plus one on floating-point attachments.
-    * FLOAT uses one unit of framebuffer depth. Vulkan enum values are 1/2. */
-   if (p->depth_bias_representation == 1)
-      power = -(int)(p->depth_mantissa_bits + p->depth_is_float);
-   else if (p->depth_bias_representation == 2)
-      power = 0;
-   /* Exact powers of two, including FP32 subnormal spacing, without a libcl
-    * math-library call in these standalone precompiled Mesa kernels. */
-   uint resolvable_bits = power >= -126 ? (uint)(power + 127) << 23
-                                         : 1u << (power + 149);
-   float resolvable = as_float(resolvable_bits);
-   float bias = p->depth_bias_constant * resolvable + p->depth_bias_slope * slope;
-   if (p->depth_bias_clamp > 0)
-      bias = fmin(bias, p->depth_bias_clamp);
-   else if (p->depth_bias_clamp < 0)
-      bias = fmax(bias, p->depth_bias_clamp);
-   return bias;
+   return polygon_depth_bias_units(p, maximum_z, slope);
 }
 
 KERNEL(64)

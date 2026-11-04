@@ -640,7 +640,7 @@ kk_get_device_properties(
       .extraPrimitiveOverestimationSizeGranularity = 0.0f,
       .primitiveUnderestimation = false,
       .conservativePointAndLineRasterization = false,
-      .degenerateTrianglesRasterized = false,
+      .degenerateTrianglesRasterized = true,
       .degenerateLinesRasterized = false,
       .fullyCoveredFragmentShaderInputVariable = false,
       .conservativeRasterizationPostDepthCoverage = false,
