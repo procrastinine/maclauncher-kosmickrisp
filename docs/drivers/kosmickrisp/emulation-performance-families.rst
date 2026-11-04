@@ -79,7 +79,7 @@
      - On
      - On
      - On
-     - On Apple7-11: POINT emits two triangles per point after capture; a Mesh pipeline captures its Mesh output once, and a reader draws each triangle's own vertices inside the clip volume as native points after face culling. FILL and eligible thin LINE draws retain native alternatives. Availability alone adds no shader code.
+     - On Apple7-11: POINT emits two triangles per point after capture; a Mesh pipeline captures its Mesh output once, and a reader draws each triangle's own vertices inside the clip volume as native points after face culling, with the triangle's facing passed to a fragment shader that reads gl_FrontFacing. FILL and eligible thin LINE draws retain native alternatives. Availability alone adds no shader code.
    * - ``line_expansion``
      - On
      - On

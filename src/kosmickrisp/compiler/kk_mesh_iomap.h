@@ -234,6 +234,19 @@ msl_mesh_line_primitive(struct nir_to_msl_ctx *ctx)
       "float kk_line_width [[user(polygon_point_coord)]];\n");
 }
 
+/* The point reader's primitive: the LinePrimitive members plus the facing of
+ * the triangle each point comes from. Fragment programs without a facing read
+ * leave it unused. */
+void
+msl_mesh_point_primitive(struct nir_to_msl_ctx *ctx)
+{
+   kk_mesh_io_block(ctx, "PointPrimitive", ctx->shader->info.outputs_written &
+      ctx->shader->info.per_primitive_outputs &
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT), false, false,
+      "uint kk_point_front [[user(polygon_front_face)]];\n");
+}
+
 /* The point reader's vertex: the native MeshVertex members, which keep their
  * attributes for the unchanged fragment function, plus a point size. Polygon
  * point size is 1 (polygonModePointSize is false), so a triangle Mesh shader

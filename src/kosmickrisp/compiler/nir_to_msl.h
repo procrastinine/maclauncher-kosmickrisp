@@ -16,6 +16,11 @@ struct vk_input_attachment_location_state;
 struct vk_color_attachment_location_state;
 struct vk_render_pass_state;
 
+/* Facing of the triangle a Mesh point-mode point comes from: a per-primitive
+ * fragment input, user(polygon_front_face). Vulkan never uses this legacy
+ * back-face color slot. */
+#define KK_MESH_POINT_FRONT_SLOT VARYING_SLOT_BFC0
+
 struct kk_mesh_msl_options {
    bool queries;
    uint32_t *retained_strides, *retained_fields;

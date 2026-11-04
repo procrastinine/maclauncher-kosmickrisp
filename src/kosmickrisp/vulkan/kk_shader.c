@@ -2156,6 +2156,18 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       shader->info.mesh_line = true;
    }
 
+   if (stage == MESA_SHADER_FRAGMENT && prev_stage &&
+       prev_stage->info.stage == MESA_SHADER_MESH &&
+       prev_stage->mesh->info.primitive == MESA_PRIM_TRIANGLES &&
+       kk_mesh_point_possible(state) &&
+       BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FRONT_FACE)) {
+      nir_shader *point_fs = nir_shader_clone(NULL, nir);
+      kk_mesh_point_fragment(point_fs);
+      NIR_PASS(_, point_fs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
+      kk_compile_msl(dev, point_fs, state, &shader->polygon[6]);
+      shader->info.mesh_point_front = true;
+   }
+
    if (stage == MESA_SHADER_FRAGMENT) {
       if (state && (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT)) {
          nir_builder b = nir_builder_at(nir_before_impl(nir_shader_get_entrypoint(nir)));
@@ -2987,6 +2999,10 @@ gather_graphics_pipeline_create_info(
       if (stage == MESA_SHADER_FRAGMENT && s->info.mesh_line) {
          info->mesh_line = true;
          kk_msl_copy(&vs->polygon[3], &s->polygon[3]);
+      }
+      if (stage == MESA_SHADER_FRAGMENT && s->info.mesh_point_front) {
+         info->mesh_point_front = true;
+         kk_msl_copy(&vs->polygon[6], &s->polygon[6]);
       }
       if (stage == MESA_SHADER_FRAGMENT && info->conservative)
          kk_msl_copy(&vs->polygon[5], &s->polygon[5]);
@@ -4830,7 +4846,8 @@ kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_
 
    u_foreach_bit(i, shader->info.gs_aux_mask)
       kk_msl_serialize(&shader->gs_aux[i], blob);
-   if (shader->info.polygon_point || shader->info.poly_layer_replay || shader->info.interlock_envelope || shader->info.mesh_line) {
+   if (shader->info.polygon_point || shader->info.poly_layer_replay || shader->info.interlock_envelope || shader->info.mesh_line ||
+       shader->info.mesh_point_front) {
       for (unsigned i = 0; i < ARRAY_SIZE(shader->polygon); ++i) {
          blob_write_uint8(blob, shader->polygon[i].code != NULL);
          if (shader->polygon[i].code) kk_msl_serialize(&shader->polygon[i], blob);
@@ -4981,7 +4998,8 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
       result = kk_msl_deserialize(blob, &shader->gs_aux[i]);
       if (result != VK_SUCCESS) goto fail;
    }
-   if (info.polygon_point || info.poly_layer_replay || info.interlock_envelope || info.mesh_line) {
+   if (info.polygon_point || info.poly_layer_replay || info.interlock_envelope || info.mesh_line ||
+       info.mesh_point_front) {
       for (unsigned i = 0; i < ARRAY_SIZE(shader->polygon); ++i) {
          if (!blob_read_uint8(blob)) continue;
          result = kk_msl_deserialize(blob, &shader->polygon[i]);

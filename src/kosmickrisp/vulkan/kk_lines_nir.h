@@ -278,6 +278,35 @@ kk_mesh_line_fragment(nir_shader *nir)
 }
 
 static bool
+kk_mesh_point_front_face(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_front_face)
+      return false;
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def *front = nir_load_per_primitive_input(b, 1, 32, nir_imm_int(b, 0),
+      .dest_type = nir_type_uint32, .io_semantics.location = KK_MESH_POINT_FRONT_SLOT,
+      .io_semantics.num_slots = 1);
+   nir_def_replace(&intr->def, nir_ine_imm(b, front, 0));
+   return true;
+}
+
+/* Points drawn from a triangle Mesh shader in point mode keep the triangle's
+ * facing; Metal reports every point as front facing. The point reader passes
+ * the facing per primitive, and only its fragment program reads it. */
+static void
+kk_mesh_point_fragment(nir_shader *nir)
+{
+   nir_builder b = nir_builder_at(nir_before_impl(nir_shader_get_entrypoint(nir)));
+   nir_shader_intrinsics_pass(nir, kk_line_resolve_coverage,
+      nir_metadata_control_flow, nir_imm_float(&b, 1));
+   nir_shader_intrinsics_pass(nir, kk_mesh_point_front_face,
+      nir_metadata_control_flow, NULL);
+   nir->info.inputs_read |= BITFIELD64_BIT(KK_MESH_POINT_FRONT_SLOT);
+   nir->info.per_primitive_inputs |= BITFIELD64_BIT(KK_MESH_POINT_FRONT_SLOT);
+   BITSET_CLEAR(nir->info.system_values_read, SYSTEM_VALUE_FRONT_FACE);
+}
+
+static bool
 kk_line_remove_early_exports(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
    if (intr->intrinsic != nir_intrinsic_store_output) return false;

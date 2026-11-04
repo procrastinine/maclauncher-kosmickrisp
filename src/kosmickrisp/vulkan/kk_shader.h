@@ -134,7 +134,7 @@ struct kk_mesh_shader_info {
 };
 
 /* Serialized info may change within padding without changing sizeof. */
-#define KK_SHADER_INFO_CACHE_VERSION 13u
+#define KK_SHADER_INFO_CACHE_VERSION 14u
 
 enum kk_gpl_shader_kind {
    KK_GPL_NONE,
@@ -149,6 +149,9 @@ struct kk_gpl_shader_state;
 struct kk_shader_info {
    bool interlock_envelope;
    bool mesh_line;
+   /* polygon[6]: the fragment program of a triangle Mesh pipeline's point
+    * reader, reading the triangle's facing. */
+   bool mesh_point_front;
    bool depth_bounds_emulation;
    mesa_shader_stage stage;
    bool uses_per_draw_data;
@@ -377,7 +380,7 @@ struct kk_shader {
    /* Compute pass of a GS. Its rasterization VS is in
     * msl_data[MESA_SHADER_GEOMETRY]. */
    struct msl_compile_data gs_main;
-   struct msl_compile_data polygon[6];
+   struct msl_compile_data polygon[7];
    struct msl_compile_data polygon_native;
    struct msl_compile_data polygon_native_fs;
    struct msl_compile_data gs_aux[2];

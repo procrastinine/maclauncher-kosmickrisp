@@ -101,7 +101,8 @@ Feature table
    * - ``fillModeNonSolid``, ``extendedDynamicState3PolygonMode``
      - Native with emulated cases: line mode uses native wireframe. Point mode
        expands captured primitives into two triangles per point; Mesh shader
-       triangles draw native points at their vertices.
+       triangles draw native points at their vertices, and gl_FrontFacing of
+       those points is the triangle's facing.
      - None listed; line mode native on all families.
      - ``polygon_points``
      - On

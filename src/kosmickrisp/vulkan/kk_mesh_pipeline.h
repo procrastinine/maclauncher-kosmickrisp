@@ -368,7 +368,8 @@ kk_mesh_get_line_pipeline(struct kk_device *dev, struct kk_shader *shader,
 }
 
 /* The point reader keeps the pipeline's own fragment function: its vertex
- * and primitive records carry the same attributes as the native output. */
+ * and primitive records carry the same attributes as the native output, plus
+ * the triangle's facing for the fragment variant that reads it. */
 VkResult
 kk_mesh_get_point_pipeline(struct kk_device *dev, struct kk_shader *shader,
                            struct kk_pipeline_handles **out)
@@ -385,12 +386,15 @@ kk_mesh_get_point_pipeline(struct kk_device *dev, struct kk_shader *shader,
       mesh_state.info.retained_reader = true;
       mesh_state.info.point_reader = true;
       mesh_state.info.has_task = false;
+      /* A fragment program reading gl_FrontFacing has a variant reading the
+       * point reader's per-primitive facing. */
+      const bool front = shader->info.mesh_point_front && shader->polygon[6].code;
       const struct kk_mesh_fragment_program monolithic = {
-         .monolithic = &shader->msl_data[MESA_SHADER_FRAGMENT],
+         .monolithic = front ? &shader->polygon[6] : &shader->msl_data[MESA_SHADER_FRAGMENT],
       };
       VkResult result = kk_mesh_build_pipeline(dev, &executable, NULL,
          &shader->msl_data[MESA_SHADER_MESH],
-         kk_mesh_fragment(shader) ? kk_mesh_fragment(shader) : &monolithic,
+         !front && kk_mesh_fragment(shader) ? kk_mesh_fragment(shader) : &monolithic,
          false, created);
       if (result != VK_SUCCESS) {
          kk_mesh_release_pipeline(dev, shader, created, KK_PIPELINE_MESH_POINT);
