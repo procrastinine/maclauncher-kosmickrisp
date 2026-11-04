@@ -1836,7 +1836,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
       producer->info.next_stage = MESA_SHADER_GEOMETRY;
       size_t key_size = poly_passthrough_gs_key_size(producer->xfb_info ? producer->xfb_info->output_count : 0);
       struct poly_passthrough_gs_key *key = rzalloc_size(NULL, key_size);
-      key->prim = u_decomposed_prim(vk_topology_to_mesa(state->ia->primitive_topology));
+      key->prim = u_reduced_prim(vk_topology_to_mesa(state->ia->primitive_topology));
       if (tess) {
          key->prim = producer->info.tess.point_mode ? MESA_PRIM_POINTS :
             (producer->info.tess._primitive_mode == TESS_PRIMITIVE_ISOLINES ? MESA_PRIM_LINES : MESA_PRIM_TRIANGLES);
