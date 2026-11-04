@@ -6,6 +6,7 @@
  */
 
 #include "kk_image.h"
+#include "kk_depth_bounds.h"
 #include "kk-writable-msaa.h"
 #include "kk_external_memory_fd.h"
 #include "kk_descriptor_set.h"
@@ -639,7 +640,7 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
 
    if ((image->vk.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
-       image->vk.samples > 1) {
+       (image->vk.samples > 1 || kk_depth_bounds_emulated(dev))) {
       image->vk.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
       image->vk.stencil_usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
    }

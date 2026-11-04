@@ -47,6 +47,21 @@ kk_interlock_framebuffer_load_attachment(nir_builder *b,
    struct kk_interlock_program_nir *program, nir_intrinsic_instr *intr)
 {
    nir_io_semantics io = nir_intrinsic_io_semantics(intr);
+   if (io.location == FRAG_RESULT_DEPTH || io.location == FRAG_RESULT_STENCIL) {
+      struct kk_interlock_framebuffer_nir *state = program->data;
+      struct kk_interlock_transaction_nir *transaction = &state->transaction;
+      nir_def *params = transaction->render->parameters(b, transaction->render->data);
+      nir_def *sample = kk_interlock_shadow_sample(b, transaction, params, intr->src[1].ssa);
+      nir_def *address = kk_interlock_shadow_address(b, params,
+         io.location == FRAG_RESULT_DEPTH ? offsetof(struct kk_interlock_envelope, depth) :
+         offsetof(struct kk_interlock_envelope, stencil), sample, 4);
+      nir_def *value = nir_load_global(b, 1, 32, address, .access = ACCESS_COHERENT, .align_mul = 4);
+      if (intr->def.bit_size == 16)
+         value = nir_alu_type_get_base_type(nir_intrinsic_dest_type(intr)) == nir_type_float ?
+            nir_f2f16(b, value) : nir_u2u16(b, value);
+      nir_def *zero = nir_imm_intN_t(b, 0, intr->def.bit_size);
+      return nir_trim_vector(b, nir_vec4(b, value, zero, zero, zero), intr->def.num_components);
+   }
    if (io.location < FRAG_RESULT_DATA0 ||
        io.location >= FRAG_RESULT_DATA0 + 8)
       return NULL;

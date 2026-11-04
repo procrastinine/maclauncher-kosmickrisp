@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_depth_stencil_state.h"
+#include "kk_depth_bounds.h"
 #include "kk_image.h"
 #include "kk_image_view.h"
 #include "kk_physical_device.h"
@@ -54,7 +55,7 @@ kk_cmd_capture_depth_stencil(struct kk_cmd_buffer *cmd,
       .render = gfx->render,
       .rasterization_samples = cmd->vk.dynamic_graphics_state.ms.rasterization_samples,
       .dynamic = gfx->is_depth_stencil_dynamic,
-      .native_depth_bounds = kk_device_physical(kk_cmd_buffer_device(cmd))->vk.supported_features.depthBounds,
+      .native_depth_bounds = kk_depth_bounds_native(kk_device_physical(kk_cmd_buffer_device(cmd))),
    };
    const struct kk_attachment *depth = &s->render.depth_att;
    const struct kk_attachment *stencil = &s->render.stencil_att;

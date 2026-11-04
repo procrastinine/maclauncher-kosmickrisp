@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_bo.h"
+#include "kk_depth_bounds.h"
 #include <string.h>
 
 static VkResult
@@ -7,8 +8,11 @@ kk_interlock_device_init(struct kk_device *dev)
 {
    if (!dev->vk.enabled_features.fragmentShaderSampleInterlock &&
        !dev->vk.enabled_features.fragmentShaderPixelInterlock &&
-       !dev->vk.enabled_features.fragmentShaderShadingRateInterlock)
+       !dev->vk.enabled_features.fragmentShaderShadingRateInterlock &&
+       !kk_depth_bounds_emulated(dev))
       return VK_SUCCESS;
+   if (kk_depth_bounds_emulated(dev))
+      kk_depth_bounds_init_dispatch(dev);
    /* One tile of pixel/sample guard words avoids a single contended address.
     * Atomic values are internal; aliased tiles never communicate app data. */
    VkResult result = kk_alloc_bo(dev, &dev->vk.base, 32 * 32 * 32 * sizeof(uint32_t),

@@ -66,6 +66,7 @@ kk_files = files(
   'kk_cmd_dgc.c',
   'kk_dgc.m',
   'kk_cmd_draw.c',
+  'kk_depth_bounds.c',
   'kk_depth_stencil_state.c',
   'kk_fragment_shading_rate_command.c',
   'kk_fragment_shading_rate_resources.c',

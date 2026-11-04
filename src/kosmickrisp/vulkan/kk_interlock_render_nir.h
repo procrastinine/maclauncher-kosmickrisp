@@ -13,6 +13,7 @@ struct kk_interlock_render_nir {
    struct kk_interlock_capture_nir inputs;
    /* Application frequency is saved before fixed-function output lowering. */
    bool sample_shading;
+   nir_def *(*capture_job)(nir_builder *, void *);
    void (*lower_sample_outputs)(nir_shader *, void *);
    void *sample_outputs_data;
    nir_def *(*parameters)(nir_builder *, void *);
@@ -128,10 +129,13 @@ kk_interlock_capture_shader(const nir_shader_compiler_options *options,
    nir_def *params = s->parameters(&b, s->data);
    nir_def *coord = nir_load_frag_coord(&b);
    nir_def *pixel = nir_f2u32(&b, nir_channels(&b, coord, 3));
-   nir_def *primitive = nir_load_primitive_id(&b);
+   nir_def *primitive = s->capture_job ? s->capture_job(&b, s->data) : nir_load_primitive_id(&b);
    nir_def *layer = nir_load_layer_id(&b);
    nir_def *selected_layer = nir_ieq(&b, layer,
       kk_interlock_env(&b, params, layer));
+   if (s->capture_job)
+      selected_layer = nir_iand(&b, selected_layer, nir_ult(&b, primitive,
+         kk_interlock_env(&b, params, primitive_count)));
    nir_def *cell = kk_interlock_cell(&b, params, pixel, primitive);
    nir_def *claim = kk_interlock_word_address(&b,
       kk_interlock_env(&b, params, claims), cell);

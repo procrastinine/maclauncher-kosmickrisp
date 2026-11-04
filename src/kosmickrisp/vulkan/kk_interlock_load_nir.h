@@ -5,6 +5,11 @@
 #include "kk_interlock_replay_nir.h"
 #include "kosmickrisp/compiler/nir_to_msl.h"
 
+/* These views are two-dimensional single-sample or multisample arrays, including for a
+ * single framebuffer layer. The native packet creates aspect-specific views
+ * of the stored attachments. No same-pass depth/stencil access is required. */
+#include "kk_depth_bounds_load_nir.h"
+
 /* These views are always two-dimensional multisample arrays, including for a
  * single framebuffer layer. The native packet creates aspect-specific views
  * of the stored attachments. No same-pass depth/stencil access is required. */
@@ -44,11 +49,16 @@ kk_interlock_attachment_read(nir_builder *b, nir_def *params,
    return nir_if_phi(b, &tex->def, absent);
 }
 
+
+
 static nir_shader *
 kk_interlock_load_shader(const nir_shader_compiler_options *options,
    struct kk_interlock_render_nir *render,
-   const struct kk_interlock_replay_info *info)
+   const struct kk_interlock_replay_info *info, bool depth_bounds)
 {
+   nir_def *(*read_attachment)(nir_builder *, nir_def *, unsigned,
+      nir_def *, nir_def *, nir_alu_type, bool) = depth_bounds ?
+      kk_depth_bounds_attachment_read : kk_interlock_attachment_read;
    nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
       options, "interlock attachment load");
    b.shader->info.workgroup_size[0] = 8;
@@ -80,7 +90,7 @@ kk_interlock_load_shader(const nir_shader_compiler_options *options,
          continue;
       nir_alu_type type = util_format_is_pure_uint(format) ? nir_type_uint32 :
          util_format_is_pure_sint(format) ? nir_type_int32 : nir_type_float32;
-      nir_def *value = kk_interlock_attachment_read(&b, params,
+      nir_def *value = read_attachment(&b, params,
          offsetof(struct kk_interlock_envelope, color_texture) + i * 8,
          pixel, sample, type, false);
       nir_def *base = kk_interlock_env_load(&b, params, 1, 64,
@@ -89,11 +99,11 @@ kk_interlock_load_shader(const nir_shader_compiler_options *options,
          nir_u2u64(&b, nir_imul_imm(&b, index, 16)));
       nir_store_global(&b, value, address, .align_mul = 16);
    }
-   nir_def *depth = info->depth ? kk_interlock_attachment_read(&b, params,
+   nir_def *depth = info->depth ? read_attachment(&b, params,
       offsetof(struct kk_interlock_envelope, depth_texture), pixel, sample,
       nir_type_float32, true) : nir_imm_float(&b, 1);
    nir_def *stencil = info->stencil ? nir_channel(&b,
-      kk_interlock_attachment_read(&b, params,
+      read_attachment(&b, params,
          offsetof(struct kk_interlock_envelope, stencil_texture), pixel, sample,
          nir_type_uint32, false), 0) : nir_imm_int(&b, 0);
    nir_store_global(&b, depth, kk_interlock_word_address(&b,

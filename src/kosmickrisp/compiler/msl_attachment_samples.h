@@ -2,6 +2,8 @@
  * Share native color inputs between ordinary and ordered attachment reads,
  * including multisampling and dynamically indexed attachment arrays.
  */
+#include "msl_depth_bounds_attachments.h"
+
 static bool
 msl_attachment_sample_fetch(nir_builder *b, nir_intrinsic_instr *intr,
                             const struct lower_ia_state *state)
@@ -24,7 +26,12 @@ msl_attachment_sample_fetch(nir_builder *b, nir_intrinsic_instr *intr,
    unsigned index = base;
    if (constant)
       index += nir_src_as_uint(intr->src[3]);
-   nir_def *result = &intr->def;
+   nir_def *result = msl_depth_bounds_input(b, intr, state);
+   if (state->depth_bounds_shadow) {
+      if (result == &intr->def) return false;
+      nir_def_replace(&intr->def, result);
+      return true;
+   }
    for (unsigned i = 0; i < ial->color_attachment_count; ++i) {
       unsigned attachment = ial->color_map[i];
       unsigned slot = state->cal ? state->cal->color_map[i] : i;

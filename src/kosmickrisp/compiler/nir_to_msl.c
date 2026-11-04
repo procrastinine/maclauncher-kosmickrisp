@@ -1515,7 +1515,9 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       P(ctx, "kk_pipeline_statistics_active;\n");
       break;
    case nir_intrinsic_load_buffer_ptr_kk:
-      if (nir_intrinsic_binding(instr) == KK_ARGUMENT_POLY_LAYER_REPLAY) {
+      if (nir_intrinsic_binding(instr) == KK_ARGUMENT_PER_DRAW) {
+         P(ctx, "(ulong)&per_draw.contents[0];\n");
+      } else if (nir_intrinsic_binding(instr) == KK_ARGUMENT_POLY_LAYER_REPLAY) {
          P(ctx, "(ulong)poly_layer_selector;\n");
       } else {
          P(ctx, "(ulong)&buf%d.contents[0];\n", nir_intrinsic_binding(instr));

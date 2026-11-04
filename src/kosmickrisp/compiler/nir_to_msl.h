@@ -97,7 +97,7 @@ bool msl_nir_fs_remove_depth_write(nir_shader *s);
 void msl_nir_lower_input_attachments(
    nir_shader *nir, const struct vk_input_attachment_location_state *ial,
    const struct vk_color_attachment_location_state *cal,
-   const struct vk_render_pass_state *rp, bool interlock_shadow_samples);
+   const struct vk_render_pass_state *rp, bool interlock_shadow_samples, bool mesh_shadow, bool depth_bounds_shadow);
 bool msl_lower_textures(nir_shader *s, bool lower_lod_bias);
 
 bool msl_lower_robustness2_images(nir_shader *s);

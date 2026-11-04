@@ -48,6 +48,7 @@ enum kk_feature_bit {
    KK_FEAT_SPARSE_IMAGE_QUERY,
    KK_FEAT_WRITABLE_MSAA,
    KK_FEAT_GEOMETRY_REPORTS,
+   KK_FEAT_DEPTH_BOUNDS,
    KK_FEAT_COUNT,
 };
 
@@ -123,10 +124,11 @@ struct kk_mesh_shader_info {
 };
 
 /* Serialized info may change within padding without changing sizeof. */
-#define KK_SHADER_INFO_CACHE_VERSION 1u
+#define KK_SHADER_INFO_CACHE_VERSION 2u
 
 struct kk_shader_info {
    bool interlock_envelope;
+   bool depth_bounds_emulation;
    mesa_shader_stage stage;
    bool uses_per_draw_data;
    uint8_t sparse_modes; /* Native code compiled for these residency classes. */

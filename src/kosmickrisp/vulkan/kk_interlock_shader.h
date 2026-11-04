@@ -8,6 +8,8 @@
 #include "util/u_atomic.h"
 
 #include "kk_interlock_shader_data.h"
+#include "kk_depth_bounds_mesh_nir.h"
+#include "kk_depth_bounds_clear_nir.h"
 
 /* The shared compiler implementation is defined later in kk_shader.c. */
 static void kk_compile_msl_options(struct kk_device *dev,
@@ -164,13 +166,17 @@ kk_interlock_compile_fragment(struct kk_device *dev, struct kk_shader *owner,
    bool sample_shading)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
-   struct kk_interlock_shader *shader = rzalloc(NULL, struct kk_interlock_shader);
+   struct kk_interlock_shader *shader = owner->info.depth_bounds_emulation ?
+      (struct kk_interlock_shader *)rzalloc(NULL, struct kk_depth_bounds_shader) :
+      rzalloc(NULL, struct kk_interlock_shader);
    if (!shader)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    shader->references = 1;
    owner->interlock = shader;
+   const bool mesh = previous && previous->info.stage == MESA_SHADER_MESH;
    struct kk_interlock_render_nir render = {
-      .parameters = kk_interlock_shader_parameters,
+      .parameters = mesh ? kk_depth_bounds_mesh_parameters : kk_interlock_shader_parameters,
+      .capture_job = mesh ? kk_depth_bounds_mesh_job : NULL,
       .geometry = previous && previous->info.has_geometry ?
          &previous->info.polygon : NULL,
       .point_coord = kk_interlock_source_point_coord,
@@ -179,8 +185,11 @@ kk_interlock_compile_fragment(struct kk_device *dev, struct kk_shader *owner,
       .sample_outputs_data = (void *)state,
    };
    shader->info.source_vertices_per_primitive = previous && previous->info.has_geometry ?
-      mesa_vertices_per_prim(previous->info.gs.mode) : 3;
+      mesa_vertices_per_prim(previous->info.gs.mode) :
+      mesh ? mesa_vertices_per_prim(previous->mesh->info.primitive) : 3;
    kk_interlock_capture_layout(original, &render.inputs);
+   render.inputs.point_coord &= mesh;
+   render.inputs.point_sample = sample_shading;
    shader->info.inputs = render.inputs;
    const struct vk_render_pass_state *rp = state->rp;
    for (unsigned i = 0; i < rp->color_attachment_count; ++i) {
@@ -206,6 +215,9 @@ kk_interlock_compile_fragment(struct kk_device *dev, struct kk_shader *owner,
       capture.shader, state, robustness);
 
    nir_shader *transaction = nir_shader_clone(NULL, original);
+   if (mesh)
+      nir_shader_intrinsics_pass(transaction, kk_depth_bounds_mesh_original_per_draw,
+         nir_metadata_control_flow, NULL);
    struct kk_interlock_framebuffer_nir framebuffer = {
       .transaction = {.render = &render},
       .depth_bits = shader->info.depth_bits,
@@ -225,7 +237,18 @@ kk_interlock_compile_fragment(struct kk_device *dev, struct kk_shader *owner,
    kk_interlock_compile_program(dev, shader, KK_INTERLOCK_TILE_VERTEX,
       kk_interlock_tile_vertex_shader(original->options), state, robustness);
    kk_interlock_compile_program(dev, shader, KK_INTERLOCK_LOAD,
-      kk_interlock_load_shader(original->options, &render, &replay), state, robustness);
+      kk_interlock_load_shader(original->options, &render, &replay,
+         owner->info.depth_bounds_emulation), state, robustness);
+   if (owner->info.depth_bounds_emulation && mesh) {
+      struct kk_depth_bounds_shader *bounds =
+         container_of(shader, struct kk_depth_bounds_shader, base);
+      nir_shader *clear = kk_depth_bounds_clear_shader(original->options, &render);
+      msl_preprocess_nir(clear);
+      kk_nir_lower_descriptors(clear, 0, robustness, 0, NULL);
+      kk_compile_msl_options(dev, clear, state, &bounds->clear, NULL, NULL, NULL);
+      ralloc_steal(shader, bounds->clear.code);
+      ralloc_steal(shader, bounds->clear.entrypoint_name);
+   }
    return VK_SUCCESS;
 }
 
@@ -243,6 +266,13 @@ kk_interlock_shader_serialize(const struct kk_shader *owner, struct blob *blob)
    blob_write_bytes(blob, &owner->interlock->info, sizeof(owner->interlock->info));
    for (unsigned i = 0; i < KK_INTERLOCK_PROGRAM_COUNT; ++i)
       kk_msl_serialize(&owner->interlock->program[i], blob);
+   if (owner->info.depth_bounds_emulation) {
+      const struct msl_compile_data *clear = &container_of(owner->interlock,
+         const struct kk_depth_bounds_shader, base)->clear;
+      blob_write_uint8(blob, clear->code != NULL);
+      if (clear->code)
+         kk_msl_serialize(clear, blob);
+   }
 }
 
 static VkResult
@@ -255,7 +285,9 @@ kk_interlock_shader_deserialize(struct kk_shader *owner, struct blob_reader *blo
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    if (!present)
       return VK_SUCCESS;
-   struct kk_interlock_shader *shader = rzalloc(NULL, struct kk_interlock_shader);
+   struct kk_interlock_shader *shader = owner->info.depth_bounds_emulation ?
+      (struct kk_interlock_shader *)rzalloc(NULL, struct kk_depth_bounds_shader) :
+      rzalloc(NULL, struct kk_interlock_shader);
    if (!shader)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    shader->references = 1;
@@ -271,7 +303,16 @@ kk_interlock_shader_deserialize(struct kk_shader *owner, struct blob_reader *blo
       if (result != VK_SUCCESS)
          return result;
    }
-   return VK_SUCCESS;
+   if (owner->info.depth_bounds_emulation && blob_read_uint8(blob)) {
+      struct msl_compile_data *clear = &container_of(shader,
+         struct kk_depth_bounds_shader, base)->clear;
+      VkResult result = kk_msl_deserialize(blob, clear);
+      ralloc_steal(shader, clear->code);
+      ralloc_steal(shader, clear->entrypoint_name);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+   return blob->overrun ? VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT : VK_SUCCESS;
 }
 
 #endif

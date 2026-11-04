@@ -8,12 +8,15 @@
 
 #include "nir.h"
 #include "nir_builder.h"
+#include "kosmickrisp/libkk/kk_argument_table.h"
 
 static bool
 uses_per_draw_data(UNUSED nir_builder *b, nir_intrinsic_instr *intr,
                    UNUSED void *data)
 {
-   return intr->intrinsic == nir_intrinsic_load_per_draw_ptr_kk;
+   return intr->intrinsic == nir_intrinsic_load_per_draw_ptr_kk ||
+      (intr->intrinsic == nir_intrinsic_load_buffer_ptr_kk &&
+       nir_intrinsic_binding(intr) == KK_ARGUMENT_PER_DRAW);
 }
 
 bool

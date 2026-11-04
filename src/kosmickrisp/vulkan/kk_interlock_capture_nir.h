@@ -14,6 +14,8 @@ struct kk_interlock_capture_nir {
    nir_alu_type types[NUM_TOTAL_VARYING_SLOTS];
    uint8_t components[NUM_TOTAL_VARYING_SLOTS];
    uint8_t interpolation[NUM_TOTAL_VARYING_SLOTS];
+   uint64_t per_primitive;
+   bool point_coord, point_sample;
    uint64_t center;
    uint64_t centroid;
    uint64_t sample;
@@ -25,8 +27,13 @@ kk_interlock_capture_collect(nir_builder *b, nir_intrinsic_instr *intr,
                                void *data)
 {
    struct kk_interlock_capture_nir *s = data;
+   if (intr->intrinsic == nir_intrinsic_load_point_coord) {
+      s->point_coord = true;
+      return false;
+   }
    bool interpolated = intr->intrinsic == nir_intrinsic_load_interpolated_input;
-   if (!interpolated && intr->intrinsic != nir_intrinsic_load_input)
+   if (!interpolated && intr->intrinsic != nir_intrinsic_load_input &&
+       intr->intrinsic != nir_intrinsic_load_per_primitive_input)
       return false;
    nir_src offset = intr->src[interpolated ? 1 : 0];
    assert(nir_src_is_const(offset));
@@ -37,6 +44,8 @@ kk_interlock_capture_collect(nir_builder *b, nir_intrinsic_instr *intr,
    s->components[slot] = MAX2(s->components[slot],
       intr->num_components + nir_intrinsic_component(intr));
    if (!interpolated) {
+      if (intr->intrinsic == nir_intrinsic_load_per_primitive_input)
+         s->per_primitive |= bit;
       s->center |= bit;
       s->interpolation[slot] = INTERP_MODE_FLAT;
       return false;
@@ -95,7 +104,11 @@ kk_interlock_capture_input(nir_builder *b,
    nir_alu_type type = s->types[slot];
    unsigned bits = nir_alu_type_get_type_size(type);
    nir_def *value;
-   if (s->interpolation[slot] == INTERP_MODE_FLAT) {
+   if (s->per_primitive & BITFIELD64_BIT(slot)) {
+      value = nir_load_per_primitive_input(b, components, bits, nir_imm_int(b, 0),
+         .dest_type = type, .io_semantics = io);
+      b->shader->info.per_primitive_inputs |= BITFIELD64_BIT(slot);
+   } else if (s->interpolation[slot] == INTERP_MODE_FLAT) {
       value = nir_load_input(b, components, bits, nir_imm_int(b, 0),
          .dest_type = type, .io_semantics = io);
    } else {
@@ -129,7 +142,17 @@ kk_interlock_capture_inputs_if(nir_builder *b,
 {
    const uint64_t masks[] = {s->center, s->centroid, s->sample};
    nir_def *values[3][NUM_TOTAL_VARYING_SLOTS][4];
-   nir_def *coords[4];
+   nir_def *coords[4], *points[4];
+   if (s->point_coord) {
+      nir_def *point = nir_load_point_coord(b);
+      nir_def *target = s->point_sample ? nir_load_sample_pos_from_id(b, 32, sample) :
+         nir_imm_vec2(b, 0.5f, 0.5f);
+      nir_def *offset = nir_fsub(b, target, nir_load_sample_pos(b));
+      point = nir_ffma(b, nir_ddy(b, point), nir_channel(b, offset, 1),
+         nir_ffma(b, nir_ddx(b, point), nir_channel(b, offset, 0), point));
+      for (unsigned q = 0; q < 4; ++q)
+         points[q] = nir_quad_broadcast(b, point, nir_imm_int(b, q));
+   }
    for (unsigned kind = 0; kind < ARRAY_SIZE(masks); ++kind) {
       u_foreach_bit64(slot, masks[kind]) {
          nir_def *value = kk_interlock_capture_input(b, s, slot, kind, sample);
@@ -153,6 +176,10 @@ kk_interlock_capture_inputs_if(nir_builder *b,
          }
       }
    }
+   if (s->point_coord)
+      for (unsigned q = 0; q < 4; ++q)
+         nir_store_global(b, points[q], nir_iadd_imm(b, record, s->stride + 32 + q * 8),
+            .align_mul = 4);
    if (coord)
       for (unsigned q = 0; q < 4; ++q)
          nir_store_global(b, coords[q],
@@ -290,8 +317,18 @@ kk_interlock_captured_input(nir_builder *b, nir_intrinsic_instr *intr,
                               void *data)
 {
    struct kk_interlock_captured_inputs_nir *s = data;
+   if (intr->intrinsic == nir_intrinsic_load_point_coord && s->capture->point_coord) {
+      b->cursor = nir_before_instr(&intr->instr);
+      nir_def *sample = s->sample_shading ? nir_load_var(b, s->sample) : nir_imm_int(b, 0);
+      nir_def *record = s->record(b, s->data, sample);
+      nir_def *pixel = nir_f2u32(b, nir_channels(b, nir_load_var(b, s->coord), 3));
+      nir_def_replace(&intr->def, kk_interlock_quad_load(b,
+         nir_iadd_imm(b, record, s->capture->stride + 32), 8, 2, 32, pixel));
+      return true;
+   }
    bool interpolated = intr->intrinsic == nir_intrinsic_load_interpolated_input;
-   if (!interpolated && intr->intrinsic != nir_intrinsic_load_input)
+   if (!interpolated && intr->intrinsic != nir_intrinsic_load_input &&
+       intr->intrinsic != nir_intrinsic_load_per_primitive_input)
       return false;
    nir_src offset = intr->src[interpolated ? 1 : 0];
    assert(nir_src_is_const(offset));
