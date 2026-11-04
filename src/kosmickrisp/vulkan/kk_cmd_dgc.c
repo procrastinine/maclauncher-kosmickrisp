@@ -322,11 +322,16 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INVALID_SHADER_NV);
       return;
    }
+   /* Aliased attachments require the ordinary producer/cached-raster
+    * boundary. A native user-stage ICB cannot be replayed per layer. */
+   const bool layered = !compute && cmd->state.gfx.render.layered_bc;
    bool poly = !compute &&
-               (kk_dgc_needs_poly(cmd) ||
+               (layered || kk_dgc_needs_poly(cmd) ||
                 (p.action == 1 &&
                  (p.index_size == 1 ||
                   (p.index_token != UINT32_MAX && !p.dx_index))));
+   if (layered)
+      kk_dgc_set_graphics_indirect(cmd, false);
    uint32_t maximum = p.maximum;
    p.execution_range = kk_pool_alloc(cmd, 8, 4).gpu;
    if (!p.execution_range)
@@ -373,9 +378,19 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
                                         cmd->argument_table);
          for (uint32_t i = 0; i < count; ++i) {
             uint64_t record = scratch + (uint64_t)i * p.record_stride;
-            kk_dgc_draw_sequence(cmd, record, record + p.args_offset,
-                                 record + p.index_offset, p.action == 1, p.ordinary ? first+i : 0);
+            if (layered)
+               kk_dgc_execute_layered_sequence(cmd, record,
+                  record + p.args_offset, record + p.index_offset,
+                  p.action == 1, p.ordinary ? first + i : 0);
+            else
+               kk_dgc_draw_sequence(cmd, record, record + p.args_offset,
+                  record + p.index_offset, p.action == 1,
+                  p.ordinary ? first + i : 0);
+            if (cmd->vk.record_result != VK_SUCCESS)
+               break;
          }
+         if (cmd->vk.record_result != VK_SUCCESS)
+            break;
          continue;
       }
       kk_dgc_encode(dev, cs_get_compute(cmd), parameters, icb, count, 2);

@@ -69,3 +69,5 @@ void kk_dgc_draw_sequence(struct kk_cmd_buffer *cmd, uint64_t root,
    gfx->descriptors.root.addr = previous_address;
    gfx->descriptors.root_dirty = true;
 }
+
+#include "kk_dgc_layered.h"

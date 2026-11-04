@@ -67,6 +67,10 @@ void kk_dgc_draw_sequence(struct kk_cmd_buffer *cmd, uint64_t root,
                           uint64_t args, uint64_t binding, bool indexed, uint32_t draw_id);
 void kk_dgc_set_linked_table_buffers(struct kk_cmd_buffer *cmd,
    uint64_t vertex_buffer, uint64_t fragment_buffer);
+/* Records one GPU-generated sequence through the shared producer and retained
+ * raster-reader boundary; returns only after every reader has been encoded. */
+void kk_dgc_execute_layered_sequence(struct kk_cmd_buffer *cmd, uint64_t root,
+   uint64_t args, uint64_t binding, bool indexed, uint32_t draw_id);
 void kk_dgc_release_commands(struct kk_cmd_buffer *cmd);
 uint32_t kk_dgc_primitive(struct kk_cmd_buffer *cmd);
 bool kk_dgc_prepare_graphics_root(struct kk_cmd_buffer *allocator, struct kk_cmd_buffer *state, struct kk_root_descriptor_table *root);
