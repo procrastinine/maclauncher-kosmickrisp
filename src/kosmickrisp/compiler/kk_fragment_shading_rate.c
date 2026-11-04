@@ -155,6 +155,7 @@ kk_nir_lower_coarse_fragment(nir_shader *nir)
    b.cursor = nir_before_cf_list(&impl->body);
    nir_def *context = nir_load_per_draw_ptr_kk(&b, 1, 64);
    nir_def *coverage = CTX(&b, context, coverage, 64);
+   nir_def *sample_mask = CTX(&b, context, sample_mask, 32);
    nir_def *results = CTX(&b, context, results, 64);
    nir_def *diagnostics = CTX(&b, context, diagnostics, 64);
    nir_def *width = CTX(&b, context, width, 32);
@@ -202,6 +203,7 @@ kk_nir_lower_coarse_fragment(nir_shader *nir)
          offsetof(struct kk_vrs_coverage, z)), .align_mul = 4);
       nir_pop_if(&b, NULL);
       fine = nir_if_phi(&b, fine, zero_mask);
+      fine = nir_iand(&b, fine, sample_mask);
       zw = nir_if_phi(&b, zw, zero_zw);
       nir_def *first = nir_iand(&b, nir_ieq_imm(&b, mask, 0), nir_ine_imm(&b, fine, 0));
       z = nir_bcsel(&b, first, nir_channel(&b, zw, 0), z);
@@ -325,24 +327,31 @@ lower_native_application(nir_builder *b, nir_instr *instr, void *data)
    bool vertical = false, coarse = false, derivative = false;
    if (intr->intrinsic == nir_intrinsic_load_interpolated_input ||
        intr->intrinsic == nir_intrinsic_load_barycentric_coord_pixel ||
-       intr->intrinsic == nir_intrinsic_load_barycentric_coord_centroid) {
-      nir_intrinsic_instr *bary = intr->intrinsic == nir_intrinsic_load_interpolated_input
-         ? nir_def_as_intrinsic(intr->src[0].ssa) : intr;
+       intr->intrinsic == nir_intrinsic_load_barycentric_coord_centroid ||
+       intr->intrinsic == nir_intrinsic_load_barycentric_coord_at_offset) {
+      bool input = intr->intrinsic == nir_intrinsic_load_interpolated_input;
+      nir_intrinsic_instr *bary = input ? nir_def_as_intrinsic(intr->src[0].ssa) : intr;
       bool centroid = bary->intrinsic == nir_intrinsic_load_barycentric_centroid ||
                       bary->intrinsic == nir_intrinsic_load_barycentric_coord_centroid;
+      bool offset = bary->intrinsic == nir_intrinsic_load_barycentric_at_offset ||
+                    bary->intrinsic == nir_intrinsic_load_barycentric_coord_at_offset;
       unsigned mode = nir_intrinsic_interp_mode(bary);
+      nir_def *point = centroid ? v->centroid_xy : v->position;
+      nir_def *native = &intr->def;
       b->cursor = nir_before_instr(instr);
-      if (centroid) {
-         if (intr->intrinsic == nir_intrinsic_load_interpolated_input)
+      if (offset)
+         point = nir_fadd(b, nir_trim_vector(b, v->position, 2), bary->src[0].ssa);
+      if (centroid || offset) {
+         if (input)
             nir_src_rewrite(&intr->src[0], nir_load_barycentric_pixel(b, 32, .interp_mode = mode));
          else
-            intr->intrinsic = nir_intrinsic_load_barycentric_coord_pixel;
+            native = nir_load_barycentric_coord_pixel(b, 32, .interp_mode = mode);
       }
       b->cursor = nir_after_instr(instr);
-      nir_def *logical = interpolate_logical_pixel(b, v, &intr->def,
-         mode != INTERP_MODE_NOPERSPECTIVE, centroid ? v->centroid_xy : v->position);
+      nir_def *logical = interpolate_logical_pixel(b, v, native,
+         mode != INTERP_MODE_NOPERSPECTIVE, point);
       nir_def_rewrite_uses_after(&intr->def, logical);
-      return true; /* Keep the native input as the plane's source. */
+      return true; /* Keep the native center input as the plane's source. */
    }
    b->cursor = nir_before_instr(instr);
    switch (intr->intrinsic) {
@@ -433,11 +442,50 @@ kk_nir_vrs_result_stride(nir_shader *nir)
    return vrs_payload_layout(nir, &layout) ? layout.stride : 0;
 }
 
+/* Compile clone only. Introduce derivative instructions before recording the
+ * application instruction set so they use the same logical-quad lowering as
+ * explicit derivatives. Descriptor/sampler/helper sources retain their actual
+ * identity and tail; array-layer coordinates are not footprint dimensions. */
+static bool
+native_implicit_gradients(nir_shader *nir)
+{
+   nir_foreach_function_impl(impl, nir) {
+      nir_builder b = nir_builder_create(impl);
+      nir_foreach_block(block, impl) nir_foreach_instr_safe(instr, block) {
+         if (instr->type != nir_instr_type_tex) continue;
+         nir_tex_instr *tex = nir_instr_as_tex(instr);
+         if (tex->op != nir_texop_tex && tex->op != nir_texop_txb) continue;
+         int coordinate = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+         if (coordinate < 0 || nir_get_tex_src(tex, nir_tex_src_projector) ||
+             tex->coord_components <= tex->is_array)
+            return false;
+         b.cursor = nir_before_instr(instr);
+         nir_def *coord = nir_trim_vector(&b, tex->src[coordinate].src.ssa,
+                                         tex->coord_components - tex->is_array);
+         nir_def *dx = nir_ddx(&b, coord), *dy = nir_ddy(&b, coord);
+         int bias_index = nir_tex_instr_src_index(tex, nir_tex_src_bias);
+         if (bias_index >= 0) {
+            nir_def *bias = nir_f2fN(&b, tex->src[bias_index].src.ssa, dx->bit_size);
+            nir_def *scale = nir_fexp2(&b, bias);
+            dx = nir_fmul(&b, dx, scale);
+            dy = nir_fmul(&b, dy, scale);
+            nir_tex_instr_remove_src(tex, bias_index);
+         }
+         nir_tex_instr_add_src(tex, nir_tex_src_ddx, dx);
+         nir_tex_instr_add_src(tex, nir_tex_src_ddy, dy);
+         tex->op = nir_texop_txd;
+      }
+      nir_progress(true, impl, nir_metadata_none);
+   }
+   return true;
+}
+
 static bool
 lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *linked)
 {
    if (nir->info.stage != MESA_SHADER_FRAGMENT ||
        (!linked && nir->info.outputs_written != BITFIELD64_BIT(FRAG_RESULT_DATA0))) return false;
+   if (!native_implicit_gradients(nir)) return false;
    bool needs_centroid = false;
    nir_foreach_function_impl(impl, nir) nir_foreach_block(block, impl)
       nir_foreach_instr(instr, block) {
@@ -465,7 +513,6 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
             needs_centroid = true;
             break;
          case nir_intrinsic_load_barycentric_coord_sample:
-         case nir_intrinsic_load_barycentric_coord_at_offset:
          case nir_intrinsic_load_barycentric_coord_at_sample:
          case nir_intrinsic_load_output:
             return false;
@@ -474,7 +521,8 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
             if (source->type != nir_instr_type_intrinsic) return false;
             nir_intrinsic_op bary = nir_instr_as_intrinsic(source)->intrinsic;
             if (bary != nir_intrinsic_load_barycentric_pixel &&
-                bary != nir_intrinsic_load_barycentric_centroid) return false;
+                bary != nir_intrinsic_load_barycentric_centroid &&
+                bary != nir_intrinsic_load_barycentric_at_offset) return false;
             needs_centroid |= bary == nir_intrinsic_load_barycentric_centroid;
             break;
          }
@@ -531,6 +579,7 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
    nir_def *cell_x = nir_imul(&b, nir_udiv(&b, ix, fw), fw);
    nir_def *cell_y = nir_imul(&b, nir_udiv(&b, iy, fh), fh);
    nir_def *coverage = CTX(&b, context, coverage, 64);
+   nir_def *sample_mask = CTX(&b, context, sample_mask, 32);
    nir_def *width = CTX(&b, context, width, 32);
    nir_def *height = CTX(&b, context, height, 32);
    nir_def *mask = nir_imm_int(&b, 0), *canonical = nir_imm_int(&b, 4);
@@ -549,6 +598,7 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
          nir_imul_imm(&b, nir_u2u64(&b, offset), sizeof(struct kk_vrs_coverage))), .align_mul = 4);
       nir_pop_if(&b, NULL);
       fine = nir_if_phi(&b, fine, zero_coverage);
+      fine = nir_iand(&b, fine, sample_mask);
       canonical = nir_bcsel(&b, nir_ine_imm(&b, fine, 0), nir_imm_int(&b, i), canonical);
       nir_def *pixel = nir_iadd(&b, nir_imm_int(&b, i & 1), nir_imul(&b, nir_imm_int(&b, i >> 1), fw));
       nir_def *shift = nir_imul(&b, samples, nir_isub(&b,
@@ -595,7 +645,9 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
        * centroid positions belong to physical pixels and cannot be reused. */
       nir_def *ax = nir_f2i32(&b, nir_fsub(&b, sx, nir_fmul_imm(&b, nir_u2f32(&b, fw), .5)));
       nir_def *ay = nir_f2i32(&b, nir_fsub(&b, sy, nir_fmul_imm(&b, nir_u2f32(&b, fh), .5)));
-      for (int pixel = 3; pixel >= 0; pixel--) {
+      /* Lower coverage indices belong to later spatial pixels. Overwrite
+       * with each covered candidate so the final point is the lowest bit. */
+      for (unsigned pixel = 0; pixel < 4; pixel++) {
          nir_def *cx = nir_iadd_imm(&b, ax, pixel & 1);
          nir_def *cy = nir_iadd_imm(&b, ay, pixel >> 1);
          nir_def *valid = nir_iand(&b,
@@ -609,9 +661,15 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
             nir_imul_imm(&b, nir_u2u64(&b, index), sizeof(struct kk_vrs_coverage))), .align_mul = 4);
          nir_pop_if(&b, NULL);
          covered = nir_if_phi(&b, covered, zero);
-         nir_def *point = nir_vec2(&b,
-            nir_fadd_imm(&b, nir_i2f32(&b, cx), .5),
-            nir_fadd_imm(&b, nir_i2f32(&b, cy), .5));
+         covered = nir_iand(&b, covered, sample_mask);
+         /* Coverage bits name the original raster samples. Query their
+          * actual native positions, including programmable/Bresenham state,
+          * rather than treating a partially covered MSAA pixel as its centre.
+          * Empty cells use valid sample0 only for the unselected candidate. */
+         nir_def *sample = nir_find_lsb(&b, nir_umax(&b, covered, nir_imm_int(&b, 1)));
+         nir_def *location = nir_load_sample_pos_from_id(&b, 32, sample);
+         nir_def *point = nir_fadd(&b, nir_vec2(&b,
+            nir_i2f32(&b, cx), nir_i2f32(&b, cy)), location);
          v.centroid_xy = nir_bcsel(&b, nir_ine_imm(&b, covered, 0), point, v.centroid_xy);
       }
    }

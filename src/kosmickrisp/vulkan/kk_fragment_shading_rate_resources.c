@@ -55,6 +55,7 @@ kk_vrs_cmd_prepare_native(struct kk_cmd_buffer *cmd,
    context->result_stride = stride;
    context->original_per_draw = original_per_draw;
    context->reserved = samples;
+   context->sample_mask = cmd->vk.dynamic_graphics_state.ms.sample_mask;
    mtl_set_address(coarse_table, allocation.gpu, KK_ARGUMENT_PER_DRAW);
    *out = (struct kk_vrs_prepared){context, allocation.gpu, bytes};
    return VK_SUCCESS;

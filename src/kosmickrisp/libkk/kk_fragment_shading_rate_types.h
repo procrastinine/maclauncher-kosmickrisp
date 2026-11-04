@@ -13,7 +13,7 @@ struct kk_vrs_context { \
    U64 rate_texture; U32 rate_image_width; U32 rate_image_height; \
    U32 texel_width; U32 texel_height; U32 primitive_rate; \
    U32 combiner0; U32 combiner1; U32 has_attachment; U64 pixel_results; \
-   U32 result_stride; U64 original_per_draw; \
+   U32 result_stride; U32 sample_mask; U64 original_per_draw; \
 }; \
 struct kk_vrs_coverage { U32 mask; F32 z; F32 reciprocal_w; U32 reserved; }; \
 struct kk_vrs_result { F32 color[4]; U32 mask; U32 api_primitive; U32 rate; U32 reserved; }; \
@@ -30,6 +30,7 @@ KK_VRS_LAYOUT(uint64_t, uint32_t, float)
 #define KK_VRS_MSL_LAYOUT KK_VRS_STRING(KK_VRS_LAYOUT(ulong, uint, float))
 _Static_assert(sizeof(struct kk_vrs_mesh_prepare) == 112, "Mesh preparation layout");
 _Static_assert(sizeof(struct kk_vrs_context) == 120, "coarse context layout");
+_Static_assert(offsetof(struct kk_vrs_context, sample_mask) == 108, "sample mask uses existing padding");
 _Static_assert(sizeof(struct kk_vrs_coverage) == 16, "coverage layout");
 _Static_assert(sizeof(struct kk_vrs_result) == 32, "result layout");
 #endif
