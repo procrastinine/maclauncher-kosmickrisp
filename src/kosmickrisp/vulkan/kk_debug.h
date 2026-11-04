@@ -12,6 +12,9 @@ enum kk_debug {
    KK_DEBUG_MSL = 1ull << 1,
    /* Forces robustness for all shaders */
    KK_DEBUG_FORCE_ROBUSTNESS = 1ull << 2,
+   /* Passes the PerVertexKHR values of emulated shaders through memory, as
+    * without enough varying slots */
+   KK_DEBUG_FORCE_PER_VERTEX_BUFFER = 1ull << 3,
 };
 
 extern enum kk_debug kk_mesa_debug_flags;

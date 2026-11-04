@@ -1774,8 +1774,12 @@ kk_set_unrolled_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
 
 /* Unrolling will always be done through indirect rendering, so if this is
  * called from non-indirect calls, we will fake it. */
+/* With emulate_flatshade_last, last-vertex provoking triangles are rotated so
+ * the provoking vertex comes first. The PerVertexKHR emulation needs the
+ * Vulkan vertex order instead and handles the provoking vertex itself. */
 static bool
-kk_unroll_geometry(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+kk_unroll_geometry(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
+                   bool emulate_flatshade_last)
 {
    if (unlikely(!kk_convert_to_indirect_draw(cmd, data)))
       return false;
@@ -1802,6 +1806,7 @@ kk_unroll_geometry(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       .in_el_size_B = data->index_buffer_el_size_B,
       .out_el_size_B = 4u,
       .flatshade_first = data->flatshade_first,
+      .emulate_flatshade_last = emulate_flatshade_last,
       .mode = data->prim,
    };
 
@@ -1817,7 +1822,8 @@ kk_unroll_geometry(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 /* Metal has no adjacency topologies, so draws without a GS draw the lines or
  * triangles they rasterize instead. */
 static bool
-kk_unroll_adjacency(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+kk_unroll_adjacency(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
+                    bool emulate_flatshade_last)
 {
    if (unlikely(!kk_convert_to_indirect_draw(cmd, data)))
       return false;
@@ -1838,6 +1844,7 @@ kk_unroll_adjacency(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
                        : 0u,
       .in_el_size_B = data->index_buffer_el_size_B,
       .flatshade_first = data->flatshade_first,
+      .emulate_flatshade_last = emulate_flatshade_last,
       .mode = data->prim,
    };
 
@@ -2170,6 +2177,22 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
       if (tess_args.gpu) {
          kk_upload_tess_params(cmd, tess_args.cpu, draw);
       }
+      struct kk_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+      if (!geom && fs && fs->info.fs.emulates_per_vertex_inputs) {
+         struct kk_device *dev = kk_cmd_buffer_device(cmd);
+         struct kk_per_draw_data *pd = &gfx->per_draw_data;
+         pd->per_vertex_indirect_addr = gfx->tess.out_draws_addr;
+         pd->per_vertex_index_addr = dev->heap->gpu + sizeof(struct poly_heap);
+         pd->per_vertex_index_size = 4u;
+         pd->per_vertex_index_count =
+            (dev->heap->size_B - sizeof(struct poly_heap)) / 4u;
+         pd->per_vertex_first_vertex = 0u;
+         pd->per_vertex_base_vertex = 0;
+         pd->per_vertex_topology = gfx->tess.prim;
+         pd->per_vertex_heap =
+            fs->info.fs.per_vertex_uses_heap ? kk_heap(cmd) : 0u;
+      }
+
    }
 
    if (geom) {
@@ -2183,8 +2206,17 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
          dyn->rs.provoking_vertex == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
    }
 
+   struct kk_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+   bool per_vertex = fs && fs->info.fs.emulates_per_vertex_inputs;
+   if (per_vertex)
+      gfx->per_draw_data.provoking_last =
+         cmd->vk.dynamic_graphics_state.rs.provoking_vertex ==
+         VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
+   /* The optional tail adds no upload bytes to ordinary shaders. */
+   uint32_t per_draw_size = per_vertex ? sizeof(gfx->per_draw_data) :
+      offsetof(struct kk_per_draw_data, per_vertex_index_addr);
    struct kk_ptr shader_data_gpu =
-      kk_pool_upload(cmd, &gfx->per_draw_data, sizeof(gfx->per_draw_data), 8u);
+      kk_pool_upload(cmd, &gfx->per_draw_data, per_draw_size, 8u);
    if (unlikely(!shader_data_gpu.gpu))
       return;
 
@@ -2466,8 +2498,13 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
    struct kk_draw_data draw = {
       .index.gpu = data->index_buffer,
       .index.el_size_B = data->index_buffer_el_size_B,
-      .primitive_type =
-         emulated ? 0u : mesa_prim_to_mtl_primitive_type(data->prim),
+      /* Fans only get here with the PerVertexKHR emulation, which draws them
+       * as triangle lists. */
+      .primitive_type = emulated ? 0u
+                                 : mesa_prim_to_mtl_primitive_type(
+                                      data->prim == MESA_PRIM_TRIANGLE_FAN
+                                         ? MESA_PRIM_TRIANGLES
+                                         : data->prim),
    };
 
    if (data->indirect) {
@@ -2497,6 +2534,8 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
 }
 
 #include "kk_statistics_command.h"
+
+#include "kk_barycentric_draw.h"
 
 static void
 kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
@@ -2539,12 +2578,28 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 
    kk_update_ia_statistics(cmd, data);
 
-   /* Unroll geometry. Skip draw if we fail. */
-   if (requires_unroll(cmd, data) && !kk_unroll_geometry(cmd, data))
+   struct kk_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+   bool emulates_per_vertex = fs && fs->info.fs.emulates_per_vertex_inputs;
+   bool per_vertex = !tess && !geom && emulates_per_vertex;
+
+   /* Unroll geometry. Skip draw if we fail. The per-vertex emulation issues
+    * its own lists. */
+   if (!per_vertex && requires_unroll(cmd, data) &&
+       !kk_unroll_geometry(cmd, data, true))
       return;
 
+   /* Primitive restart: split into a triangle list on the GPU, keeping the
+    * Vulkan vertex order, then emulate on the list. */
+   if (per_vertex && data->indexed && data->restart &&
+       !kk_unroll_geometry(cmd, data, false))
+      return;
+
+   /* Rotate the rewritten primitives only when flat inputs need the last
+    * vertex first, like kk_unroll_geometry. The per-vertex emulation handles
+    * last-vertex provoking itself and keeps the Vulkan corner order. */
    if (!geom && mesa_prim_has_adjacency(data->prim) &&
-       !kk_unroll_adjacency(cmd, data))
+       !kk_unroll_adjacency(
+          cmd, data, !per_vertex && requires_unroll_flatshade(cmd, data)))
       return;
 
    /* Patch lists do not restart, so only a GS fed by the input assembly needs
@@ -2553,8 +2608,26 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    if (gs_restart && !kk_convert_to_indirect_draw(cmd, data))
       return;
 
+   uint64_t per_vertex_draws = 0u;
+   if (per_vertex && data->indirect && !per_vertex_draws_raw_indirect(data)) {
+      struct kk_ptr out = kk_pool_alloc(
+         cmd, data->draw_count * sizeof(VkDrawIndirectCommand), 4u);
+      if (unlikely(!out.gpu))
+         return;
+      libkk_per_vertex_draw(cmd, kk_grid_1d(data->draw_count), true, out.gpu,
+                            data->indirect_command.addr,
+                            data->indirect_command.stride / sizeof(uint32_t),
+                            data->indexed, data->prim);
+      per_vertex_draws = out.gpu;
+   }
+   bool per_vertex_tess = tess && !geom && emulates_per_vertex;
+   bool per_vertex_gs = geom && emulates_per_vertex;
+
    for (uint32_t i = 0; i < data->draw_count; i++) {
       struct kk_draw_data draw_data = build_draw_data(cmd, data, i);
+
+      if (per_vertex)
+         kk_prepare_per_vertex_draw(cmd, data, i, per_vertex_draws, &draw_data);
 
       if (data->upload_mask)
          kk_upload_per_draw_data(cmd, data->upload_mask, i, &draw_data,
@@ -2566,6 +2639,23 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
          draw_data = kk_launch_gs_prerast(cmd, data, draw_data, gs_restart);
          kk_finish_geometry_statistics(cmd);
       }
+      if (per_vertex_gs &&
+          !kk_prepare_gs_per_vertex_draw(cmd, data, &draw_data))
+         continue;
+
+      if (per_vertex_tess && kk_grid_is_indirect(draw_data.grid)) {
+         struct kk_ptr out =
+            kk_pool_alloc(cmd, sizeof(VkDrawIndirectCommand), 4u);
+         if (unlikely(!out.gpu))
+            continue;
+         libkk_per_vertex_draw(
+            cmd, kk_grid_1d(1u), true, out.gpu, draw_data.grid.addr,
+            sizeof(VkDrawIndexedIndirectCommand) / sizeof(uint32_t), 1u,
+            cmd->state.gfx.tess.prim);
+         draw_data.grid = kk_grid_indirect(out.gpu);
+         draw_data.index.el_size_B = 0u;
+      }
+
 
       if (!geom && gfx->primitives_query[0]) {
          enum mesa_prim mode = tess ? gfx->tess.prim : data->prim;

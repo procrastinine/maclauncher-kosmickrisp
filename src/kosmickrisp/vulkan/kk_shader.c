@@ -12,6 +12,7 @@
 #include "kk_descriptor_set_layout.h"
 #include "kk_device.h"
 #include "kk_format.h"
+#include "kk_nir_lower_per_vertex.h"
 #include "kk_nir_lower_vbo.h"
 #include "kk_physical_device.h"
 #include "kk_sampler.h"
@@ -114,9 +115,13 @@ kk_vi_is_static(const struct vk_graphics_pipeline_state *state)
           !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_VI);
 }
 
+#include "kk_barycentric_shader.h"
+
 struct kk_vs_key {
    bool is_points;
    bool dynamic_vi;
+   bool strip_fan_or_adjacency;
+   bool provoking_last;
    struct vk_vertex_input_state vi;
 };
 
@@ -128,6 +133,8 @@ kk_populate_vs_key(struct kk_vs_key *key,
    key->is_points = state->ia && state->ia->primitive_topology ==
                                     VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
    key->dynamic_vi = !kk_vi_is_static(state);
+   key->strip_fan_or_adjacency = kk_state_strip_fan_or_adjacency(state);
+   key->provoking_last = kk_state_provoking_last(state);
    if (!key->dynamic_vi)
       key->vi = *state->vi;
 }
@@ -598,7 +605,9 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
    /* Check https://github.com/KhronosGroup/Vulkan-Portability/issues/54 for
     * explanation on why we need this. */
    else if (nir->info.fs.needs_full_quad_helper_invocations ||
-            nir->info.fs.needs_coarse_quad_helper_invocations) {
+            nir->info.fs.needs_coarse_quad_helper_invocations ||
+            (dev->vk.enabled_features.fragmentShaderBarycentric &&
+             fs_needs_unmerged_triangles(nir))) {
       struct kk_physical_device *pdev = kk_device_physical(dev);
 
       /* Metal by default merges triangles which results in incorrect edges, see
@@ -1101,6 +1110,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
                   struct kk_shader *prev_stage,
                   const struct vk_pipeline_robustness_state *robustness,
                   const struct vk_graphics_pipeline_state *state,
+                  const struct kk_per_vertex_map *per_vertex_map,
                   const VkAllocationCallbacks *pAllocator,
                   struct kk_shader **shader_out)
 {
@@ -1119,6 +1129,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    }
 
    gather_shader_info(shader, nir, state);
+   kk_barycentric_shader_info(shader, per_vertex_map);
    if (stage == MESA_SHADER_FRAGMENT && kk_polygon_possible(dev, state)) {
       shader->info.fs.noperspective_outputs = kk_polygon_noperspective_outputs(nir);
       nir_shader *point_fs = nir_shader_clone(NULL, nir);
@@ -1155,11 +1166,18 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          memset(&nir->info.cs, 0, sizeof(nir->info.cs));
          nir->xfb_info = NULL;
          NIR_PASS(_, nir, poly_nir_lower_sw_vs);
-      } else
+      } else {
          /* Metal's instance_id contains base_instance. When the emulation path
           * is taken, since we launch compute, they correctly get translated.
           * For the non-emulated path we need to subtract base_instance... */
          NIR_PASS(_, nir, msl_nir_lower_instance_id);
+
+         bool progress = false;
+         NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
+                  per_vertex_map);
+         if (progress)
+            shader->info.uses_per_draw_data = true;
+      }
    } else if (stage == MESA_SHADER_TESS_CTRL) {
       /* TODO_KOSMICKRISP: Poly lowering breaks with vectorized I/O less than
        * 32-bit, which we support. Lower TCS inputs & outputs to scalar. */
@@ -1202,6 +1220,12 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          nir->info.stage = MESA_SHADER_COMPUTE;
          memset(&nir->info.cs, 0, sizeof(nir->info.cs));
          nir->xfb_info = NULL;
+      } else {
+         bool progress = false;
+         NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
+                  per_vertex_map);
+         if (progress)
+            shader->info.uses_per_draw_data = true;
       }
    } else if (stage == MESA_SHADER_GEOMETRY) {
       /* TODO_KOSMICKRISP: Poly lowering breaks with vectorized I/O less than
@@ -1261,6 +1285,12 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
       kk_lower_hw_vs(nir, state, shader->info.gs.mode == MESA_PRIM_POINTS);
       msl_nir_lower_clip_cull_distance(nir, 0);
+
+      bool progress = false;
+      NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
+               per_vertex_map);
+      if (progress)
+         shader->info.uses_per_draw_data = true;
       /* Descriptors were lowered with the GS, this lowers the system values
        * the hardware vertex lowering added */
       NIR_PASS(_, nir, kk_nir_lower_descriptors, robustness, 0, NULL);
@@ -1294,7 +1324,7 @@ kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
    struct kk_shader *shader = NULL;
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
    VkResult result =
-      kk_compile_shader(dev, nir, NULL, &rs_none, NULL, alloc, &shader);
+      kk_compile_shader(dev, nir, NULL, &rs_none, NULL, NULL, alloc, &shader);
    if (result != VK_SUCCESS)
       return result;
 
@@ -1845,6 +1875,9 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
    nir_shader *nir_shaders[shader_count + 2u];
    struct kk_shader *shaders[shader_count + 2u];
 
+   bool force_per_vertex = kk_barycentric_force_per_vertex(
+      shader_count, infos, state, enabled_features);
+
    /* Lower shaders, notably lowering IO. This is a prerequisite for intershader
     * optimization. */
    const struct vk_pipeline_robustness_state *vertex_robustness = &rs_none;
@@ -1961,11 +1994,30 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
    nir_opt_varyings_bulk(nir_shaders, total_shaders, true, UINT32_MAX,
                          UINT32_MAX, nir_opts, NULL);
 
+   struct kk_per_vertex_map per_vertex_map = {0};
+   if (state && total_shaders >= 2u &&
+       nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT &&
+       (nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_VERTEX ||
+        nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_TESS_EVAL ||
+        nir_shaders[total_shaders - 2u]->info.stage == MESA_SHADER_GEOMETRY))
+      NIR_PASS(
+         _, nir_shaders[total_shaders - 1u], kk_nir_lower_fs_per_vertex_inputs,
+         nir_shaders[total_shaders - 2u], force_per_vertex,
+         &per_vertex_map);
+
+   if (per_vertex_map.out_of_slots) {
+      for (uint32_t i = 0; i < total_shaders; i++)
+         ralloc_free(nir_shaders[i]);
+      memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
+      return vk_errorf(dev, VK_ERROR_UNKNOWN,
+                       "Out of varying slots for barycentric emulation");
+   }
+
    for (uint32_t i = 0; i < total_shaders; i++) {
       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
       result =
          kk_compile_shader(dev, nir_shaders[i], prev_stage, vertex_robustness,
-                           state, pAllocator, &shaders[i]);
+                           state, &per_vertex_map, pAllocator, &shaders[i]);
 
       if (result != VK_SUCCESS) {
          /* Clean up all the shaders before this point */

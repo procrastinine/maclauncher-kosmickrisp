@@ -100,6 +100,22 @@ struct kk_per_draw_data {
    /* Whether the last vertex of a primitive is its provoking vertex */
    uint32_t provoking_last;
    uint32_t rasterization_stream;
+
+   /* PerVertexKHR emulation. Index buffer of the draw, 0 if non-indexed. */
+   uint64_t per_vertex_index_addr;
+   uint32_t per_vertex_index_size;
+   uint32_t per_vertex_first_vertex;
+   int32_t per_vertex_base_vertex;
+   uint32_t per_vertex_topology;
+   /* Number of index buffer elements. */
+   uint32_t per_vertex_index_count;
+   /* The original indirect command is drawn, so vertex IDs start at its first
+    * vertex/index plus vertex offset. */
+   uint32_t per_vertex_raw_indirect;
+   /* Original indirect command of the draw, 0 for direct draws. */
+   uint64_t per_vertex_indirect_addr;
+   /* Heap the PerVertexKHR buffer is allocated from, 0 if unused. */
+   uint64_t per_vertex_heap;
 };
 
 struct kk_attachment {
@@ -186,6 +202,8 @@ struct kk_graphics_state {
       struct kk_addr_range gpu;
       uint8_t bytes_per_index;
       uint64_t null_addr;
+      /* uint32 0, 1, 2, ... for PerVertexKHR emulated indirect draws. */
+      struct kk_addr_range identity;
    } index;
 
    /* Vertex buffers */

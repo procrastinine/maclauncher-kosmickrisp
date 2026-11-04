@@ -94,6 +94,8 @@ kk_files = files(
   'kk_nir_lower_multiview.c',
   'kk_nir_lower_null_images.c',
   'kk_nir_lower_textures.c',
+  'kk_nir_lower_per_vertex.c',
+  'kk_nir_lower_per_vertex.h',
   'kk_nir_lower_vbo.h',
   'kk_nir_lower_vbo.c',
   'kk_physical_device.h',

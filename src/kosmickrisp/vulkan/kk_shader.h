@@ -129,6 +129,8 @@ struct kk_shader_info {
 
       struct {
          bool uses_flat_varyings;
+         bool emulates_per_vertex_inputs;
+         bool per_vertex_uses_heap;
          uint64_t flat_outputs;
          uint64_t noperspective_outputs;
       } fs;

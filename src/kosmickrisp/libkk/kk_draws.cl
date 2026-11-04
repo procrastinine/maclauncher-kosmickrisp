@@ -77,7 +77,8 @@ libkk_unroll_geometry(
    constant uint32_t *in_draw, global uint32_t *out_draw,
    uint32_t in_draw_stride_el, uint32_t restart_index,
    uint32_t index_buffer_size_el, uint32_t in_el_size_B,
-   uint32_t out_el_size_B, uint32_t flatshade_first, uint32_t mode)
+   uint32_t out_el_size_B, uint32_t flatshade_first,
+   uint32_t emulate_flatshade_last, uint32_t mode)
 {
    uint gid = cl_group_id.x;
    in_draw += gid * in_draw_stride_el;
@@ -86,7 +87,53 @@ libkk_unroll_geometry(
    POLY_DECL_UNROLL_RESTART_SCRATCH(scratch, 1024);
    poly_unroll_geometry(out_draw, heap, in_draw, index_buffer,
                         index_buffer_size_el, in_el_size_B, out_el_size_B,
-                        restart_index, flatshade_first, true, mode, scratch);
+                        restart_index, flatshade_first, emulate_flatshade_last,
+                        mode, scratch);
+}
+
+/*
+ * PerVertexKHR emulation issues every draw as a non-indexed point, line or
+ * triangle list starting at vertex 0, with one vertex per primitive vertex.
+ * The vertex shader reads the first vertex/index and vertex offset from the
+ * original command.
+ */
+KERNEL(32)
+libkk_per_vertex_draw(global uint32_t *out, constant uint32_t *in,
+                      uint32_t in_stride_el, uint32_t indexed, uint32_t mode)
+{
+   uint draw = cl_global_id.x;
+   in += draw * in_stride_el;
+   out += draw * 4;
+
+   uint32_t count = in[0];
+   uint32_t prims, prim_vertices;
+   switch (mode) {
+   case MESA_PRIM_POINTS:
+      prim_vertices = 1;
+      prims = count;
+      break;
+   case MESA_PRIM_LINES:
+      prim_vertices = 2;
+      prims = count / 2;
+      break;
+   case MESA_PRIM_LINE_STRIP:
+      prim_vertices = 2;
+      prims = count >= 2 ? count - 1 : 0;
+      break;
+   case MESA_PRIM_TRIANGLES:
+      prim_vertices = 3;
+      prims = count / 3;
+      break;
+   default:
+      prim_vertices = 3;
+      prims = count >= 3 ? count - 2 : 0;
+      break;
+   }
+
+   out[0] = prims * prim_vertices;
+   out[1] = in[1];
+   out[2] = 0;
+   out[3] = indexed ? in[4] : in[3];
 }
 
 /* Unrolls restart without reordering vertices for a GS input. */
@@ -110,7 +157,8 @@ libkk_unroll_adjacency(uint64_t index_buffer, global struct poly_heap *heap,
                        constant uint32_t *in_draw, global uint32_t *out_draw,
                        uint32_t in_draw_stride_el,
                        uint32_t index_buffer_size_el, uint32_t in_el_size_B,
-                       uint32_t flatshade_first, uint32_t mode)
+                       uint32_t flatshade_first,
+                       uint32_t emulate_flatshade_last, uint32_t mode)
 {
    uint tid = cl_local_id.x;
    in_draw += cl_group_id.x * in_draw_stride_el;
@@ -139,7 +187,8 @@ libkk_unroll_adjacency(uint64_t index_buffer, global struct poly_heap *heap,
          uint id =
             poly_vertex_id_for_topology(mode, flatshade_first, i, vtx, prims);
          uint x = (i * out_per_prim) + poly_output_vertex_id_for_topology(
-                                          out_mode, flatshade_first, true, k);
+                                          out_mode, flatshade_first,
+                                          emulate_flatshade_last, k);
          poly_store_index(
             out_ptr, sizeof(uint32_t), x,
             poly_load_index(in_ptr, in_range_el, id, in_el_size_B));
