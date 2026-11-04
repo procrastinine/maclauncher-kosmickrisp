@@ -6,6 +6,9 @@
  */
 #include "../compiler/kk-sampler-helper-flags.h"
 #include "util/half_float.h"
+static_assert(offsetof(struct kk_sampled_image_descriptor, aux_word) ==
+                 KK_SAMPLE_HEAP_CLAMP_0_OFFSET_B,
+              "heap sampler records keep the clamp-to-0 plane in aux_word");
 struct kk_sample_lower_ctx {
    struct lower_descriptors_ctx descriptors;
    bool minmax;
@@ -295,6 +298,9 @@ kk_sample_mark(nir_builder *b, nir_tex_instr *tex, void *data)
       }
    }
    unsigned flags = KK_SAMPLE_HELPER;
+   /* Descriptor-heap samplers are cast derefs, as in descriptor lowering. */
+   if (deref->deref_type == nir_deref_type_cast)
+      flags |= KK_SAMPLE_HEAP_SAMPLER;
    if (virtual_possible)
       flags |= KK_SAMPLE_VIRTUAL;
    if (tex->is_sparse) flags |= KK_SAMPLE_SPARSE;

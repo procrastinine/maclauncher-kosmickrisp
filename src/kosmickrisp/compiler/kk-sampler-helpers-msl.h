@@ -341,7 +341,10 @@ kk_sample_border(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex, const char *typ
    if ((tex->backend_flags & KK_SAMPLE_BORDER) && !tex->is_shadow) {
       P(ctx, "    if (!Border) return one;\n");
       P(ctx, "    %s zero = ", type);
-      kk_sample_native(ctx, tex, "table.handles[metadata[5]]", tap); P(ctx, ";\n");
+      kk_sample_native(ctx, tex, (tex->backend_flags & KK_SAMPLE_HEAP_SAMPLER) ?
+                       KK_SAMPLE_HEAP_CLAMP_0_SAMPLER : "table.handles[metadata[5]]",
+                       tap);
+      P(ctx, ";\n");
       nir_alu_type base = nir_alu_type_get_base_type(tex->dest_type);
       if (tex->backend_flags & KK_SAMPLE_CUSTOM) {
          P(ctx, "    uint4 border_bits = uint4(*(constant packed_uint4*)(metadata + 12));\n");

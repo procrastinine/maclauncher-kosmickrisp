@@ -16,6 +16,16 @@
 #define KK_SAMPLE_NATIVE_CUBE_LOD (1u << 11)
 #define KK_SAMPLE_SPARSE (1u << 12)
 #define KK_SAMPLE_SPARSE_POINT (1u << 13)
+/* The sampler is a descriptor-heap record. Its planes are native sampler
+ * resource IDs, not sampler-table indices: the clamp-to-0 border plane is
+ * the record's aux_word, at the byte offset below. */
+#define KK_SAMPLE_HEAP_SAMPLER (1u << 14)
+#define KK_SAMPLE_HEAP_CLAMP_0_OFFSET_B 56
+#define KK_SAMPLE_STRINGIFY_(x) #x
+#define KK_SAMPLE_STRINGIFY(x) KK_SAMPLE_STRINGIFY_(x)
+#define KK_SAMPLE_HEAP_CLAMP_0_SAMPLER                                         \
+   "(*(constant sampler*)((constant uchar*)metadata + "                      \
+   KK_SAMPLE_STRINGIFY(KK_SAMPLE_HEAP_CLAMP_0_OFFSET_B) "))"
 #define KK_SAMPLE_METADATA_SHIFT 16
 #define KK_SAMPLE_METADATA_MASK (7u << KK_SAMPLE_METADATA_SHIFT)
 
