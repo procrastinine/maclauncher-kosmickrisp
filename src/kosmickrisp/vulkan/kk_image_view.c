@@ -18,6 +18,8 @@
 #include "kosmickrisp/bridge/mtl_format.h"
 
 #include "vk_format.h"
+#define KK_MAINTENANCE11_VIEW
+#include "kk_maintenance11.h"
 
 static enum pipe_swizzle
 vk_swizzle_to_pipe(VkComponentSwizzle swizzle)
@@ -276,6 +278,12 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
                   mtl_retain(mtl_handle);
          }
       }
+      VkResult alias_result = kk_image_view_init_alias(dev, view, view_plane,
+                                                       mtl_handle, &view_layout);
+      if (alias_result != VK_SUCCESS) {
+         kk_image_view_finish(dev, view);
+         return alias_result;
+      }
    }
 
    return VK_SUCCESS;
@@ -287,6 +295,7 @@ kk_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
    for (uint8_t plane = 0; plane < view->plane_count; plane++) {
       if (view->planes[plane].mtl_handle_cube_face)
          mtl_release(view->planes[plane].mtl_handle_cube_face);
+      kk_image_view_finish_alias(view, plane);
       if (view->planes[plane].mtl_handle_sampled)
          mtl_release(view->planes[plane].mtl_handle_sampled);
 

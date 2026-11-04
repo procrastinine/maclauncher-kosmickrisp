@@ -85,10 +85,17 @@ static_assert(offsetof(struct kk_sampled_image_descriptor, image_min_lod_uint16)
 
 struct kk_storage_image_descriptor {
    uint64_t image_gpu_resource_id;
-   uint32_t texel_offset;
-   uint32_t texel_count;
+   union {
+      struct { uint32_t texel_offset, texel_count; };
+      uint64_t image_array_gpu_resource_id;
+   };
 };
 
+static_assert(offsetof(struct kk_storage_image_descriptor, image_array_gpu_resource_id) ==
+              sizeof(uint64_t),
+              "2D array handles and texel/3D metadata occupy disjoint view classes");
+static_assert(offsetof(struct kk_sampled_image_descriptor, aux_resource_id) == 48,
+              "array aliasing retains the sampled descriptor auxiliary ABI");
 static_assert(sizeof(struct kk_storage_image_descriptor) == 16,
               "kk_storage_image_descriptor has no holes");
 

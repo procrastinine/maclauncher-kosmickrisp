@@ -49,6 +49,10 @@ struct kk_image_view {
 
       mtl_texture *mtl_handle_cube_face;
       uint64_t cube_face_gpu_resource_id;
+      mtl_texture *mtl_handle_sampled_alias;
+      mtl_texture *mtl_handle_storage_alias;
+      uint64_t sampled_alias_gpu_resource_id;
+      uint64_t storage_alias_gpu_resource_id;
       uint64_t sampled_gpu_resource_id;
       uint64_t storage_gpu_resource_id;
       uint64_t input_gpu_resource_id;

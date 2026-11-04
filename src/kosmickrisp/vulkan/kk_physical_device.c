@@ -166,6 +166,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_maintenance7 = true,
       .KHR_maintenance8 = true,
       .KHR_maintenance9 = true,
+      .KHR_maintenance11 = true,
       .KHR_maintenance10 = true,
       .KHR_device_address_commands = true,
 #ifdef KK_USE_WSI_PLATFORM
@@ -435,6 +436,9 @@ kk_get_device_features(
 
       /* VK_KHR_maintenance9 */
       .maintenance9 = true,
+
+      /* VK_KHR_maintenance11 */
+      .maintenance11 = true,
 
       /* VK_KHR_maintenance10 */
       .maintenance10 = true,

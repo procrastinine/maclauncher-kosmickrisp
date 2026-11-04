@@ -433,6 +433,8 @@ kk_lower_buffer64(nir_builder *b, nir_intrinsic_instr *intr,
    return true;
 }
 
+#include "kk_maintenance11.h"
+
 static bool
 lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
                    const struct lower_descriptors_ctx *ctx)
@@ -524,6 +526,10 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
       nir_src_rewrite(&intr->src[0], handle);
    } else {
       nir_rewrite_image_intrinsic(intr, handle, nir_image_intrinsic_type_bindless);
+   if (kk_alias_lower_array_atomic(b, intr, deref, ctx, type,
+                                  nir_intrinsic_access(intr) | access,
+                                  msl_convert_access_flag(access)))
+      return true;
    }
 
    if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF &&
@@ -781,6 +787,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
          ? offsetof(struct kk_sampled_image_descriptor, aux_resource_id)
          : offsetof(struct kk_sampled_image_descriptor, image_gpu_resource_id);
 
+      offs = kk_alias_sampled_offset(tex, offs);
       nir_def *resource_addr = load_resource_addr(
          b, 1, 64, nir_src_as_deref(nir_src_for_ssa(texture)),
          image_id_offset_B + offs, ctx);

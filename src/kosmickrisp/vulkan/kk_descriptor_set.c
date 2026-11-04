@@ -17,6 +17,8 @@
 #include "kk_image_view.h"
 #include "kk_physical_device.h"
 #include "kk_sampler.h"
+#define KK_MAINTENANCE11_DESCRIPTOR
+#include "kk_maintenance11.h"
 #define KK_SLICED_3D_DESCRIPTOR
 #include "kk_sliced_3d.h"
 
@@ -92,6 +94,7 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
             assert(desc[plane].aux_word == 0);
             desc[plane].aux_word = sparse_query;
          }
+         kk_alias_sampled_descriptor(&desc[plane], view, plane, is_input_attachment);
          float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0);
          desc[plane].image_min_lod_fp16 = _mesa_float_to_half(min_lod);
          desc[plane].image_min_lod_uint16 = min_lod;
@@ -202,6 +205,7 @@ get_storage_image_view_desc(
 
       assert(view->planes[plane].storage_gpu_resource_id);
       desc.image_gpu_resource_id = view->planes[plane].storage_gpu_resource_id;
+      kk_alias_storage_descriptor(&desc, view);
       kk_sliced_3d_descriptor(&desc, &view->vk);
       kk_sparse_storage_descriptor(&desc, view);
    }
