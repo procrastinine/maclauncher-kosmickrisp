@@ -187,12 +187,15 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
    if (p->metal_compiler && mtl_compiler_get_cache_stats(p->metal_compiler, &archive))
       fprintf(p->log, ",\"metal_archive\":{\"scope\":\"shared_compiler_lifetime\","
          "\"compiler\":\"%p\",\"archive_loaded\":%s,\"requests\":%"PRIu64",\"lookups\":%"PRIu64
-         ",\"hits\":%"PRIu64",\"native_pipeline_successes\":%"PRIu64
+         ",\"piece_loads\":%"PRIu64",\"piece_load_ms\":%.6f,\"archive_opens\":%"PRIu64
+         ",\"archive_open_ms\":%.6f,\"hits\":%"PRIu64",\"native_pipeline_successes\":%"PRIu64
          ",\"checkpoints\":%"PRIu64",\"store_requested_bytes\":%"PRIu64
          ",\"snapshot_ms\":%.6f,\"capture_wait_ms\":%.6f"
          ",\"vertex_library_requests\":%"PRIu64",\"vertex_library_hits\":%"PRIu64"}",
          p->metal_compiler, archive.archive_loaded ? "true" : "false", archive.requests,
-         archive.lookups, archive.hits, archive.native_compiles, archive.checkpoints,
+         archive.lookups, archive.piece_loads, archive.piece_load_ns / 1e6, archive.archive_opens,
+         archive.archive_open_ns / 1e6, archive.hits, archive.native_compiles,
+         archive.checkpoints,
          archive.stored_bytes, archive.snapshot_ns / 1e6, archive.capture_wait_ns / 1e6,
          archive.vertex_library_requests, archive.vertex_library_hits);
    fprintf(p->log, ",\"submit_pending\":%"PRId64",\"submit_peak\":%"PRIu64
@@ -908,10 +911,14 @@ kk_perf_metal_archive(struct kk_perf *p, void *compiler)
    if (!mtl_compiler_get_cache_stats(compiler, &stats)) return;
    pthread_mutex_lock(&p->mutex);
    fprintf(p->log, "{\"kk_metal_archive\":1,\"device\":\"%p\",\"compiler\":\"%p\","
-      "\"archive_loaded\":%s,\"requests\":%"PRIu64",\"lookups\":%"PRIu64",\"hits\":%"PRIu64
+      "\"archive_loaded\":%s,\"requests\":%"PRIu64",\"lookups\":%"PRIu64
+      ",\"piece_loads\":%"PRIu64",\"piece_load_ms\":%.6f,\"archive_opens\":%"PRIu64
+      ",\"archive_open_ms\":%.6f,\"hits\":%"PRIu64
       ",\"native_pipeline_successes\":%"PRIu64",\"store_requested_bytes\":%"PRIu64"}\n",
       (void *)p, compiler, stats.archive_loaded ? "true" : "false",
-      stats.requests, stats.lookups, stats.hits, stats.native_compiles, stats.stored_bytes);
+      stats.requests, stats.lookups, stats.piece_loads, stats.piece_load_ns / 1e6,
+      stats.archive_opens, stats.archive_open_ns / 1e6, stats.hits, stats.native_compiles,
+      stats.stored_bytes);
    fflush(p->log);
    pthread_mutex_unlock(&p->mutex);
 }

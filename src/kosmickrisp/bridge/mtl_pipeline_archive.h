@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /* Private implementation; included only by mtl_compiler.m. */
 #include <Metal/MTL4Archive.h>
+#include <Metal/MTL4MeshRenderPipeline.h>
 #include <Metal/MTL4PipelineDataSetSerializer.h>
+#include <Metal/MTL4TileRenderPipeline.h>
 #include <dispatch/dispatch.h>
 #include <objc/runtime.h>
 #include <pthread.h>
@@ -10,8 +12,9 @@
 
 static char kk_archive_association, kk_library_hint_association;
 
-/* This is only a search hint. Metal still verifies every descriptor, including
- * constants and state not represented here; a collision takes the normal walk. */
+/* This is only a search key. Metal still verifies every descriptor, including
+ * constants and state not represented here. Pipelines that share a key are
+ * recorded under it once per piece, and a lookup tries each of those pieces. */
 static void
 kk_remember_library_hint(id library, MTL4LibraryDescriptor *descriptor)
 {
@@ -40,6 +43,15 @@ kk_function_hint(MTL4FunctionDescriptor *function)
    return library && source.name ? @[library, source.name] : nil;
 }
 
+static void
+kk_color_attachment_hint(NSMutableArray *fields,
+                         MTL4RenderPipelineColorAttachmentDescriptorArray *colors)
+{
+   for (unsigned i = 0; i < 8; ++i)
+      [fields addObject:@[@(colors[i].pixelFormat), @(colors[i].writeMask)]];
+}
+
+/* A descriptor without a key compiles without opening any archive piece. */
 static NSData *
 kk_pipeline_hint(MTL4PipelineDescriptor *descriptor)
 {
@@ -60,11 +72,28 @@ kk_pipeline_hint(MTL4PipelineDescriptor *descriptor)
          @(render.rasterizationEnabled), @(render.maxVertexAmplificationCount)]];
       /* MTL4 has no depth/stencil-format fields on this descriptor. This
        * advisory key never replaces Metal's complete descriptor verification. */
+      kk_color_attachment_hint(fields, render.colorAttachments);
+   } else if ([descriptor isKindOfClass:[MTL4MeshRenderPipelineDescriptor class]]) {
+      MTL4MeshRenderPipelineDescriptor *mesh = (id)descriptor;
+      id object = kk_function_hint(mesh.objectFunctionDescriptor);
+      id stage = kk_function_hint(mesh.meshFunctionDescriptor);
+      id fragment = kk_function_hint(mesh.fragmentFunctionDescriptor);
+      if (!object || !stage || !fragment) return nil;
+      [fields addObjectsFromArray:@[@"mesh", object, stage, fragment,
+         @(mesh.maxTotalThreadsPerObjectThreadgroup),
+         @(mesh.maxTotalThreadsPerMeshThreadgroup), @(mesh.payloadMemoryLength),
+         @(mesh.maxTotalThreadgroupsPerMeshGrid), @(mesh.rasterSampleCount),
+         @(mesh.rasterizationEnabled), @(mesh.maxVertexAmplificationCount)]];
+      kk_color_attachment_hint(fields, mesh.colorAttachments);
+   } else if ([descriptor isKindOfClass:[MTL4TileRenderPipelineDescriptor class]]) {
+      MTL4TileRenderPipelineDescriptor *tile = (id)descriptor;
+      id function = kk_function_hint(tile.tileFunctionDescriptor);
+      if (!function) return nil;
+      [fields addObjectsFromArray:@[@"tile", function, @(tile.rasterSampleCount),
+         @(tile.threadgroupSizeMatchesTileSize), @(tile.maxTotalThreadsPerThreadgroup)]];
       for (unsigned i = 0; i < 8; ++i)
-         [fields addObject:@[@(render.colorAttachments[i].pixelFormat),
-                             @(render.colorAttachments[i].writeMask)]];
+         [fields addObject:@(tile.colorAttachments[i].pixelFormat)];
    } else {
-      /* Unclassified native paths keep the existing complete archive walk. */
       return nil;
    }
    NSData *bytes = [NSPropertyListSerialization dataWithPropertyList:fields
@@ -177,15 +206,15 @@ kk_archive_temporary_path(void)
    pthread_rwlock_t capture_gate;
    dispatch_queue_t checkpoint_queue;
    NSMutableArray *pieces;
+   /* Hint -> identities of the pieces that captured a pipeline with that hint,
+    * oldest first. This directory is the complete lookup set. */
    NSMutableDictionary *hints;
    NSMutableDictionary *pending_hints;
    NSMutableDictionary *piece_by_identity;
    NSMutableArray *resident_pieces;
-   KKArchivePiece *preferred;
    NSMutableArray *graphics_libraries;
    size_t graphics_source_bytes;
    uint64_t generation, checkpointed, last_compile;
-   uint64_t hint_generation, hint_checkpointed;
    bool available, scheduled, finished, gate_ready;
    struct mtl_compiler_cache_stats stats;
 }
@@ -193,13 +222,26 @@ kk_archive_temporary_path(void)
 - (void)load;
 - (NSArray *)candidates:(NSData *)hint;
 - (KKLoadedArchive *)archiveForPiece:(KKArchivePiece *)piece;
-- (void)recordHit:(KKArchivePiece *)piece hint:(NSData *)hint;
+- (void)recordHit;
 - (void)recordCompile:(NSData *)hint;
 - (BOOL)publishPiece:(NSData *)identity captured:(NSDictionary *)captured;
 - (void)scheduleLocked;
 - (void)checkpoint:(BOOL)final;
 - (void)finish;
 @end
+
+static void
+kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identity)
+{
+   NSMutableArray *identities = directory[hint];
+   if (!identities) {
+      identities = [[NSMutableArray alloc] initWithObjects:identity, nil];
+      directory[hint] = identities;
+      [identities release];
+   } else if (![identities containsObject:identity]) {
+      [identities addObject:identity];
+   }
+}
 
 @implementation KKPipelineArchive
 - (id)initWithDevice:(id<MTLDevice>)dev operations:(const struct mtl_compiler_cache_ops *)ops data:(void *)data
@@ -254,40 +296,49 @@ kk_archive_temporary_path(void)
          piece_by_identity[key] = piece;
          [piece release];
       }
+      /* Repeated hints list every piece recorded for them. Journals without
+       * rows keep their pieces; those pipelines compile and are recorded again. */
       if ([rows isKindOfClass:[NSArray class]]) for (id row in rows) {
          if (![row isKindOfClass:[NSArray class]] || [row count] != 2) continue;
          id hint = row[0], key = row[1];
          if ([hint isKindOfClass:[NSData class]] && [hint length] == 32 &&
              [key isKindOfClass:[NSData class]] && [key length] == 32 &&
              piece_by_identity[key])
-            hints[hint] = key;
+            kk_archive_add_hint(hints, hint, key);
       }
    });
 }
 
+/* Only pieces recorded for this hint, newest first. An unrecorded hint opens
+ * no piece. */
 - (NSArray *)candidates:(NSData *)hint
 {
+   if (!hint) return @[];
    [self load];
    @synchronized(self) {
-      NSMutableArray *result = [NSMutableArray arrayWithCapacity:pieces.count];
-      NSData *identity = hint ? hints[hint] : nil;
-      KKArchivePiece *hinted = identity ? piece_by_identity[identity] : nil;
-      if (hinted) [result addObject:hinted];
-      if (preferred && preferred != hinted) [result addObject:preferred];
-      for (KKArchivePiece *piece in [pieces reverseObjectEnumerator])
-         if (piece != preferred && piece != hinted) [result addObject:piece];
-      return [[result copy] autorelease];
+      NSArray *identities = hints[hint];
+      NSMutableArray *result = [NSMutableArray arrayWithCapacity:identities.count];
+      for (NSData *identity in [identities reverseObjectEnumerator]) {
+         KKArchivePiece *piece = piece_by_identity[identity];
+         if (piece) [result addObject:piece];
+      }
+      return result;
    }
 }
 
 - (KKLoadedArchive *)archiveForPiece:(KKArchivePiece *)piece
 {
    KKLoadedArchive *result = nil;
+   bool piece_read = false, archive_opened = false;
+   uint64_t load_ns = 0, open_ns = 0;
    /* No global publication lock during disk IO or native archive opening. */
    @synchronized(piece) {
       if (!piece->resident && !piece->unavailable) {
          size_t length = 0;
+         uint64_t begin = kk_archive_now();
          void *bytes = operations.load_piece(cache_data, piece->identity.bytes, &length);
+         load_ns = kk_archive_now() - begin;
+         piece_read = true;
          NSData *data = bytes
             ? [NSData dataWithBytesNoCopy:bytes length:length freeWhenDone:YES] : nil;
          KKLoadedArchive *opened = [KKLoadedArchive new];
@@ -295,7 +346,10 @@ kk_archive_temporary_path(void)
          NSString *path = data ? kk_archive_temporary_path() : nil;
          NSError *error = nil;
          if (path && [data writeToFile:path options:NSDataWritingAtomic error:&error]) {
+            begin = kk_archive_now();
             opened->archive = [device newArchiveWithURL:[NSURL fileURLWithPath:path] error:&error];
+            open_ns = kk_archive_now() - begin;
+            archive_opened = true;
             opened->path = [path copy];
          }
          if (opened->archive) piece->resident = opened;
@@ -308,6 +362,14 @@ kk_archive_temporary_path(void)
       result = [piece->resident retain];
    }
    KKArchivePiece *retired = nil;
+   if (piece_read) @synchronized(self) {
+      stats.piece_loads++;
+      stats.piece_load_ns += load_ns;
+      if (archive_opened) {
+         stats.archive_opens++;
+         stats.archive_open_ns += open_ns;
+      }
+   }
    if (result) @synchronized(self) {
       stats.archive_loaded = true;
       [resident_pieces removeObjectIdenticalTo:piece];
@@ -327,20 +389,10 @@ kk_archive_temporary_path(void)
    return [result autorelease];
 }
 
-- (void)recordHit:(KKArchivePiece *)piece hint:(NSData *)hint
+/* A hit comes only from a piece already recorded for its hint. */
+- (void)recordHit
 {
-   @synchronized(self) {
-      stats.hits++;
-      if (hint && ![hints[hint] isEqual:piece->identity]) {
-         hints[hint] = piece->identity;
-         hint_generation++;
-         [self scheduleLocked];
-      }
-      if (preferred != piece) {
-         [preferred release];
-         preferred = [piece retain];
-      }
-   }
+   @synchronized(self) { stats.hits++; }
 }
 
 /* Caller holds capture_gate for reading until after this publication. */
@@ -358,8 +410,7 @@ kk_archive_temporary_path(void)
 
 - (void)scheduleLocked
 {
-   if (scheduled || finished ||
-       (generation == checkpointed && hint_generation == hint_checkpointed)) return;
+   if (scheduled || finished || generation == checkpointed) return;
    if (!checkpoint_queue) {
       dispatch_queue_attr_t attributes = dispatch_queue_attr_make_with_qos_class(
          DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0);
@@ -375,105 +426,97 @@ kk_archive_temporary_path(void)
 }
 
 /* The utility queue is the sole index writer. Piece bytes are verified before
- * the two-slot journal can publish both their reference and captured hints. */
+ * the two-slot journal publishes their reference together with captured hints.
+ * A hint has one row per recorded piece, oldest first. Readers that keep a
+ * single piece per hint use its last row. */
 - (BOOL)publishPiece:(NSData *)identity captured:(NSDictionary *)captured
 {
    NSMutableArray *index = [NSMutableArray array], *rows = [NSMutableArray array];
-   NSMutableDictionary *directory;
-   uint64_t hint_target;
+   NSMutableDictionary *directory = [NSMutableDictionary dictionary];
    @synchronized(self) {
       for (KKArchivePiece *entry in pieces) [index addObject:entry->identity];
-      if (identity && !piece_by_identity[identity]) [index addObject:identity];
-      directory = [[hints mutableCopy] autorelease];
-      hint_target = hint_generation;
+      if (!piece_by_identity[identity]) [index addObject:identity];
+      for (NSData *hint in hints)
+         directory[hint] = [[hints[hint] mutableCopy] autorelease];
    }
-   if (identity) for (NSData *hint in captured) directory[hint] = identity;
-   for (NSData *hint in directory) [rows addObject:@[hint, directory[hint]]];
+   for (NSData *hint in captured) kk_archive_add_hint(directory, hint, identity);
+   for (NSData *hint in directory)
+      for (NSData *key in directory[hint]) [rows addObject:@[hint, key]];
    NSData *manifest = [NSPropertyListSerialization dataWithPropertyList:
       @{@"version": @1, @"pieces": index, @"hints": rows}
       format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
    BOOL stored = manifest.length &&
       operations.store(cache_data, manifest.bytes, manifest.length);
-   @synchronized(self) {
-      if (stored) {
-         if (identity && !piece_by_identity[identity]) {
-            KKArchivePiece *piece = [[KKArchivePiece alloc] initWithIdentity:identity];
-            if (piece) {
-               [pieces addObject:piece];
-               piece_by_identity[identity] = piece;
-               [piece release];
-            }
+   /* Storage failure is an ordinary cache miss, not a timed retry loop. */
+   if (stored) @synchronized(self) {
+      if (!piece_by_identity[identity]) {
+         KKArchivePiece *piece = [[KKArchivePiece alloc] initWithIdentity:identity];
+         if (piece) {
+            [pieces addObject:piece];
+            piece_by_identity[identity] = piece;
+            [piece release];
          }
-         if (identity) for (NSData *hint in captured) hints[hint] = identity;
-         stats.checkpoints++;
       }
-      /* Storage failure is an ordinary cache miss, not a timed retry loop.
-       * Updates received during IO remain dirty and get another transaction. */
-      hint_checkpointed = hint_target;
+      if (piece_by_identity[identity])
+         for (NSData *hint in captured) kk_archive_add_hint(hints, hint, identity);
+      stats.checkpoints++;
    }
    return stored;
 }
 
 - (void)checkpoint:(BOOL)final
 {
-   uint64_t target;
-   bool capture;
    @synchronized(self) {
       if (!final) scheduled = false;
-      if ((!final && finished) || !serializer || !available ||
-          (generation == checkpointed && hint_generation == hint_checkpointed))
+      if ((!final && finished) || !serializer || !available || generation == checkpointed)
          return;
-      capture = generation != checkpointed;
       uint64_t now = kk_archive_now();
-      if (!final && capture && generation - checkpointed < 16 &&
+      if (!final && generation - checkpointed < 16 &&
           now && last_compile && now - last_compile < 500000000) {
          [self scheduleLocked];
          return;
       }
-      target = checkpointed;
    }
-   NSData *data = nil;
-   NSDictionary *captured = nil;
-   if (capture) {
-      /* Captures share read access; only the short snapshot is exclusive. */
-      if (final) pthread_rwlock_wrlock(&capture_gate);
-      else if (pthread_rwlock_trywrlock(&capture_gate)) {
-         @synchronized(self) { [self scheduleLocked]; }
-         return;
-      }
-      @synchronized(self) {
-         target = generation;
-         captured = [pending_hints copy];
-         [pending_hints removeAllObjects];
-      }
-      NSString *path = kk_archive_temporary_path();
-      NSError *error = nil;
-      BOOL serialized = NO;
-      uint64_t begin = kk_archive_now();
-      @try {
-         if (path) {
-            [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
-            serialized = [serializer serializeAsArchiveAndFlushToURL:
-               [NSURL fileURLWithPath:path] error:&error];
-         }
-      } @catch (NSException *exception) {
-         serialized = NO;
-      } @finally {
-         pthread_rwlock_unlock(&capture_gate);
-      }
-      @synchronized(self) { stats.snapshot_ns += kk_archive_now() - begin; }
-      /* All IO, hashing, piece/index storage and verification follow unlock. */
-      data = serialized ? [NSData dataWithContentsOfFile:path] : nil;
-      if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+   /* Captures share read access; only the short snapshot is exclusive. */
+   if (final) pthread_rwlock_wrlock(&capture_gate);
+   else if (pthread_rwlock_trywrlock(&capture_gate)) {
+      @synchronized(self) { [self scheduleLocked]; }
+      return;
    }
+   uint64_t target;
+   NSDictionary *captured;
+   @synchronized(self) {
+      target = generation;
+      captured = [pending_hints copy];
+      [pending_hints removeAllObjects];
+   }
+   NSString *path = kk_archive_temporary_path();
+   NSError *error = nil;
+   BOOL serialized = NO;
+   uint64_t begin = kk_archive_now();
+   @try {
+      if (path) {
+         [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+         serialized = [serializer serializeAsArchiveAndFlushToURL:
+            [NSURL fileURLWithPath:path] error:&error];
+      }
+   } @catch (NSException *exception) {
+      serialized = NO;
+   } @finally {
+      pthread_rwlock_unlock(&capture_gate);
+   }
+   @synchronized(self) { stats.snapshot_ns += kk_archive_now() - begin; }
+   /* All IO, hashing, piece/index storage and verification follow unlock. */
+   NSData *data = serialized ? [NSData dataWithContentsOfFile:path] : nil;
+   if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
    NSData *identity = nil;
    if (data.length) {
       uint8_t key[32];
       if (operations.store_piece(cache_data, data.bytes, data.length, key))
          identity = [NSData dataWithBytes:key length:sizeof(key)];
    }
-   BOOL stored = [self publishPiece:identity captured:identity ? captured : nil];
-   if (stored && identity) @synchronized(self) { stats.stored_bytes += data.length; }
+   if (identity && [self publishPiece:identity captured:captured])
+      @synchronized(self) { stats.stored_bytes += data.length; }
    [captured release];
    @synchronized(self) {
       checkpointed = target;
@@ -496,7 +539,6 @@ kk_archive_temporary_path(void)
 - (void)dealloc
 {
    [graphics_libraries release];
-   [preferred release];
    [pieces release];
    [hints release];
    [pending_hints release];
@@ -669,7 +711,7 @@ kk_archive_compute(mtl_compiler *compiler, MTL4ComputePipelineDescriptor *descri
       @synchronized(cache) { cache->stats.lookups++; }
       NSError *error = nil;
       id<MTLComputePipelineState> state = [archive newComputePipelineStateWithDescriptor:descriptor error:&error];
-      if (state) { [cache recordHit:piece hint:hint]; return state; }
+      if (state) { [cache recordHit]; return state; }
    }
    return nil;
 }
@@ -688,7 +730,7 @@ kk_archive_render(mtl_compiler *compiler, MTL4PipelineDescriptor *descriptor)
       @synchronized(cache) { cache->stats.lookups++; }
       NSError *error = nil;
       id<MTLRenderPipelineState> state = [archive newRenderPipelineStateWithDescriptor:descriptor error:&error];
-      if (state) { [cache recordHit:piece hint:hint]; return state; }
+      if (state) { [cache recordHit]; return state; }
    }
    return nil;
 }

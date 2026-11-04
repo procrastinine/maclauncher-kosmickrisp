@@ -44,6 +44,9 @@ struct mtl_compiler_cache_stats {
    uint64_t lookups, hits, native_compiles, stored_bytes;
    uint64_t checkpoints, snapshot_ns, capture_wait_ns, requests;
    uint64_t vertex_library_requests, vertex_library_hits;
+   /* Disk-cache piece reads (load_piece) and native archive opens
+    * (newArchiveWithURL), with the time spent in each call. */
+   uint64_t piece_loads, piece_load_ns, archive_opens, archive_open_ns;
    bool archive_loaded;
 };
 /* Lifetime totals for this shared native compiler, not one Vulkan device. */

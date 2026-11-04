@@ -430,14 +430,22 @@ opened archive objects are retained in an in-memory least-recently-used set;
 active requests retain their own archive and backing file.
 
 Lookup hints combine shader-library source hashes and compiler options with
-selected resolved pipeline state. A hint selects the first piece to try.
-Metal verifies the complete native descriptor, including function constants.
-Missing, stale or colliding hints continue through the remaining candidates.
-Unavailable archive payloads are cache misses and use normal compilation.
+selected resolved compute, render, mesh or tile pipeline state. Each
+checkpoint records the hints of the pipelines it captured. A hint can refer to
+several pieces when pipelines differ only in state outside the hint, such as
+function constant values. A lookup opens only the pieces recorded for its
+hint. A request whose hint has no recorded piece, or whose descriptor has no
+hint, uses normal compilation without opening an archive piece. Metal verifies
+the complete native descriptor, including function constants, so a piece that
+does not contain the exact pipeline is a miss. Unavailable archive payloads are
+cache misses and use normal compilation.
 
 A checkpoint stores and verifies its archive payload before publishing the
 piece reference and captured lookup hints together in the two-slot journal.
-Legacy journals containing only piece references remain readable.
+The journal stores one row for each hint and piece pair. Journals with a single
+row per hint, and legacy journals containing only piece references, remain
+readable; pipelines without a recorded piece compile once and are recorded by
+the next checkpoint.
 
 Metal workarounds
 *****************
