@@ -36,6 +36,7 @@ struct vk_meta_blit_key {
    enum vk_meta_object_key_type key_type;
    enum glsl_sampler_dim dim;
    VkSampleCountFlagBits src_samples;
+   VkSampleCountFlagBits dst_samples;
    VkResolveModeFlagBits resolve_mode;
    VkResolveModeFlagBits stencil_resolve_mode;
    bool stencil_as_discard;
@@ -419,7 +420,7 @@ get_blit_pipeline(struct vk_device *device,
       .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
    };
    struct vk_meta_rendering_info render = {
-      .samples = 1,
+      .samples = key->dst_samples ? key->dst_samples : VK_SAMPLE_COUNT_1_BIT,
    };
    if (key->aspects & VK_IMAGE_ASPECT_COLOR_BIT) {
       render.color_attachment_count = 1;
@@ -748,6 +749,7 @@ vk_meta_blit_image(struct vk_command_buffer *cmd,
    memset(&key, 0, sizeof(key));
    key.key_type = VK_META_OBJECT_KEY_BLIT;
    key.src_samples = src_image->samples;
+   key.dst_samples = dst_image->samples;
    key.dim = vk_image_sampler_dim(src_image);
    key.dst_format = dst_format;
 

@@ -135,6 +135,7 @@ struct kk_attachment {
 
 struct kk_rendering_state {
    bool attachmentless;
+   bool msrtss;
    VkRenderingFlagBits flags;
 
    VkRect2D area;
@@ -269,6 +270,14 @@ struct kk_ts_stage_entry {
    uint32_t index;
 };
 
+struct kk_msrtss_image {
+   VkImage image;
+   VkDeviceMemory memory;
+   struct kk_image_view *source;
+   VkImageView view;
+   VkSampleCountFlagBits samples;
+};
+
 struct kk_cmd_buffer {
    struct vk_command_buffer vk;
 
@@ -279,6 +288,7 @@ struct kk_cmd_buffer {
       mtl_compute_encoder *compute;
    } metal;
    /* Pending timestamp resolves (struct kk_ts_resolve), flushed at cs_end. */
+   struct util_dynarray msrtss_images;
    struct util_dynarray ts_resolves;
    /* Timestamps already sampled by the current render encoder. (struct
     * kk_ts_stage_entry). */
@@ -378,6 +388,9 @@ mtl_depth_stencil_state *
 kk_compile_depth_stencil_state(struct kk_device *device,
                                const struct vk_depth_stencil_state *ds,
                                bool has_depth, bool has_stencil);
+
+void kk_meta_expand_msrtss(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
+                           VkImage dst, VkImageAspectFlags aspects);
 
 void kk_meta_resolve_rendering(struct kk_cmd_buffer *cmd,
                                const VkRenderingInfo *pRenderingInfo);

@@ -12,6 +12,8 @@
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
 #include "kk_physical_device.h"
+#include "kk_image.h"
+#include "kk_image_view.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 
@@ -326,5 +328,29 @@ kk_meta_resolve_rendering(struct kk_cmd_buffer *cmd,
    kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS,
                  "meta:resolve_rendering");
    vk_meta_resolve_rendering(&cmd->vk, &dev->meta, pRenderingInfo);
+   kk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
+}
+
+void
+kk_meta_expand_msrtss(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
+                     VkImage dst, VkImageAspectFlags aspects)
+{
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   VK_FROM_HANDLE(kk_image, dst_image, dst);
+   const VkExtent3D extent = vk_image_mip_level_extent(src->vk.image,
+                                                     src->vk.base_mip_level);
+   const VkImageBlit2 region = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
+      .srcSubresource = {aspects, src->vk.base_mip_level,
+                         src->vk.base_array_layer, src->vk.layer_count},
+      .srcOffsets = {{0, 0, 0}, {extent.width, extent.height, 1}},
+      .dstSubresource = {aspects, 0, 0, src->vk.layer_count},
+      .dstOffsets = {{0, 0, 0}, {extent.width, extent.height, 1}},
+   };
+   struct kk_meta_save save;
+   kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS, "meta:MSRTSS load");
+   vk_meta_blit_image(&cmd->vk, &dev->meta, src->vk.image,
+      src->vk.view_format, VK_IMAGE_LAYOUT_GENERAL, &dst_image->vk,
+      src->vk.view_format, VK_IMAGE_LAYOUT_GENERAL, 1, &region, VK_FILTER_NEAREST);
    kk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
 }

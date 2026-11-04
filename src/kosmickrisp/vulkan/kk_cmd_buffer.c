@@ -42,6 +42,13 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
 {
    struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
 
+   /* Internal views must go before their command-owned backing images. */
+   vk_meta_object_list_reset(&dev->vk, &cmd->vk.meta_objects);
+   util_dynarray_foreach(&cmd->msrtss_images, struct kk_msrtss_image, image) {
+      kk_DestroyImage(kk_device_to_handle(dev), image->image, NULL);
+      kk_FreeMemory(kk_device_to_handle(dev), image->memory, NULL);
+   }
+   util_dynarray_clear(&cmd->msrtss_images);
    kk_cmd_release_dynamic_ds_state(cmd);
    kk_descriptor_state_fini(cmd, &cmd->state.gfx.descriptors);
    kk_descriptor_state_fini(cmd, &cmd->state.cs.descriptors);
@@ -95,6 +102,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
    kk_cmd_release_resources(dev, cmd);
    util_dynarray_fini(&cmd->large_bos);
    util_dynarray_fini(&cmd->post_render_writes);
+   util_dynarray_fini(&cmd->msrtss_images);
    util_dynarray_fini(&cmd->ts_resolves);
    util_dynarray_fini(&cmd->ts_stage_map);
 
@@ -126,6 +134,7 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    if (result != VK_SUCCESS)
       goto alloc_fail;
 
+   cmd->msrtss_images = UTIL_DYNARRAY_INIT;
    cmd->ts_resolves = UTIL_DYNARRAY_INIT;
    cmd->ts_stage_map = UTIL_DYNARRAY_INIT;
    cmd->post_render_writes = UTIL_DYNARRAY_INIT;

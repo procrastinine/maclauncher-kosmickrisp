@@ -415,6 +415,11 @@ kk_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
 
    vk_foreach_struct(sType, ext, pFormatProperties->pNext) {
       switch (sType) {
+      case VK_STRUCTURE_TYPE_SUBPASS_RESOLVE_PERFORMANCE_QUERY_EXT: {
+         /* Private MSAA backing and LOAD replication are not a free resolve. */
+         ((VkSubpassResolvePerformanceQueryEXT *)ext)->optimal = VK_FALSE;
+         break;
+      }
       case VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3: {
          VkFormatProperties3 *p = ext;
          p->linearTilingFeatures = linear2;

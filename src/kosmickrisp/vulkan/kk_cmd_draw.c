@@ -248,8 +248,8 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
    }
 }
 
-VKAPI_ATTR void VKAPI_CALL
-kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
+static void
+kk_begin_rendering(VkCommandBuffer commandBuffer,
                      const VkRenderingInfo *pRenderingInfo)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
@@ -634,8 +634,8 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
    mtl_release(cmd->state.gfx.render_pass_descriptor);
    cmd->state.gfx.render_pass_descriptor = NULL;
 
-   if (render->flags &
-       (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT))
+   if (!render->msrtss && (render->flags &
+       (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT)))
       need_meta_resolve = false;
 
    memset(render, 0, sizeof(*render));
@@ -3084,3 +3084,5 @@ kk_CmdDrawIndirectByteCountEXT(VkCommandBuffer commandBuffer,
    };
    kk_draw(cmd, &data);
 }
+
+#include "kk_msrtss.h"
