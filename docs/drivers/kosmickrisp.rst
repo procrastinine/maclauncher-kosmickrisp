@@ -436,7 +436,8 @@ generated helper stages, and do not dump shader contents.
 
 With compile records enabled, ``KK_PERF_TRACKING_BUILD_REASONS=1`` adds
 native library and archive outcomes, exact archive search keys and stable
-function-constant value digests. These identify source-cache misses, native
+function-constant value digests. Each attributed device also identifies the
+mapped driver image. These identify source-cache misses, native
 archive misses and constant specializations as separate, overlapping facts.
 Joined graphics-library workers retain the enclosing callback identity.
 

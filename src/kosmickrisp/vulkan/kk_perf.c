@@ -14,6 +14,8 @@
 #include "util/os_time.h"
 #include "util/mesa-blake3.h"
 #include <errno.h>
+#include <dlfcn.h>
+#include <unistd.h>
 #include <inttypes.h>
 #include <math.h>
 #include <pthread.h>
@@ -108,6 +110,20 @@ positive_option(const char *name, uint64_t fallback)
    return !errno && !*end && value && value <= UINT32_MAX ? value : fallback;
 }
 
+/* A counts-only run must identify the mapped image, not merely its requested
+ * environment. Paths are data and can contain JSON metacharacters. */
+static void
+kk_perf_image_string(FILE *log, const char *text)
+{
+   fputc('"', log);
+   for (const unsigned char *p = (const unsigned char *)text; *p; ++p) {
+      if (*p == '"' || *p == '\\') fputc('\\', log);
+      if (*p < 32) fprintf(log, "\\u%04x", *p);
+      else fputc(*p, log);
+   }
+   fputc('"', log);
+}
+
 struct kk_perf *
 kk_perf_create(void)
 {
@@ -140,6 +156,15 @@ kk_perf_create(void)
    p->created = p->interval_start = kk_perf_now();
    /* Acknowledge enabled tracking before any native device-init compile. */
    flush_locked(p, kk_perf_now(), false);
+   if (p->build_reasons) {
+      Dl_info image = {0};
+      dladdr((const void *)kk_perf_create, &image);
+      fprintf(p->log, "{\"kk_build_origin\":1,\"device\":\"%p\",\"pid\":%d,\"image\":",
+              (void *)p, (int)getpid());
+      kk_perf_image_string(p->log, image.dli_fname ? image.dli_fname : "");
+      fprintf(p->log, "}\n");
+      fflush(p->log);
+   }
    return p;
 }
 
