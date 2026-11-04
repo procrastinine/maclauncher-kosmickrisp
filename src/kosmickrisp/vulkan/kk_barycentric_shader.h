@@ -84,6 +84,7 @@ kk_barycentric_shader_info(struct kk_shader *shader,
 enum kk_barycentric_input_flags {
    KK_BARYCENTRIC_INPUT_PER_VERTEX = 1u << 0,
    KK_BARYCENTRIC_INPUT_FLAT = 1u << 1,
+   KK_BARYCENTRIC_INPUT_COORD = 1u << 2,
 };
 
 /* Capture the layout before IO lowering removes the input variables. */
@@ -91,6 +92,12 @@ static unsigned
 kk_barycentric_input_flags(nir_shader *fs)
 {
    unsigned flags = 0;
+   /* This is the original guest interface. Fragment finishing can later add
+    * native coordinates solely to prevent Metal triangle merging; those do
+    * not request guest corner ordering or per-vertex shader replay. */
+   if (BITSET_TEST(fs->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD) ||
+       BITSET_TEST(fs->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD))
+      flags |= KK_BARYCENTRIC_INPUT_COORD;
    nir_foreach_shader_in_variable(var, fs) {
       if (var->data.per_vertex)
          flags |= KK_BARYCENTRIC_INPUT_PER_VERTEX;
@@ -118,6 +125,8 @@ kk_barycentric_force_per_vertex(uint32_t shader_count,
        infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT) {
       nir_shader *fs = infos[shader_count - 1u].nir;
       force_per_vertex = input_flags & KK_BARYCENTRIC_INPUT_PER_VERTEX;
+      if (!(input_flags & KK_BARYCENTRIC_INPUT_COORD))
+         return force_per_vertex;
       bool flat_inputs = input_flags & KK_BARYCENTRIC_INPUT_FLAT;
       enum kk_barycentric_usage usage = kk_nir_barycentric_usage(fs);
       if (usage == KK_BARYCENTRIC_NONE)
