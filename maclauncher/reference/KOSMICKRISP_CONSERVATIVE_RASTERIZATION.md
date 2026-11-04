@@ -20,7 +20,7 @@ Triangles that collapse to a point or line on the raster grid retain their conse
 
 The conservative mode and zero extra size support extended dynamic state. Pipelines that declare a dynamic conservative mode compile the required raster variants in advance. Statically disabled pipelines retain their ordinary MSL and draw uploads. Conservative expansion allocates primitive packets and row spans only for enabled draws. Each covered row emits two triangles, and multisampled pixels retain their full geometric coverage before the application sample mask applies.
 
-Source remains pinned by `producers/kosmickrisp/kosmickrisp-source.json`. The adaptations are registered as `conservative-rasterization`, `conservative-degenerate-triangles` and `conservative-inner-coverage` in the ordered patch catalog.
+The conservative rasterization, degenerate triangle and inner coverage implementations are ordinary commits in the Mesa tree.
 
 The fragment input sample mask is the original primitive's full geometric sample mask intersected with the API sample mask, restricted to the invocation sample when sample shading is enabled. It remains a pre-depth/stencil value with early fragment tests. A zero logical input mask prevents application fragment shader execution. Conservative pipelines do not support the PostDepthCoverage execution mode.
 

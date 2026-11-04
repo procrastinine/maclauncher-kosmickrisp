@@ -76,6 +76,12 @@ tile dimensions do not change the application-visible binding granularity.
 
 ## Raw block layer entries
 
+The maintenance6 `blockTexelViewCompatibleMultipleLayers` property reports
+support for multi-layer raw block views. Original1D/2D arrays, cube faces and
+regular3D depth-slice attachment views use the shared layer-selection contract.
+Each uncompressed view contains one mip level and retains the original image's
+size-compatible block contents.
+
 A layered raw block-view record embeds the shared sparse query prefix and
 points to ordinary sampled and storage descriptor arrays. Original1D arrays
 use the same per-layer native2D-array aliases, with a physical height of one.

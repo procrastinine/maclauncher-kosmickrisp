@@ -366,6 +366,18 @@ Consumers: Fragment shading rate retained raster phases.
 
 Implementation: [kk_poly_retained_raster_types.h](../src/kosmickrisp/vulkan/kk_poly_retained_raster_types.h), [kk_poly_retained_raster_command.h](../src/kosmickrisp/vulkan/kk_poly_retained_raster_command.h), [kk_poly_retained.h](../src/kosmickrisp/libkk/kk_poly_retained.h), [kk_polygon.cl](../src/kosmickrisp/libkk/kk_polygon.cl), [kk_cmd_buffer.h](../src/kosmickrisp/vulkan/kk_cmd_buffer.h), [kk_cmd_buffer.c](../src/kosmickrisp/vulkan/kk_cmd_buffer.c), [kk_cmd_draw.c](../src/kosmickrisp/vulkan/kk_cmd_draw.c), [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_poly_layer_replay_nir.h](../src/kosmickrisp/vulkan/kk_poly_layer_replay_nir.h), [kk_poly_layer_replay_command.h](../src/kosmickrisp/vulkan/kk_poly_layer_replay_command.h).
 
+### Share linked vertex input slots with native raster alternatives
+
+Vulkan contract: Share linked vertex input slots with native raster alternatives.
+
+Lower native alternative vertex fetches after linking using the owning shader input mask. Static formats, dynamic metadata and robustness bounds use the same compact root slots as the ordinary draw state.
+
+Scope: Linked vertex input packing, Native raster alternative compilation. Device support and operation restrictions are defined by the linked implementation.
+
+Consumers: Vulkan graphics pipelines with native raster alternatives.
+
+Implementation: [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c).
+
 ## Resources, descriptors and memory
 
 ### Shared compiler-assigned shader feature bits for pipeline statistics and sampler reduction
@@ -974,11 +986,11 @@ Vulkan contract: Layered block-texel view resource selection.
 
 
 
-Scope: the Vulkan operation identified above. Device support and operation restrictions are defined by the linked implementation.
+Limits and reported properties: `VkPhysicalDeviceMaintenance6Properties.blockTexelViewCompatibleMultipleLayers = true`.
 
 Consumers: Vulkan applications.
 
-Implementation: [kk_layered_bc.c](../src/kosmickrisp/vulkan/kk_layered_bc.c), [kk_layered_bc.h](../src/kosmickrisp/vulkan/kk_layered_bc.h), [kk_layered_bc_nir.h](../src/kosmickrisp/vulkan/kk_layered_bc_nir.h), [kk_image_view.c](../src/kosmickrisp/vulkan/kk_image_view.c), [kk_image_view.h](../src/kosmickrisp/vulkan/kk_image_view.h), [kk_descriptor_set.c](../src/kosmickrisp/vulkan/kk_descriptor_set.c), [kk_nir_lower_descriptors.c](../src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c), [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_shader.h](../src/kosmickrisp/vulkan/kk_shader.h), [meson.build](../src/kosmickrisp/vulkan/meson.build), [kk_layered_bc_render.h](../src/kosmickrisp/vulkan/kk_layered_bc_render.h), [kk_cmd_buffer.h](../src/kosmickrisp/vulkan/kk_cmd_buffer.h), [kk_cmd_draw.c](../src/kosmickrisp/vulkan/kk_cmd_draw.c), [kk_layered_bc_cube_nir.h](../src/kosmickrisp/vulkan/kk_layered_bc_cube_nir.h), [kk_mesh_command.h](../src/kosmickrisp/vulkan/kk_mesh_command.h).
+Implementation: [kk_layered_bc.c](../src/kosmickrisp/vulkan/kk_layered_bc.c), [kk_layered_bc.h](../src/kosmickrisp/vulkan/kk_layered_bc.h), [kk_layered_bc_nir.h](../src/kosmickrisp/vulkan/kk_layered_bc_nir.h), [kk_image_view.c](../src/kosmickrisp/vulkan/kk_image_view.c), [kk_image_view.h](../src/kosmickrisp/vulkan/kk_image_view.h), [kk_descriptor_set.c](../src/kosmickrisp/vulkan/kk_descriptor_set.c), [kk_nir_lower_descriptors.c](../src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c), [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_shader.h](../src/kosmickrisp/vulkan/kk_shader.h), [meson.build](../src/kosmickrisp/vulkan/meson.build), [kk_layered_bc_render.h](../src/kosmickrisp/vulkan/kk_layered_bc_render.h), [kk_cmd_buffer.h](../src/kosmickrisp/vulkan/kk_cmd_buffer.h), [kk_cmd_draw.c](../src/kosmickrisp/vulkan/kk_cmd_draw.c), [kk_layered_bc_cube_nir.h](../src/kosmickrisp/vulkan/kk_layered_bc_cube_nir.h), [kk_mesh_command.h](../src/kosmickrisp/vulkan/kk_mesh_command.h), [kk_physical_device.c](../src/kosmickrisp/vulkan/kk_physical_device.c).
 
 ### Standard-shaped sparse 3D residency
 
@@ -1221,6 +1233,18 @@ Scope: shader compilation, shader serialization, precompiled driver programs. De
 Consumers: KosmicKrisp shader compiler.
 
 Implementation: [kk_shader.h](../src/kosmickrisp/vulkan/kk_shader.h), [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_mesh_pipeline.h](../src/kosmickrisp/vulkan/kk_mesh_pipeline.h), [kk_device_lib.c](../src/kosmickrisp/vulkan/kk_device_lib.c).
+
+### Copy constant matrix coordinate defaults
+
+Vulkan contract: Copy constant matrix coordinate defaults.
+
+Copy the exact binary16 coordinate ramp0..63 into the existing command-owned root instead of converting the same64 constants on every recording. Storage, layout and initialization order remain unchanged.
+
+Scope: Command-buffer descriptor-root initialization. Device support and operation restrictions are defined by the linked implementation.
+
+Consumers: Vulkan command recording.
+
+Implementation: [kk_cmd_buffer.c](../src/kosmickrisp/vulkan/kk_cmd_buffer.c).
 
 ## Presentation and platform integration
 
