@@ -832,7 +832,9 @@ mtl_new_render_pipeline_for_raster_attachments(mtl_compiler *compiler,
    @autoreleasepool {
       MTL4RenderPipelineDescriptor *copy = [(MTL4RenderPipelineDescriptor *)descriptor copy];
       copy.rasterSampleCount = samples;
-      if (topology != MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED)
+      /* Mesh pipeline descriptors have no input primitive topology. */
+      if (topology != MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED &&
+          [copy isKindOfClass:[MTL4RenderPipelineDescriptor class]])
          copy.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)topology;
       if (framebuffer_reads) {
          MTL4SpecializedFunctionDescriptor *fragment =
