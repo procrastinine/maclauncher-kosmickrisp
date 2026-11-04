@@ -786,7 +786,9 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
                             (pdev->info.gpu_apple_family == 7 ||
                              pdev->info.gpu_apple_family == 8) &&
                             state->ms && state->ms->rasterization_samples > 1;
-      if (!ms_bug_present)
+      /* KK_WORKAROUND_19: diagnostic-only triangle-merge comparison. */
+      if (!ms_bug_present &&
+          !(pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)))
          NIR_PASS(_, nir, msl_disable_triangle_merge);
    }
 

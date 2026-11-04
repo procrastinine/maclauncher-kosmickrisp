@@ -1184,6 +1184,13 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
    _mesa_blake3_update(&blake3_ctx, instance->driver_build_sha,
                        sizeof(instance->driver_build_sha));
 
+   /* Keep diagnostic shaders out of default application pipeline caches and
+    * shader binaries. Disk/native caches also key the workaround mask. */
+   if (pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)) {
+      static const char diagnostic[] = "triangle-merge-disabled";
+      _mesa_blake3_update(&blake3_ctx, diagnostic, sizeof(diagnostic));
+   }
+
    unsigned char blake3[BLAKE3_KEY_LEN];
    _mesa_blake3_final(&blake3_ctx, blake3);
 
