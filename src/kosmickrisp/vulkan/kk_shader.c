@@ -1581,11 +1581,14 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
           * For the non-emulated path we need to subtract base_instance... */
          NIR_PASS(_, nir, msl_nir_lower_instance_id);
 
-         bool progress = false;
-         NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
-                  per_vertex_map);
-         if (progress)
-            shader->info.uses_per_draw_data = true;
+         if (per_vertex_map &&
+             (per_vertex_map->active || per_vertex_map->canonical_heap)) {
+            bool progress = false;
+            NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
+                     per_vertex_map);
+            if (progress)
+               shader->info.uses_per_draw_data = true;
+         }
       }
    } else if (stage == MESA_SHADER_TESS_CTRL) {
       /* TODO_KOSMICKRISP: Poly lowering breaks with vectorized I/O less than
@@ -1630,11 +1633,14 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          memset(&nir->info.cs, 0, sizeof(nir->info.cs));
          nir->xfb_info = NULL;
       } else {
-         bool progress = false;
-         NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
-                  per_vertex_map);
-         if (progress)
-            shader->info.uses_per_draw_data = true;
+         if (per_vertex_map &&
+             (per_vertex_map->active || per_vertex_map->canonical_heap)) {
+            bool progress = false;
+            NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
+                     per_vertex_map);
+            if (progress)
+               shader->info.uses_per_draw_data = true;
+         }
       }
    } else if (stage == MESA_SHADER_GEOMETRY) {
       /* TODO_KOSMICKRISP: Poly lowering breaks with vectorized I/O less than
@@ -1729,11 +1735,14 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       kk_lower_hw_vs(nir, state, shader->info.gs.mode == MESA_PRIM_POINTS);
       msl_nir_lower_clip_cull_distance(nir, 0);
 
-      bool progress = false;
-      NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
-               per_vertex_map);
-      if (progress)
-         shader->info.uses_per_draw_data = true;
+      if (per_vertex_map &&
+          (per_vertex_map->active || per_vertex_map->canonical_heap)) {
+         bool progress = false;
+         NIR_PASS(progress, nir, kk_nir_lower_vs_per_vertex_outputs,
+                  per_vertex_map);
+         if (progress)
+            shader->info.uses_per_draw_data = true;
+      }
       /* Descriptors were lowered with the GS, this lowers the system values
        * the hardware vertex lowering added */
       NIR_PASS(_, nir, kk_nir_lower_descriptors, false, robustness, 0, NULL);

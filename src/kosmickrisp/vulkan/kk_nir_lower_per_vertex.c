@@ -151,7 +151,7 @@ kk_nir_barycentric_usage(nir_shader *fs)
        !BITSET_TEST(fs->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD))
       return KK_BARYCENTRIC_NONE;
 
-   bool persp = false, linear = false, exact = false;
+   bool persp = false, linear = false;
    nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {
          if (instr->type != nir_instr_type_intrinsic)
@@ -159,16 +159,17 @@ kk_nir_barycentric_usage(nir_shader *fs)
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
          if (!is_barycentric_coord(intr))
             continue;
+         if (intr->intrinsic != nir_intrinsic_load_barycentric_coord_pixel)
+            return KK_BARYCENTRIC_EXACT;
          if (nir_intrinsic_interp_mode(intr) == INTERP_MODE_NOPERSPECTIVE)
             linear = true;
          else
             persp = true;
-         exact |= intr->intrinsic != nir_intrinsic_load_barycentric_coord_pixel;
+         if (persp && linear)
+            return KK_BARYCENTRIC_EXACT;
       }
    }
-   if (!persp && !linear)
-      return KK_BARYCENTRIC_NONE;
-   return (exact || (persp && linear)) ? KK_BARYCENTRIC_EXACT : KK_BARYCENTRIC_PIXEL;
+   return (persp || linear) ? KK_BARYCENTRIC_PIXEL : KK_BARYCENTRIC_NONE;
 }
 
 static void
@@ -219,22 +220,29 @@ static nir_def *load_per_draw(nir_builder *, unsigned, unsigned);
 #include "kk_canonical_projected.h"
 
 static nir_def *
+load_per_vertex_corner(nir_builder *b, nir_intrinsic_instr *intr,
+                       const struct kk_per_vertex_map *map, unsigned corner)
+{
+   unsigned location = io_location(intr, 1);
+   return nir_load_input(
+      b, intr->def.num_components, intr->def.bit_size, nir_imm_int(b, 0),
+      .base = 0u, .component = nir_intrinsic_component(intr),
+      .dest_type = nir_intrinsic_dest_type(intr),
+      .io_semantics.location = map->slot[location][corner],
+      .io_semantics.num_slots = 1u);
+}
+
+static nir_def *
 load_per_vertex_value(nir_builder *b, nir_intrinsic_instr *intr,
                       const struct kk_per_vertex_map *map)
 {
-   unsigned location = io_location(intr, 1);
-   nir_def *values[3];
-   for (unsigned v = 0u; v < 3u; ++v) {
-      values[v] = nir_load_input(
-         b, intr->def.num_components, intr->def.bit_size, nir_imm_int(b, 0),
-         .base = 0u, .component = nir_intrinsic_component(intr),
-         .dest_type = nir_intrinsic_dest_type(intr),
-         .io_semantics.location = map->slot[location][v],
-         .io_semantics.num_slots = 1u);
-   }
-
    if (nir_src_is_const(intr->src[0]))
-      return values[MIN2(nir_src_as_uint(intr->src[0]), 2u)];
+      return load_per_vertex_corner(b, intr, map,
+                                    MIN2(nir_src_as_uint(intr->src[0]), 2u));
+
+   nir_def *values[3];
+   for (unsigned v = 0u; v < 3u; ++v)
+      values[v] = load_per_vertex_corner(b, intr, map, v);
 
    nir_def *vertex = intr->src[0].ssa;
    return nir_bcsel(
@@ -364,16 +372,17 @@ make_buffer_interface_room(nir_shader *fs, nir_shader *prev,
       ~map->unused_locations;
    uint8_t width[VARYING_SLOT_MAX];
    unsigned components = kk_native_interface_components(fs, prev, width);
+   unsigned free = 32 - util_bitcount64(used & generic & ~map->locations);
+   unsigned modes = uses_barycentric[0] + uses_barycentric[1];
+   unsigned removed = 0;
+   u_foreach_bit64(location, map->locations)
+      removed += width[location];
+   unsigned packed = components - removed + 2 + 3 * modes;
+   if (free >= 2 + modes && packed <= 124)
+      return;
+
    nir_foreach_function_impl(body, fs) nir_foreach_block(block, body) {
       nir_foreach_instr(instr, block) {
-         unsigned free = 32 - util_bitcount64(used & generic & ~map->locations);
-         unsigned modes = uses_barycentric[0] + uses_barycentric[1];
-         unsigned removed = 0;
-         u_foreach_bit64(location, map->locations)
-            removed += width[location];
-         unsigned packed = components - removed + 2 + 3 * modes;
-         if (free >= 2 + modes && packed <= 124)
-            return;
          if (instr->type != nir_instr_type_intrinsic)
             continue;
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
@@ -392,6 +401,13 @@ make_buffer_interface_room(nir_shader *fs, nir_shader *prev,
             uses_barycentric[nir_intrinsic_interp_mode(bary) ==
                                INTERP_MODE_NOPERSPECTIVE] = true;
          }
+         /* Only moving an input can change the native interface budget. */
+         free += (used & bit) != 0;
+         removed += width[location];
+         modes = uses_barycentric[0] + uses_barycentric[1];
+         packed = components - removed + 2 + 3 * modes;
+         if (free >= 2 + modes && packed <= 124)
+            return;
       }
    }
 }
@@ -832,7 +848,7 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
 
    /* Points and lines repeat their last vertex. */
    nir_def *line_base = nir_imul_imm(&b, triangle, 2);
-   nir_def *indices[3];
+   nir_def *positions[3], *indices[3];
    for (unsigned v = 0u; v < 3u; ++v) {
       unsigned line_vertex = MIN2(v, 1u);
       nir_def *position =
@@ -845,18 +861,42 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
                                strip[v],
                                fan[v],
                             });
-      indices[v] =
+      positions[v] = position;
+      if (template_count == 3u) {
+         indices[v] =
+            vertex_index(&b, nir_iadd(&b, first_vertex, position), index_addr,
+                         index_size, index_count, base_vertex);
+      }
+   }
+   nir_def *own_index;
+   if (template_count == 3u) {
+      own_index = nir_bcsel(
+         &b, nir_ieq_imm(&b, corner, 0), indices[0],
+         nir_bcsel(&b, nir_ieq_imm(&b, corner, 1), indices[1], indices[2]));
+   } else {
+      /* Select before decoding the index buffer when only this invocation
+       * and, for flat inputs, the provoking corner need original values. */
+      nir_def *position = nir_bcsel(
+         &b, nir_ieq_imm(&b, corner, 0), positions[0],
+         nir_bcsel(&b, nir_ieq_imm(&b, corner, 1), positions[1], positions[2]));
+      own_index =
          vertex_index(&b, nir_iadd(&b, first_vertex, position), index_addr,
                       index_size, index_count, base_vertex);
    }
-   nir_def *own_index = nir_bcsel(
-      &b, nir_ieq_imm(&b, corner, 0), indices[0],
-      nir_bcsel(&b, nir_ieq_imm(&b, corner, 1), indices[1], indices[2]));
 
    /* With this order the Vulkan provoking vertex is always the first or the
     * last corner of the emitted primitive. */
    nir_def *provoking_corner =
       nir_bcsel(&b, provoking_last, nir_iadd_imm(&b, prim_vertices, -1), zero);
+   nir_def *flat_index = NULL;
+   if (template_count == 1u) {
+      nir_def *position = nir_bcsel(
+         &b, nir_ieq_imm(&b, provoking_corner, 0), positions[0],
+         nir_bcsel(&b, nir_ieq_imm(&b, provoking_corner, 1), positions[1], positions[2]));
+      flat_index =
+         vertex_index(&b, nir_iadd(&b, first_vertex, position), index_addr,
+                      index_size, index_count, base_vertex);
+   }
 
    nir_foreach_block(block, impl) {
       nir_foreach_instr_safe(instr, block) {
@@ -916,24 +956,23 @@ kk_nir_lower_vs_per_vertex_outputs(nir_shader *nir,
                        .io_semantics.num_slots = 1u);
    }
 
-   nir_def *basis = nir_vec3(&b, nir_b2f32(&b, nir_ieq_imm(&b, corner, 0)),
-                             nir_b2f32(&b, nir_ieq_imm(&b, corner, 1)),
-                             nir_b2f32(&b, nir_ieq_imm(&b, corner, 2)));
-   for (unsigned i = 0u; i < 2u; ++i) {
-      if (!map->barycentric_slot[i] || map->projected_basis)
-         continue;
-      nir_store_output(&b, basis, nir_imm_int(&b, 0), .base = 0u, .range = 1u,
-                       .write_mask = 0x7, .component = 0u,
-                       .src_type = nir_type_float32,
-                       .io_semantics.location = map->barycentric_slot[i],
-                       .io_semantics.num_slots = 1u);
+   if (!map->projected_basis &&
+       (map->barycentric_slot[0] || map->barycentric_slot[1])) {
+      nir_def *basis = nir_vec3(&b, nir_b2f32(&b, nir_ieq_imm(&b, corner, 0)),
+                                nir_b2f32(&b, nir_ieq_imm(&b, corner, 1)),
+                                nir_b2f32(&b, nir_ieq_imm(&b, corner, 2)));
+      for (unsigned i = 0u; i < 2u; ++i) {
+         if (!map->barycentric_slot[i])
+            continue;
+         nir_store_output(&b, basis, nir_imm_int(&b, 0), .base = 0u, .range = 1u,
+                          .write_mask = 0x7, .component = 0u,
+                          .src_type = nir_type_float32,
+                          .io_semantics.location = map->barycentric_slot[i],
+                          .io_semantics.num_slots = 1u);
+      }
    }
    for (unsigned v = 0u; v < template_count; ++v) {
-      nir_def *index = indices[v];
-      if (flat_only) {
-         index = nir_bcsel(&b, nir_ieq_imm(&b, provoking_corner, 0), indices[0],
-            nir_bcsel(&b, nir_ieq_imm(&b, provoking_corner, 1), indices[1], indices[2]));
-      }
+      nir_def *index = flat_only ? flat_index : indices[v];
       nir_def *params[3] = {
          index,
          flat_only ? nir_imm_int(&b, 1) :
