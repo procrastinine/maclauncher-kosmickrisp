@@ -971,8 +971,9 @@ kk_image_plane_create_texture(struct kk_image_plane *plane,
       return mtl_new_texture_with_descriptor_linear(plane->mem->bo->map, layout,
                                                     mem_offset_B);
 
-   return mtl_new_texture_with_descriptor(plane->mem->bo->mtl_handle, layout,
-                                          mem_offset_B);
+   return mtl_new_texture_with_descriptor(
+      plane->mem->bo->mtl_handle, layout,
+      kk_device_memory_heap_offset_B(plane->mem, mem_offset_B));
 }
 
 static VkResult
@@ -1026,7 +1027,8 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
       array_layout.layers = array_layout.layers * array_layout.depth_px;
       array_layout.depth_px = 1u;
       plane->mtl_handle_array = mtl_new_texture_with_descriptor(
-         mem->bo->mtl_handle, &array_layout, *offset_B);
+         mem->bo->mtl_handle, &array_layout,
+         kk_device_memory_heap_offset_B(mem, *offset_B));
       if (plane->mtl_handle_array == NULL)
          return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
       if (image->vk.base.object_name)

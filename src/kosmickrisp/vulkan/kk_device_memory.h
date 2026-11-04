@@ -34,6 +34,14 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_device_memory, vk.base, VkDeviceMemory,
 
 VkResult kk_device_memory_commit_private(struct kk_device *, struct kk_device_memory *);
 
+/* Logical VkDeviceMemory bytes to native heap placement bytes. */
+static inline uint64_t
+kk_device_memory_heap_offset_B(const struct kk_device_memory *mem,
+                                uint64_t logical_offset_B)
+{
+   return mem->bo->heap_offset_B + logical_offset_B;
+}
+
 extern const VkExternalMemoryProperties kk_mtlheap_mem_props;
 extern const VkExternalMemoryProperties kk_host_mem_props;
 extern const VkExternalMemoryProperties kk_fd_mem_props;

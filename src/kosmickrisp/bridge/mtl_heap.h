@@ -10,6 +10,7 @@
 #include "mtl_types.h"
 
 #include <inttypes.h>
+#include <stdbool.h>
 
 /* TODO_KOSMICKRISP We should move this struct to the bridge side. */
 struct kk_image_layout;
@@ -23,6 +24,16 @@ uint64_t mtl_heap_get_size(mtl_heap *heap);
 enum mtl_storage_mode mtl_heap_get_storage_mode(mtl_heap *heap);
 
 mtl_texture *mtl_new_memoryless_texture(mtl_device *, const struct kk_image_layout *);
+
+/* Immutable logical region follows a retained native heap across imports. */
+struct mtl_heap_memory_region {
+   uint64_t offset_B;
+   uint64_t size_B;
+};
+bool mtl_heap_set_memory_region(mtl_heap *heap,
+                                 const struct mtl_heap_memory_region *region);
+bool mtl_heap_get_memory_region(mtl_heap *heap,
+                                 struct mtl_heap_memory_region *region);
 
 /* Allocation from heap */
 mtl_buffer *mtl_new_buffer_with_length(mtl_heap *heap, uint64_t size_B,

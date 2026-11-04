@@ -22,6 +22,7 @@ struct kk_bo {
    mtl_heap *mtl_handle;
    mtl_buffer *map;
    uint64_t size_B;
+   uint64_t heap_offset_B;
    uint64_t gpu; // GPU address
    void *cpu;    // CPU address
    struct list_head residency_link;

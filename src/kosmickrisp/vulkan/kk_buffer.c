@@ -182,7 +182,8 @@ kk_bind_buffer_memory(struct kk_device *dev, const VkBindBufferMemoryInfo *info)
 
    if (mem->bo->mtl_handle) {
       buffer->metal.handle = mtl_new_buffer_with_length(
-         mem->bo->mtl_handle, buffer->vk.size, info->memoryOffset);
+         mem->bo->mtl_handle, buffer->vk.size,
+         kk_device_memory_heap_offset_B(mem, info->memoryOffset));
       buffer->metal.offset = 0u;
    } else {
       /* If the memory is not heap backed, for example if we imported a host

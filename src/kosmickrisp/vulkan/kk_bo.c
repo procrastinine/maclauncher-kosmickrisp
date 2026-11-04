@@ -10,6 +10,7 @@
 #include "kk_physical_device.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
+#include "kosmickrisp/bridge/mtl_sparse.h"
 
 #include "util/u_memory.h"
 
@@ -33,6 +34,11 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
 {
    VkResult result = VK_SUCCESS;
 
+   const bool align_gpu_base = size_B >= 65536;
+   const bool private_heap =
+      (options & (3u << MTL_RESOURCE_STORAGE_MODE_SHIFT)) ==
+      MTL_RESOURCE_STORAGE_MODE_PRIVATE;
+
    // TODO_KOSMICKRISP: Probably requires handling the buffer maximum 256MB
    uint64_t minimum_alignment = 0u;
    mtl_heap_buffer_size_and_align_with_length(dev->mtl_handle, &size_B,
@@ -48,8 +54,18 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
 #endif
 
    size_B = align64(size_B, minimum_alignment);
-   mtl_heap *handle =
-      mtl_new_heap(dev->mtl_handle, size_B, options);
+   uint64_t heap_offset_B = 0;
+   uint64_t heap_size_B = size_B;
+   if (align_gpu_base && private_heap) {
+      if (size_B > UINT64_MAX - 65535) {
+         result = vk_error(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         goto fail_heap;
+      }
+      /* Preserve the existing 64 KiB placement-sparse heap constructor. Its
+       * physical capacity is not part of the logical BO size. */
+      heap_size_B = align64(size_B, 65536);
+   }
+   mtl_heap *handle = mtl_new_heap(dev->mtl_handle, heap_size_B, options);
    if (handle == NULL) {
       result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
       goto fail_heap;
@@ -61,6 +77,64 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
       goto fail_map;
    }
 
+   if (align_gpu_base) {
+      heap_offset_B = -mtl_buffer_get_gpu_address(map) & UINT64_C(65535);
+      if (heap_offset_B && private_heap &&
+          mtl_device_supports_placement_sparse(dev->mtl_handle)) {
+         /* A half-page prefix cannot be expressed by sparse heap-page binds.
+          * Never publish it or withdraw the private memory type. */
+         result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                           "Native sparse-compatible heap base is not 64 KiB aligned");
+         goto fail_alloc;
+      }
+      if (heap_offset_B > mtl_heap_get_size(handle) - size_B) {
+         if (size_B > UINT64_MAX - 65536) {
+            result = vk_error(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+            goto fail_alloc;
+         }
+         /* The first, unpublished heap needs more capacity. One bounded
+          * replacement reserves enough for any 64 KiB alignment prefix. */
+         mtl_release(map);
+         mtl_release(handle);
+         heap_size_B = size_B + 65536;
+         handle = mtl_new_heap(dev->mtl_handle, heap_size_B, options);
+         if (!handle) {
+            result = vk_error(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+            goto fail_heap;
+         }
+         map = mtl_new_buffer_with_length(handle, size_B, 0);
+         if (!map) {
+            result = vk_error(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+            goto fail_map;
+         }
+         heap_offset_B = -mtl_buffer_get_gpu_address(map) & UINT64_C(65535);
+      }
+      if (heap_offset_B) {
+         mtl_buffer *logical_map =
+            mtl_new_buffer_with_length(handle, size_B, heap_offset_B);
+         if (!logical_map) {
+            result = vk_error(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+            goto fail_alloc;
+         }
+         mtl_release(map);
+         map = logical_map;
+      }
+      if (mtl_buffer_get_gpu_address(map) & UINT64_C(65535)) {
+         result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                           "Native logical allocation base is not 64 KiB aligned");
+         goto fail_alloc;
+      }
+      if (heap_offset_B || mtl_heap_get_size(handle) != size_B) {
+         const struct mtl_heap_memory_region region = {
+            .offset_B = heap_offset_B, .size_B = size_B,
+         };
+         if (!mtl_heap_set_memory_region(handle, &region)) {
+            result = vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
+            goto fail_alloc;
+         }
+      }
+   }
+
    struct kk_bo *bo = CALLOC_STRUCT(kk_bo);
 
    if (bo == NULL) {
@@ -70,6 +144,7 @@ kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
 
    bo->mtl_handle = handle;
    bo->size_B = size_B;
+   bo->heap_offset_B = heap_offset_B;
    bo->map = map;
    bo->gpu = mtl_buffer_get_gpu_address(map);
    if ((options & (3u << MTL_RESOURCE_STORAGE_MODE_SHIFT)) ==

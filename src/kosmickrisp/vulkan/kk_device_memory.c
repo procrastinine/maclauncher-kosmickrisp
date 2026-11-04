@@ -373,9 +373,6 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
    uint64_t alignment = 4096;
    os_get_page_size(&alignment);
 
-   const uint64_t aligned_size =
-      align64(pAllocateInfo->allocationSize, alignment);
-
    mem = vk_device_memory_create(&dev->vk, pAllocateInfo, pAllocator,
                                  sizeof(*mem));
    if (!mem)
@@ -426,9 +423,16 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
             result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
             goto fail_import;
          }
+         struct mtl_heap_memory_region region;
+         if (!mtl_heap_get_memory_region(metal_info->handle, &region) ||
+             mem->vk.size > region.size_B) {
+            result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+            goto fail_import;
+         }
+         mem->bo->heap_offset_B = region.offset_B;
          mem->bo->mtl_handle = mtl_retain(metal_info->handle);
          mem->bo->map = mtl_new_buffer_with_length(
-            mem->bo->mtl_handle, mem->vk.size, 0u);
+            mem->bo->mtl_handle, mem->vk.size, mem->bo->heap_offset_B);
       } else {
          if (!host_visible || !(host_info->handleType & kk_host_mem_props.compatibleHandleTypes) ||
              !host_info->pHostPointer ||
@@ -448,7 +452,7 @@ fail_import:
          goto fail_alloc;
       }
       if (import_metal) {
-         mem->bo->size_B = mtl_heap_get_size(mem->bo->mtl_handle);
+         mem->bo->size_B = mem->vk.size;
 
       } else {
          mem->bo->size_B = mtl_buffer_get_length(mem->bo->map);
@@ -461,7 +465,7 @@ fail_import:
          mem->bo->cpu = mtl_get_contents(mem->bo->map);
    } else {
       result =
-         kk_alloc_bo_options(dev, &dev->vk.base, aligned_size, alignment, options, &mem->bo);
+         kk_alloc_bo_options(dev, &dev->vk.base, pAllocateInfo->allocationSize, alignment, options, &mem->bo);
       if (result != VK_SUCCESS)
          goto fail_alloc;
 

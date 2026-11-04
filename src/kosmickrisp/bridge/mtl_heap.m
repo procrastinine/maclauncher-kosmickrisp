@@ -12,6 +12,8 @@
 #include "kk_image_layout.h"
 
 #include <Metal/MTLHeap.h>
+#import <Foundation/Foundation.h>
+#include <objc/runtime.h>
 
 /* Creation */
 mtl_heap *
@@ -78,6 +80,48 @@ mtl_new_memoryless_texture(mtl_device *device, const struct kk_image_layout *lay
       descriptor.storageMode = MTLStorageModeMemoryless;
       descriptor.usage = MTLTextureUsageRenderTarget;
       return [(id<MTLDevice>)device newTextureWithDescriptor:descriptor];
+   }
+}
+
+/* A process-wide selector key also works when another instance of the driver
+ * imports a retained heap after the original VkDeviceMemory has been freed.
+ * The immutable bytes own no resource and introduce no allocation owner cycle. */
+static const void *
+mtl_heap_memory_region_key(void)
+{
+   return (const void *)sel_registerName("mesa.kosmickrisp.heap-memory-region.v1");
+}
+
+bool
+mtl_heap_set_memory_region(mtl_heap *heap,
+                            const struct mtl_heap_memory_region *region)
+{
+   @autoreleasepool {
+      NSData *data = [[NSData alloc] initWithBytes:region length:sizeof(*region)];
+      if (!data)
+         return false;
+      objc_setAssociatedObject((id)heap, mtl_heap_memory_region_key(), data,
+                                OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      [data release];
+      return true;
+   }
+}
+
+bool
+mtl_heap_get_memory_region(mtl_heap *heap,
+                            struct mtl_heap_memory_region *region)
+{
+   @autoreleasepool {
+      id<MTLHeap> hp = (id<MTLHeap>)heap;
+      NSData *data = objc_getAssociatedObject(hp, mtl_heap_memory_region_key());
+      *region = (struct mtl_heap_memory_region){.size_B = hp.size};
+      if (data) {
+         if (data.length != sizeof(*region))
+            return false;
+         [data getBytes:region length:sizeof(*region)];
+      }
+      return region->offset_B <= hp.size &&
+             region->size_B <= hp.size - region->offset_B;
    }
 }
 
