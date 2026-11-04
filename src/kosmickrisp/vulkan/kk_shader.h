@@ -219,6 +219,8 @@ struct kk_shader_info {
          /* Multisampled shading-rate fragments run once across samples
           * through per-fragment slots. */
          bool fsr_slots;
+         /* Reads the rate state that follows the push constants. */
+         bool fsr_root;
          uint64_t flat_outputs;
          uint64_t noperspective_outputs;
       } fs;

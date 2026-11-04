@@ -29,5 +29,6 @@ bool kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts);
  * and the raster primitive ID. */
 bool kk_nir_lower_fsr_late(nir_shader *nir);
 bool kk_nir_fsr_uses_slots(nir_shader *nir);
+bool kk_nir_fsr_reads_root(nir_shader *nir);
 
 #endif

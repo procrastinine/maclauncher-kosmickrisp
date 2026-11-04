@@ -1585,6 +1585,7 @@ gather_shader_info(struct kk_shader *shader, nir_shader *nir,
       shader->info.fs.flat_outputs = fs_flat_output_mask(nir);
       shader->info.fs.uses_flat_varyings = shader->info.fs.flat_outputs != 0;
       shader->info.fs.fsr_slots = kk_nir_fsr_uses_slots(nir);
+      shader->info.fs.fsr_root = kk_nir_fsr_reads_root(nir);
    } else if (nir->info.stage == MESA_SHADER_COMPUTE) {
       shader->info.cs.local_size.x = nir->info.workgroup_size[0];
       shader->info.cs.local_size.y = nir->info.workgroup_size[1];
@@ -3730,10 +3731,18 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       }
    }
    push_size = MAX2(push_size, heap_push_size);
-   /* Rate state follows the push constants in the root table. */
+   /* Rate state follows the push constants in the root table. Pipelines
+    * upload it only when their fragment shader reads it; separately
+    * compiled stages cannot tell and always do. */
    if (kk_fsr_device(dev) && infos[0].stage != MESA_SHADER_COMPUTE &&
-       !mesa_shader_stage_is_rt(infos[0].stage))
-      push_size = KK_FSR_PUSH_SIZE;
+       !mesa_shader_stage_is_rt(infos[0].stage)) {
+      bool fsr_root = !state;
+      for (uint32_t i = 0; i < total_shaders; ++i)
+         fsr_root |= shaders[i]->info.stage == MESA_SHADER_FRAGMENT &&
+                     shaders[i]->info.fs.fsr_root;
+      if (fsr_root)
+         push_size = KK_FSR_PUSH_SIZE;
+   }
    for (uint32_t i = 0; i < total_shaders; ++i) {
       shaders[i]->info.push_size = push_size;
       shaders[i]->info.descriptor_heap = infos[0].flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;

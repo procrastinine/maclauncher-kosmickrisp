@@ -805,10 +805,14 @@ kk_nir_lower_fsr_late(nir_shader *nir)
    return nir_shader_intrinsics_pass(nir, fsr_late, nir_metadata_none, NULL);
 }
 
+struct fsr_root_range {
+   unsigned begin, end;
+};
+
 static bool
-fsr_reads_slots(UNUSED nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
+fsr_reads_root(UNUSED nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
-   /* The draw serial is read only by the slot protocol. */
+   const struct fsr_root_range *range = data;
    if (intr->intrinsic != nir_intrinsic_load_global_constant)
       return false;
    nir_scalar addr = nir_get_scalar(intr->src[0].ssa, 0);
@@ -821,7 +825,8 @@ fsr_reads_slots(UNUSED nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *d
           nir_scalar_intrinsic_op(base) == nir_intrinsic_load_buffer_ptr_kk &&
           nir_intrinsic_binding(nir_def_as_intrinsic(base.def)) == KK_ARGUMENT_ROOT &&
           nir_scalar_is_const(offset) &&
-          nir_scalar_as_uint(offset) == offsetof(struct kk_root_descriptor_table, fsr.serial))
+          nir_scalar_as_uint(offset) >= range->begin &&
+          nir_scalar_as_uint(offset) < range->end)
          return true;
    }
    return false;
@@ -831,6 +836,19 @@ fsr_reads_slots(UNUSED nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *d
 bool
 kk_nir_fsr_uses_slots(nir_shader *nir)
 {
+   const unsigned serial = offsetof(struct kk_root_descriptor_table, fsr.serial);
+   struct fsr_root_range range = {serial, serial + 4};
    return nir->info.stage == MESA_SHADER_FRAGMENT &&
-          nir_shader_intrinsics_pass(nir, fsr_reads_slots, nir_metadata_all, NULL);
+          nir_shader_intrinsics_pass(nir, fsr_reads_root, nir_metadata_all, &range);
+}
+
+/* Whether the root upload must include the rate state after the push
+ * constants: dynamic rate and combiners, the attachment or the slots. */
+bool
+kk_nir_fsr_reads_root(nir_shader *nir)
+{
+   struct fsr_root_range range = {offsetof(struct kk_root_descriptor_table, fsr),
+      offsetof(struct kk_root_descriptor_table, fsr) + sizeof(struct kk_root_fsr)};
+   return nir->info.stage == MESA_SHADER_FRAGMENT &&
+          nir_shader_intrinsics_pass(nir, fsr_reads_root, nir_metadata_all, &range);
 }
