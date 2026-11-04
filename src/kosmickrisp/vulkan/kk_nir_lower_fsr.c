@@ -51,6 +51,7 @@ struct fsr_ctx {
    nir_def *fx, *fy;      /* fragment width and height, float */
    /* Neighbor displacements for the derivative solve. */
    nir_def *dhx, *dhy, *dvx, *dvy, *inv_det;
+   nir_def *use_hd, *use_dv; /* diagonal basis when the H/V pair is singular */
    nir_instr *top_end;    /* last instruction of the setup block */
 };
 
@@ -118,6 +119,9 @@ fsr_derivatives(nir_builder *b, struct fsr_ctx *ctx, nir_def *value,
    nir_def *v = value->bit_size == 32 ? value : nir_f2f32(b, value);
    nir_def *dh = nir_fsub(b, nir_quad_swap_horizontal(b, v), v);
    nir_def *dv = nir_fsub(b, nir_quad_swap_vertical(b, v), v);
+   nir_def *diagonal = nir_fsub(b, nir_quad_swap_diagonal(b, v), v);
+   dh = nir_bcsel(b, ctx->use_dv, diagonal, dh);
+   dv = nir_bcsel(b, ctx->use_hd, diagonal, dv);
    nir_def *gx = nir_fmul(b, nir_fsub(b, nir_fmul(b, dh, ctx->dvy),
                                       nir_fmul(b, dv, ctx->dhy)), ctx->inv_det);
    nir_def *gy = nir_fmul(b, nir_fsub(b, nir_fmul(b, dv, ctx->dhx),
@@ -270,8 +274,30 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
    ctx->dhy = nir_fsub(b, nir_quad_swap_horizontal(b, ctx->vy), ctx->vy);
    ctx->dvx = nir_fsub(b, nir_quad_swap_vertical(b, ctx->vx), ctx->vx);
    ctx->dvy = nir_fsub(b, nir_quad_swap_vertical(b, ctx->vy), ctx->vy);
-   ctx->inv_det = nir_frcp(b, nir_fsub(b, nir_fmul(b, ctx->dhx, ctx->dvy),
-                                       nir_fmul(b, ctx->dhy, ctx->dvx)));
+   nir_def *det = nir_fsub(b, nir_fmul(b, ctx->dhx, ctx->dvy),
+                              nir_fmul(b, ctx->dhy, ctx->dvx));
+   nir_def *ddx = nir_fsub(b, nir_quad_swap_diagonal(b, ctx->vx), ctx->vx);
+   nir_def *ddy = nir_fsub(b, nir_quad_swap_diagonal(b, ctx->vy), ctx->vy);
+   nir_def *det_hd = nir_fsub(b, nir_fmul(b, ctx->dhx, ddy),
+                                 nir_fmul(b, ctx->dhy, ddx));
+   nir_def *det_dv = nir_fsub(b, nir_fmul(b, ddx, ctx->dvy),
+                                 nir_fmul(b, ddy, ctx->dvx));
+   nir_def *singular = nir_feq_imm(b, det, 0.0f);
+   ctx->use_hd = nir_iand(b, singular, nir_fneu_imm(b, det_hd, 0.0f));
+   ctx->use_dv = nir_iand(b, nir_iand(b, singular, nir_inot(b, ctx->use_hd)),
+                            nir_fneu_imm(b, det_dv, 0.0f));
+   ctx->dhx = nir_bcsel(b, ctx->use_dv, ddx, ctx->dhx);
+   ctx->dhy = nir_bcsel(b, ctx->use_dv, ddy, ctx->dhy);
+   ctx->dvx = nir_bcsel(b, ctx->use_hd, ddx, ctx->dvx);
+   ctx->dvy = nir_bcsel(b, ctx->use_hd, ddy, ctx->dvy);
+   det = nir_bcsel(b, ctx->use_hd, det_hd,
+                    nir_bcsel(b, ctx->use_dv, det_dv, det));
+   /* If all four positions are collinear, a 2D gradient is undefined.
+    * Keep the solve finite rather than passing infinity to texture LOD. */
+   nir_def *nonzero = nir_fneu_imm(b, det, 0.0f);
+   ctx->inv_det = nir_bcsel(b, nonzero,
+      nir_frcp(b, nir_bcsel(b, nonzero, det, nir_imm_float(b, 1.0f))),
+      nir_imm_float(b, 0.0f));
 
    if (ctx->sample_group) {
       ctx->fw = fsr_combine(b, ctx, fwv, wh, wv);
@@ -715,19 +741,16 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
     * otherwise the helper flags decide, as without the handshake. */
    nir_def *pres = nir_load_var(b, present);
    nir_def *covered = nir_load_var(b, ctx->covered_var);
-   /* Lanes that do not run the sample read garbage, so their view of the
-    * fragment can differ from the executing lanes' view. Lane positions,
-    * and therefore the derivative system, must agree across the quad: a
-    * lane takes a view only when it is marked, contains its reporter, lies
-    * within the helper coverage and every lane it names reports the same
-    * view. The executing lanes' identical views always pass. A lane whose
-    * own view fails adopts the largest passing view of a neighbor (the
-    * lowest position on ties), otherwise the helper coverage. */
+   /* Each presence word describes one fragment, not the whole quad.
+    * Union all mutually verified reports so that helpers and the other
+    * fragment of a 2x1/1x2 quad use the same coverage. Choosing one best
+    * neighboring report can drop their own fragment and collapse positions. */
    nir_def *rep = nir_bcsel(b, nir_ine_imm(b, nir_iand(b, pres, own), 0),
                             nir_ior_imm(b, nir_iand_imm(b, pres, 0xf), 0x10), nir_imm_int(b, 0));
    nir_def *r[4] = {rep, nir_quad_swap_horizontal(b, rep), nir_quad_swap_vertical(b, rep),
                     nir_quad_swap_diagonal(b, rep)};
-   nir_def *ok[4], *score[4];
+   nir_def *ok[4];
+   nir_def *quad_covered = nir_imm_int(b, 0);
    for (unsigned j = 0; j < 4; ++j) {
       /* r[j] comes from quad position p ^ j; ctx->bits[j] is its bit. */
       nir_def *valid = nir_iand(b, nir_ine_imm(b, nir_iand_imm(b, r[j], 0x10), 0),
@@ -740,20 +763,12 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
          agree = nir_iand(b, agree, nir_ior(b, nir_inot(b, named), nir_ieq(b, r[k], r[j])));
       }
       ok[j] = nir_iand(b, valid, agree);
-      nir_def *pos = nir_ixor(b, ctx->p, nir_imm_int(b, j));
-      score[j] = nir_bcsel(b, ok[j],
-         nir_iadd_imm(b, nir_isub(b, nir_imul_imm(b, nir_bit_count(b, nir_iand_imm(b, r[j], 0xf)), 4), pos), 4),
-         nir_imm_int(b, 0));
-   }
-   nir_def *best = covered, *best_score = nir_imm_int(b, 0);
-   for (unsigned j = 1; j < 4; ++j) {
-      nir_def *better = nir_ult(b, best_score, score[j]);
-      best = nir_bcsel(b, better, nir_iand_imm(b, r[j], 0xf), best);
-      best_score = nir_umax(b, best_score, score[j]);
+      quad_covered = nir_ior(b, quad_covered,
+         nir_bcsel(b, ok[j], nir_iand_imm(b, r[j], 0xf), nir_imm_int(b, 0)));
    }
    nir_def *known = ok[0];
    nir_store_var(b, ctx->covered_var,
-                 nir_bcsel(b, known, nir_iand_imm(b, pres, 0xf), best), 1);
+                 nir_bcsel(b, nir_ine_imm(b, quad_covered, 0), quad_covered, covered), 1);
 
    /* After the setup: the sample invocation that holds the claiming lane
     * runs the side effects through its real lane. A lane without its own
