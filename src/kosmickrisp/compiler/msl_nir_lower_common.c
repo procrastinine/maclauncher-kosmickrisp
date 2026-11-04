@@ -778,6 +778,72 @@ msl_nir_lower_clip_cull_distance(nir_shader *nir, unsigned num_cull_distances)
       NIR_PASS(_, nir, msl_nir_lower_clip_cull_distance_vs);
 }
 
+/* Metal declares each varying slot as one typed vector shared by the last
+ * vertex stage and the fragment stage, but varying linking packs flat 16-bit
+ * and 32-bit components into the same slot. User varyings therefore cross the
+ * interface as 32-bit values: the last vertex stage widens what it stores and
+ * reads back, and the fragment stage narrows what it loads. */
+static bool
+widen_varying(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   const bool fragment = b->shader->info.stage == MESA_SHADER_FRAGMENT;
+   bool store = false;
+   switch (intr->intrinsic) {
+   case nir_intrinsic_load_input:
+   case nir_intrinsic_load_interpolated_input:
+   case nir_intrinsic_load_per_primitive_input:
+      if (!fragment)
+         return false;
+      break;
+   case nir_intrinsic_store_output:
+   case nir_intrinsic_store_per_vertex_output:
+   case nir_intrinsic_store_per_primitive_output:
+      if (fragment)
+         return false;
+      store = true;
+      break;
+   case nir_intrinsic_load_output:
+   case nir_intrinsic_load_per_vertex_output:
+   case nir_intrinsic_load_per_primitive_output:
+      if (fragment)
+         return false;
+      break;
+   default:
+      return false;
+   }
+   nir_io_semantics io = nir_intrinsic_io_semantics(intr);
+   if (io.location < VARYING_SLOT_VAR0 || io.location > VARYING_SLOT_VAR31)
+      return false;
+   if (store) {
+      nir_def *value = intr->src[0].ssa;
+      if (value->bit_size != 16)
+         return false;
+      nir_alu_type type = nir_intrinsic_src_type(intr);
+      nir_alu_type wide = nir_alu_type_get_base_type(type) | 32;
+      b->cursor = nir_before_instr(&intr->instr);
+      nir_src_rewrite(&intr->src[0],
+                      nir_type_convert(b, value, type, wide, nir_rounding_mode_undef));
+      nir_intrinsic_set_src_type(intr, wide);
+   } else {
+      if (intr->def.bit_size != 16)
+         return false;
+      nir_alu_type type = nir_intrinsic_dest_type(intr);
+      nir_alu_type wide = nir_alu_type_get_base_type(type) | 32;
+      intr->def.bit_size = 32;
+      nir_intrinsic_set_dest_type(intr, wide);
+      b->cursor = nir_after_instr(&intr->instr);
+      nir_def *narrow = nir_type_convert(b, &intr->def, wide, type, nir_rounding_mode_undef);
+      nir_def_rewrite_uses_after(&intr->def, narrow);
+   }
+   return true;
+}
+
+bool
+msl_nir_widen_16bit_varyings(nir_shader *nir)
+{
+   return nir_shader_intrinsics_pass(nir, widen_varying, nir_metadata_control_flow, NULL);
+}
+
 static bool
 lower_instance_id(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
 {

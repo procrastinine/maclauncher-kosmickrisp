@@ -3373,8 +3373,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    mesa_shader_stage layer_producer = MESA_SHADER_NONE;
    mesa_shader_stage cull_producer = MESA_SHADER_NONE;
    bool cull_distance = false;
+   bool mesh_interface = false;
    for (uint32_t i = 0; i < shader_count; ++i) {
       mesa_shader_stage stage = infos[i].stage;
+      mesh_interface |= stage == MESA_SHADER_MESH;
       if ((stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_TESS_EVAL ||
            stage == MESA_SHADER_GEOMETRY || stage == MESA_SHADER_MESH) &&
           (cull_producer == MESA_SHADER_NONE || stage > cull_producer)) {
@@ -3502,6 +3504,11 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
                    info->set_layout_count, info->set_layouts, state, features, info, NULL, depth_bounds,
                    primitive_rate_output, fsr_dual);
+      /* Keep packed flat Mesh slots uniformly 32-bit before the linker
+       * combines components. Metal gives each user slot one vector type. */
+      if (mesh_interface && (nir->info.stage == MESA_SHADER_MESH ||
+                             nir->info.stage == MESA_SHADER_FRAGMENT))
+         NIR_PASS(_, nir, msl_nir_widen_16bit_varyings);
       if (fsr_dual && nir->info.stage == MESA_SHADER_FRAGMENT) {
          coarse_fs = nir_shader_clone(NULL, nir);
          if (!kk_lower_fs_rate(dev, coarse_fs, state, true)) {
