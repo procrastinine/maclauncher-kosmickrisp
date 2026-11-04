@@ -90,9 +90,9 @@ kk_copy_address_image(VkCommandBuffer commandBuffer,
                 * internal dependency, including when the caller uses a queue
                 * whose public capability is transfer only. */
                if (!to_image)
-                  mtl_barrier_after_encoder_stages(cs_get_compute(cmd),
+                  KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, cs_get_compute(cmd),
                      MTL_STAGE_DISPATCH | MTL_STAGE_BLIT,
-                     MTL_STAGE_DISPATCH | MTL_STAGE_BLIT);
+                     MTL_STAGE_DISPATCH | MTL_STAGE_BLIT, MTL_VISIBILITY_RESOURCE_ALIAS);
                for (uint32_t row = 0; row < count; ++row) {
                   const VkDeviceAddressRangeKHR address = {
                      .address = region->addressRange.address +
@@ -119,9 +119,9 @@ kk_copy_address_image(VkCommandBuffer commandBuffer,
                   kk_CmdCopyMemoryKHR(commandBuffer, &copy);
                }
                if (to_image) {
-                  mtl_barrier_after_encoder_stages(cs_get_compute(cmd),
+                  KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, cs_get_compute(cmd),
                      MTL_STAGE_DISPATCH | MTL_STAGE_BLIT,
-                     MTL_STAGE_DISPATCH | MTL_STAGE_BLIT);
+                     MTL_STAGE_DISPATCH | MTL_STAGE_BLIT, MTL_VISIBILITY_RESOURCE_ALIAS);
                   const VkCopyBufferToImageInfo2 copy = {
                      .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
                      .srcBuffer = staging,

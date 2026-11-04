@@ -1223,8 +1223,8 @@ kk_heap(struct kk_cmd_buffer *cmd)
       }
 
       /* Ensure heap is set to 0 before we allocate anything. */
-      mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
-                                       MTL_STAGE_DISPATCH);
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
 
       *uses_heap = true;
    }
@@ -2530,8 +2530,8 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
          cmd, vs, vs->pipeline.gfx.pre_render[0]);
       if (!pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
       struct mtl_size local_size = {KK_POLY_WG_SIZE, 1, 1};
-      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
-                                       MTL_STAGE_DISPATCH);
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
       mtl_compute_set_pipeline_state(enc, pipeline);
       kk_dispatch_compute(enc, grid_vs, local_size);
    }
@@ -2544,8 +2544,8 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
        * empty data. We set restart to true to avoid unroll. */
       if (grid_tcs.mode == KK_GRID_DIRECT && grid_tcs.size.x == 0u)
          return (struct kk_draw_data){.grid = kk_grid_1d(0u)};
-      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
-                                       MTL_STAGE_DISPATCH);
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
       mtl_compute_set_pipeline_state(enc, pipeline);
       kk_dispatch_compute(enc, grid_tcs, local_size);
    }
@@ -2698,8 +2698,8 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
    struct mtl_size local_size = {KK_POLY_WG_SIZE, 1, 1};
    mtl_compute_encoder *enc = cs_get_compute(cmd);
 
-   mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
-                                    MTL_STAGE_DISPATCH);
+   KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH,
+                                    MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
    mtl_compute_pipeline_state *producer_pipeline = kk_cmd_sampler_compute_pipeline(
       cmd, vs, vs->pipeline.gfx.pre_render[pre_render_count - 2u]);
    if (!producer_pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
@@ -2718,7 +2718,7 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
          return (struct kk_draw_data){.grid = kk_grid_1d(0)};
       }
       if (vs->info.gs_aux_mask & BITFIELD_BIT(0)) {
-         mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
+         KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
          mtl_compute_pipeline_state *count_pipeline = kk_cmd_sampler_compute_pipeline(
             cmd, vs, vs->pipeline.gfx.gs_aux[0]);
          if (!count_pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
@@ -2732,13 +2732,13 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
          mtl_compute_pipeline_state *pipeline = kk_pre_gs_pipeline(cmd, vs, statistics);
          if (!pipeline)
             return (struct kk_draw_data){.grid = kk_grid_1d(0u)};
-         mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
+         KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
          mtl_compute_set_pipeline_state(enc, pipeline);
          kk_dispatch_compute(enc, kk_grid_1d(1), (struct mtl_size){1, 1, 1});
       }
    }
-   mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
-                                    MTL_STAGE_DISPATCH);
+   KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH,
+                                    MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
    mtl_compute_pipeline_state *geometry_pipeline = kk_cmd_sampler_compute_pipeline(
       cmd, vs, vs->pipeline.gfx.pre_render[pre_render_count - 1u]);
    if (!geometry_pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};

@@ -487,7 +487,7 @@ apply_pending_barrier(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
    if (b->src && b->dst) {
       /* A consumer covers this encoder and later encoders, while its source
        * scope contains only passes closed before this encoder began. */
-      mtl_barrier_after_queue_stages_with_options(encoder, b->src, b->dst,
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_queue_stages_with_options, encoder, b->src, b->dst,
                                                  b->visibility);
    }
    cmd->pending_barrier = (struct kk_barrier_scope){0};
@@ -518,7 +518,8 @@ cs_start_render(struct kk_cmd_buffer *cmd)
    if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL)) {
       kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_RENDER_ENCODER_BEGIN, 0);
       kk_perf_render_begin(kk_cmd_buffer_device(cmd)->perf, cmd->metal.render,
-                            state->render_pass_descriptor, &state->render.area);
+                            state->render_pass_descriptor, &state->render.area,
+                            cmd->metal.cmd_buf);
    }
 
    apply_pending_barrier(cmd, cmd->metal.render);
@@ -619,7 +620,7 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
          occlusion || resolves ? MTL_VISIBILITY_RESOURCE_ALIAS
                                : MTL_VISIBILITY_DEVICE;
       if (stages)
-         mtl_barrier_after_stages_with_options(encoder, stages, dst,
+         KK_CMD_BARRIER(cmd, mtl_barrier_after_stages_with_options, encoder, stages, dst,
                                                visibility);
    }
    cmd->closed_encoder_stages |= stages;
@@ -933,13 +934,13 @@ emit_scoped_barrier(struct kk_cmd_buffer *cmd, struct kk_barrier_scope scope)
     * covers earlier passes for this and subsequent encoders. The intra-pass
     * barrier below handles current-pass producers and consumers. */
    if (src)
-      mtl_barrier_after_stages_with_options(encoder, src, scope.dst,
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_stages_with_options, encoder, src, scope.dst,
                                            scope.visibility);
    if (scope.src & cmd->closed_encoder_stages)
-      mtl_barrier_after_queue_stages_with_options(encoder, scope.src, scope.dst,
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_queue_stages_with_options, encoder, scope.src, scope.dst,
                                                  scope.visibility);
    if (src && dst)
-      mtl_barrier_after_encoder_stages_with_options(encoder, src, dst,
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder, src, dst,
                                                     scope.visibility);
 }
 
@@ -1437,8 +1438,8 @@ kk_dispatch_precompiled_shader(struct kk_cmd_buffer *cmd, struct kk_grid grid,
 {
    KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_STATE, state);
    mtl_compute_encoder *encoder = cs_get_compute(cmd);
-   mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
-                                    MTL_STAGE_DISPATCH);
+   KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder, MTL_STAGE_DISPATCH,
+                                    MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
 
    struct kk_ptr data_gpu = kk_pool_upload(cmd, data, data_size, 8u);
    if (unlikely(!data_gpu.gpu))
@@ -1463,8 +1464,8 @@ kk_dispatch_precompiled_shader(struct kk_cmd_buffer *cmd, struct kk_grid grid,
          mtl_dispatch_threadgroups_with_indirect_buffer(encoder, grid.addr,
                                                         local_size);
    }
-   mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
-                                    MTL_STAGE_DISPATCH);
+   KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder, MTL_STAGE_DISPATCH,
+                                    MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
 
    /* Rebind the existing root. */
    mtl_set_address(cmd->argument_table, cmd->state.root_addr, KK_ARGUMENT_ROOT);
@@ -1713,9 +1714,9 @@ kk_CmdWriteMarkerToMemoryAMD(VkCommandBuffer commandBuffer,
     * we need the barrier. If we are mid render, we will queue it for when it is
     * closed. */
    if (cmd_buffer->metal.compute) {
-      mtl_barrier_after_encoder_stages(cmd_buffer->metal.compute,
+      KK_CMD_BARRIER(cmd_buffer, mtl_barrier_after_encoder_stages_with_options, cmd_buffer->metal.compute,
                                        MTL_STAGE_DISPATCH | MTL_STAGE_BLIT,
-                                       MTL_STAGE_DISPATCH | MTL_STAGE_BLIT);
+                                       MTL_STAGE_DISPATCH | MTL_STAGE_BLIT, MTL_VISIBILITY_RESOURCE_ALIAS);
    }
 
    write.value = pInfo->marker;

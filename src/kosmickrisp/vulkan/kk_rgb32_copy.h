@@ -64,20 +64,20 @@ kk_copy_rgb32_buffer_image(struct kk_cmd_buffer *cmd, struct kk_buffer *buffer,
             libkk_rgb32_copy(cmd, kk_grid_2d(width, chunk_rows), false,
                              packed, staging.gpu, row_B, width, chunk_rows,
                              true, alpha);
-            mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
-                                             MTL_STAGE_BLIT);
+            KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder, MTL_STAGE_DISPATCH,
+                                             MTL_STAGE_BLIT, MTL_VISIBILITY_RESOURCE_ALIAS);
             mtl_copy_from_buffer_to_texture(encoder, &copy);
-            mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_BLIT,
-                                             MTL_STAGE_DISPATCH);
+            KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder, MTL_STAGE_BLIT,
+                                             MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
          } else {
             mtl_copy_from_texture_to_buffer(encoder, &copy);
-            mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_BLIT,
-                                             MTL_STAGE_DISPATCH);
+            KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder, MTL_STAGE_BLIT,
+                                             MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
             libkk_rgb32_copy(cmd, kk_grid_2d(width, chunk_rows), false,
                              packed, staging.gpu, row_B, width, chunk_rows,
                              false, alpha);
-            mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
-                                             MTL_STAGE_BLIT);
+            KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder, MTL_STAGE_DISPATCH,
+                                             MTL_STAGE_BLIT, MTL_VISIBILITY_RESOURCE_ALIAS);
          }
       }
    }

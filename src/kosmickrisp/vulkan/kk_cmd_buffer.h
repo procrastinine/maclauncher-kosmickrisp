@@ -11,6 +11,7 @@
 #include "poly/geometry.h"
 
 #include "kk_private.h"
+#include "kk_perf.h"
 
 #include "kk_descriptor_set.h"
 #include "kk_image.h"

@@ -172,10 +172,15 @@ kk_interlock_render_batch(struct kk_interlock_draw *p, unsigned program,
       mtl_new_render_command_encoder_with_descriptor(p->command, pass);
    if (unlikely(p->device->perf != NULL))
       /* This internal tiled pass is not an application rendering scope. */
-      kk_perf_render_begin(p->device->perf, enc, pass, NULL);
+      kk_perf_render_begin(p->device->perf, enc, pass, NULL, p->command);
    mtl_release(pass);
    mtl_barrier_after_queue_stages(enc, MTL_STAGE_ALL,
       MTL_STAGE_VERTEX | MTL_STAGE_FRAGMENT);
+   if (unlikely(p->device->perf != NULL))
+      kk_perf_barrier(p->device->perf, p->command, enc,
+         "mtl_barrier_after_queue_stages_with_options", MTL_STAGE_ALL,
+         MTL_STAGE_VERTEX | MTL_STAGE_FRAGMENT, MTL_VISIBILITY_RESOURCE_ALIAS,
+         __func__, __LINE__);
    mtl_render_set_pipeline_state(enc, p->pipeline[program]);
    mtl_render_set_argument_table(enc, p->arguments,
       MTL_RENDER_STAGE_VERTEX | MTL_RENDER_STAGE_FRAGMENT);
@@ -295,6 +300,11 @@ kk_interlock_draw_step(struct kk_interlock_draw *p)
       if (p->captured_inputs ? p->first_capture : !p->primitive) {
          mtl_compute_encoder *compute = mtl_new_compute_command_encoder(p->command);
          mtl_barrier_after_queue_stages(compute, MTL_STAGE_ALL, MTL_STAGE_DISPATCH);
+         if (unlikely(p->device->perf != NULL))
+            kk_perf_barrier(p->device->perf, p->command, compute,
+               "mtl_barrier_after_queue_stages_with_options", MTL_STAGE_ALL,
+               MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS,
+               __func__, __LINE__);
          mtl_compute_set_pipeline_state(compute, p->load);
          mtl_compute_set_argument_table(compute, p->arguments);
          mtl_dispatch_threads(compute,

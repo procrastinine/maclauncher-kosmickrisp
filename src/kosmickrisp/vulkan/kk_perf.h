@@ -10,6 +10,7 @@ struct vk_device;
 struct vk_queue_submit;
 struct kk_perf;
 struct kk_image;
+struct kk_cmd_buffer;
 struct VkImageCreateInfo;
 struct VkRect2D;
 enum kk_perf_metric {
@@ -82,10 +83,28 @@ void kk_perf_cache_lookup(struct vk_device *, bool hit);
 /* Physical native pass counters are CPU recording observations, not GPU
  * presentation counts. No bridge snapshot is made when tracking is disabled. */
 void kk_perf_render_begin(struct kk_perf *, const void *encoder, void *descriptor,
-                           const struct VkRect2D *render_area);
+                           const struct VkRect2D *render_area, const void *command);
 void kk_perf_render_stores(struct kk_perf *, const void *encoder,
                             const uint32_t stores[10]);
 void kk_perf_render_end(struct kk_perf *, const void *encoder);
+/* Opt-in native barrier trace. Frame IDs are CPU present-boundary observations,
+ * not measured GPU frame IDs. Native calls retain their exact arguments. */
+void kk_perf_barrier(struct kk_perf *, const void *command, const void *encoder,
+                     const char *kind, unsigned after, unsigned before,
+                     unsigned visibility, const char *site, unsigned line);
+#define KK_CMD_BARRIER(CMD, CALL, ENCODER, AFTER, BEFORE, VISIBILITY)             \
+   do {                                                                        \
+      struct kk_cmd_buffer *_kk_cmd = (CMD);                                   \
+      void *_kk_encoder = (ENCODER);                                           \
+      enum mtl_stages _kk_after = (AFTER), _kk_before = (BEFORE);               \
+      enum mtl_visibility_options _kk_visibility = (VISIBILITY);               \
+      CALL(_kk_encoder, _kk_after, _kk_before, _kk_visibility);                 \
+      struct kk_perf *_kk_perf = kk_cmd_buffer_device(_kk_cmd)->perf;           \
+      if (unlikely(_kk_perf != NULL))                                          \
+         kk_perf_barrier(_kk_perf, _kk_cmd->metal.cmd_buf, _kk_encoder,          \
+                          #CALL, _kk_after, _kk_before, _kk_visibility,          \
+                          __func__, __LINE__);                                 \
+   } while (0)
 void kk_perf_image_create(struct kk_perf *, const struct kk_image *,
                            const struct VkImageCreateInfo *);
 void kk_perf_image_bind(struct kk_perf *, const struct kk_image *, uint32_t plane);

@@ -33,6 +33,8 @@ struct kk_perf_render_pass {
    struct mtl_render_pass_info info;
    VkRect2D area;
    bool area_known;
+   const void *command;
+   uint64_t trace_id;
 };
 struct kk_perf_attachment_stat {
    uint32_t aspect, format, samples, load, store;
@@ -47,10 +49,11 @@ struct kk_perf {
    pthread_mutex_t mutex;
    FILE *log;
    void *metal_compiler;
-   bool close_log, compile_details, submit_details;
+   bool close_log, compile_details, submit_details, barrier_details;
    bool device_features_known;
    bool pipeline_statistics_query, writable_msaa, dynamic_rendering;
    uint64_t compile_sequence, pipeline_sequence, submit_sequence;
+   uint64_t barrier_sequence, render_trace_sequence;
    uint64_t created, interval_start, frames, interval_frames;
    uint64_t frame_interval, time_interval, sequence;
    int64_t pending, submit_pending, compiler_active;
@@ -109,6 +112,8 @@ kk_perf_create(void)
    p->compile_details = details && *details && strcmp(details, "0") && strcmp(details, "false");
    const char *submits = getenv("KK_PERF_TRACKING_SUBMITS");
    p->submit_details = submits && !strcmp(submits, "1");
+   const char *barriers = getenv("KK_PERF_TRACKING_BARRIERS");
+   p->barrier_details = barriers && !strcmp(barriers, "1");
    p->log = stderr;
    const char *path = getenv("KK_PERF_TRACKING_LOG");
    if (path && *path) {
@@ -365,7 +370,7 @@ render_flush_locked(struct kk_perf *p)
 
 void
 kk_perf_render_begin(struct kk_perf *p, const void *encoder, void *descriptor,
-                     const VkRect2D *render_area)
+                     const VkRect2D *render_area, const void *command)
 {
    if (!encoder) {
       pthread_mutex_lock(&p->mutex);
@@ -388,12 +393,55 @@ kk_perf_render_begin(struct kk_perf *p, const void *encoder, void *descriptor,
    }
    if (free_slot == ARRAY_SIZE(p->render_active))
       p->render_dropped_passes++;
-   else
-      p->render_active[free_slot] = (struct kk_perf_render_pass) {
+   else {
+      struct kk_perf_render_pass *pass = &p->render_active[free_slot];
+      *pass = (struct kk_perf_render_pass) {
          .encoder = encoder, .info = info,
          .area = render_area ? *render_area : (VkRect2D){0},
-         .area_known = render_area != NULL,
+         .area_known = render_area != NULL, .command = command,
       };
+      if (p->barrier_details) {
+         pass->trace_id = ++p->render_trace_sequence;
+         fprintf(p->log, "{\"kk_render_pass\":1,\"phase\":\"begin\",\"device\":\"%p\","
+                 "\"pass_id\":%"PRIu64",\"cpu_frame\":%"PRIu64",\"command\":\"%p\","
+                 "\"encoder\":\"%p\",\"target_extent\":[%u,%u],\"attachments\":[",
+                 (void *)p, pass->trace_id, p->frames + 1, command, encoder,
+                 info.width, info.height);
+         bool comma = false;
+         for (unsigned a = 0; a < MTL_RENDER_PASS_INFO_ATTACHMENTS; ++a) {
+            const struct mtl_render_pass_attachment_info *t = &info.attachments[a];
+            if (!t->present) continue;
+            fprintf(p->log, "%s{\"slot\":%u,\"texture\":\"%p\",\"base_texture\":\"%p\","
+                    "\"load\":%u,\"store\":%u}", comma ? "," : "", a,
+                    t->texture, t->base_texture, t->load, t->store);
+            comma = true;
+         }
+         fprintf(p->log, "]}\n");
+      }
+   }
+   pthread_mutex_unlock(&p->mutex);
+}
+
+void
+kk_perf_barrier(struct kk_perf *p, const void *command, const void *encoder,
+                 const char *kind, unsigned after, unsigned before,
+                 unsigned visibility, const char *site, unsigned line)
+{
+   if (!p->barrier_details)
+      return;
+   pthread_mutex_lock(&p->mutex);
+   uint64_t pass_id = 0;
+   for (unsigned i = 0; i < ARRAY_SIZE(p->render_active); ++i)
+      if (p->render_active[i].encoder == encoder) {
+         pass_id = p->render_active[i].trace_id;
+         break;
+      }
+   fprintf(p->log, "{\"kk_barrier\":1,\"device\":\"%p\",\"sequence\":%"PRIu64
+           ",\"cpu_frame\":%"PRIu64",\"command\":\"%p\",\"encoder\":\"%p\","
+           "\"pass_id\":%"PRIu64",\"kind\":\"%s\",\"after_stages\":%u,"
+           "\"before_stages\":%u,\"visibility\":%u,\"site\":\"%s\",\"line\":%u}\n",
+           (void *)p, ++p->barrier_sequence, p->frames + 1, command, encoder,
+           pass_id, kind, after, before, visibility, site, line);
    pthread_mutex_unlock(&p->mutex);
 }
 
@@ -469,6 +517,11 @@ kk_perf_render_end(struct kk_perf *p, const void *encoder)
       if (!samples)
          samples = pass->info.default_samples;
       p->render_samples[render_sample_bucket(samples)]++;
+      if (p->barrier_details)
+         fprintf(p->log, "{\"kk_render_pass\":1,\"phase\":\"end\",\"device\":\"%p\","
+                 "\"pass_id\":%"PRIu64",\"cpu_frame\":%"PRIu64",\"command\":\"%p\","
+                 "\"encoder\":\"%p\"}\n", (void *)p, pass->trace_id,
+                 p->frames + 1, pass->command, encoder);
       pass->encoder = NULL;
       break;
    }

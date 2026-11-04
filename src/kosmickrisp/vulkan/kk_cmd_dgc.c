@@ -456,8 +456,8 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
          kk_dgc_execute_compute(
              cs_get_compute(cmd), icb, p.execution_range,
              compute_pipeline);
-         mtl_barrier_after_encoder_stages(
-             cmd->metal.compute, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
+         KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options,
+             cmd->metal.compute, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
       } else {
          kk_dgc_set_graphics_indirect(cmd, true);
          kk_dgc_flush_graphics(cmd);

@@ -112,12 +112,12 @@ kk_rt_trace(struct kk_cmd_buffer *cmd,const VkStridedDeviceAddressRegionKHR *ray
    /* Internal RT dispatch changes the physical compute PSO. Invalidate the
     * ordinary compute binding cache through its existing encoder helper. */
    mtl_compute_encoder *encoder=cs_get_compute(cmd);
-   mtl_barrier_after_encoder_stages(encoder,MTL_STAGE_DISPATCH,MTL_STAGE_DISPATCH);
+   KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder,MTL_STAGE_DISPATCH,MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
    uint64_t prior_root=cmd->state.root_addr;
    kk_cmd_bind_root_to_argument_table(cmd,args.gpu);
    mtl_compute_set_pipeline_state(encoder,pipeline->native.pipeline);
    mtl_dispatch_threads(encoder,(struct mtl_size){physical,1,1},(struct mtl_size){32,1,1});
-   mtl_barrier_after_encoder_stages(encoder,MTL_STAGE_DISPATCH,MTL_STAGE_DISPATCH);
+   KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder,MTL_STAGE_DISPATCH,MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
    kk_cmd_bind_root_to_argument_table(cmd,prior_root);
 }
 VKAPI_ATTR void VKAPI_CALL

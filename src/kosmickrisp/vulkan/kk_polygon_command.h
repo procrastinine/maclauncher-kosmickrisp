@@ -15,7 +15,7 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    else
       libkk_polygon_capture_setup(cmd, kk_grid_1d(1), true, geometry_params, kk_heap(cmd));
    enc = cs_get_compute(cmd);
-   mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
+   KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
    mtl_compute_pipeline_state *capture_pipeline = kk_cmd_sampler_compute_pipeline(
          cmd, vs, vs->pipeline.gfx.polygon_capture);
       if (!capture_pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
@@ -41,7 +41,7 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
          mtl_compute_pipeline_state *pipeline = kk_pre_gs_pipeline(cmd, vs, statistics);
          if (!pipeline)
             return (struct kk_draw_data){.grid = kk_grid_1d(0u)};
-         mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
+         KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
          mtl_compute_set_pipeline_state(enc, pipeline);
          kk_dispatch_compute(enc, kk_grid_1d(1), (struct mtl_size){1, 1, 1});
       }
@@ -49,7 +49,7 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    uint64_t capture = gfx->polygon_capture;
    if (vs->pipeline.gfx.polygon_xfb) {
       enc = cs_get_compute(cmd);
-      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
       mtl_compute_pipeline_state *xfb_pipeline = kk_cmd_sampler_compute_pipeline(
          cmd, vs, vs->pipeline.gfx.polygon_xfb);
       if (!xfb_pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
