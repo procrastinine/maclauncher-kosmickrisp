@@ -81,6 +81,94 @@ kk_barycentric_shader_info(struct kk_shader *shader,
 
 }
 
+/* Native pre-raster values preserve triangle-list API corner order only on
+ * an ordinary, linked VS/FS pair with static first-vertex provoking. Other
+ * producers and independent stage interfaces keep the shared corner path. */
+static bool
+kk_barycentric_native_per_vertex(uint32_t count, nir_shader **stages,
+                                 const struct vk_graphics_pipeline_state *state,
+                                 struct msl_per_vertex_inputs *inputs)
+{
+   if (count != 2 || stages[0]->info.stage != MESA_SHADER_VERTEX ||
+       stages[1]->info.stage != MESA_SHADER_FRAGMENT || !state || !state->ia ||
+       state->ia->primitive_topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
+       kk_state_strip_fan_or_adjacency(state) || kk_state_provoking_last(state) ||
+       stages[0]->xfb_info)
+      return false;
+
+   memset(inputs, 0, sizeof(*inputs));
+   uint64_t ordinary = 0;
+   nir_foreach_function_impl(impl, stages[1]) nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         bool per_vertex = intr->intrinsic == nir_intrinsic_load_per_vertex_input ||
+                           intr->intrinsic == nir_intrinsic_load_input_vertex;
+         bool flat = intr->intrinsic == nir_intrinsic_load_input ||
+                     intr->intrinsic == nir_intrinsic_load_per_primitive_input;
+         if (!per_vertex && !flat &&
+             intr->intrinsic != nir_intrinsic_load_interpolated_input)
+            continue;
+         unsigned src = flat ? 0 : 1;
+         if (!nir_src_is_const(intr->src[src]))
+            return false;
+         unsigned location = nir_intrinsic_io_semantics(intr).location +
+                             nir_src_as_uint(intr->src[src]);
+         if (location < VARYING_SLOT_VAR0 || location > VARYING_SLOT_VAR31) {
+            if (per_vertex)
+               return false;
+            continue;
+         }
+         if (!per_vertex) {
+            ordinary |= BITFIELD64_BIT(location);
+            continue;
+         }
+         unsigned slot = location - VARYING_SLOT_VAR0;
+         nir_alu_type type = nir_intrinsic_dest_type(intr);
+         if ((type != nir_type_float32 && type != nir_type_int32 &&
+              type != nir_type_uint32 && type != nir_type_float16) ||
+             (inputs->type[slot] && inputs->type[slot] != type))
+            return false;
+         inputs->locations |= BITFIELD64_BIT(location);
+         inputs->type[slot] = type;
+         inputs->components[slot] = MAX2(inputs->components[slot],
+            nir_intrinsic_component(intr) + intr->num_components);
+      }
+   }
+   /* A single Metal input cannot be both vertex_value<T> and an ordinary
+    * interpolant/flat value. Keep mixed aliases on the existing transport. */
+   if (!inputs->locations || (inputs->locations & ordinary))
+      return false;
+   uint64_t written = 0;
+   nir_foreach_function_impl(impl, stages[0]) nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         if (intr->intrinsic != nir_intrinsic_store_output)
+            continue;
+         if (!nir_src_is_const(intr->src[1]))
+            return false;
+         unsigned location = nir_intrinsic_io_semantics(intr).location +
+                             nir_src_as_uint(intr->src[1]);
+         if (!(inputs->locations & BITFIELD64_BIT(location)))
+            continue;
+         unsigned slot = location - VARYING_SLOT_VAR0;
+         if (nir_intrinsic_src_type(intr) != inputs->type[slot])
+            return false;
+         written |= BITFIELD64_BIT(location);
+         /* Match the MSL output declaration, including sparse component
+          * stores. Unwritten components retain Vulkan's undefined value. */
+         unsigned width = nir_intrinsic_component(intr) +
+                          util_last_bit(nir_intrinsic_write_mask(intr));
+         inputs->components[slot] = MAX3(inputs->components[slot], width,
+                                         intr->num_components);
+      }
+   }
+   return written == inputs->locations;
+}
+
 enum kk_barycentric_input_flags {
    KK_BARYCENTRIC_INPUT_PER_VERTEX = 1u << 0,
    KK_BARYCENTRIC_INPUT_FLAT = 1u << 1,

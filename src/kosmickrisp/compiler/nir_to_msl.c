@@ -1407,6 +1407,34 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       P(ctx, ";\n");
       break;
    }
+   case nir_intrinsic_load_input_vertex:
+   case nir_intrinsic_load_per_vertex_input: {
+      unsigned location = nir_intrinsic_io_semantics(instr).location +
+                          nir_src_as_uint(instr->src[1]);
+      unsigned component = nir_intrinsic_component(instr);
+      assert(ctx->per_vertex_inputs && ctx->inputs_info[location].per_vertex);
+      msl_input_name(ctx, location, component);
+      P(ctx, ".get(");
+      if (nir_src_is_const(instr->src[0])) {
+         const char *corner[] = {"first", "second", "third"};
+         P(ctx, "vertex_index::%s", corner[MIN2(nir_src_as_uint(instr->src[0]), 2)]);
+      } else {
+         /* Preserve the emulated path's unsigned clamp to the third corner.
+          * Do not assume the implementation's vertex_index enum values. */
+         src_to_msl(ctx, &instr->src[0]);
+         P(ctx, " == 0u ? vertex_index::first : ");
+         src_to_msl(ctx, &instr->src[0]);
+         P(ctx, " == 1u ? vertex_index::second : vertex_index::third");
+      }
+      P(ctx, ")");
+      if (instr->num_components < msl_input_num_components(ctx, location)) {
+         P(ctx, ".");
+         for (unsigned i = 0; i < instr->num_components; i++)
+            P(ctx, "%c", "xyzw"[component + i]);
+      }
+      P(ctx, ";\n");
+      break;
+   }
    case nir_intrinsic_load_per_primitive_input:
    case nir_intrinsic_load_input: {
       unsigned idx = nir_src_as_uint(instr->src[0u]);
@@ -2851,6 +2879,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    ctx.disabled_workarounds = options->disabled_workarounds;
    ctx.native_sampler_lod_bias = options->native_sampler_lod_bias;
    ctx.native_query_texture_lod = options->native_query_texture_lod;
+   ctx.per_vertex_inputs = options->per_vertex_inputs;
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    msl_interlock_prepare(shader);
    bool fp32_controls_helpers = kk_fp32_controls_lower(&ctx);
@@ -2861,6 +2890,8 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
        shader->info.stage == MESA_SHADER_TESS_CTRL)
       P(&ctx, "#include <metal_compute>\n");
    P(&ctx, "#include <metal_stdlib>\n");
+   if (ctx.per_vertex_inputs && shader->info.stage == MESA_SHADER_FRAGMENT)
+      P(&ctx, "#include <metal_vertex_value>\n");
    if (shader->info.stage == MESA_SHADER_COMPUTE && shader->info.cs.has_cooperative_matrix)
       P(&ctx, "#include <metal_simdgroup_matrix>\n");
    P(&ctx, "using namespace metal;\n");

@@ -166,7 +166,7 @@ Implementation: [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_cmd_dr
 
 Vulkan contract: `VK_KHR_fragment_shader_barycentric`, `VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR.fragmentShaderBarycentric`.
 
-Uses native center barycentrics and shared primitive-corner transport for original per-vertex inputs and off-center interpolation, including geometry adjacency and provoking vertex semantics.
+Uses native center barycentrics. Apple10 and later also use native pre-raster per-vertex values for linked vertex/fragment triangle-list pipelines with static first-vertex provoking, compatible raw types and a native-size interface. Other original per-vertex inputs and off-center coordinates use shared primitive-corner transport, including geometry adjacency and provoking vertex semantics.
 
 Limits and reported properties: `triStripVertexOrderIndependentOfProvokingVertex = false`.
 

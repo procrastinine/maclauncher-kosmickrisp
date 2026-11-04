@@ -1419,6 +1419,7 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    translate_options.disabled_workarounds = pdev->settings.disabled_workarounds;
    translate_options.native_sampler_lod_bias = pdev->info.gpu_apple_family >= 10;
    translate_options.native_query_texture_lod = pdev->info.supports_query_texture_lod;
+   translate_options.per_vertex_inputs = opts ? opts->native_per_vertex : NULL;
    struct kk_mesh_msl_options mesh_options;
    if (nir->info.stage == MESA_SHADER_TASK || nir->info.stage == MESA_SHADER_MESH) {
       mesh_options.queries = opts && opts->mesh_queries;
@@ -3260,8 +3261,17 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       ? nir_shader_clone(NULL, nir_shaders[total_shaders - 1u]) : NULL;
    /* The normal fragment finish gathered current system-value metadata.
     * Classify only now: early preprocessing metadata predates sysval lowering. */
+   struct msl_per_vertex_inputs native_inputs;
+   bool native_per_vertex =
+      (barycentric_inputs & KK_BARYCENTRIC_INPUT_PER_VERTEX) &&
+      pdev->info.gpu_apple_family >= 10 && !pixel_envelope && !polygon_capture &&
+      !poly_layer_replay && !retain_native && !native_pair[0] &&
+      kk_barycentric_native_per_vertex(total_shaders, nir_shaders, state,
+                                       &native_inputs);
    bool force_per_vertex = kk_barycentric_force_per_vertex(
-      shader_count, infos, state, enabled_features, barycentric_inputs);
+      shader_count, infos, state, enabled_features,
+      native_per_vertex ? barycentric_inputs & ~KK_BARYCENTRIC_INPUT_PER_VERTEX
+                        : barycentric_inputs);
    struct kk_per_vertex_map per_vertex_map = {0};
    if (total_shaders >= 2u &&
        nir_shaders[total_shaders - 1u]->info.stage == MESA_SHADER_FRAGMENT &&
@@ -3324,6 +3334,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       .polygon_capture = polygon_capture,
       .polygon_regular = polygon_regular,
       .per_vertex_map = &per_vertex_map,
+      .native_per_vertex = native_per_vertex && !per_vertex_map.active
+         ? &native_inputs : NULL,
       .mesh_queries = features & BITFIELD_BIT(KK_FEAT_MESH_QUERIES),
       .pipeline_statistics = features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS),
       .geometry_reports = features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS),

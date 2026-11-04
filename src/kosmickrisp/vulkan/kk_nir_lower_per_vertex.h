@@ -12,10 +12,8 @@
 extern "C" {
 #endif
 
-/* Metal has no way to read the values of the individual vertices of a
- * primitive in the fragment shader. They are emulated by running the vertex
- * shader for all three corners of the triangle and passing the results as
- * flat varyings.
+/* Where native pre-raster triangle values cannot preserve the interface and
+ * corner ordering, pass the three corners as flat varyings or heap records.
  */
 struct kk_per_vertex_map {
    /* Emulation is active: draws are issued as non-indexed triangle lists with

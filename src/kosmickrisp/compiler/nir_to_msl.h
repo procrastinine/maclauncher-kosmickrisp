@@ -24,11 +24,20 @@ struct kk_mesh_msl_options {
    unsigned flat_heap_offset;
 };
 
+/* Exact linked producer types for native pre-raster triangle attributes.
+ * Retain this interface through independent late store/load shrinking. */
+struct msl_per_vertex_inputs {
+   uint64_t locations;
+   nir_alu_type type[32];
+   uint8_t components[32];
+};
+
 struct nir_to_msl_options {
    void *mem_ctx;
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;
    bool native_query_texture_lod;
+   const struct msl_per_vertex_inputs *per_vertex_inputs;
    /* Output: the emitted source uses a Metal 4.1 operation. */
    bool requires_msl41;
    /* Output: an emitted FP8 matrix load/store consumes the coordinate ramp. */

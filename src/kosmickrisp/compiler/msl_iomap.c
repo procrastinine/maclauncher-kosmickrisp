@@ -266,6 +266,18 @@ fs_input_no_interpolant(struct nir_to_msl_ctx *ctx, uint64_t location)
    }
 }
 
+static void
+fs_input_per_vertex(struct nir_to_msl_ctx *ctx, unsigned location)
+{
+   struct io_slot_info info = ctx->inputs_info[location];
+   P_IND(ctx, "vertex_value<%s%s> ", alu_type_to_string(info.type),
+         vector_suffixes[info.num_components]);
+   varying_slot_name(ctx, location, 0);
+   P(ctx, " ");
+   varying_slot_semantic(ctx, location, 0);
+   P(ctx, ";\n");
+}
+
 /* Generate the struct definition for the fragment shader input argument */
 static void
 fs_input_block(nir_shader *shader, struct nir_to_msl_ctx *ctx)
@@ -286,7 +298,9 @@ fs_input_block(nir_shader *shader, struct nir_to_msl_ctx *ctx)
    ctx->indentlevel++;
    u_foreach_bit64(location, shader->info.inputs_read) {
       struct io_slot_info info = ctx->inputs_info[location];
-      if (info.uses_interpolant)
+      if (info.per_vertex)
+         fs_input_per_vertex(ctx, location);
+      else if (info.uses_interpolant)
          fs_input_interpolant(ctx, location);
       else
          fs_input_no_interpolant(ctx, location);
@@ -386,6 +400,12 @@ msl_nir_gather_io_info(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
          interp_intrin->intrinsic == nir_intrinsic_load_barycentric_at_offset;
       break;
    }
+   case nir_intrinsic_load_input_vertex:
+   case nir_intrinsic_load_per_vertex_input:
+      /* The linked native interface below supplies the complete producer
+       * type even when this intrinsic reads just one component. */
+      assert(ctx->compiler->per_vertex_inputs);
+      break;
    case nir_intrinsic_load_per_primitive_input:
    case nir_intrinsic_load_input: {
       unsigned component = nir_intrinsic_component(intrin);
@@ -460,6 +480,19 @@ msl_gather_io_info(struct nir_to_msl_ctx *ctx,
    };
    nir_shader_intrinsics_pass(ctx->shader, msl_nir_gather_io_info,
                               nir_metadata_all, &gather_ctx);
+   if (ctx->per_vertex_inputs) {
+      /* A vertex_value<T> input must have exactly its producer's T. Late
+       * scalarization/shrinking may change either stage's instructions, but
+       * must not independently shrink their native interface declarations. */
+      u_foreach_bit64(location, ctx->per_vertex_inputs->locations) {
+         unsigned slot = location - VARYING_SLOT_VAR0;
+         struct io_slot_info *info = ctx->shader->info.stage == MESA_SHADER_FRAGMENT
+            ? &info_array_input[location] : &info_array_output[location];
+         info->type = ctx->per_vertex_inputs->type[slot];
+         info->num_components = ctx->per_vertex_inputs->components[slot];
+         info->per_vertex = ctx->shader->info.stage == MESA_SHADER_FRAGMENT;
+      }
+   }
 }
 
 /* Generate all the struct definitions needed for shader I/O */

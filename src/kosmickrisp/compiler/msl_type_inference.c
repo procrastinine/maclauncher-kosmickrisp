@@ -280,6 +280,8 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
                            nir_intrinsic_instr *instr)
 {
    switch (instr->intrinsic) {
+   case nir_intrinsic_load_input_vertex:
+   case nir_intrinsic_load_per_vertex_input:
    case nir_intrinsic_load_per_primitive_input:
    case nir_intrinsic_load_input:
    case nir_intrinsic_load_interpolated_input:
