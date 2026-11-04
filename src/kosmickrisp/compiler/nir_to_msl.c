@@ -2676,6 +2676,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
 
    struct nir_to_msl_ctx ctx = {
       .shader = shader,
+      .interlock = msl_interlock_shader(shader),
       .text = _mesa_string_buffer_create(options->mem_ctx, 1024),
       .disabled_workarounds = options->disabled_workarounds,
       .native_sampler_lod_bias = options->native_sampler_lod_bias,

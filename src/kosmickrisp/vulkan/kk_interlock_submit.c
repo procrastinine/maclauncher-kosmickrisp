@@ -652,6 +652,7 @@ kk_interlock_segments_finish(struct kk_cmd_buffer *cmd)
          kk_cmd_pool_return_cmd_buf(kk_cmd_buffer_pool(cmd), s->commands[i]);
       kk_interlock_segment_release(s);
    }
+   cmd->interlock_segments_tail = NULL;
 }
 
 VkResult
@@ -708,10 +709,11 @@ kk_interlock_split(struct kk_cmd_buffer *cmd, void *data,
    /* Transfer only the ended command buffers at this boundary. Allocators
     * retain the command buffer's normal lifetime and reset path. */
    util_dynarray_clear(&cmd->mesh_command_buffers);
-   struct kk_interlock_segment **link = &cmd->interlock_segments;
-   while (*link)
-      link = &(*link)->next;
-   *link = segment;
+   if (cmd->interlock_segments_tail)
+      cmd->interlock_segments_tail->next = segment;
+   else
+      cmd->interlock_segments = segment;
+   cmd->interlock_segments_tail = segment;
    cmd->metal.cmd_buf = tail;
    mtl_begin_command_buffer(tail, cmd->metal.allocator);
    return VK_SUCCESS;

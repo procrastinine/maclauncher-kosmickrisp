@@ -29,7 +29,7 @@ msl_interlock_prepare(nir_shader *shader)
 static void
 msl_interlock_inputs(struct nir_to_msl_ctx *ctx)
 {
-   if (msl_interlock_shader(ctx->shader))
+   if (ctx->interlock)
       P_IND(ctx, "device atomic_uint *kk_rog [[buffer(%u), raster_order_group(0)]],\n",
             KK_ARGUMENT_INTERLOCK_GUARD);
 }
@@ -37,7 +37,7 @@ msl_interlock_inputs(struct nir_to_msl_ctx *ctx)
 static void
 msl_interlock_locals(struct nir_to_msl_ctx *ctx)
 {
-   if (!msl_interlock_shader(ctx->shader))
+   if (!ctx->interlock)
       return;
    P_IND(ctx, "device atomic_uint *kk_rog_pixel = kk_rog + (((uint(gl_FragCoord.y) & 31u) * 32u + (uint(gl_FragCoord.x) & 31u)) * 32u");
    if (BITSET_TEST(ctx->shader->info.system_values_read, SYSTEM_VALUE_SAMPLE_ID))
@@ -50,7 +50,7 @@ msl_interlock_locals(struct nir_to_msl_ctx *ctx)
 static bool
 msl_interlock_side_effect(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
 {
-   if (!msl_interlock_shader(ctx->shader))
+   if (!ctx->interlock)
       return false;
    switch (instr->intrinsic) {
    case nir_intrinsic_store_global:
@@ -81,7 +81,7 @@ msl_interlock_release(struct nir_to_msl_ctx *ctx, bool fence)
 static bool
 msl_interlock_intrinsic(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
 {
-   if (!msl_interlock_shader(ctx->shader))
+   if (!ctx->interlock)
       return false;
    switch (instr->intrinsic) {
    case nir_intrinsic_begin_invocation_interlock:

@@ -27,6 +27,7 @@ struct nir_to_msl_ctx {
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;
    bool uses_per_draw_data;
+   bool interlock;
    bool mesh_queries;
    uint32_t mesh_retained_vertex_stride, mesh_retained_primitive_stride;
    uint32_t mesh_retained_fields[4][4];
