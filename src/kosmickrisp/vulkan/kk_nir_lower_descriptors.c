@@ -683,6 +683,7 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
    }
 }
 
+#include "../compiler/kk-sampler-params-nir.h"
 #include "kk_sampler_minmax.h"
 #include "kk_sparse_sample_nir.h"
 #include "kk_standard_sparse_3d_sample.h"
@@ -694,6 +695,33 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
           const struct lower_descriptors_ctx *ctx)
 {
    b->cursor = nir_before_instr(&tex->instr);
+
+   /* Old lod-bias queries use the same complete-metadata decoder too. */
+   if (tex->op == nir_texop_lod_bias && !(tex->backend_flags & KK_SAMPLE_METADATA))
+      tex->backend_flags |= KK_SAMPLE_METADATA | KK_SAMPLE_LOWER_NATIVE_BIAS |
+         (KK_SAMPLER_META_BIAS << KK_SAMPLE_METADATA_SHIFT);
+
+   if (tex->op == nir_texop_lod && !(tex->backend_flags & KK_SAMPLE_HELPER)) {
+      nir_def *minimum = kk_sampler_query_metadata(b, tex, KK_SAMPLER_META_MIN_LOD, false);
+      nir_def *maximum = kk_sampler_query_metadata(b, tex, KK_SAMPLER_META_MAX_LOD, false);
+      lower_tex(b, nir_instr_as_tex(nir_def_instr(minimum)), ctx);
+      lower_tex(b, nir_instr_as_tex(nir_def_instr(maximum)), ctx);
+      nir_tex_instr_add_src(tex, nir_tex_src_min_lod, minimum);
+      nir_tex_instr_add_src(tex, nir_tex_src_max_lod_kk, maximum);
+      if (b->shader->info.stage == MESA_SHADER_COMPUTE &&
+          b->shader->info.derivative_group == DERIVATIVE_GROUP_LINEAR) {
+         b->cursor = nir_before_instr(&tex->instr);
+         nir_def *bias = kk_sampler_query_metadata(b, tex, KK_SAMPLER_META_QUERY_BIAS, false);
+         nir_def *mode = kk_sampler_query_metadata(b, tex, KK_SAMPLER_META_MIPMAP, false);
+         lower_tex(b, nir_instr_as_tex(nir_def_instr(bias)), ctx);
+         lower_tex(b, nir_instr_as_tex(nir_def_instr(mode)), ctx);
+         b->cursor = nir_before_instr(&tex->instr);
+         nir_tex_instr_add_src(tex, nir_tex_src_backend1,
+            nir_vec4(b, nir_u2u32(b, nir_f2f16(b, bias)), nir_f2u32(b, mode),
+                     nir_imm_int(b, 0), nir_imm_int(b, 0)));
+      }
+      b->cursor = nir_before_instr(&tex->instr);
+   }
 
    nir_def *texture = nir_steal_tex_src(tex, nir_tex_src_texture_deref);
    nir_def *sampler = nir_steal_tex_src(tex, nir_tex_src_sampler_deref);
@@ -719,6 +747,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       : plane_offset_B;
 
    kk_sample_descriptor(b, tex, sampler, plane_offset_B, ctx);
+   if (tex->backend_flags & KK_SAMPLE_METADATA) return true;
 
    if (tex->sampler_dim == GLSL_SAMPLER_DIM_BUF) {
       nir_def *metadata = load_resource_deref_desc(
@@ -746,17 +775,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
     * the sampler descriptor. There's no spot in the hardware descriptor,
     * plus this saves on precious sampler heap spots.
     */
-   if (tex->op == nir_texop_lod_bias) {
-      unsigned offs =
-         offsetof(struct kk_sampled_image_descriptor, sampler_lod_bias_fp16);
 
-      nir_def *bias = load_resource_deref_desc(
-         b, 1, 16, nir_src_as_deref(nir_src_for_ssa(sampler)),
-         plane_offset_B + offs, ctx);
-
-      nir_def_replace(&tex->def, bias);
-      return true;
-   }
 
    if (tex->op == nir_texop_image_min_lod_agx) {
       assert(tex->dest_type == nir_type_float16 ||
@@ -911,36 +930,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
                             nir_load_sampler_handle_kk(b, index));
    }
 
-   if (tex->op == nir_texop_lod) {
-      nir_def *lod_min = nir_f2f32(
-         b, load_resource_deref_desc(
-               b, 1, 16, nir_src_as_deref(nir_src_for_ssa(sampler)),
-               plane_offset_B + offsetof(struct kk_sampled_image_descriptor,
-                                         sampler_lod_min_fp16),
-               ctx));
-      nir_def *lod_max = nir_f2f32(
-         b, load_resource_deref_desc(
-               b, 1, 16, nir_src_as_deref(nir_src_for_ssa(sampler)),
-               plane_offset_B + offsetof(struct kk_sampled_image_descriptor,
-                                         sampler_lod_max_fp16),
-               ctx));
 
-      nir_tex_instr_add_src(tex, nir_tex_src_min_lod, lod_min);
-      nir_tex_instr_add_src(tex, nir_tex_src_max_lod_kk, lod_max);
-      if (b->shader->info.stage == MESA_SHADER_COMPUTE &&
-          b->shader->info.derivative_group == DERIVATIVE_GROUP_LINEAR) {
-         nir_deref_instr *s = nir_src_as_deref(nir_src_for_ssa(sampler));
-         nir_def *bias = load_resource_deref_desc(b, 1, 16, s,
-            plane_offset_B + offsetof(struct kk_sampled_image_descriptor,
-                                      sampler_query_lod_bias_fp16), ctx);
-         nir_def *mode = load_resource_deref_desc(b, 1, 16, s,
-            plane_offset_B + offsetof(struct kk_sampled_image_descriptor,
-                                      sampler_mipmap_mode), ctx);
-         nir_tex_instr_add_src(tex, nir_tex_src_backend1,
-            nir_vec4(b, nir_u2u32(b, bias), nir_u2u32(b, mode),
-                      nir_imm_int(b, 0), nir_imm_int(b, 0)));
-      }
-   }
 
    return true;
 }

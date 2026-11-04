@@ -25,6 +25,7 @@ struct nir_to_msl_ctx {
    nir_shader *shader;
    struct _mesa_string_buffer *text;
    uint64_t disabled_workarounds;
+   bool native_sampler_lod_bias;
    bool uses_per_draw_data;
    bool mesh_queries;
    uint32_t mesh_retained_vertex_stride, mesh_retained_primitive_stride;

@@ -19,6 +19,7 @@ struct vk_render_pass_state;
 struct nir_to_msl_options {
    void *mem_ctx;
    uint64_t disabled_workarounds;
+   bool native_sampler_lod_bias;
    bool mesh_queries;
    uint32_t *mesh_retained_strides;
    uint32_t *mesh_retained_fields;

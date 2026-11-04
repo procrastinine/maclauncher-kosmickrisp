@@ -813,7 +813,7 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
       NIR_PASS(_, nir, kk_nir_lower_standard_3d_samples, set_layout_count, set_layouts);
 
    NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
-      (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10,
+      features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX),
       features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER));
    NIR_PASS(_, nir, kk_nir_lower_sparse_sample_views, set_layout_count, set_layouts,
       (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10);
@@ -1262,6 +1262,7 @@ kk_compile_msl_options(struct kk_physical_device *pdev, nir_shader *nir,
       ? *opts->msl_custom : (struct nir_to_msl_options){0};
    translate_options.mem_ctx = NULL;
    translate_options.disabled_workarounds = pdev->settings.disabled_workarounds;
+   translate_options.native_sampler_lod_bias = pdev->info.gpu_apple_family >= 10;
    translate_options.mesh_queries = opts && opts->mesh_queries;
    translate_options.mesh_retained_strides = opts ? opts->mesh_retained_strides : NULL;
    translate_options.mesh_retained_fields = opts ? opts->mesh_retained_fields : NULL;

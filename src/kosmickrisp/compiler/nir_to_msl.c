@@ -2678,6 +2678,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       .shader = shader,
       .text = _mesa_string_buffer_create(options->mem_ctx, 1024),
       .disabled_workarounds = options->disabled_workarounds,
+      .native_sampler_lod_bias = options->native_sampler_lod_bias,
       .mesh_queries = options->mesh_queries,
       .mesh_view_mask = options->mesh_view_mask,
       .mesh_view_index_offset = options->mesh_view_index_offset,

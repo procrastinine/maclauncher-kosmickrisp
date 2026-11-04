@@ -219,13 +219,15 @@ msl_lower_robustness2_images(nir_shader *nir)
    return progress;
 }
 
+#include "kk-sampler-params-nir.h"
+
 bool
 msl_lower_textures(nir_shader *nir, bool lower_lod_bias)
 {
    bool progress = false;
    nir_lower_tex_options lower_tex_options = {
       .lower_txp = ~0u,
-      .lower_sampler_lod_bias = lower_lod_bias,
+      .lower_sampler_lod_bias = false,
 
       /* We don't use 1D textures because they are really limited in Metal */
       .lower_1d = true,
@@ -235,9 +237,10 @@ msl_lower_textures(nir_shader *nir, bool lower_lod_bias)
 
       /* Metal does not natively support offsets for texture.read operations */
       .lower_txf_offset = true,
-      .lower_txd_cube_map = true,
+      .lower_txd_cube_map = false,
    };
 
+   NIR_PASS(progress, nir, kk_sampler_lower_bias, lower_lod_bias);
    NIR_PASS(progress, nir, nir_lower_tex, &lower_tex_options);
    return progress;
 }

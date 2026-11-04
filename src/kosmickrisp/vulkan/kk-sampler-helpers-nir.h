@@ -31,7 +31,7 @@ static bool
 kk_sample_mark(nir_builder *b, nir_tex_instr *tex, void *data)
 {
    struct kk_sample_lower_ctx *ctx = data;
-   if (tex->is_shadow || !nir_tex_instr_need_sampler(tex))
+   if ((tex->backend_flags & KK_SAMPLE_METADATA) || !nir_tex_instr_need_sampler(tex))
       return false;
    if (tex->op != nir_texop_tex && tex->op != nir_texop_txb &&
        tex->op != nir_texop_txl && tex->op != nir_texop_txd &&

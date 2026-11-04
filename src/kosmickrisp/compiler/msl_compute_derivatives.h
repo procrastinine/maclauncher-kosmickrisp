@@ -10,6 +10,7 @@
 #ifndef MSL_COMPUTE_DERIVATIVES_H
 #define MSL_COMPUTE_DERIVATIVES_H
 #include "nir.h"
+#include "kk-sampler-helper-flags.h"
 #include "nir_builder.h"
 #include "nir_builtin_builder.h"
 
@@ -94,7 +95,7 @@ kk_compute_derivative_lod(nir_shader *nir)
             if (instr->type != nir_instr_type_tex)
                continue;
             nir_tex_instr *tex = nir_instr_as_tex(instr);
-            if (tex->op != nir_texop_lod)
+            if (tex->op != nir_texop_lod || (tex->backend_flags & KK_SAMPLE_HELPER))
                continue;
             b.cursor = nir_before_instr(instr);
             nir_tex_instr *probe = nir_instr_as_tex(nir_instr_clone(nir, &tex->instr));
@@ -143,6 +144,13 @@ kk_compute_derivative_lod(nir_shader *nir)
       nir_progress(true, impl, nir_metadata_control_flow);
    }
 }
+static bool
+kk_unhandled_cube_gradient(const nir_tex_instr *tex, UNUSED const void *data)
+{
+   return tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE &&
+          !(tex->backend_flags & KK_SAMPLE_HELPER);
+}
+
 static inline void
 kk_lower_compute_derivatives(nir_shader *nir)
 {
@@ -150,7 +158,7 @@ kk_lower_compute_derivatives(nir_shader *nir)
        nir->info.derivative_group != DERIVATIVE_GROUP_LINEAR)
       return;
    kk_compute_derivative_textures(nir);
-   const nir_lower_tex_options cubes = {.lower_txd_cube_map = true};
+   const nir_lower_tex_options cubes = {.lower_txd_cb = kk_unhandled_cube_gradient};
    nir_lower_tex(nir, &cubes);
    kk_compute_derivative_lod(nir);
    nir_shader_intrinsics_pass(nir, kk_lower_compute_derivative,
