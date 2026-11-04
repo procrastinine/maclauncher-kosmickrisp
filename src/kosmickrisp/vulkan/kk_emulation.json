@@ -1165,5 +1165,30 @@
       11
     ],
     "family_cost_note": "On Apple7: split-word image transactions under the existing hashed lock. On Apple8-11: native texture min/max publishes under the same mixed-operation lock. Actual atomics retain CAS retries and fences; shaders without 64-bit image operations are unchanged."
+  },
+  {
+    "name": "shader_module_identifier",
+    "description": "Stable shader-module identifiers and cache-only pipeline creation.",
+    "cost_class": "CPU hashing / pipeline-cache lookup",
+    "cost_note": "Identifier queries use the module bytecode hash. Identifier-only pipeline creation looks up cached shaders and returns PIPELINE_COMPILE_REQUIRED on a cache-only miss. Ordinary shader code and draw execution are unchanged.",
+    "extensions": [
+      "VK_EXT_shader_module_identifier"
+    ],
+    "features": [
+      "shaderModuleIdentifier"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "Enables DXVK and vkd3d-proton identifier-based pipeline-cache probes without supplying full shader modules or adding shader and draw work.",
+    "off_consequence": "Identifier-based cache probes are unavailable; translators retain ordinary shader-module pipeline creation.",
+    "native_from": 7,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: CPU-only stable identifier hashing and existing pipeline-cache lookups; no per-draw or per-sample work."
   }
 ]

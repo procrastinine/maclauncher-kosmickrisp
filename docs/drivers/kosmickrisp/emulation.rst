@@ -390,3 +390,12 @@
      - Only actual 64-bit image operations emit the transaction helpers. Apple7 uses split-word texture reads and writes under the shared lock; Apple8 and later retain native texture min/max publication under that lock. Ordinary shaders and draws are unchanged.
      - On Apple7, VK_EXT_shader_image_atomic_int64 and the R64_UINT and R64_SINT storage image and storage texel buffer formats are unavailable; vkd3d-proton reports sampler feedback tier 0 and no typed-resource 64-bit atomics, so feature level 12_2 is unavailable.
      - ``performance,+image_atomic64``
+   * - ``shader_module_identifier``
+     - Stable shader-module identifiers and cache-only pipeline creation.
+       Controls: ``VK_EXT_shader_module_identifier``, ``shaderModuleIdentifier``.
+     - CPU hashing / pipeline-cache lookup. Identifier queries use the module bytecode hash. Identifier-only pipeline creation looks up cached shaders and returns PIPELINE_COMPILE_REQUIRED on a cache-only miss. Ordinary shader code and draw execution are unchanged.
+     - Apple7 and later; emulated on earlier supported families
+     - On
+     - Enables DXVK and vkd3d-proton identifier-based pipeline-cache probes without supplying full shader modules or adding shader and draw work.
+     - Identifier-based cache probes are unavailable; translators retain ordinary shader-module pipeline creation.
+     - ``performance,+shader_module_identifier``

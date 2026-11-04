@@ -304,3 +304,10 @@
      - On
      - On
      - On Apple7: split-word image transactions under the existing hashed lock. On Apple8-11: native texture min/max publishes under the same mixed-operation lock. Actual atomics retain CAS retries and fences; shaders without 64-bit image operations are unchanged.
+   * - ``shader_module_identifier``
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: CPU-only stable identifier hashing and existing pipeline-cache lookups; no per-draw or per-sample work.

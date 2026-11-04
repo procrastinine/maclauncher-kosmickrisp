@@ -8,16 +8,16 @@
      - Entries selected by the family threshold
    * - ``apple7``
      - Apple7
-     - ``depth_bias_control``
+     - ``depth_bias_control``, ``shader_module_identifier``
    * - ``apple8``
      - Apple8
-     - ``depth_bias_control``, ``image_atomic64``
+     - ``depth_bias_control``, ``image_atomic64``, ``shader_module_identifier``
    * - ``apple9``
      - Apple9
-     - ``depth_bias_control``, ``image_atomic64``
+     - ``depth_bias_control``, ``image_atomic64``, ``shader_module_identifier``
    * - ``apple10``
      - Apple10
-     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
+     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``, ``shader_module_identifier``
    * - ``apple11``
      - Apple11
-     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
+     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``, ``shader_module_identifier``

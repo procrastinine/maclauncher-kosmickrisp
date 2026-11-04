@@ -6,12 +6,12 @@
    * - Running device family
      - Entries using their native path
    * - Apple7
-     - ``depth_bias_control``
+     - ``depth_bias_control``, ``shader_module_identifier``
    * - Apple8
-     - ``depth_bias_control``, ``image_atomic64``
+     - ``depth_bias_control``, ``image_atomic64``, ``shader_module_identifier``
    * - Apple9
-     - ``depth_bias_control``, ``image_atomic64``
+     - ``depth_bias_control``, ``image_atomic64``, ``shader_module_identifier``
    * - Apple10
-     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
+     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``, ``shader_module_identifier``
    * - Apple11
-     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
+     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``, ``shader_module_identifier``
