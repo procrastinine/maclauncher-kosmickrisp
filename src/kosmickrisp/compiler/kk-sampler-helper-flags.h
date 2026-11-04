@@ -25,6 +25,13 @@
 _Static_assert((KK_SAMPLE_NATIVE_DISPATCH & KK_SAMPLE_METADATA_MASK) == 0,
                "native dispatch is independent of metadata selectors");
 
+/* Descriptor-aware dispatch reaches this helper only for emulating samplers.
+ * Its one out-of-line entry owns the inline footprint/border implementation. */
+#define KK_SAMPLE_EMULATION_ONLY (1u << 20)
+_Static_assert((KK_SAMPLE_EMULATION_ONLY &
+                (KK_SAMPLE_METADATA_MASK | KK_SAMPLE_NATIVE_DISPATCH)) == 0,
+               "emulation entry is independent of deferred dispatch metadata");
+
 enum kk_sampler_metadata_value {
    KK_SAMPLER_META_BIAS,
    KK_SAMPLER_META_MIN_LOD,

@@ -194,7 +194,9 @@ kk_sample_native_dispatch(nir_builder *b, nir_tex_instr *tex,
        (flags & (KK_SAMPLE_MIN | KK_SAMPLE_MAX | KK_SAMPLE_BORDER_KNOWN))) {
       tex->backend_flags &= ~(KK_SAMPLE_NATIVE_DISPATCH | KK_SAMPLE_LOWER_NATIVE_BIAS);
       kk_sampler_lower_bias_value(b, tex, lower_native);
-      return kk_sample_mark(b, tex, ctx);
+      bool progress = kk_sample_mark(b, tex, ctx);
+      tex->backend_flags |= KK_SAMPLE_EMULATION_ONLY;
+      return progress;
    }
    b->cursor = nir_before_instr(&tex->instr);
    if (!(flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_MINMAX | KK_SAMPLE_BORDER))) {
@@ -230,6 +232,7 @@ kk_sample_native_dispatch(nir_builder *b, nir_tex_instr *tex,
    nir_tex_instr *slow = kk_sample_clone(b, tex);
    kk_sampler_lower_bias_value(b, slow, lower_native);
    kk_sample_mark(b, slow, ctx);
+   slow->backend_flags |= KK_SAMPLE_EMULATION_ONLY;
    b->cursor = nir_after_instr(&slow->instr);
    nir_push_else(b, NULL);
    nir_def *native = kk_sample_native_value(b, tex, binding, known, &ctx->descriptors);

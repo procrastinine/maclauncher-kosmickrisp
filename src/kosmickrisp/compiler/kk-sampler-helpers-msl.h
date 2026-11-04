@@ -324,6 +324,10 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
                    tex->sampler_dim == GLSL_SAMPLER_DIM_1D ? 1 : 2;
    bool reduction = tex->backend_flags & KK_SAMPLE_MINMAX;
    bool gather = tex->op == nir_texop_tg4;
+   bool emulation_only = tex->backend_flags & KK_SAMPLE_EMULATION_ONLY;
+   /* Keep one call boundary around descriptor-selected emulation. Native
+    * samples use the ordinary emitter; conservative helpers retain theirs. */
+   const char *internal_attribute = emulation_only ? "always_inline" : "noinline";
    if (tex->op == nir_texop_lod) {
       P(ctx, "static __attribute__((noinline)) float2 kk_sample_%u(", id);
       kk_sample_texture_param(ctx, tex);
@@ -371,7 +375,7 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       if (flush && !tex->is_shadow)
          P(ctx, "    value = as_type<%s>(select(as_type<uint4>(value), as_type<uint4>(value) & 0x80000000u, (as_type<uint4>(value) & 0x7f800000u) == 0u));\n", type);
       P(ctx, "    return value;\n}\n");
-      P(ctx, "template<bool Border> static __attribute__((noinline)) %s kk_tap_%u(", type, id);
+      P(ctx, "template<bool Border> static __attribute__((%s)) %s kk_tap_%u(", internal_attribute, type, id);
       kk_sample_texture_param(ctx, tex);
       P(ctx, ", sampler native_sampler, constant SamplerTable &table, constant ushort *metadata, float4 tap_coord, uint tap_level");
       if (tex->is_shadow) P(ctx, ", float compare_value");
@@ -390,7 +394,7 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       }
       kk_sample_border(ctx, tex, type, true);
       P(ctx, "}\n");
-      P(ctx, "template<bool Border> static __attribute__((noinline)) %s kk_level_%u(", type, id);
+      P(ctx, "template<bool Border> static __attribute__((%s)) %s kk_level_%u(", internal_attribute, type, id);
       kk_sample_texture_param(ctx, tex);
       P(ctx, ", sampler native_sampler, constant SamplerTable &table, constant ushort *metadata, float4 coord, uint mip, bool linear_filter, uint mode, float3 texel_offset");
       if (tex->is_shadow) P(ctx, ", float compare_value");
@@ -427,7 +431,7 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, ");\n        if (!linear_filter) return tap;\n        if (mode == 0u) weighted += %s(tap) * weight;\n", accum);
       P(ctx, "        else result = first ? tap : kk_reduce_%u(result, tap, mode);\n        first = false;\n    }\n    return mode == 0u ? %s(weighted) : result;\n}\n", id, type);
 
-      P(ctx, "template<bool Border> static __attribute__((noinline)) %s kk_reduction_%u(", type, id);
+      P(ctx, "template<bool Border> static __attribute__((%s)) %s kk_reduction_%u(", internal_attribute, type, id);
       kk_sample_texture_param(ctx, tex);
       P(ctx, ", sampler native_sampler, constant SamplerTable &table, constant ushort *metadata, float4 coord");
       kk_sample_parameters(ctx, tex, true);
@@ -468,7 +472,7 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
    }
    if (kk_sample_has_footprint(tex) &&
        (tex->backend_flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_SPARSE))) {
-      P(ctx, "template<bool Border> static __attribute__((noinline)) %s kk_virtual_%u(", type, id);
+      P(ctx, "template<bool Border> static __attribute__((%s)) %s kk_virtual_%u(", internal_attribute, type, id);
       kk_sample_texture_param(ctx, tex);
       P(ctx, ", sampler native_sampler, constant SamplerTable &table, constant ushort *metadata, float4 coord");
       kk_sample_parameters(ctx, tex, true);
@@ -527,7 +531,7 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       }
       P(ctx, "}\n");
    }
-   P(ctx, "template<bool Border> static __attribute__((noinline)) %s kk_native_%u(", type, id);
+   P(ctx, "template<bool Border> static __attribute__((%s)) %s kk_native_%u(", internal_attribute, type, id);
    kk_sample_texture_param(ctx, tex);
    P(ctx, ", sampler native_sampler, constant SamplerTable &table, constant ushort *metadata, float4 coord");
    kk_sample_parameters(ctx, tex, true);
@@ -588,10 +592,12 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       }
       P(ctx, "    }\n");
    }
-   P(ctx, "    if (!border) return kk_native_%u<false>(image, native_sampler, table, metadata, coord", id);
-   kk_sample_parameters(ctx, tex, false);
-   if (tex->backend_flags & KK_SAMPLE_NATIVE_CUBE_LOD) P(ctx, ", reduction_lod");
-   P(ctx, ");\n");
+   if (!emulation_only) {
+      P(ctx, "    if (!border) return kk_native_%u<false>(image, native_sampler, table, metadata, coord", id);
+      kk_sample_parameters(ctx, tex, false);
+      if (tex->backend_flags & KK_SAMPLE_NATIVE_CUBE_LOD) P(ctx, ", reduction_lod");
+      P(ctx, ");\n");
+   }
    if (tex->backend_flags & KK_SAMPLE_BORDER) {
       P(ctx, "    return kk_native_%u<true>(image, native_sampler, table, metadata, coord", id);
       kk_sample_parameters(ctx, tex, false);
