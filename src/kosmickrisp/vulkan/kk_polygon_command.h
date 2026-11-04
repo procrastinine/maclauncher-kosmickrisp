@@ -16,7 +16,11 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    mtl_compute_set_pipeline_state(enc, vs->pipeline.gfx.polygon_capture);
    kk_dispatch_compute(enc, grid, local);
 
-   bool queries = false;
+   bool queries = cmd->state.pipeline_statistics_flags &
+      (VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT |
+       VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
+       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
+       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT);
    for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; ++i)
       queries |= gfx->xfb_query[i] || gfx->primitives_query[i];
    if (gs->info.geometry.xfb || queries) {

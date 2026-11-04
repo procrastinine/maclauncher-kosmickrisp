@@ -67,6 +67,7 @@ struct kk_shader_info {
    mesa_shader_stage stage;
    bool uses_per_draw_data;
    bool has_geometry;
+   bool api_geometry;
    bool polygon_point;
    struct poly_gs_capture_info polygon;
    struct poly_gs_info geometry;

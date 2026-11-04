@@ -26,6 +26,7 @@
 
 #include "poly/nir/poly_nir.h"
 #include "poly/geometry.h"
+#include "kk_statistics_nir.h"
 
 #include "vk_blend.h"
 #include "vk_format.h"
@@ -1806,6 +1807,8 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
       emulated_stage |= (nir->xfb_info || kk_polygon_possible(state)) && (nir->info.stage == MESA_SHADER_VERTEX ||
                                          nir->info.stage == MESA_SHADER_TESS_EVAL);
       msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
+      if (nir->info.stage == MESA_SHADER_FRAGMENT)
+         NIR_PASS(_, nir, kk_nir_statistics_fs);
       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
                    info->set_layout_count, info->set_layouts, state, features);
 
@@ -1939,6 +1942,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
                                      local_size_threads, &s->pipeline.cs);
    } else {
       gather_graphics_pipeline_create_info(state, shaders, total_shaders);
+      shaders[0]->info.api_geometry = explicit_geometry;
       result = kk_compile_graphics_pipeline(dev, shaders[0]);
 
       /* Generated Poly and empty-fragment leaves are already copied into the

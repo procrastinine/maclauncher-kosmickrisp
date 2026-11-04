@@ -39,6 +39,7 @@ struct kk_root_descriptor_table {
          uint64_t attrib_base[KK_MAX_ATTRIBS];
          uint32_t attrib_clamps[KK_MAX_ATTRIBS];
 
+         uint64_t fragment_statistic;
          float blend_constant[4];
          float clip_z_coeff;
 
@@ -269,6 +270,9 @@ struct kk_cmd_buffer {
    struct {
       struct kk_graphics_state gfx;
       struct kk_compute_state cs;
+      uint64_t compute_statistic;
+      uint64_t pipeline_statistics;
+      VkQueryPipelineStatisticFlags pipeline_statistics_flags;
       struct kk_conditional_rendering_state cond_render;
       struct kk_shader *shaders[MESA_SHADER_STAGES];
       /* Address of the binding 0 for when compute dispatches modify it.

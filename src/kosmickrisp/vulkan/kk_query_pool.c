@@ -35,6 +35,8 @@ static uint32_t
 kk_reports_per_query(struct kk_query_pool *pool)
 {
    switch (pool->vk.query_type) {
+   case VK_QUERY_TYPE_PIPELINE_STATISTICS:
+      return util_bitcount(pool->vk.pipeline_statistics);
    case VK_QUERY_TYPE_OCCLUSION:
    case VK_QUERY_TYPE_TIMESTAMP:
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT:
@@ -139,6 +141,14 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
    struct kk_query_pool *pool;
    VkResult result = VK_SUCCESS;
 
+   /* Core statistics come from actual draw data, Poly stages, and
+    * fragment execution. Additional statistic families are not exposed. */
+   if (pCreateInfo->queryType == VK_QUERY_TYPE_PIPELINE_STATISTICS &&
+       (pCreateInfo->pipelineStatistics == 0 ||
+        (pCreateInfo->pipelineStatistics &
+         ~0x7ffu)))
+      return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
+
    pool =
       vk_query_pool_create(&dev->vk, pCreateInfo, pAllocator, sizeof(*pool));
    if (!pool)
@@ -151,16 +161,22 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
    /* We place the availability, then index, and then data (if in this buffer).
     * Timestamp pools carry availability in the report itself, so they need no
     * availability array. */
-   uint32_t availability_size = 0;
-   uint32_t index_size = 0;
+   uint64_t availability_size = 0;
+   uint64_t index_size = 0;
    if (!kk_pool_is_ts(pool)) {
-      availability_size = pool->vk.query_count * sizeof(uint32_t);
-      index_size = sizeof(uint16_t) * pool->vk.query_count;
+      availability_size = (uint64_t)pool->vk.query_count * sizeof(uint32_t);
+      if (kk_pool_is_oq(pool))
+         index_size = sizeof(uint16_t) * pool->vk.query_count;
    }
 
-   pool->index_start = align(availability_size, sizeof(struct kk_query_report));
-   uint32_t bo_size =
-      align(pool->index_start + index_size, sizeof(struct kk_query_report));
+   uint64_t index_start = align(availability_size, sizeof(struct kk_query_report));
+   uint64_t bo_size =
+      align(index_start + index_size, sizeof(struct kk_query_report));
+   if (bo_size > UINT32_MAX) {
+      kk_DestroyQueryPool(device, kk_query_pool_to_handle(pool), pAllocator);
+      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   }
+   pool->index_start = index_start;
 
    uint32_t reports_per_query = kk_reports_per_query(pool);
    pool->query_stride = reports_per_query * sizeof(struct kk_query_report);
@@ -170,9 +186,13 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
       pool->query_start = 0;
    } else {
       pool->query_start = bo_size;
-      bo_size += pool->query_stride * pool->vk.query_count;
+      bo_size += (uint64_t)pool->query_stride * pool->vk.query_count;
    }
 
+   if (bo_size > UINT32_MAX) {
+      kk_DestroyQueryPool(device, kk_query_pool_to_handle(pool), pAllocator);
+      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   }
    result = kk_alloc_bo(dev, &dev->vk.base, bo_size, 8, &pool->bo);
    if (result != VK_SUCCESS) {
       kk_DestroyQueryPool(device, kk_query_pool_to_handle(pool), pAllocator);
@@ -423,6 +443,19 @@ kk_begin_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
+   if (pool->vk.query_type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
+      uint64_t addr = kk_query_report_addr(kk_cmd_buffer_device(cmd), pool, query);
+      unsigned mask = pool->vk.pipeline_statistics;
+      cmd->state.pipeline_statistics = addr;
+      cmd->state.pipeline_statistics_flags = mask;
+      cmd->state.compute_statistic = (mask & VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT) ?
+         addr + util_bitcount(mask & (VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT - 1)) * sizeof(uint64_t) : 0;
+      cmd->state.gfx.descriptors.root.draw.fragment_statistic =
+         (mask & VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT) ?
+         addr + util_bitcount(mask & (VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT - 1)) * sizeof(uint64_t) : 0;
+      cmd->state.gfx.descriptors.root_dirty = true;
+      return;
+   }
    if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
       cmd->state.gfx.xfb_query[index] = kk_query_report_addr(kk_cmd_buffer_device(cmd), pool, query);
       return;
@@ -445,7 +478,12 @@ kk_end_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
-   if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
+   if (pool->vk.query_type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
+      cmd->state.compute_statistic = 0;
+      cmd->state.pipeline_statistics_flags = 0;
+      cmd->state.gfx.descriptors.root.draw.fragment_statistic = 0;
+      cmd->state.gfx.descriptors.root_dirty = true;
+   } else if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
       cmd->state.gfx.xfb_query[index] = 0;
    } else if (pool->vk.query_type == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {
       cmd->state.gfx.primitives_query[index] = 0;

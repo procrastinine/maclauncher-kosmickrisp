@@ -38,6 +38,18 @@ kk_flush_compute_state(struct kk_cmd_buffer *cmd)
 }
 
 static void
+kk_count_compute_invocations(struct kk_cmd_buffer *cmd, uint64_t indirect,
+                             struct mtl_size groups, struct mtl_size local)
+{
+   if (!cmd->state.compute_statistic)
+      return;
+
+   libkk_count_compute(cmd, kk_grid_1d(1), false,
+                       cmd->state.compute_statistic, indirect,
+                       groups.x, groups.y, groups.z, local.x, local.y, local.z);
+}
+
+static void
 kk_predicate_compute(struct kk_cmd_buffer *cmd, uint64_t indirect_addr_out,
                      uint64_t indirect_addr_in)
 {
@@ -64,7 +76,7 @@ kk_CmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX,
                    uint32_t groupCountZ)
 {
    /* Metal validation dislikes empty disptaches */
-   if (groupCountX * groupCountY * groupCountZ == 0)
+   if (groupCountX == 0 || groupCountY == 0 || groupCountZ == 0)
       return;
 
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
@@ -95,12 +107,15 @@ kk_CmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX,
       }
 
       kk_predicate_compute(cmd, patched.gpu, patched.gpu);
+      kk_count_compute_invocations(cmd, patched.gpu, (struct mtl_size){0}, local_size);
 
       /* Flush compute state after predication dispatch */
       kk_flush_compute_state(cmd);
       mtl_dispatch_threadgroups_with_indirect_buffer(encoder, patched.gpu,
                                                      local_size);
    } else {
+      kk_count_compute_invocations(cmd, 0,
+         (struct mtl_size){groupCountX, groupCountY, groupCountZ}, local_size);
       struct mtl_size grid_size = {
          .x = groupCountX * local_size.x,
          .y = groupCountY * local_size.y,
@@ -138,12 +153,15 @@ kk_CmdDispatchIndirect2KHR(VkCommandBuffer commandBuffer,
       }
 
       kk_predicate_compute(cmd, patched.gpu, pInfo->addressRange.address);
+      kk_count_compute_invocations(cmd, patched.gpu, (struct mtl_size){0}, local_size);
 
       /* Flush compute state after predication dispatch */
       kk_flush_compute_state(cmd);
       mtl_dispatch_threadgroups_with_indirect_buffer(encoder, patched.gpu,
                                                      local_size);
    } else {
+      kk_count_compute_invocations(cmd, pInfo->addressRange.address,
+                                    (struct mtl_size){0}, local_size);
       kk_flush_compute_state(cmd);
       mtl_dispatch_threadgroups_with_indirect_buffer(
          encoder, pInfo->addressRange.address, local_size);
