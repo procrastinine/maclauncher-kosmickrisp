@@ -155,13 +155,14 @@ load_descriptor(nir_builder *b, unsigned num_components, unsigned bit_size,
          nir_imm_int(b, kk_root_descriptor_offset(dynamic_buffers)), 8);
       nir_def *addr = nir_iadd(b, table, nir_u2u64(b,
          nir_imul_imm(b, index, sizeof(struct kk_buffer_address))));
-      nir_def *desc = load_speculatable(b, num_components, bit_size,
+      nir_def *desc = load_speculatable(b, offset_B ? num_components : 3, bit_size,
          nir_iadd_imm(b, addr, offset_B), offset_B ? 4 : 16);
       if (offset_B) return desc;
       assert(num_components == 4 && bit_size == 32);
 
-      /* We know a priori that the the .w compnent (offset) is zero */
-      return nir_vector_insert_imm(b, desc, nir_imm_int(b, 0), 3);
+      /* The residency word is not part of the bounded address. Keep its
+       * byte offset zero without fetching the unused fourth descriptor word. */
+      return nir_pad_vector_imm_int(b, desc, 0, 4);
    }
 
    case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK: {
@@ -189,18 +190,18 @@ load_descriptor(nir_builder *b, unsigned num_components, unsigned bit_size,
       unsigned desc_align_offset = binding_layout->offset + offset_B;
       desc_align_offset %= desc_align_mul;
 
-      nir_def *desc;
+      const bool buffer_address = offset_B == 0 &&
+         (binding_layout->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+          binding_layout->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
       nir_def *set_addr = load_descriptor_set_addr(b, set, ctx);
-      desc = nir_load_global_constant_offset(
-         b, num_components, bit_size, set_addr, desc_ubo_offset,
+      nir_def *desc = nir_load_global_constant_offset(
+         b, buffer_address ? 3 : num_components, bit_size, set_addr, desc_ubo_offset,
          .align_mul = desc_align_mul, .align_offset = desc_align_offset,
          .access = ACCESS_CAN_SPECULATE);
 
-      if (offset_B == 0 && (binding_layout->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
-                            binding_layout->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)) {
-         /* We know a priori that the the .w compnent (offset) is zero */
+      if (buffer_address) {
          assert(num_components == 4 && bit_size == 32);
-         desc = nir_vector_insert_imm(b, desc, nir_imm_int(b, 0), 3);
+         desc = nir_pad_vector_imm_int(b, desc, 0, 4);
       }
       return desc;
    }
@@ -1113,7 +1114,7 @@ lower_load_ssbo_descriptor(nir_builder *b, nir_intrinsic_instr *intrin,
       nir_def *offset = nir_channel(b, addr, 3);
       /* Mask off the binding stride */
       base = nir_iand_imm(b, base, BITFIELD64_MASK(56));
-      desc = nir_load_global_constant_offset(b, 4, 32, base, offset,
+      desc = nir_load_global_constant_offset(b, 3, 32, base, offset,
                                              .align_mul = 16, .align_offset = 0,
                                              .access = ACCESS_CAN_SPECULATE);
       break;
@@ -1126,7 +1127,7 @@ lower_load_ssbo_descriptor(nir_builder *b, nir_intrinsic_instr *intrin,
       /* Mask off the binding stride */
       base = nir_iand_imm(b, base, BITFIELD64_MASK(56));
       desc = nir_load_global_constant_bounded(
-         b, 4, 32, base, offset, size, .align_mul = 16, .align_offset = 0,
+         b, 3, 32, base, offset, size, .align_mul = 16, .align_offset = 0,
          .access = ACCESS_CAN_SPECULATE);
       break;
    }
@@ -1136,7 +1137,7 @@ lower_load_ssbo_descriptor(nir_builder *b, nir_intrinsic_instr *intrin,
    }
 
    /* The stored fourth word is a residency index, never a byte offset. */
-   desc = nir_vector_insert_imm(b, desc, nir_imm_int(b, 0), 3);
+   desc = nir_pad_vector_imm_int(b, desc, 0, 4);
    nir_def_rewrite_uses(&intrin->def, desc);
 
    return true;
