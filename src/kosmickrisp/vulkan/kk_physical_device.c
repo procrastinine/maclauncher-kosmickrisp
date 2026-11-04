@@ -730,7 +730,7 @@ kk_get_device_properties(
       .shaderSignedZeroInfNanPreserveFloat32 = true,
       .shaderSignedZeroInfNanPreserveFloat64 = false,
       .shaderDenormPreserveFloat16 = true,
-      .shaderDenormPreserveFloat32 = false,
+      .shaderDenormPreserveFloat32 = true,
       .shaderDenormPreserveFloat64 = false,
       .shaderDenormFlushToZeroFloat16 = false,
       .shaderDenormFlushToZeroFloat32 = true,

@@ -276,9 +276,12 @@ alu_fcmp_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,
    ALU_BINOP(op);
 }
 
+#include "kk_fp32_preserve.h"
+
 static void
 alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
 {
+   if (kk_fp32_preserve_alu(ctx, instr)) return;
    switch (instr->op) {
    case nir_op_isign:
       alu_src_to_msl(ctx, instr, 0);
@@ -2249,6 +2252,8 @@ msl_preprocess_nir(struct nir_shader *nir)
    NIR_PASS(_, nir, nir_split_per_member_structs);
    NIR_PASS(_, nir, nir_lower_continue_constructs);
 
+   if (kk_fp32_preserve(nir))
+      NIR_PASS(_, nir, nir_shader_instructions_pass, kk_fp32_preserve_prepare, nir_metadata_control_flow, NULL);
    NIR_PASS(_, nir, nir_lower_frexp);
 
    NIR_PASS(_, nir, nir_lower_vars_to_ssa);
@@ -2526,6 +2531,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       P(&ctx, "#include <metal_compute>\n");
    P(&ctx, "#include <metal_stdlib>\n");
    P(&ctx, "using namespace metal;\n");
+   if (kk_fp32_preserve(shader)) P(&ctx, "%s", kk_fp32_preserve_msl);
 
    msl_emit_constant_data(&ctx, shader);
 
