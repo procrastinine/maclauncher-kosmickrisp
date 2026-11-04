@@ -13,15 +13,71 @@ kk_msrtss_same_view(const struct kk_image_view *a,
           a->vk.layer_count == b->vk.layer_count;
 }
 
+/* A completely classified pass can resolve directly from tile storage. A
+ * LOAD or an encoder break still needs the persistent multisample backing. */
+static bool
+kk_msrtss_tile_safe(struct kk_cmd_buffer *cmd,
+                    const struct kk_image_view *src,
+                    const VkRenderingInfo *info,
+                    const VkRenderingAttachmentInfo *att)
+{
+   const struct vk_features *features = &kk_cmd_buffer_device(cmd)->vk.enabled_features;
+   /* These software consumers can split a VS/FS encoder after pipeline
+    * classification. Their command-owned backing must remain persistent. */
+   if (features->depthBounds || features->fragmentShaderPixelInterlock ||
+       features->fragmentShaderSampleInterlock || features->pipelineFragmentShadingRate ||
+       features->primitiveFragmentShadingRate || features->attachmentFragmentShadingRate)
+      return false;
+   if (!cmd->transient_preflight_done || !cmd->transient_safe ||
+       (info->flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT)) ||
+       (att->loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR &&
+        att->loadOp != VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
+       !(src->vk.aspects & VK_IMAGE_ASPECT_COLOR_BIT) ||
+       info->renderArea.offset.x || info->renderArea.offset.y ||
+       info->renderArea.extent.width != src->vk.extent.width ||
+       info->renderArea.extent.height != src->vk.extent.height)
+      return false;
+   const uint32_t layers = info->viewMask ? util_last_bit(info->viewMask) : info->layerCount;
+   if (layers != src->vk.layer_count ||
+       (info->viewMask && info->viewMask != BITFIELD_MASK(layers)))
+      return false;
+   if (att->storeOp == VK_ATTACHMENT_STORE_OP_STORE &&
+       (vk_format_is_int(src->vk.view_format) ||
+        !kk_get_va_format(vk_format_to_pipe_format(src->vk.view_format))->resolve ||
+        (vk_get_rendering_attachment_flags(att) &
+         VK_RENDERING_ATTACHMENT_RESOLVE_SKIP_TRANSFER_FUNCTION_BIT_KHR)))
+      return false;
+   /* Shared views must retain one backing even when their load operations
+    * disagree. Leave that uncommon alias case on the existing private path. */
+   for (uint32_t i = 0; i < info->colorAttachmentCount; i++) {
+      const VkRenderingAttachmentInfo *other = &info->pColorAttachments[i];
+      VK_FROM_HANDLE(kk_image_view, view, other->imageView);
+      if (view && ((other != att && kk_msrtss_same_view(src, view)) ||
+          view->vk.extent.width != src->vk.extent.width ||
+          view->vk.extent.height != src->vk.extent.height))
+         return false;
+   }
+   const VkRenderingAttachmentInfo *ds[2] = {
+      info->pDepthAttachment, info->pStencilAttachment,
+   };
+   for (uint32_t i = 0; i < 2; i++) {
+      VK_FROM_HANDLE(kk_image_view, view, ds[i] ? ds[i]->imageView : VK_NULL_HANDLE);
+      if (view && (view->vk.extent.width != src->vk.extent.width ||
+                   view->vk.extent.height != src->vk.extent.height))
+         return false;
+   }
+   return true;
+}
+
 static VkResult
 kk_msrtss_image(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
-                VkSampleCountFlagBits samples, VkImageView *view_out)
+                VkSampleCountFlagBits samples, bool transient, VkImageView *view_out)
 {
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    const VkDevice device = kk_device_to_handle(dev);
    util_dynarray_foreach(&cmd->msrtss_images, struct kk_msrtss_image, cached) {
       if (kk_msrtss_same_view(cached->source, src) &&
-          cached->samples == samples && cached->view) {
+          cached->samples == samples && cached->transient == transient && cached->view) {
          *view_out = cached->view;
          return VK_SUCCESS;
       }
@@ -39,12 +95,15 @@ kk_msrtss_image(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
       .arrayLayers = src->vk.layer_count,
       .samples = samples,
       .tiling = VK_IMAGE_TILING_OPTIMAL,
-      .usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+      .usage = (transient ? VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT :
+                             VK_IMAGE_USAGE_SAMPLED_BIT) |
          ((aspects & VK_IMAGE_ASPECT_COLOR_BIT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
                                                : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
    };
-   struct kk_msrtss_image image = {.source = src, .samples = samples};
+   struct kk_msrtss_image image = {
+      .source = src, .samples = samples, .transient = transient,
+   };
    VkResult result = kk_CreateImage(device, &image_info, NULL, &image.image);
    if (result != VK_SUCCESS)
       return result;
@@ -64,6 +123,15 @@ kk_msrtss_image(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
           !(pdev->mem_types[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
          memory_type = i;
          break;
+      }
+   }
+   if (transient) {
+      for (uint32_t i = 0; i < pdev->mem_type_count; i++) {
+         if ((requirements.memoryTypeBits & BITFIELD_BIT(i)) &&
+             (pdev->mem_types[i].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)) {
+            memory_type = i;
+            break;
+         }
       }
    }
    const VkMemoryAllocateInfo allocation = {
@@ -86,8 +154,15 @@ kk_msrtss_image(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
    util_dynarray_append(&cmd->msrtss_images, image);
    if (result != VK_SUCCESS)
       return result;
+   /* Automatic internal sampling usage must not force the tile-only view
+    * into private storage. This view is consumed only by the native pass. */
+   const VkImageViewUsageCreateInfo view_usage = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
+      .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+   };
    const VkImageViewCreateInfo view = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .pNext = transient ? &view_usage : NULL,
       .flags = VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA,
       .image = image.image,
       .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
@@ -149,8 +224,11 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
          }
       }
       if (implicit[i] == VK_NULL_HANDLE) {
+         const VkRenderingAttachmentInfo *original = i < info->colorAttachmentCount
+            ? &info->pColorAttachments[i] : att;
+         const bool transient = kk_msrtss_tile_safe(cmd, src, info, original);
          VkResult result = kk_msrtss_image(cmd, src,
-                                           msrtss->rasterizationSamples, &implicit[i]);
+            msrtss->rasterizationSamples, transient, &implicit[i]);
          if (result != VK_SUCCESS) {
             vk_command_buffer_set_error(&cmd->vk, result);
             return;

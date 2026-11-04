@@ -397,6 +397,7 @@ struct kk_msrtss_image {
    struct kk_image_view *source;
    VkImageView view;
    VkSampleCountFlagBits samples;
+   bool transient;
 };
 
 struct kk_whole_pass_state {
