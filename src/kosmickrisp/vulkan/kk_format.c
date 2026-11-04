@@ -432,6 +432,16 @@ kk_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
          ((VkSubpassResolvePerformanceQueryEXT *)ext)->optimal = VK_FALSE;
          break;
       }
+      case VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_4_KHR: {
+         /* Flags4 is an additional namespace, not a copy of Flags2.
+          * The pinned registry defines no Flags4 bits. */
+         VkFormatProperties4KHR *p = ext;
+         p->linearTilingFeatures = 0;
+         p->optimalTilingFeatures = 0;
+         p->bufferFeatures = 0;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3: {
          VkFormatProperties3 *p = ext;
          p->linearTilingFeatures = linear2;

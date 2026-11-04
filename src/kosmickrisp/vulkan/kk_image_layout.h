@@ -44,7 +44,7 @@ struct kk_image_layout {
 
    enum mtl_texture_usage usage;
 
-   VkImageCreateFlags create_flags;
+   VkImageCreateFlags2KHR create_flags;
 
    /** Texture format */
    struct {
@@ -212,8 +212,8 @@ kk_get_level_size_B(const struct kk_image_layout *layout, unsigned level)
 }
 
 bool kk_image_layout_can_optimize(const struct kk_physical_device *pdev,
-                                  VkImageUsageFlags usage, VkImageTiling tiling,
-                                  VkImageCreateFlags flags,
+                                  VkImageUsageFlags2KHR usage, VkImageTiling tiling,
+                                  VkImageCreateFlags2KHR flags,
                                   enum pipe_format format);
 
 void kk_image_layout_init(const struct kk_device *dev,

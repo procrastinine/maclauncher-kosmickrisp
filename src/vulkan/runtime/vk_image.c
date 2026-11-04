@@ -60,9 +60,9 @@ vk_image_init(struct vk_device *device,
    assert(pCreateInfo->extent.height > 0);
    assert(pCreateInfo->extent.depth > 0);
 
-   if (pCreateInfo->flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)
+   if (create_flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)
       assert(pCreateInfo->imageType == VK_IMAGE_TYPE_2D);
-   if (pCreateInfo->flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT)
+   if (create_flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT)
       assert(pCreateInfo->imageType == VK_IMAGE_TYPE_3D);
 
    image->create_flags = create_flags;

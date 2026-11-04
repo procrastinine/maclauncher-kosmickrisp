@@ -230,6 +230,9 @@ kk_GetPhysicalDeviceImageFormatProperties2(
 {
    VK_FROM_HANDLE(kk_physical_device, pdev, physicalDevice);
 
+   const VkImageCreateFlags2KHR create_flags =
+      vk_image_format_info_2_flags(pImageFormatInfo);
+
    const VkImageUsageFlags2KHR all_usage =
       vk_image_format_info_2_usage(pImageFormatInfo) |
       vk_image_format_info_2_stencil_usage(pImageFormatInfo);
@@ -299,7 +302,7 @@ kk_GetPhysicalDeviceImageFormatProperties2(
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
    /* Don't support sparse residency */
-   if ((pImageFormatInfo->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))
+   if ((create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
    /* From the Vulkan 1.3.279 spec:
@@ -314,7 +317,7 @@ kk_GetPhysicalDeviceImageFormatProperties2(
     *    "If imageType is VK_IMAGE_TYPE_1D, flags must not contain
     *    VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT"
     */
-   if ((pImageFormatInfo->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) &&
+   if ((create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) &&
        (pImageFormatInfo->type == VK_IMAGE_TYPE_1D ||
         pImageFormatInfo->tiling == VK_IMAGE_TILING_LINEAR))
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
@@ -328,8 +331,8 @@ kk_GetPhysicalDeviceImageFormatProperties2(
     *    VK_IMAGE_CREATE_SPARSE_BINDING_BIT, or
     *    VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT"
     */
-   if ((pImageFormatInfo->flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) &&
-       (pImageFormatInfo->flags & (VK_IMAGE_CREATE_SPARSE_ALIASED_BIT |
+   if ((create_flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) &&
+       (create_flags & (VK_IMAGE_CREATE_SPARSE_ALIASED_BIT |
                                    VK_IMAGE_CREATE_SPARSE_BINDING_BIT |
                                    VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)))
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
@@ -376,7 +379,7 @@ kk_GetPhysicalDeviceImageFormatProperties2(
        pImageFormatInfo->type == VK_IMAGE_TYPE_2D && ycbcr_info == NULL &&
        (features & (VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
                     VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
-       !(pImageFormatInfo->flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) &&
+       !(create_flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) &&
        !(all_usage & VK_IMAGE_USAGE_STORAGE_BIT)) {
       enum pipe_format format = vk_format_to_pipe_format(pImageFormatInfo->format);
       const struct kk_va_format *caps = kk_get_va_format(format);
@@ -398,7 +401,7 @@ kk_GetPhysicalDeviceImageFormatProperties2(
     * There is one exception to this below for storage.
     */
    VkImageUsageFlags2KHR view_usage = all_usage;
-   if (pImageFormatInfo->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT)
+   if (create_flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT)
       view_usage = 0;
 
    u_foreach_bit64(b, view_usage) {
@@ -462,16 +465,16 @@ kk_GetPhysicalDeviceImageFormatProperties2(
     *    VK_IMAGE_CREATE_DISJOINT_BIT"
     */
    if (plane_count == 1 &&
-       !(pImageFormatInfo->flags & VK_IMAGE_CREATE_ALIAS_BIT) &&
-       (pImageFormatInfo->flags & VK_IMAGE_CREATE_DISJOINT_BIT))
+       !(create_flags & VK_IMAGE_CREATE_ALIAS_BIT) &&
+       (create_flags & VK_IMAGE_CREATE_DISJOINT_BIT))
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
    if (ycbcr_info &&
-       ((pImageFormatInfo->flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) ||
-        (pImageFormatInfo->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)))
+       ((create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) ||
+        (create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)))
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
-   if ((pImageFormatInfo->flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&
+   if ((create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&
        (all_usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT))
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
@@ -510,11 +513,11 @@ kk_GetPhysicalDeviceImageFormatProperties2(
          /* Optimal device access and identical memory layout if optimization
           * is the same both with and without host transfer usage */
          bool with_host_transfer = kk_image_layout_can_optimize(
-            pdev, all_usage, pImageFormatInfo->tiling, pImageFormatInfo->flags,
+            pdev, all_usage, pImageFormatInfo->tiling, create_flags,
             p_format);
          bool without_host_transfer = kk_image_layout_can_optimize(
             pdev, all_usage & ~VK_IMAGE_USAGE_HOST_TRANSFER_BIT,
-            pImageFormatInfo->tiling, pImageFormatInfo->flags, p_format);
+            pImageFormatInfo->tiling, create_flags, p_format);
          host_props->optimalDeviceAccess =
             with_host_transfer == without_host_transfer;
          host_props->identicalMemoryLayout = host_props->optimalDeviceAccess;
@@ -566,7 +569,7 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
 
    image->plane_count = vk_format_get_plane_count(pCreateInfo->format);
    image->disjoint = image->plane_count > 1 &&
-                     (pCreateInfo->flags & VK_IMAGE_CREATE_DISJOINT_BIT);
+                     (image->vk.create_flags & VK_IMAGE_CREATE_DISJOINT_BIT);
 
    const struct vk_format_ycbcr_info *ycbcr_info =
       vk_format_get_ycbcr_info(pCreateInfo->format);
@@ -596,7 +599,7 @@ kk_image_plane_size_align_B(struct kk_device *dev, const struct kk_image *image,
 
 static void
 kk_image_plane_finish(struct kk_device *dev, struct kk_image_plane *plane,
-                      VkImageCreateFlags create_flags,
+                      VkImageCreateFlags2KHR create_flags,
                       const VkAllocationCallbacks *pAllocator)
 {
    if (plane->mtl_handle != NULL)

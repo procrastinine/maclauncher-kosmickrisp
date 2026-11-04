@@ -19,7 +19,7 @@
 
 static enum mtl_texture_type
 vk_image_to_mtl_texture_type(const struct vk_image *image,
-                             VkImageUsageFlags usage)
+                             VkImageUsageFlags2KHR usage)
 {
    uint32_t array_layers = image->array_layers;
    uint32_t samples = image->samples;
@@ -41,8 +41,8 @@ vk_image_to_mtl_texture_type(const struct vk_image *image,
 }
 
 static enum mtl_texture_usage
-vk_image_usage_flags_to_mtl_texture_usage(VkImageUsageFlags usage_flags,
-                                          VkImageCreateFlags create_flags,
+vk_image_usage_flags_to_mtl_texture_usage(VkImageUsageFlags2KHR usage_flags,
+                                          VkImageCreateFlags2KHR create_flags,
                                           bool supports_atomics)
 {
    enum mtl_texture_usage usage = 0u;
@@ -50,13 +50,13 @@ vk_image_usage_flags_to_mtl_texture_usage(VkImageUsageFlags usage_flags,
    if (usage_flags & VK_IMAGE_USAGE_STORAGE_BIT)
       usage |= MTL_TEXTURE_USAGE_SHADER_WRITE;
 
-   const VkImageUsageFlags shader_read =
+   const VkImageUsageFlags2KHR shader_read =
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
       VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
    if (usage_flags & shader_read)
       usage |= MTL_TEXTURE_USAGE_SHADER_READ;
 
-   const VkImageUsageFlags render_attachment =
+   const VkImageUsageFlags2KHR render_attachment =
       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
       VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -78,8 +78,8 @@ vk_image_usage_flags_to_mtl_texture_usage(VkImageUsageFlags usage_flags,
 
 bool
 kk_image_layout_can_optimize(const struct kk_physical_device *pdev,
-                             VkImageUsageFlags usage, VkImageTiling tiling,
-                             VkImageCreateFlags flags, enum pipe_format format)
+                             VkImageUsageFlags2KHR usage, VkImageTiling tiling,
+                             VkImageCreateFlags2KHR flags, enum pipe_format format)
 {
    /* Can only optimize if tiling is optimal */
    if (tiling != VK_IMAGE_TILING_OPTIMAL)
@@ -266,7 +266,7 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
 {
    const struct kk_physical_device *pdev = kk_device_physical(dev);
    const struct kk_va_format *supported_format = kk_get_va_format(format);
-   VkImageUsageFlags usage = vk_image_usage(image, image->aspects);
+   VkImageUsageFlags2KHR usage = vk_image_usage(image, image->aspects);
    layout->type = vk_image_to_mtl_texture_type(image, usage);
    layout->width_px = image->extent.width / width_scale;
    layout->height_px = image->extent.height / height_scale;
