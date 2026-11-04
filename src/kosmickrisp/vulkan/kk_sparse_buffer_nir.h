@@ -241,6 +241,13 @@ kk_sparse_access_mask(nir_builder *b, nir_def *source, nir_def *address,
                       unsigned size, unsigned components, unsigned write_mask,
                       bool range_lookup)
 {
+   /* Ray-tracing stages place function-temporary variables in their 64-bit
+    * continuation frames, which cannot be passed as the helper's thread
+    * pointer. Their accesses build the same mask inline. */
+   if (mesa_shader_stage_is_rt(b->shader->info.stage))
+      return kk_sparse_access_mask_body(b, source, address, nir_imm_int(b, size),
+                                        nir_imm_int(b, components),
+                                        nir_imm_int(b, write_mask), range_lookup);
    const char *name = "__kk_sparse_buffer_access";
    nir_function *helper = NULL;
    nir_foreach_function(function, b->shader) {
