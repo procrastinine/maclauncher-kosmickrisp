@@ -1888,6 +1888,9 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
             break;
          case SCOPE_QUEUE_FAMILY:
          case SCOPE_DEVICE:
+         /* Shader calls run as visible functions of the calling thread; the
+          * device scope also orders their image and buffer accesses. */
+         case SCOPE_SHADER_CALL:
             P(ctx, "thread_scope::thread_scope_device");
             break;
          default:
