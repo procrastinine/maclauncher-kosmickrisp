@@ -252,7 +252,8 @@ kk_sparse_access_mask(nir_builder *b, nir_def *source, nir_def *address,
       helper->num_params = 7;
       helper->params = rzalloc_array(helper, nir_parameter, 7);
       helper->params[0] = (nir_parameter) {
-         .num_components = 1, .bit_size = 64, .mode = nir_parameter_out,
+         .num_components = 1, .bit_size = nir_get_ptr_bitsize(b->shader),
+         .mode = nir_parameter_out,
          .is_return = true, .type = glsl_uint_type(),
       };
       for (unsigned i = 1; i < 7; ++i)
