@@ -93,8 +93,8 @@ kk_sparse_bda_version(nir_builder *b)
  * addresses cross intervals. Cache page status within this IO, never across
  * accesses: version and map observations retain their volatile boundaries. */
 static nir_def *
-kk_sparse_access_mask(nir_builder *b, nir_def *source, nir_def *address,
-                      unsigned size, unsigned components, unsigned write_mask,
+kk_sparse_access_mask_body(nir_builder *b, nir_def *source, nir_def *address,
+                           nir_def *size, nir_def *components, nir_def *write_mask,
                       bool range_lookup)
 {
    nir_variable *cursor = nir_local_variable_create(b->impl, glsl_uint_type(), "sparse_cursor");
@@ -140,12 +140,12 @@ kk_sparse_access_mask(nir_builder *b, nir_def *source, nir_def *address,
    nir_loop *scalars = nir_push_loop(b);
    scalars->control = nir_loop_control_dont_unroll;
    nir_def *c = nir_load_var(b, component);
-   nir_if *done = nir_push_if(b, nir_uge_imm(b, c, components));
+   nir_if *done = nir_push_if(b, nir_uge(b, c, components));
    nir_jump(b, nir_jump_break);
    nir_pop_if(b, done);
    nir_def *bit = nir_ishl(b, nir_imm_int(b, 1), c);
-   nir_def *scalar_address = nir_iadd(b, address, nir_u2u64(b, nir_imul_imm(b, c, size)));
-   nir_if *used = nir_push_if(b, nir_ine_imm(b, nir_iand_imm(b, bit, write_mask), 0));
+   nir_def *scalar_address = nir_iadd(b, address, nir_u2u64(b, nir_imul(b, c, size)));
+   nir_if *used = nir_push_if(b, nir_ine_imm(b, nir_iand(b, bit, write_mask), 0));
    nir_def *record = source;
    if (range_lookup) {
       /* Preserve full64 wrap behavior without another directory search. */
@@ -190,7 +190,8 @@ kk_sparse_access_mask(nir_builder *b, nir_def *source, nir_def *address,
    nir_def *map_value = nir_load_var(b, map);
    nir_if *mapped = range_lookup ? nir_push_if(b, nir_ine_imm(b, map_value, 0)) : NULL;
    nir_def *start = nir_load_var(b, base);
-   nir_def *last = nir_iadd_imm(b, scalar_address, size - 1);
+   nir_def *last = nir_iadd(b, scalar_address,
+      nir_u2u64(b, nir_iadd_imm(b, size, -1)));
    nir_def *valid = nir_iand(b, nir_uge(b, scalar_address, start),
       nir_iand(b, nir_ult(b, last, nir_load_var(b, limit)), nir_uge(b, last, scalar_address)));
    nir_if *bounds = nir_push_if(b, valid);
@@ -230,6 +231,55 @@ kk_sparse_access_mask(nir_builder *b, nir_def *source, nir_def *address,
    nir_store_var(b, component, nir_iadd_imm(b, c, 1), 1);
    nir_pop_loop(b, scalars);
    return nir_load_var(b, mask);
+}
+
+/* Added after application preprocessing/inlining. The ordinary native path
+ * never constructs this function. One helper covers all scalar widths,
+ * vector widths, write masks and both residency address representations. */
+static nir_def *
+kk_sparse_access_mask(nir_builder *b, nir_def *source, nir_def *address,
+                      unsigned size, unsigned components, unsigned write_mask,
+                      bool range_lookup)
+{
+   const char *name = "__kk_sparse_buffer_access";
+   nir_function *helper = NULL;
+   nir_foreach_function(function, b->shader) {
+      if (strcmp(function->name, name) == 0) { helper = function; break; }
+   }
+   if (!helper) {
+      helper = nir_function_create(b->shader, name);
+      helper->dont_inline = true;
+      helper->num_params = 7;
+      helper->params = rzalloc_array(helper, nir_parameter, 7);
+      helper->params[0] = (nir_parameter) {
+         .num_components = 1, .bit_size = 64, .mode = nir_parameter_out,
+         .is_return = true, .type = glsl_uint_type(),
+      };
+      for (unsigned i = 1; i < 7; ++i)
+         helper->params[i] = (nir_parameter) {
+            .num_components = 1, .bit_size = i < 3 ? 64 : 32,
+         };
+      nir_builder h = nir_builder_create(nir_function_impl_create(helper));
+      h.cursor = nir_before_impl(h.impl);
+      nir_def *src = nir_load_param(&h, 1), *addr = nir_load_param(&h, 2);
+      nir_def *bytes = nir_load_param(&h, 3), *count = nir_load_param(&h, 4);
+      nir_def *mask = nir_load_param(&h, 5);
+      nir_if *range = nir_push_if(&h, nir_ine_imm(&h, nir_load_param(&h, 6), 0));
+      nir_def *bda = kk_sparse_access_mask_body(&h, src, addr, bytes, count, mask, true);
+      nir_push_else(&h, range);
+      nir_def *indexed = kk_sparse_access_mask_body(&h, src, addr, bytes, count, mask, false);
+      nir_pop_if(&h, range);
+      nir_def *value = nir_if_phi(&h, bda, indexed);
+      nir_deref_instr *out = nir_build_deref_cast(&h, nir_load_param(&h, 0),
+         nir_var_function_temp, glsl_uint_type(), 0);
+      nir_store_deref(&h, out, value, 1);
+   }
+   nir_variable *result = nir_local_variable_create(b->impl, glsl_uint_type(),
+      ralloc_asprintf(b->shader, "sparse_access_result_%u", exec_list_length(&b->impl->locals)));
+   nir_deref_instr *out = nir_build_deref_var(b, result);
+   nir_call(b, helper, &out->def, source, address, nir_imm_int(b, size),
+      nir_imm_int(b, components), nir_imm_int(b, write_mask), nir_imm_int(b, range_lookup));
+   return nir_load_deref(b, out);
 }
 
 static bool
