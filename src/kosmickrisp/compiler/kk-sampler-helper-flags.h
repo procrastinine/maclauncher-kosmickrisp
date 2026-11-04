@@ -19,6 +19,12 @@
 #define KK_SAMPLE_METADATA_SHIFT 16
 #define KK_SAMPLE_METADATA_MASK (7u << KK_SAMPLE_METADATA_SHIFT)
 
+/* Defer sampler bias until the actual native/emulated descriptor dispatch.
+ * This bit is consumed by descriptor-aware lowering, before MSL emission. */
+#define KK_SAMPLE_NATIVE_DISPATCH (1u << 19)
+_Static_assert((KK_SAMPLE_NATIVE_DISPATCH & KK_SAMPLE_METADATA_MASK) == 0,
+               "native dispatch is independent of metadata selectors");
+
 enum kk_sampler_metadata_value {
    KK_SAMPLER_META_BIAS,
    KK_SAMPLER_META_MIN_LOD,

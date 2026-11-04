@@ -75,29 +75,166 @@ kk_sample_static_metadata(const struct kk_sampler *sampler, unsigned field,
 }
 
 static bool
-kk_sample_fold_metadata(nir_builder *b, nir_tex_instr *tex,
-                        const struct kk_descriptor_set_binding_layout *binding,
-                        const struct kk_sampler *known)
+kk_sample_constant_metadata(const struct kk_descriptor_set_binding_layout *binding,
+                            const struct kk_sampler *known, unsigned field,
+                            bool lower, float *value)
 {
    if (!known && (!binding || !binding->immutable_samplers || !binding->array_size))
       return false;
-   unsigned field = (tex->backend_flags & KK_SAMPLE_METADATA_MASK) >>
-                    KK_SAMPLE_METADATA_SHIFT;
-   bool lower = tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS;
-   float value;
    if (!kk_sample_static_metadata(known ? known : binding->immutable_samplers[0],
-                                  field, lower, &value))
+                                  field, lower, value))
       return false;
    if (!known) {
       for (unsigned i = 1; i < binding->array_size; ++i) {
          float next;
          if (!kk_sample_static_metadata(binding->immutable_samplers[i], field, lower, &next) ||
-             memcmp(&value, &next, sizeof(value)))
+             memcmp(value, &next, sizeof(*value)))
             return false;
       }
    }
+   return true;
+}
+
+static bool
+kk_sample_fold_metadata(nir_builder *b, nir_tex_instr *tex,
+                        const struct kk_descriptor_set_binding_layout *binding,
+                        const struct kk_sampler *known)
+{
+   unsigned field = (tex->backend_flags & KK_SAMPLE_METADATA_MASK) >>
+                    KK_SAMPLE_METADATA_SHIFT;
+   bool lower = tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS;
+   float value;
+   if (!kk_sample_constant_metadata(binding, known, field, lower, &value))
+      return false;
    b->cursor = nir_before_instr(&tex->instr);
    nir_def_replace(&tex->def, nir_imm_float(b, value));
+   return true;
+}
+
+static bool kk_sample_mark(nir_builder *b, nir_tex_instr *tex, void *data);
+
+static nir_tex_instr *
+kk_sample_clone(nir_builder *b, nir_tex_instr *tex)
+{
+   nir_tex_instr *copy = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
+   copy->backend_flags &= ~(KK_SAMPLE_NATIVE_DISPATCH | KK_SAMPLE_LOWER_NATIVE_BIAS);
+   nir_builder_instr_insert(b, &copy->instr);
+   return copy;
+}
+
+/* The native branch uses the original operation and the ordinary texture
+ * emitter. On Metal3 only the numeric native bias is needed; pointer records
+ * and virtual precision stay entirely on the emulation branch. */
+static nir_def *
+kk_sample_native_value(nir_builder *b, nir_tex_instr *tex,
+                       const struct kk_descriptor_set_binding_layout *binding,
+                       const struct kk_sampler *known,
+                       const struct lower_descriptors_ctx *ctx)
+{
+   if (!(tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS))
+      return &kk_sample_clone(b, tex)->def;
+
+   float constant_bias;
+   nir_def *bias;
+   if (kk_sample_constant_metadata(binding, known, KK_SAMPLER_META_QUERY_BIAS,
+                                   false, &constant_bias)) {
+      bias = nir_imm_float16(b, constant_bias);
+   } else {
+      nir_def *plane = nir_get_tex_src(tex, nir_tex_src_plane);
+      unsigned offset = plane ? nir_src_as_uint(nir_src_for_ssa(plane)) *
+         sizeof(struct kk_sampled_image_descriptor) : 0;
+      bias = load_resource_deref_desc(b, 1, 16,
+         nir_get_tex_deref(tex, nir_tex_src_sampler_deref),
+         offset + offsetof(struct kk_sampled_image_descriptor,
+                           sampler_query_lod_bias_fp16), ctx);
+   }
+   if (tex->op == nir_texop_tex) {
+      /* Keep the frequent zero-bias sample literally implicit, including its
+       * anisotropic native filtering. The flag and bias loads remain runtime
+       * descriptor reads for mutable/UAB bindings. */
+      nir_push_if(b, nir_fneu_imm(b, bias, 0));
+      nir_def *biased = nir_f2f32(b, bias);
+      nir_tex_instr *with_bias = kk_sample_clone(b, tex);
+      with_bias->op = nir_texop_txb;
+      nir_tex_instr_add_src(with_bias, nir_tex_src_bias, biased);
+      nir_push_else(b, NULL);
+      nir_tex_instr *plain = kk_sample_clone(b, tex);
+      nir_pop_if(b, NULL);
+      return nir_if_phi(b, &with_bias->def, &plain->def);
+   }
+
+   nir_def *value = nir_f2f32(b, bias);
+   nir_tex_instr *native = kk_sample_clone(b, tex);
+   b->cursor = nir_before_instr(&native->instr);
+   if (tex->op == nir_texop_txd) {
+      nir_def *scale = nir_fexp2(b, value);
+      nir_def *dx = nir_f2f32(b, nir_steal_tex_src(native, nir_tex_src_ddx));
+      nir_def *dy = nir_f2f32(b, nir_steal_tex_src(native, nir_tex_src_ddy));
+      nir_tex_instr_add_src(native, nir_tex_src_ddx, nir_fmul(b, dx, scale));
+      nir_tex_instr_add_src(native, nir_tex_src_ddy, nir_fmul(b, dy, scale));
+   } else {
+      nir_tex_src_type source = tex->op == nir_texop_txl
+                                  ? nir_tex_src_lod : nir_tex_src_bias;
+      nir_def *original = nir_steal_tex_src(native, source);
+      value = nir_f2f32(b, nir_fadd(b, bias, nir_f2f16(b, original)));
+      nir_tex_instr_add_src(native, source, value);
+   }
+   b->cursor = nir_after_instr(&native->instr);
+   return &native->def;
+}
+
+static bool
+kk_sample_native_dispatch(nir_builder *b, nir_tex_instr *tex,
+                          struct kk_sample_lower_ctx *ctx,
+                          const struct kk_descriptor_set_binding_layout *binding,
+                          const struct kk_sampler *known, unsigned flags)
+{
+   bool lower_native = tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS;
+   if ((known && known->is_virtual) ||
+       (flags & (KK_SAMPLE_MIN | KK_SAMPLE_MAX | KK_SAMPLE_BORDER_KNOWN))) {
+      tex->backend_flags &= ~(KK_SAMPLE_NATIVE_DISPATCH | KK_SAMPLE_LOWER_NATIVE_BIAS);
+      kk_sampler_lower_bias_value(b, tex, lower_native);
+      return kk_sample_mark(b, tex, ctx);
+   }
+   b->cursor = nir_before_instr(&tex->instr);
+   if (!(flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_MINMAX | KK_SAMPLE_BORDER))) {
+      nir_def_replace(&tex->def,
+         kk_sample_native_value(b, tex, binding, known, &ctx->descriptors));
+      return true;
+   }
+
+   nir_deref_instr *deref = nir_get_tex_deref(tex, nir_tex_src_sampler_deref);
+   nir_def *plane = nir_get_tex_src(tex, nir_tex_src_plane);
+   unsigned offset = plane ? nir_src_as_uint(nir_src_for_ssa(plane)) *
+      sizeof(struct kk_sampled_image_descriptor) : 0;
+   nir_def *emulated = nir_imm_false(b);
+   if (flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_MINMAX)) {
+      nir_def *metadata = load_resource_deref_desc(b, 2, 16, deref,
+         offset + offsetof(struct kk_sampled_image_descriptor, sampler_reduction_mode),
+         &ctx->descriptors);
+      if (flags & KK_SAMPLE_VIRTUAL)
+         emulated = nir_test_mask(b, nir_channel(b, metadata, 1), KK_SAMPLER_FILTER_VIRTUAL);
+      if (flags & KK_SAMPLE_MINMAX)
+         emulated = nir_ior(b, emulated, nir_ine_imm(b, nir_channel(b, metadata, 0), 0));
+   }
+   if (flags & KK_SAMPLE_BORDER) {
+      nir_def *border = load_resource_deref_desc(b, 1, 16, deref,
+         offset + offsetof(struct kk_sampled_image_descriptor, clamp_0_sampler_index_or_negative),
+         &ctx->descriptors);
+      emulated = nir_ior(b, emulated, nir_ige_imm(b, border, 0));
+   }
+   /* Implicit candidates have quad-uniform descriptor selection. Only this
+    * uniform emulation branch needs quad derivatives or software LOD. Explicit
+    * level/gradient candidates carry all their original derivative inputs. */
+   nir_push_if(b, emulated);
+   nir_tex_instr *slow = kk_sample_clone(b, tex);
+   kk_sampler_lower_bias_value(b, slow, lower_native);
+   kk_sample_mark(b, slow, ctx);
+   b->cursor = nir_after_instr(&slow->instr);
+   nir_push_else(b, NULL);
+   nir_def *native = kk_sample_native_value(b, tex, binding, known, &ctx->descriptors);
+   nir_pop_if(b, NULL);
+   nir_def_replace(&tex->def, nir_if_phi(b, &slow->def, native));
    return true;
 }
 
@@ -154,6 +291,9 @@ kk_sample_mark(nir_builder *b, nir_tex_instr *tex, void *data)
       if (known_border > 0)
          flags |= KK_SAMPLE_BORDER_KNOWN;
    }
+   if (tex->backend_flags & KK_SAMPLE_NATIVE_DISPATCH)
+      return kk_sample_native_dispatch(b, tex, ctx, binding, known, flags);
+
    if (!(flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_MINMAX | KK_SAMPLE_BORDER |
                   KK_SAMPLE_SPARSE)) && tex->op != nir_texop_lod &&
        !(tex->backend_flags & KK_SAMPLE_NATIVE_CUBE_LOD))

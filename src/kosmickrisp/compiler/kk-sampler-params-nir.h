@@ -27,12 +27,8 @@ kk_sampler_query_metadata(nir_builder *b, nir_tex_instr *tex,
 }
 
 static bool
-kk_sampler_lower_bias_instr(nir_builder *b, nir_tex_instr *tex, void *data)
+kk_sampler_lower_bias_value(nir_builder *b, nir_tex_instr *tex, bool lower_native)
 {
-   if ((tex->backend_flags & KK_SAMPLE_METADATA) ||
-       !nir_tex_instr_need_sampler(tex) || tex->op == nir_texop_tg4)
-      return false;
-   bool lower_native = *(bool *)data;
    /* Preserve the original explicit cube form. Native sampling keeps its
     * upstream scalar level while virtual sampling still has its gradients. */
    if (tex->op == nir_texop_txd && tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE)
@@ -71,6 +67,31 @@ kk_sampler_lower_bias_instr(nir_builder *b, nir_tex_instr *tex, void *data)
       nir_tex_instr_add_src(tex, source, bias);
    }
    return true;
+}
+
+static bool
+kk_sampler_lower_bias_instr(nir_builder *b, nir_tex_instr *tex, void *data)
+{
+   if ((tex->backend_flags & KK_SAMPLE_METADATA) ||
+       !nir_tex_instr_need_sampler(tex) || tex->op == nir_texop_tg4)
+      return false;
+   bool lower_native = *(bool *)data;
+   bool implicit = tex->op == nir_texop_tex || tex->op == nir_texop_txb;
+   bool explicit_lod = tex->op == nir_texop_txl ||
+      (tex->op == nir_texop_txd && tex->sampler_dim != GLSL_SAMPLER_DIM_CUBE);
+   /* An implicit sample can remain implicit inside the descriptor dispatch
+    * only when that dispatch is quad-uniform. Nonuniform implicit samples,
+    * sparse results, LOD queries and explicit cube gradients keep the existing
+    * derivative/lowering route. Mutable/UAB descriptors are still read at use. */
+   if (!tex->is_sparse && nir_get_tex_deref(tex, nir_tex_src_sampler_deref) &&
+       (explicit_lod || (implicit && b->shader->info.stage == MESA_SHADER_FRAGMENT &&
+                        !tex->sampler_non_uniform && !tex->texture_non_uniform))) {
+      tex->backend_flags |= KK_SAMPLE_NATIVE_DISPATCH;
+      if (lower_native)
+         tex->backend_flags |= KK_SAMPLE_LOWER_NATIVE_BIAS;
+      return true;
+   }
+   return kk_sampler_lower_bias_value(b, tex, lower_native);
 }
 
 static bool
