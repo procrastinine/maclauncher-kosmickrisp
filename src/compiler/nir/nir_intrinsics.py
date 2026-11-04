@@ -3361,8 +3361,9 @@ load("buffer_ptr_kk", [], [BINDING], [CAN_ELIMINATE, CAN_REORDER])
 # Represents a pointer to the start of the per-draw data buffer
 load("per_draw_ptr_kk", [], [], [CAN_ELIMINATE, CAN_REORDER])
 # Device-monotonic sampler-state specialization, resolved before Metal PSO creation.
+# BASE 0 selects generic sampler emulation; BASE 1 selects non-seamless cubes.
 intrinsic("load_sampler_emulation_enabled_kk", src_comp=[], dest_comp=1,
-          bit_sizes=[1], flags=[CAN_ELIMINATE, CAN_REORDER])
+          indices=[BASE], bit_sizes=[1], flags=[CAN_ELIMINATE, CAN_REORDER])
 # Metal [[primitive_id]] of the rasterized primitive in a fragment shader. It
 # becomes load_primitive_id once a geometry or mesh producer's written
 # primitive ID has been forwarded to the fragment shader.

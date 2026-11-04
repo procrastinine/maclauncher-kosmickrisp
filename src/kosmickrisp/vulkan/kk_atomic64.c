@@ -98,7 +98,7 @@ kk_msl_function(struct kk_device *dev, const struct msl_compile_data *data,
 {
    VkResult result = kk_msl_function_sampler_base(dev, data, library, entry, out);
    if (result != VK_SUCCESS || !data->uses_sampler_emulation) return result;
-   mtl_function_descriptor *function = mtl_specialize_sampler_emulation(*out, true);
+   mtl_function_descriptor *function = mtl_specialize_sampler_emulation(*out, KK_SAMPLER_EMULATION_ALL);
    mtl_release(*out);
    *out = function;
    return function ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;

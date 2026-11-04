@@ -66,8 +66,11 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
    }
    /* Native linked fragments supply the same compiled-use metadata. This
     * first build precedes publication; lazy variants only inherit it. */
-   if (!shader->info.uses_sampler_emulation && fragment_program->uses_sampler_emulation)
-      shader->info.uses_sampler_emulation = true;
+   uint8_t fragment_domains = fragment_program->monolithic ?
+      fragment_program->monolithic->uses_sampler_emulation :
+      fragment_program->uses_sampler_emulation;
+   if ((shader->info.uses_sampler_emulation & fragment_domains) != fragment_domains)
+      shader->info.uses_sampler_emulation |= fragment_domains;
    bool virtual = info->has_task &&
       (force_virtual || info->task_grid_bound > KK_MESH_NATIVE_GROUPS);
    void *temporary = NULL;

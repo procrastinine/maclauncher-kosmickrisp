@@ -6,6 +6,12 @@
 #define KK_FUNCTION_CONSTANT_PIPELINE_STATISTICS 8u
 #define KK_FUNCTION_CONSTANT_ATOMIC64_LOCK_TABLE 9u
 #define KK_FUNCTION_CONSTANT_SAMPLER_EMULATION 10u
+#define KK_FUNCTION_CONSTANT_NON_SEAMLESS_CUBE 11u
+
+/* Independent device-monotonic specialization domains. */
+#define KK_SAMPLER_EMULATION_GENERIC 1u
+#define KK_SAMPLER_EMULATION_CUBE 2u
+#define KK_SAMPLER_EMULATION_ALL 3u
 
 /* Driver-owned buffer entries shared by native stages and command expansion.
  * VFT entries contain addresses of buffers holding table resource IDs. */
@@ -32,6 +38,14 @@
    "#define KK_ARGUMENT_MESH_PARAMETERS " KK_ARGUMENT_VALUE_STRING(KK_ARGUMENT_MESH_PARAMETERS) "\n" \
    "#define KK_ARGUMENT_INTERLOCK_GUARD " KK_ARGUMENT_VALUE_STRING(KK_ARGUMENT_INTERLOCK_GUARD) "\n" \
    "#define KK_ARGUMENT_POLY_LAYER_REPLAY " KK_ARGUMENT_VALUE_STRING(KK_ARGUMENT_POLY_LAYER_REPLAY) "\n"
+
+/* Render variants pack each domain's four stage bits into one byte. */
+static inline unsigned
+kk_sampler_stage_mask(unsigned stages, unsigned domains)
+{
+   return ((domains & KK_SAMPLER_EMULATION_GENERIC) ? stages : 0) |
+          ((domains & KK_SAMPLER_EMULATION_CUBE) ? stages << 4 : 0);
+}
 
 struct kk_argument_table_usage {
    unsigned linked_graphics;

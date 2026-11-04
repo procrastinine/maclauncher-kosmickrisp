@@ -1462,10 +1462,10 @@ void kk_interlock_pipeline_finish(struct kk_interlock_pipeline *);
 static void
 kk_shader_sampler_info(struct kk_shader *shader)
 {
-   bool uses = shader->gs_main.uses_sampler_emulation ||
-               shader->polygon_native.uses_sampler_emulation ||
-               shader->polygon_native_fs.uses_sampler_emulation ||
-               shader->fsr_coarse[0].uses_sampler_emulation ||
+   uint8_t uses = shader->gs_main.uses_sampler_emulation |
+               shader->polygon_native.uses_sampler_emulation |
+               shader->polygon_native_fs.uses_sampler_emulation |
+               shader->fsr_coarse[0].uses_sampler_emulation |
                shader->fsr_coarse[1].uses_sampler_emulation;
    for (unsigned i = 0; i < ARRAY_SIZE(shader->msl_data); ++i)
       uses |= shader->msl_data[i].uses_sampler_emulation;
@@ -4054,7 +4054,8 @@ kk_msl_serialize(const struct msl_compile_data *data, struct blob *blob)
                          (data->uses_matrix_coordinates ? 2u : 0u) |
                          (data->uses_atomic64_locks ? 4u : 0u) |
                          (data->uses_pipeline_statistics ? 8u : 0u) |
-                         (data->uses_sampler_emulation ? 16u : 0u) |
+                         ((data->uses_sampler_emulation & KK_SAMPLER_EMULATION_GENERIC) ? 16u : 0u) |
+                         ((data->uses_sampler_emulation & KK_SAMPLER_EMULATION_CUBE) ? 64u : 0u) |
                          (data->requires_sampler_emulation ? 32u : 0u));
    blob_write_bytes(blob, data->entrypoint_name, entrypoint_length);
    blob_write_bytes(blob, data->code, code_length);
@@ -4120,7 +4121,9 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
    data->uses_matrix_coordinates = (flags & 2u) != 0;
    data->uses_atomic64_locks = (flags & 4u) != 0;
    data->uses_pipeline_statistics = (flags & 8u) != 0;
-   data->uses_sampler_emulation = (flags & 16u) != 0;
+   data->uses_sampler_emulation =
+      ((flags & 16u) ? KK_SAMPLER_EMULATION_GENERIC : 0) |
+      ((flags & 64u) ? KK_SAMPLER_EMULATION_CUBE : 0);
    data->requires_sampler_emulation = (flags & 32u) != 0;
    data->entrypoint_name = ralloc_array(NULL, char, entrypoint_length);
    if (data->entrypoint_name == NULL)
@@ -4135,8 +4138,12 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
 
    if (blob->overrun || !entrypoint_length || !code_length ||
        data->entrypoint_name[entrypoint_length - 1] || data->code[code_length - 1] ||
-       (flags & ~0xbfu) || (!(flags & 0x80u) && (flags & 60u)) ||
+       (!(flags & 0x80u) && (flags & 124u)) ||
        ((flags & 32u) && !(flags & 16u)))
+      return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
+   /* The old shared sampler constant cannot represent independent domains. */
+   if (data->uses_sampler_emulation &&
+       !strstr(data->code, "kk_non_seamless_cube_active"))
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    /* Old ordinary source remains reusable. Old atomic source loaded its
     * address from root word0 and must be recompiled for specialization. */

@@ -134,7 +134,7 @@ struct kk_shader_info {
    bool depth_bounds_emulation;
    mesa_shader_stage stage;
    bool uses_per_draw_data;
-   bool uses_sampler_emulation;
+   uint8_t uses_sampler_emulation; /* KK_SAMPLER_EMULATION_* domain mask. */
    uint8_t sparse_modes; /* Native code compiled for these residency classes. */
    uint8_t framebuffer_read_mask;
    uint32_t push_size;
@@ -282,7 +282,7 @@ struct msl_compile_data {
    bool uses_matrix_coordinates;
    bool uses_atomic64_locks;
    bool uses_pipeline_statistics;
-   bool uses_sampler_emulation;
+   uint8_t uses_sampler_emulation; /* KK_SAMPLER_EMULATION_* domain mask. */
    bool requires_sampler_emulation;
 };
 
@@ -408,7 +408,7 @@ kk_cmd_sampler_compute_pipeline(struct kk_cmd_buffer *cmd,
 }
 bool kk_attachment_sampler_emulation_changed(struct kk_cmd_buffer *cmd,
    struct kk_shader *shader);
-bool kk_attachment_sampler_emulation_value(struct kk_device *device,
+uint8_t kk_attachment_sampler_emulation_value(struct kk_device *device,
    const struct kk_shader *shader);
 
 extern const struct vk_device_shader_ops kk_device_shader_ops;

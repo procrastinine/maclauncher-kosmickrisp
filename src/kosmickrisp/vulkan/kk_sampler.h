@@ -10,6 +10,7 @@
 
 #include "kk_device.h"
 #include "kk_sampler_emulation.h"
+#include "kosmickrisp/libkk/kk_argument_table.h"
 #include "kosmickrisp/compiler/kk-sampler-params.h"
 #include "kk_physical_device.h"
 #include "kk_private.h"
@@ -67,8 +68,18 @@ kk_sampler_emulation_filter_bits(const struct kk_sampler *sampler)
 static inline void
 kk_sampler_publish_emulation(struct kk_device *dev, const struct kk_sampler *sampler)
 {
-   if (kk_sampler_needs_emulation(sampler))
-      p_atomic_set(&dev->sampler_emulation, 1);
+   unsigned domains = 0;
+   if (sampler->is_virtual || sampler->has_border || sampler->reduction_mode != 0)
+      domains |= KK_SAMPLER_EMULATION_GENERIC;
+   if (sampler->filter_bits & KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE)
+      domains |= KK_SAMPLER_EMULATION_CUBE;
+   unsigned previous = p_atomic_read(&dev->sampler_emulation);
+   while ((previous & domains) != domains) {
+      unsigned observed = p_atomic_cmpxchg(&dev->sampler_emulation,
+                                           previous, previous | domains);
+      if (observed == previous) break;
+      previous = observed;
+   }
 }
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(kk_sampler, vk.base, VkSampler,

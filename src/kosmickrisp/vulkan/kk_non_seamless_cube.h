@@ -91,7 +91,7 @@ kk_lower_non_seamless_cube(nir_builder *b, nir_tex_instr *tex, void *data)
          seamless = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
          nir_builder_instr_insert(b, &seamless->instr);
       }
-      nir_push_if(b, nir_load_sampler_emulation_enabled_kk(b));
+      nir_push_if(b, nir_load_sampler_emulation_enabled_kk(b, .base = 1));
    }
    if (implicit) {
       // Derivatives must be taken before the sampler-dependent branch.

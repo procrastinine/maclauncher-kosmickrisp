@@ -630,13 +630,17 @@ mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
 }
 
 mtl_function_descriptor *
-mtl_specialize_sampler_emulation(mtl_function_descriptor *function, bool enabled)
+mtl_specialize_sampler_emulation(mtl_function_descriptor *function, uint32_t enabled)
 {
    @autoreleasepool {
       MTL4SpecializedFunctionDescriptor *desc =
          kk_new_function_specialization((id)function);
-      kk_set_function_constant(desc, &enabled, MTLDataTypeBool, sizeof(enabled),
+      bool generic = enabled & KK_SAMPLER_EMULATION_GENERIC;
+      bool cube = enabled & KK_SAMPLER_EMULATION_CUBE;
+      kk_set_function_constant(desc, &generic, MTLDataTypeBool, sizeof(generic),
                                KK_FUNCTION_CONSTANT_SAMPLER_EMULATION);
+      kk_set_function_constant(desc, &cube, MTLDataTypeBool, sizeof(cube),
+                               KK_FUNCTION_CONSTANT_NON_SEAMLESS_CUBE);
       return (void *)desc;
    }
 }
@@ -652,7 +656,9 @@ mtl_sampler_emulation_render_descriptor(mtl_render_pipeline_descriptor *descript
 #define KK_SAMPLER_STAGE(type, field, bit) do { \
    if (stages & (bit)) { \
       mtl_function_descriptor *function = mtl_specialize_sampler_emulation( \
-         (void *)((type *)copy).field, (enabled_stages & (bit)) != 0); \
+         (void *)((type *)copy).field, \
+         ((enabled_stages & (bit)) ? KK_SAMPLER_EMULATION_GENERIC : 0) | \
+         ((enabled_stages & ((bit) << 4)) ? KK_SAMPLER_EMULATION_CUBE : 0)); \
       if (!function) { [copy release]; return NULL; } \
       ((type *)copy).field = (id)function; \
       kk_record_stage_constants(copy, @#field, (id)function, true); \

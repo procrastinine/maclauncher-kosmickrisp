@@ -5,6 +5,7 @@
  */
 
 #include "vulkan/vulkan_core.h"
+#include "kosmickrisp/libkk/kk_argument_table.h"
 #include "msl_private.h"
 #include "kk-sampler-helper-flags.h"
 #include "kk_atomic_int64_usage.h"
@@ -476,7 +477,8 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       break;
    case nir_intrinsic_load_sampler_emulation_enabled_kk:
       ctx->has_sampler_helpers = true;
-      ctx->uses_sampler_emulation = true;
+      ctx->uses_sampler_emulation |= nir_intrinsic_base(instr) ?
+         KK_SAMPLER_EMULATION_CUBE : KK_SAMPLER_EMULATION_GENERIC;
       set_type(types, &instr->def, TYPE_BOOL);
       break;
    case nir_intrinsic_load_pipeline_statistics_enabled_kk:
@@ -672,9 +674,9 @@ infer_types_from_instr(struct nir_to_msl_ctx *ctx, struct hash_table *types,
    case nir_instr_type_tex:
       ctx->has_sampler_helpers |= nir_instr_as_tex(instr)->backend_flags &
                               (KK_SAMPLE_HELPER | KK_SAMPLE_METADATA);
-      ctx->uses_sampler_emulation |= nir_instr_as_tex(instr)->backend_flags &
+      ctx->uses_sampler_emulation |= (nir_instr_as_tex(instr)->backend_flags &
          (KK_SAMPLE_METADATA | KK_SAMPLE_VIRTUAL | KK_SAMPLE_MINMAX |
-          KK_SAMPLE_BORDER | KK_SAMPLE_SPARSE);
+          KK_SAMPLE_BORDER | KK_SAMPLE_SPARSE)) ? KK_SAMPLER_EMULATION_GENERIC : 0;
       ctx->requires_sampler_emulation |=
          (nir_instr_as_tex(instr)->backend_flags & KK_SAMPLE_HELPER) &&
          (nir_instr_as_tex(instr)->backend_flags & KK_SAMPLE_SPARSE);
@@ -1015,7 +1017,7 @@ msl_infer_types(struct nir_to_msl_ctx *ctx)
 {
    nir_shader *shader = ctx->shader;
    ctx->has_sampler_helpers = false;
-   ctx->uses_sampler_emulation = false;
+   ctx->uses_sampler_emulation = 0;
    ctx->requires_sampler_emulation = false;
    ctx->sparse_residency = false;
    ctx->uses_atomic64 = ctx->uses_image_atomic64 = false;

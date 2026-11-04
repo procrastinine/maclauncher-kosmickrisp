@@ -54,7 +54,7 @@ struct nir_to_msl_ctx {
    const struct msl_per_vertex_inputs *per_vertex_inputs;
    bool uses_per_draw_data;
    bool has_sampler_helpers;
-   bool uses_sampler_emulation;
+   uint8_t uses_sampler_emulation; /* KK_SAMPLER_EMULATION_* domain mask. */
    bool requires_sampler_emulation;
    bool sparse_residency;
    bool interlock;

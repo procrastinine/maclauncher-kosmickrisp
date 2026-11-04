@@ -77,7 +77,7 @@ mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
 }
 
 mtl_function_descriptor *
-mtl_specialize_sampler_emulation(mtl_function_descriptor *function, bool enabled)
+mtl_specialize_sampler_emulation(mtl_function_descriptor *function, uint32_t enabled)
 {
    return NULL;
 }

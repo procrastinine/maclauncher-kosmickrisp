@@ -165,7 +165,8 @@ mtl_render_pipeline_descriptor *mtl_statistics_render_descriptor(
    mtl_render_pipeline_descriptor *descriptor);
 
 /* Constant values wrap the complete caller chain; retained descriptors remain
- * reusable for either sampler variant. The bits identify actual source users. */
+ * reusable for both independent sampler domains. Stage bits occupy 0..3
+ * for generic emulation and 4..7 for non-seamless cube sampling. */
 enum mtl_sampler_emulation_stage {
    MTL_SAMPLER_EMULATION_VERTEX = 1u << 0,
    MTL_SAMPLER_EMULATION_FRAGMENT = 1u << 1,
@@ -173,7 +174,7 @@ enum mtl_sampler_emulation_stage {
    MTL_SAMPLER_EMULATION_MESH = 1u << 3,
 };
 mtl_function_descriptor *mtl_specialize_sampler_emulation(
-   mtl_function_descriptor *function, bool enabled);
+   mtl_function_descriptor *function, uint32_t enabled);
 mtl_render_pipeline_descriptor *mtl_sampler_emulation_render_descriptor(
    mtl_render_pipeline_descriptor *descriptor, uint32_t stages,
    uint32_t enabled_stages);

@@ -123,12 +123,12 @@
      - On
      - On Apple7-11: Mesh shaders use native primitive rejection. Ordinary producers writing cull distances use capture and an all-vertex negative test per plane before clipping; each tested vertex loads one scalar distance, and testing stops at the first nonnegative or NaN value. No cull output selects no cull capture.
    * - ``non_seamless_cube``
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off Apple7-11: Dynamic cube samples use the shared sampler-emulation function constant; the false specialization retains native cube sampling. Actual non-seamless use projects to a 2D-array face sample with quotient-rule gradients.
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: unused non-seamless cube sampling is removed by an independent function constant. Actual flagged sampler use selects face-local sampling and gradients. No native seamless toggle is assumed.
    * - ``sparse_translation``
      - On
      - On

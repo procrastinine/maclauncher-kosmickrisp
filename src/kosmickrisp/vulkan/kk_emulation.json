@@ -453,8 +453,8 @@
   {
     "name": "non_seamless_cube",
     "description": "Face-local cube sampling without filtering across cube faces.",
-    "cost_class": "shader ALU / texture sampling",
-    "cost_note": "Dynamic cube samples use the shared sampler-emulation function constant; the false specialization retains native cube sampling. Actual non-seamless use projects to a 2D-array face sample with quotient-rule gradients.",
+    "cost_class": "native unused / per-sampler cube projection",
+    "cost_note": "Descriptor-set cube samples specialize an independent non-seamless function constant. Without a non-seamless sampler request its false value retains native cube sampling, even while border or reduction emulation is active. Only actual non-seamless use projects to a 2D-array face sample with quotient-rule gradients. Variants compile lazily for each requested sampler-emulation domain. GPU-writable descriptor heaps and direct consumers without variant caches conservatively retain both domains.",
     "extensions": [
       "VK_EXT_non_seamless_cube_map"
     ],
@@ -462,12 +462,18 @@
       "nonSeamlessCubeMap"
     ],
     "properties": [],
-    "performance": false,
-    "performance_reason": "Legacy non-seamless cube sampling requires explicit selection.",
+    "performance": true,
+    "performance_reason": "Native cube sampling remains unchanged until a non-seamless sampler is requested; generic border and reduction samplers cannot activate cube projection.",
     "off_consequence": "DXVK rejects content requesting non-seamless cube sampling when the interface is unavailable.",
     "native_from": null,
-    "performance_families": [],
-    "family_cost_note": "Off Apple7-11: Dynamic cube samples use the shared sampler-emulation function constant; the false specialization retains native cube sampling. Actual non-seamless use projects to a 2D-array face sample with quotient-rule gradients."
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: unused non-seamless cube sampling is removed by an independent function constant. Actual flagged sampler use selects face-local sampling and gradients. No native seamless toggle is assumed."
   },
   {
     "name": "sparse_translation",

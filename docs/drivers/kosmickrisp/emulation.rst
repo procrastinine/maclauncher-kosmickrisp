@@ -159,10 +159,10 @@
    * - ``non_seamless_cube``
      - Face-local cube sampling without filtering across cube faces.
        Controls: ``VK_EXT_non_seamless_cube_map``, ``nonSeamlessCubeMap``.
-     - shader ALU / texture sampling. Dynamic cube samples use the shared sampler-emulation function constant; the false specialization retains native cube sampling. Actual non-seamless use projects to a 2D-array face sample with quotient-rule gradients.
+     - native unused / per-sampler cube projection. Descriptor-set cube samples specialize an independent non-seamless function constant. Without a non-seamless sampler request its false value retains native cube sampling, even while border or reduction emulation is active. Only actual non-seamless use projects to a 2D-array face sample with quotient-rule gradients. Variants compile lazily for each requested sampler-emulation domain. GPU-writable descriptor heaps and direct consumers without variant caches conservatively retain both domains.
      - No Apple family
-     - Off
-     - Legacy non-seamless cube sampling requires explicit selection.
+     - On
+     - Native cube sampling remains unchanged until a non-seamless sampler is requested; generic border and reduction samplers cannot activate cube projection.
      - DXVK rejects content requesting non-seamless cube sampling when the interface is unavailable.
      - ``performance,+non_seamless_cube``
    * - ``sparse_translation``

@@ -1788,7 +1788,8 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       P_IND(ctx, "}\n");
       break;
    case nir_intrinsic_load_sampler_emulation_enabled_kk:
-      P(ctx, "kk_sampler_emulation_active;\n");
+      P(ctx, nir_intrinsic_base(instr) ? "kk_non_seamless_cube_active;\n" :
+              "kk_sampler_emulation_active;\n");
       break;
    case nir_intrinsic_load_pipeline_statistics_enabled_kk:
       P(ctx, "kk_pipeline_statistics_active;\n");
@@ -3334,6 +3335,8 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       /* Required Bool10 is supplied by the actual stage specialization.
        * The existing C8 validator rejects a descriptor missing this value. */
       P(&ctx, "constant bool kk_sampler_emulation_active = kk_sampler_emulation;\n");
+      P(&ctx, "constant bool kk_non_seamless_cube_active [[function_constant(%u)]];\n",
+        KK_FUNCTION_CONSTANT_NON_SEAMLESS_CUBE);
    } else if (ctx.has_sampler_helpers) {
       /* Native QueryLOD/cube corrections are base Vulkan work. They need
        * neither sampler-state specialization nor a runtime device check. */

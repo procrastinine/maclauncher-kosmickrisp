@@ -657,10 +657,11 @@ Feature table
      - —
    * - ``VK_EXT_non_seamless_cube_map``
      - Emulated: non-seamless samples are projected to a 2D-array face sample
-       with recomputed gradients. Seamless samples stay native.
+       with recomputed gradients. An independent function constant retains
+       native sampling until a non-seamless sampler is requested.
      - None listed; emulated on all families.
      - ``non_seamless_cube``
-     - Off
+     - On Apple7-11
      - DXVK rejects content that requests non-seamless cube sampling.
    * - ``VK_EXT_custom_border_color``, ``VK_EXT_border_color_swizzle``
      - Emulated: the shader substitutes the border color.
@@ -865,7 +866,9 @@ KosmicKrisp emulates each of them:
   advertised only with ``MESA_KK_EXPERIMENTAL=custom_border``.
 - **Non-seamless cube sampling**: the tables list no non-seamless cube mode.
   The ``non_seamless_cube`` entry projects such samples onto a single face and
-  is off in the default ``performance`` mode.
+  is on in ``performance`` mode. Descriptor-set pipelines without a
+  non-seamless sampler retain native sampling through an independent function
+  constant; border and reduction samplers do not activate cube projection.
 
 Tessellation
 ============

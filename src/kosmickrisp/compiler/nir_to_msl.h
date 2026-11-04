@@ -47,7 +47,7 @@ struct nir_to_msl_options {
    bool uses_matrix_coordinates;
    /* Outputs from the surviving operations in this translation. */
    bool uses_pipeline_statistics;
-   bool uses_sampler_emulation;
+   uint8_t uses_sampler_emulation; /* KK_SAMPLER_EMULATION_* domain mask. */
    bool requires_sampler_emulation;
    bool uses_atomic64_locks;
 

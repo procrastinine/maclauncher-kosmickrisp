@@ -49,11 +49,13 @@ struct kk_attachment_variant {
 struct kk_compute_variant {
    struct kk_compute_variant *next;
    mtl_compute_pipeline_state *base;
-   mtl_compute_pipeline_state *emulated;
+   mtl_compute_pipeline_state *emulated[4];
    mtl_function_descriptor *function;
    uint32_t threads;
    bool indirect;
-   bool emulated_failed;
+   bool emulated_failed[4];
+   uint8_t base_mask;
+   bool required;
 };
 
 struct kk_attachment_pipelines {
@@ -69,7 +71,7 @@ struct kk_attachment_pipelines {
    uint8_t sampler_required[KK_PIPELINE_KIND_COUNT];
    bool sampler_initialized;
    bool sampler_render;
-   bool sampler_base;
+   uint8_t sampler_base;
 };
 
 /* Present only after a compiled GS actually consumes statistics addresses.
@@ -127,8 +129,7 @@ kk_sampler_cache_prepare(struct kk_device *device, struct kk_shader *shader)
    simple_mtx_lock(&cache->mutex);
    if (!p_atomic_read(&cache->sampler_initialized)) {
       /* GPU-writable heaps may publish a first sampler after encoding. */
-      cache->sampler_base = shader->info.descriptor_heap ||
-                            kk_sampler_emulation_active(device);
+      cache->sampler_base = kk_attachment_sampler_emulation_value(device, shader);
       p_atomic_set(&cache->sampler_initialized, true);
    }
    simple_mtx_unlock(&cache->mutex);
@@ -136,12 +137,14 @@ kk_sampler_cache_prepare(struct kk_device *device, struct kk_shader *shader)
    return VK_SUCCESS;
 }
 
-bool
+uint8_t
 kk_attachment_sampler_emulation_value(struct kk_device *device,
                                        const struct kk_shader *shader)
 {
-   if (!shader->info.uses_sampler_emulation) return false;
-   return shader->info.descriptor_heap || kk_sampler_emulation_active(device);
+   if (!shader->info.uses_sampler_emulation) return 0;
+   return shader->info.uses_sampler_emulation &
+      (shader->info.descriptor_heap ? KK_SAMPLER_EMULATION_ALL :
+       kk_sampler_emulation_active(device));
 }
 
 static mtl_render_pipeline_descriptor *
@@ -151,7 +154,8 @@ kk_sampler_render_descriptor(struct kk_device *device, struct kk_shader *shader,
    if (kk_sampler_cache_prepare(device, shader) != VK_SUCCESS)
       return NULL;
    return mtl_sampler_emulation_render_descriptor(descriptor, stages,
-      required | (shader->attachment_pipelines->sampler_base ? stages : 0));
+      required | kk_sampler_stage_mask(stages,
+         shader->attachment_pipelines->sampler_base));
 }
 
 /* Retain the unmodified function, not a specialized-false function. Every
@@ -172,11 +176,11 @@ kk_sampler_create_compute(struct kk_device *device, struct kk_shader *shader,
       } else {
          assert(shader->attachment_pipelines->sampler_initialized);
       }
-      bool enabled = requires_sampler_emulation ||
-                     shader->attachment_pipelines->sampler_base;
+      uint8_t enabled = (requires_sampler_emulation ? KK_SAMPLER_EMULATION_GENERIC : 0) |
+                        shader->attachment_pipelines->sampler_base;
       selected = mtl_specialize_sampler_emulation(function, enabled);
       if (!selected) return VK_ERROR_OUT_OF_HOST_MEMORY;
-      if (!enabled) {
+      if (enabled != KK_SAMPLER_EMULATION_ALL) {
          variant = calloc(1, sizeof(*variant));
          if (!variant) {
             mtl_release(selected);
@@ -195,6 +199,9 @@ kk_sampler_create_compute(struct kk_device *device, struct kk_shader *shader,
       return VK_ERROR_INVALID_SHADER_NV;
    }
    if (variant) {
+      variant->base_mask = (requires_sampler_emulation ? KK_SAMPLER_EMULATION_GENERIC : 0) |
+                           shader->attachment_pipelines->sampler_base;
+      variant->required = requires_sampler_emulation;
       variant->base = pipeline; /* The original pipeline keeps its owner. */
       variant->function = mtl_retain(function);
       variant->threads = threads;
@@ -215,22 +222,25 @@ kk_sampler_compute_pipeline(struct kk_device *device, struct kk_shader *shader,
 {
    *out = base;
    struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
-   if (!cache || !p_atomic_read(&cache->sampler_initialized) || cache->sampler_base ||
-       !kk_attachment_sampler_emulation_value(device, shader))
+   if (!cache || !p_atomic_read(&cache->sampler_initialized) ||
+       cache->sampler_base == kk_attachment_sampler_emulation_value(device, shader))
       return base ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
    struct kk_compute_variant *variant = p_atomic_read(&cache->compute_variants);
    while (variant && variant->base != base) variant = variant->next;
    if (!variant) return base ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
-   *out = p_atomic_read(&variant->emulated);
+   uint8_t enabled = kk_attachment_sampler_emulation_value(device, shader) |
+      (variant->required ? KK_SAMPLER_EMULATION_GENERIC : 0);
+   if (enabled == variant->base_mask) return VK_SUCCESS;
+   *out = p_atomic_read(&variant->emulated[enabled]);
    if (*out) return VK_SUCCESS;
-   if (p_atomic_read(&variant->emulated_failed)) return VK_ERROR_INVALID_SHADER_NV;
+   if (p_atomic_read(&variant->emulated_failed[enabled])) return VK_ERROR_INVALID_SHADER_NV;
    simple_mtx_lock(&cache->mutex);
-   mtl_compute_pipeline_state *pipeline = p_atomic_read(&variant->emulated);
-   VkResult result = p_atomic_read(&variant->emulated_failed) ?
+   mtl_compute_pipeline_state *pipeline = p_atomic_read(&variant->emulated[enabled]);
+   VkResult result = p_atomic_read(&variant->emulated_failed[enabled]) ?
       VK_ERROR_INVALID_SHADER_NV : VK_SUCCESS;
    if (!pipeline && result == VK_SUCCESS) {
       mtl_function_descriptor *function =
-         mtl_specialize_sampler_emulation(variant->function, true);
+         mtl_specialize_sampler_emulation(variant->function, enabled);
       if (!function) {
          result = VK_ERROR_OUT_OF_HOST_MEMORY;
       } else {
@@ -242,10 +252,10 @@ kk_sampler_compute_pipeline(struct kk_device *device, struct kk_shader *shader,
                mtl_new_compute_pipeline_state(device->mtl_compiler_handle,
                   function, variant->threads));
          mtl_release(function);
-         if (pipeline) p_atomic_set(&variant->emulated, pipeline);
+         if (pipeline) p_atomic_set(&variant->emulated[enabled], pipeline);
          else {
             result = VK_ERROR_INVALID_SHADER_NV;
-            p_atomic_set(&variant->emulated_failed, true);
+            p_atomic_set(&variant->emulated_failed[enabled], true);
          }
       }
    }
@@ -343,7 +353,8 @@ kk_attachment_pipelines_finish(struct kk_shader *shader)
       struct kk_compute_variant *variant = cache->compute_variants;
       cache->compute_variants = variant->next;
       mtl_release(variant->function);
-      mtl_release(variant->emulated);
+      for (unsigned i = 0; i < ARRAY_SIZE(variant->emulated); ++i)
+         mtl_release(variant->emulated[i]);
       free(variant);
    }
    for (unsigned i = 0; i < ARRAY_SIZE(cache->descriptor); ++i)
@@ -418,11 +429,10 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
    }
    statistics &= cache->statistics[kind];
    uint8_t sampler_emulation = cache->sampler_required[kind] |
-      (cache->sampler_stages[kind] &&
-       kk_attachment_sampler_emulation_value(device, shader) ?
-         cache->sampler_stages[kind] : 0);
+      kk_sampler_stage_mask(cache->sampler_stages[kind],
+         kk_attachment_sampler_emulation_value(device, shader));
    uint8_t sampler_base = cache->sampler_required[kind] |
-      (cache->sampler_base ? cache->sampler_stages[kind] : 0);
+      kk_sampler_stage_mask(cache->sampler_stages[kind], cache->sampler_base);
 
    if ((!cache->sampler_stages[kind] || sampler_emulation == sampler_base) &&
        !indirect && !statistics && topology == cache->topology[kind] &&
