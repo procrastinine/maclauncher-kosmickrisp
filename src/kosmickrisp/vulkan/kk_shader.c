@@ -378,11 +378,16 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       _mesa_blake3_update(&blake3_ctx, &conservative, sizeof(conservative));
    }
    /* Dynamic depth/stencil state leaves the bounds enable out of the FS key;
-    * a transaction pipeline must not alias its native sibling. */
+    * a transaction pipeline must not alias its native sibling, and one with
+    * a dynamic enable (which owns an ordinary route) must not alias one with
+    * a static enable. */
    if (kk_depth_bounds_selected(container_of(device, struct kk_physical_device, vk),
                                 enabled_features, state)) {
-      uint32_t bounds = BITFIELD_BIT(KK_FEAT_DEPTH_BOUNDS);
-      _mesa_blake3_update(&blake3_ctx, &bounds, sizeof(bounds));
+      const uint32_t bounds[] = {
+         BITFIELD_BIT(KK_FEAT_DEPTH_BOUNDS),
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE),
+      };
+      _mesa_blake3_update(&blake3_ctx, bounds, sizeof(bounds));
    }
 
    /* Serialized producer topology is pipeline state, including when the
