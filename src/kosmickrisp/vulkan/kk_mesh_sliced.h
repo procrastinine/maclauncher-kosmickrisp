@@ -33,9 +33,16 @@ kk_mesh_native_sliced_data(void *mem, const struct msl_compile_data *source,
 {
    if (!source || !source->code || !source->entrypoint_name)
       return false;
-   const char *start = strstr(source->code, task
-      ? "[[object, max_total_threads_per_threadgroup("
-      : "[[mesh, max_total_threads_per_threadgroup(");
+   /* Use the native entry point's wrapper. A retained reader wrapper with
+    * the same stage attribute can precede it in the translation unit. */
+   const char *prefix = task ? "[[object, max_total_threads_per_threadgroup("
+                             : "[[mesh, max_total_threads_per_threadgroup(";
+   char *native = ralloc_asprintf(mem, "]] void %s(", source->entrypoint_name);
+   const char *native_at = native ? strstr(source->code, native) : NULL;
+   const char *start = NULL;
+   for (const char *at = strstr(source->code, prefix);
+        at && (!native_at || at < native_at); at = strstr(at + 1, prefix))
+      start = at;
    const char *brace = start ? strchr(start, '{') : NULL;
    if (!brace)
       return false;

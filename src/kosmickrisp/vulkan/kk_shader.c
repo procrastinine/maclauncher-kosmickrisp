@@ -2887,8 +2887,14 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
          return result;
    }
    if (vs->info.stage == MESA_SHADER_MESH) {
-      if (!vs->info.api_geometry)
-         return kk_compile_mesh_pipeline(device, vs, false, &vs->pipeline);
+      if (!vs->info.api_geometry) {
+         /* A Mesh producer of a depth/stencil transaction also needs its
+          * load, transaction and replay executables. */
+         VkResult result = kk_compile_mesh_pipeline(device, vs, false, &vs->pipeline);
+         if (result == VK_SUCCESS && vs->interlock)
+            result = kk_interlock_pipeline_compile(device, vs);
+         return result;
+      }
       vs->lazy_polygon = calloc(1, sizeof(*vs->lazy_polygon));
       if (!vs->lazy_polygon)
          return VK_ERROR_OUT_OF_HOST_MEMORY;
