@@ -2,6 +2,9 @@
 #ifndef KK_MESH_PASS_PREPASS_H
 #define KK_MESH_PASS_PREPASS_H
 #include "kk_debug.h"
+#include "kk_image_view.h"
+#include "kk_layered_bc.h"
+#include "vk_framebuffer.h"
 #include "vk_cmd_queue.h"
 #include "vk_pipeline.h"
 #include "vk_render_pass.h"
@@ -398,6 +401,35 @@ kk_mesh_pass_barrier_safe(struct kk_mesh_pass *p, uint32_t at,
    }
 }
 
+/* Selected compressed-view attachment replay owns its retained producer.
+ * Leave that feature path intact instead of using the plain native helper. */
+static bool
+kk_mesh_pass_layered_attachments(const struct vk_cmd_queue_entry *begin)
+{
+   if (begin->type == VK_CMD_BEGIN_RENDERING)
+      return kk_layered_bc_rendering_info_requested(begin->u.begin_rendering.rendering_info);
+   const VkRenderPassBeginInfo *info = begin->type == VK_CMD_BEGIN_RENDER_PASS2 ?
+      begin->u.begin_render_pass2.render_pass_begin : begin->u.begin_render_pass.render_pass_begin;
+   const VkRenderPassAttachmentBeginInfo *attachments =
+      vk_find_struct_const(info, RENDER_PASS_ATTACHMENT_BEGIN_INFO);
+   const VkImageView *views;
+   uint32_t count;
+   if (attachments && attachments->attachmentCount) {
+      views = attachments->pAttachments; count = attachments->attachmentCount;
+   } else {
+      VK_FROM_HANDLE(vk_framebuffer, fb, info->framebuffer);
+      if (!fb) return false;
+      views = fb->attachments; count = fb->attachment_count;
+   }
+   VK_FROM_HANDLE(vk_render_pass, pass, info->renderPass);
+   for (uint32_t i = 0; i < count; ++i) {
+      if (i < pass->attachment_count && pass->attachments && !pass->attachments[i].view_mask) continue;
+      VK_FROM_HANDLE(kk_image_view, view, views[i]);
+      if (view && view->layered_bc) return true;
+   }
+   return false;
+}
+
 static bool
 kk_mesh_pass_subpasses_safe(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
 {
@@ -440,6 +472,7 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
    struct kk_conditional_rendering_state conditional = cmd->state.cond_render;
    unsigned queries = 0;
    if (cmd->metal.render) return false;
+   if (kk_mesh_pass_layered_attachments(&p->entries[0])) return false;
    if (p->entries[0].type == VK_CMD_BEGIN_RENDERING) {
       if (kk_mesh_pass_scope_end(p->entries, p->entry_count, 0) != p->entry_count - 1)
          return false;
@@ -472,7 +505,9 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
          /* Keep regular and Mesh draws in their recorded relative order. */
       } else if (e->type == VK_CMD_NEXT_SUBPASS || e->type == VK_CMD_NEXT_SUBPASS2) {
          if (p->entries[0].type == VK_CMD_BEGIN_RENDERING) return false;
-      } else if (kk_mesh_pass_boundary(e) || e->type == VK_CMD_BEGIN_RENDERING ||
+      } else if (e->type == VK_CMD_BEGIN_RENDERING) {
+         if (kk_mesh_pass_layered_attachments(e)) return false;
+      } else if (kk_mesh_pass_boundary(e) ||
                  e->type == VK_CMD_END_RENDERING || e->type == VK_CMD_END_RENDERING2_KHR) {
          /* Complete chains were checked before scanning their draws. */
       } else if (e->type == VK_CMD_PIPELINE_BARRIER || e->type == VK_CMD_PIPELINE_BARRIER2 ||
