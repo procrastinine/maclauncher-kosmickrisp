@@ -278,7 +278,7 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
 
 #include "kk_layered_bc_render.h"
 
-static void
+VKAPI_ATTR void VKAPI_CALL
 kk_begin_rendering(VkCommandBuffer commandBuffer,
                      const VkRenderingInfo *pRenderingInfo)
 {
@@ -291,13 +291,15 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    const bool layered_bc = kk_layered_bc_rendering_info_requested(pRenderingInfo);
    /* Per-layer physical passes cannot use whole-pass memoryless retention.
     * Reuse the existing private commitment path for paired transient views. */
-   const bool transient_safe = cmd->transient_safe;
-   cmd->transient_safe &= !layered_bc;
-   VkResult result = kk_transient_prepare_rendering(cmd, pRenderingInfo);
-   cmd->transient_safe = transient_safe;
-   if (result != VK_SUCCESS) {
-      vk_command_buffer_set_error(&cmd->vk, result);
-      return;
+   if (p_atomic_read(&dev->has_lazy_memory)) {
+      const bool transient_safe = cmd->transient_safe;
+      cmd->transient_safe &= !layered_bc;
+      VkResult result = kk_transient_prepare_rendering(cmd, pRenderingInfo);
+      cmd->transient_safe = transient_safe;
+      if (result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&cmd->vk, result);
+         return;
+      }
    }
 
    memset(render, 0, sizeof(*render));

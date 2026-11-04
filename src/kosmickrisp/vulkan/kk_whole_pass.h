@@ -118,8 +118,9 @@ kk_whole_pass_begin_rendering(VkCommandBuffer commandBuffer,
 
    kk_whole_pass_flush_suspended(cmd);
    dev->whole_pass_begin_rendering(commandBuffer, info);
-   /* Backend meta rendering may nest; retain the application's attachments. */
-   kk_whole_pass_save(cmd, info);
+   /* Only a suspended scope needs a matching resume snapshot. */
+   if (info->flags & VK_RENDERING_SUSPENDING_BIT)
+      kk_whole_pass_save(cmd, info);
 }
 
 VKAPI_ATTR void VKAPI_CALL

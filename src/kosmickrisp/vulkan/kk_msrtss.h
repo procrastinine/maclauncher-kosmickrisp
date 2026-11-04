@@ -2,6 +2,17 @@
 // Legacy subpasses reach this same path through Mesa's render-pass lowering.
 #include "vk_meta.h"
 
+static bool
+kk_msrtss_same_view(const struct kk_image_view *a,
+                    const struct kk_image_view *b)
+{
+   return a->vk.image == b->vk.image &&
+          a->vk.view_format == b->vk.view_format &&
+          a->vk.base_mip_level == b->vk.base_mip_level &&
+          a->vk.base_array_layer == b->vk.base_array_layer &&
+          a->vk.layer_count == b->vk.layer_count;
+}
+
 static VkResult
 kk_msrtss_image(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
                 VkSampleCountFlagBits samples, VkImageView *view_out)
@@ -9,7 +20,8 @@ kk_msrtss_image(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    const VkDevice device = kk_device_to_handle(dev);
    util_dynarray_foreach(&cmd->msrtss_images, struct kk_msrtss_image, cached) {
-      if (cached->source == src && cached->samples == samples && cached->view) {
+      if (kk_msrtss_same_view(cached->source, src) &&
+          cached->samples == samples && cached->view) {
          *view_out = cached->view;
          return VK_SUCCESS;
       }
@@ -86,17 +98,6 @@ kk_msrtss_image(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
    if (result == VK_SUCCESS)
       util_dynarray_top_ptr(&cmd->msrtss_images, struct kk_msrtss_image)->view = *view_out;
    return result;
-}
-
-static bool
-kk_msrtss_same_view(const struct kk_image_view *a,
-                    const struct kk_image_view *b)
-{
-   return a->vk.image == b->vk.image &&
-          a->vk.view_format == b->vk.view_format &&
-          a->vk.base_mip_level == b->vk.base_mip_level &&
-          a->vk.base_array_layer == b->vk.base_array_layer &&
-          a->vk.layer_count == b->vk.layer_count;
 }
 
 VKAPI_ATTR void VKAPI_CALL

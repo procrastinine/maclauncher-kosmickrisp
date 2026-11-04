@@ -610,6 +610,8 @@ void kk_cmd_buffer_set_label(struct kk_cmd_buffer *cb, const char *label);
 bool kk_whole_pass_transient_safe(struct kk_device *, struct vk_command_buffer **, uint32_t);
 bool kk_whole_pass_needs_submit(struct kk_cmd_buffer *cmd);
 void kk_whole_pass_command_boundary(struct kk_cmd_buffer *cmd);
+VKAPI_ATTR void VKAPI_CALL
+kk_begin_rendering(VkCommandBuffer, const VkRenderingInfo *);
 void kk_whole_pass_flush_suspended(struct kk_cmd_buffer *cmd);
 VkAccessFlags2 kk_whole_pass_attachment_access(VkAccessFlags2, VkPipelineStageFlags2);
 bool kk_whole_pass_attachment_barrier(const VkDependencyInfo *dep);

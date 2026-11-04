@@ -203,7 +203,15 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
    if (result != VK_SUCCESS)
       goto release;
 
-   rerecord->transient_safe = kk_whole_pass_transient_safe(dev, commands, count);
+   /* Eligibility belongs to the complete immutable recorded command list.
+    * Combining command-buffer summaries avoids rebinding every pipeline on
+    * each submission, including unrelated trailing command buffers. */
+   rerecord->transient_safe = true;
+   for (uint32_t i = 0; i < count; i++) {
+      struct kk_cmd_buffer *source =
+         container_of(commands[i], struct kk_cmd_buffer, vk);
+      rerecord->transient_safe &= source->transient_safe;
+   }
    for (*consumed = 0; *consumed < count; (*consumed)++) {
       struct kk_cmd_buffer *source =
          container_of(commands[*consumed], struct kk_cmd_buffer, vk);

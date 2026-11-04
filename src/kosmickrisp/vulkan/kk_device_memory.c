@@ -395,10 +395,11 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
       goto set_priority;
    }
 
-   simple_mtx_init(&mem->transient_mutex, mtx_plain);
    mem->lazy = properties & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
-   if (mem->lazy)
+   if (mem->lazy) {
+      simple_mtx_init(&mem->transient_mutex, mtx_plain);
       p_atomic_set(&dev->has_lazy_memory, true);
+   }
 
    bool import_metal = metal_info && metal_info->handleType;
    bool import_host = host_info && host_info->handleType;
@@ -493,7 +494,8 @@ set_priority:
    return VK_SUCCESS;
 
 fail_alloc:
-   simple_mtx_destroy(&mem->transient_mutex);
+   if (mem->lazy)
+      simple_mtx_destroy(&mem->transient_mutex);
    vk_device_memory_destroy(&dev->vk, pAllocator, &mem->vk);
    return result;
 }
@@ -516,7 +518,8 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
    kk_device_memory_set_priority(dev, mem, 0.0f);
    if (mem->bo)
       kk_destroy_bo(dev, mem->bo);
-   simple_mtx_destroy(&mem->transient_mutex);
+   if (mem->lazy)
+      simple_mtx_destroy(&mem->transient_mutex);
 
    vk_device_memory_destroy(&dev->vk, pAllocator, &mem->vk);
 }
@@ -629,9 +632,13 @@ kk_GetDeviceMemoryCommitment(VkDevice device, VkDeviceMemory _mem,
 {
    VK_FROM_HANDLE(kk_device_memory, mem, _mem);
 
-   simple_mtx_lock(&mem->transient_mutex);
-   *pCommittedMemoryInBytes = mem->bo ? mem->vk.size : 0;
-   simple_mtx_unlock(&mem->transient_mutex);
+   if (mem->lazy) {
+      simple_mtx_lock(&mem->transient_mutex);
+      *pCommittedMemoryInBytes = mem->bo ? mem->vk.size : 0;
+      simple_mtx_unlock(&mem->transient_mutex);
+   } else {
+      *pCommittedMemoryInBytes = mem->vk.size;
+   }
 }
 
 #ifdef VK_USE_PLATFORM_METAL_EXT

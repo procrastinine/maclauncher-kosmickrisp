@@ -432,7 +432,11 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    dev->vk.shader_ops = &kk_device_shader_ops;
    dev->mtl_handle = pdev->mtl_dev_handle;
    dev->vk.command_buffer_ops = &kk_cmd_buffer_ops;
-   dev->whole_pass_begin_rendering = dev->vk.dispatch_table.CmdBeginRendering;
+   /* The extension dispatch is selected once; ordinary rendering has no
+    * MSRTSS pNext walk or implicit attachment setup. */
+   dev->whole_pass_begin_rendering =
+      dev->vk.enabled_features.multisampledRenderToSingleSampled
+         ? kk_CmdBeginRendering : kk_begin_rendering;
    dev->whole_pass_end_rendering = dev->vk.dispatch_table.CmdEndRendering2KHR;
    dev->vk.dispatch_table.CmdBeginRendering = kk_whole_pass_begin_rendering;
    dev->vk.dispatch_table.CmdEndRendering = kk_whole_pass_end_rendering;
