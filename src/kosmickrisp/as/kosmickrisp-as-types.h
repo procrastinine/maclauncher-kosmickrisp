@@ -16,6 +16,10 @@
 #define KK_AS_SCRATCH_ALIGNMENT ((uint64_t)16)
 #define KK_AS_SERIAL_PREFIX_SIZE ((uint64_t)56)
 #define KK_AS_SERIAL_BLAS_BLOCKS ((uint64_t)0xffffffffu << 32)
+/* A serialized block: type (VK_ACCELERATION_STRUCTURE_SERIALIZED_BLOCK_TYPE_*),
+ * a reserved word and a 64-bit handle count, then the handles. */
+#define KK_AS_SERIAL_BLOCK_SIZE ((uint64_t)16)
+#define KK_AS_SERIAL_BLOCK_OPACITY_MICROMAP 0u
 #define KK_AS_MAX_DISPATCH_INVOCATIONS (UINT64_C(65536) * 65535 * UINT32_MAX)
 
 #define KK_AS_TYPE_TOP_LEVEL 0u
@@ -39,7 +43,8 @@ struct __attribute__((aligned(16))) kk_as_header {
    uint8_t type;
    uint8_t status;
    uint32_t build_flags;
-   uint32_t reserved0;
+   /* Bottom level: geometries with an attached opacity micromap. */
+   uint32_t micromap_count;
    uint64_t canonical_size;
    uint64_t serialization_size;
    uint64_t root_offset;
@@ -75,12 +80,14 @@ struct __attribute__((aligned(16))) kk_as_node {
    uint64_t reserved;
 };
 
+/* micromap: the attached opacity micromap's address (0 for none), which
+ * serialization lists as the BLAS's micromap handle. */
 struct kk_as_geometry {
    uint64_t first_primitive;
    uint64_t primitive_count;
    uint32_t type;
    uint32_t flags;
-   uint64_t reserved;
+   uint64_t micromap;
 };
 
 /* Triangles use the first nine floats; instances use both row-major 3x4

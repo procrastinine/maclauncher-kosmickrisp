@@ -134,6 +134,25 @@ kk_as_compute_layout(uint32_t type, uint32_t flags, uint64_t geometries,
    return true;
 }
 
+/* A bottom-level structure whose geometries reference `count` opacity
+ * micromaps serializes one opacity micromap block of `count` handles after
+ * the prefix (the block list that KK_AS_SERIAL_BLAS_BLOCKS announces). */
+static inline bool
+kk_as_layout_set_micromaps(struct kk_as_layout *layout, uint32_t count)
+{
+   struct kk_as_header *h = &layout->header;
+   uint64_t cursor = KK_AS_SERIAL_PREFIX_SIZE, ignored;
+   h->micromap_count = count;
+   if (!count)
+      return true;
+   if (!kk_as_u64_add(cursor, KK_AS_SERIAL_BLOCK_SIZE, &cursor) ||
+       !kk_as_append(&cursor, count, sizeof(uint64_t), 8, &ignored) ||
+       !kk_as_u64_align(cursor, KK_AS_ALIGNMENT, &cursor) ||
+       !kk_as_u64_add(cursor, h->canonical_size, &h->serialization_size))
+      return false;
+   return true;
+}
+
 static inline bool
 kk_as_compute_micromap_layout(uint32_t flags, uint64_t triangles, uint64_t data_bytes,
                               struct kk_as_layout *result)

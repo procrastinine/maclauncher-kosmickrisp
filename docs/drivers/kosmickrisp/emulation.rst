@@ -42,7 +42,7 @@
    * - ``opacity_micromap``
      - Opacity micromaps: per-micro-triangle opacity states for ray-traced triangles.
        Controls: ``VK_KHR_opacity_micromap``, ``micromap``, ``maxOpacity2StateSubdivisionLevel``, ``maxOpacity4StateSubdivisionLevel``, ``maxOpacityLossy4StateSubdivisionLevel``, ``maxMicromapTriangles``.
-     - compute build / software traversal. A micromap build packs the triangle records in one invocation, then copies the states with one invocation per micromap triangle. Traversals compiled for pipelines created with the opacity micromap flag, and ray queries in shaders that declare the opacity micromap execution mode, test one flag per triangle candidate; a triangle with a micromap adds an index load, the micro-triangle index computation and one state load. Other ray-tracing shaders are compiled without the lookup.
+     - compute build / software traversal. A micromap build packs the triangle records in one invocation, then copies the states with one invocation per micromap triangle. Traversals compiled for pipelines created with the opacity micromap flag, and ray queries in shaders that declare the opacity micromap execution mode, test one flag per triangle candidate; a triangle with a micromap adds an index load, the micro-triangle index computation and one state load. Other ray-tracing shaders are compiled without the lookup. Serializing a bottom-level structure lists its micromap handles in one block; deserializing installs the application-patched handles with one more pass over the nodes.
      - No Apple family
      - Off
      - Opacity micromaps require ray tracing, which requires explicit selection.

@@ -64,7 +64,7 @@ kk_as_initialize(global struct kk_as_header *dst,
       global struct kk_as_geometry *g = (global struct kk_as_geometry *)
          ((global uchar *)dst + layout->geometry_offset);
       g[id] = (struct kk_as_geometry){inputs[id].first_primitive,
-         inputs[id].primitive_count, inputs[id].type, inputs[id].flags, 0};
+         inputs[id].primitive_count, inputs[id].type, inputs[id].flags, inputs[id].micromap};
    }
 }
 
@@ -414,13 +414,46 @@ kk_as_copy(global uchar *dst, global const struct kk_as_header *src)
 }
 
 static inline uint64_t
-kk_as_serial_payload(uint64_t instance_count)
+kk_as_serial_align(uint64_t references)
 {
-   /* A BLAS has a block marker and zero optional-reference blocks. */
-   if ((instance_count >> 32) == 0xffffffffu)
-      instance_count = 0;
-   return (KK_AS_SERIAL_PREFIX_SIZE + instance_count * ((uint64_t)8) + ((uint64_t)15)) & ~((uint64_t)15);
+   return (KK_AS_SERIAL_PREFIX_SIZE + references + ((uint64_t)15)) & ~((uint64_t)15);
 }
+
+/* Bytes between the prefix and the canonical copy in a serialized AS: one
+ * pointer per instance for a top level; for a bottom level the block list
+ * that the marker announces, each block 16 bytes plus its handles. */
+static inline uint64_t
+kk_as_serial_references(global const uchar *src)
+{
+   global const struct kk_as_serial_header *prefix =
+      (global const struct kk_as_serial_header *)src;
+   uint64_t count = prefix->bottom_level_pointer_count;
+   if ((count >> 32) != 0xffffffffu)
+      return count * ((uint64_t)8);
+   uint64_t bytes = 0;
+   for (uint32_t block = 0; block < (uint32_t)count; ++block) {
+      uint64_t handles = *(global const uint64_t *)
+         (src + KK_AS_SERIAL_PREFIX_SIZE + bytes + 8);
+      bytes += KK_AS_SERIAL_BLOCK_SIZE + handles * ((uint64_t)8);
+   }
+   return bytes;
+}
+
+static inline uint64_t
+kk_as_serial_payload(global const uchar *src)
+{
+   return kk_as_serial_align(kk_as_serial_references(src));
+}
+
+static inline global struct kk_as_geometry *
+kk_as_geometries(global struct kk_as_header *h)
+{
+   return (global struct kk_as_geometry *)((global uchar *)h + h->geometry_offset);
+}
+
+/* The opacity micromap handles of a serialized bottom level (its only
+ * block), in the order of the geometries that reference a micromap. */
+#define KK_AS_SERIAL_MICROMAP_HANDLES (KK_AS_SERIAL_PREFIX_SIZE + KK_AS_SERIAL_BLOCK_SIZE)
 
 KERNEL(64)
 kk_as_serialize(global uchar *dst, global struct kk_as_header *src,
@@ -436,18 +469,35 @@ kk_as_serialize(global uchar *dst, global struct kk_as_header *src,
       prefix->serialization_size = src->serialization_size;
       prefix->deserialization_size = src->canonical_size;
       prefix->bottom_level_pointer_count = src->type == KK_AS_TYPE_BOTTOM_LEVEL ?
-         KK_AS_SERIAL_BLAS_BLOCKS : src->bottom_level_pointer_count;
+         KK_AS_SERIAL_BLAS_BLOCKS | (src->micromap_count ? 1u : 0u) :
+         src->bottom_level_pointer_count;
+      if (src->type == KK_AS_TYPE_BOTTOM_LEVEL && src->micromap_count) {
+         global uint *block = (global uint *)(dst + KK_AS_SERIAL_PREFIX_SIZE);
+         block[0] = KK_AS_SERIAL_BLOCK_OPACITY_MICROMAP;
+         block[1] = 0;
+         *(global uint64_t *)(block + 2) = src->micromap_count;
+         global uint64_t *handles = (global uint64_t *)(dst + KK_AS_SERIAL_MICROMAP_HANDLES);
+         global struct kk_as_geometry *g = kk_as_geometries(src);
+         uint32_t k = 0;
+         for (uint32_t i = 0; i < src->geometry_count && k < src->micromap_count; ++i) {
+            if (g[i].micromap)
+               handles[k++] = g[i].micromap;
+         }
+      }
    }
    if (id < src->instance_count) {
       global struct kk_as_node *instance = kk_as_node_ref(src,
          src->instance_offset + id * (uint64_t)sizeof(struct kk_as_node));
       ((global uint64_t *)(dst + KK_AS_SERIAL_PREFIX_SIZE))[id] = instance->child1_or_blas;
    }
-   uint64_t offset = kk_as_serial_payload(src->bottom_level_pointer_count);
+   uint64_t references = src->type == KK_AS_TYPE_BOTTOM_LEVEL ?
+      (src->micromap_count ? KK_AS_SERIAL_BLOCK_SIZE + src->micromap_count * ((uint64_t)8) : 0) :
+      src->bottom_level_pointer_count * ((uint64_t)8);
+   uint64_t offset = kk_as_serial_align(references);
    if (id < src->canonical_size / 8)
       ((global uint64_t *)(dst + offset))[id] = ((global const uint64_t *)src)[id];
    /* Deterministic padding contains no process addresses or uninitialized data. */
-   uint64_t padding = KK_AS_SERIAL_PREFIX_SIZE + src->bottom_level_pointer_count * ((uint64_t)8);
+   uint64_t padding = KK_AS_SERIAL_PREFIX_SIZE + references;
    if (id == 0 && offset != padding)
       *(global uint64_t *)(dst + padding) = 0;
 }
@@ -456,8 +506,7 @@ KERNEL(64)
 kk_as_deserialize(global struct kk_as_header *dst, global const uchar *src)
 {
    uint64_t id = kk_as_id();
-   global const struct kk_as_serial_header *prefix = (global const struct kk_as_serial_header *)src;
-   uint64_t offset = kk_as_serial_payload(prefix->bottom_level_pointer_count);
+   uint64_t offset = kk_as_serial_payload(src);
    global const struct kk_as_header *h = (global const struct kk_as_header *)(src + offset);
    /* UUID compatibility is queried by the application before a legal command.
     * The embedded ABI is nevertheless checked before using its layout. */
@@ -479,6 +528,43 @@ kk_as_patch_deserialized_instances(global struct kk_as_header *dst,
          dst->instance_offset + id * (uint64_t)sizeof(struct kk_as_node));
       node->child1_or_blas = ((global const uint64_t *)(src + KK_AS_SERIAL_PREFIX_SIZE))[id];
    }
+   /* A bottom level's leaves take the application-patched micromap handle of
+    * their geometry: the k-th handle belongs to the k-th geometry with a
+    * micromap. The geometry records still hold the serialized addresses here
+    * and are updated by the next dispatch. */
+   if (dst->type == KK_AS_TYPE_BOTTOM_LEVEL && dst->micromap_count && id < dst->node_count) {
+      global struct kk_as_node *node = kk_as_node_at(dst, id);
+      if (node->type != KK_AS_NODE_TRIANGLE || !(node->flags & KK_AS_NODE_FLAG_OPACITY_MICROMAP))
+         return;
+      global struct kk_as_geometry *g = kk_as_geometries(dst);
+      uint32_t geometry = node->geometry_id, k = 0;
+      if (geometry >= dst->geometry_count || !g[geometry].micromap)
+         return;
+      for (uint32_t i = 0; i < geometry; ++i)
+         k += g[i].micromap != 0;
+      global uchar *payload = (global uchar *)dst + node->child0_or_payload;
+      *(global uint64_t *)(payload + 10 * sizeof(float)) =
+         k < dst->micromap_count ?
+         ((global const uint64_t *)(src + KK_AS_SERIAL_MICROMAP_HANDLES))[k] : 0;
+   }
+}
+
+/* Follows kk_as_patch_deserialized_instances: the geometry records take the
+ * new micromap handles, so a later serialization lists them. */
+KERNEL(1)
+kk_as_patch_deserialized_micromaps(global struct kk_as_header *dst,
+                                   global const uchar *src)
+{
+   if (dst->type != KK_AS_TYPE_BOTTOM_LEVEL || !dst->micromap_count)
+      return;
+   global struct kk_as_geometry *g = kk_as_geometries(dst);
+   global const uint64_t *handles =
+      (global const uint64_t *)(src + KK_AS_SERIAL_MICROMAP_HANDLES);
+   uint32_t k = 0;
+   for (uint32_t i = 0; i < dst->geometry_count && k < dst->micromap_count; ++i) {
+      if (g[i].micromap)
+         g[i].micromap = handles[k++];
+   }
 }
 
 KERNEL(1)
@@ -494,12 +580,8 @@ KERNEL(1)
 kk_as_prepare_transfer(global uint *grid, global const uchar *src, uint serialized)
 {
    global const struct kk_as_header *h = (global const struct kk_as_header *)src;
-   if (serialized) {
-      global const struct kk_as_serial_header *prefix =
-         (global const struct kk_as_serial_header *)src;
-      h = (global const struct kk_as_header *)(src +
-         kk_as_serial_payload(prefix->bottom_level_pointer_count));
-   }
+   if (serialized)
+      h = (global const struct kk_as_header *)(src + kk_as_serial_payload(src));
    uint64_t count = h->canonical_size / 8;
    uint width = count < 65536 ? (uint)count : 65536;
    uint64_t rows = width ? count / width + (count % width != 0) : 1;

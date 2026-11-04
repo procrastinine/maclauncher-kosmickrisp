@@ -300,19 +300,27 @@ kk_CmdBuildAccelerationStructuresKHR(VkCommandBuffer commandBuffer, uint32_t inf
          return;
       }
       struct kk_ptr input = kk_pool_alloc(cmd, MAX2(input_bytes, 8), 8);
-      struct kk_ptr header = kk_pool_upload(cmd, &layout.header, sizeof(layout.header), 16);
-      if (!input.gpu || !header.gpu)
+      if (!input.gpu)
          return;
       uint64_t first = 0;
+      uint32_t micromaps = 0;
       for (uint32_t g = 0; g < info->geometryCount; ++g) {
          const VkAccelerationStructureGeometryKHR *geometry = kk_as_geometry(info, g);
-         if (!kk_as_make_input(geometry, &ppBuildRangeInfos[b][g], first,
-                               &((struct kk_as_input *)input.cpu)[g])) {
+         struct kk_as_input *in = &((struct kk_as_input *)input.cpu)[g];
+         if (!kk_as_make_input(geometry, &ppBuildRangeInfos[b][g], first, in)) {
             vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
             return;
          }
+         micromaps += in->micromap != 0;
          first += ppBuildRangeInfos[b][g].primitiveCount;
       }
+      if (!kk_as_layout_set_micromaps(&layout, micromaps)) {
+         vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         return;
+      }
+      struct kk_ptr header = kk_pool_upload(cmd, &layout.header, sizeof(layout.header), 16);
+      if (!header.gpu)
+         return;
       uint64_t scratch = info->scratchData.deviceAddress;
       struct kk_as_initialize_args init = {scratch, header.gpu, input.gpu};
       kk_as_dispatch(cmd, kk_as_direct_grid(MAX3(layout.header.node_count, info->geometryCount, 1)),
@@ -408,6 +416,8 @@ kk_CmdCopyMemoryToAccelerationStructureKHR(VkCommandBuffer commandBuffer,
    kk_as_dispatch(cmd, grid, KK_AS_DESERIALIZE, &copy, sizeof(copy));
    struct kk_as_patch_deserialized_instances_args patch = {destination, pInfo->src.deviceAddress};
    kk_as_dispatch(cmd, grid, KK_AS_PATCH_DESERIALIZED_INSTANCES, &patch, sizeof(patch));
+   struct kk_as_patch_deserialized_micromaps_args micromaps = {destination, pInfo->src.deviceAddress};
+   kk_as_dispatch(cmd, kk_grid_1d(1), KK_AS_PATCH_DESERIALIZED_MICROMAPS, &micromaps, sizeof(micromaps));
 }
 
 VKAPI_ATTR void VKAPI_CALL
