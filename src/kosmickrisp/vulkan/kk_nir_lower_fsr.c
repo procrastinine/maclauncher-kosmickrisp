@@ -947,8 +947,9 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
    ctx->top_end = nir_def_instr(ctx->real);
 }
 
-/* At the end of the shader: the winner publishes, the other real lanes take
- * its outputs and discard state, and quads broadcast as usual. */
+/* The winner publishes once. Every other executing lane reads the payload
+ * directly: a shuffle of a value produced by atomics in divergent control
+ * flow can expose suppressed sample-lane registers. */
 static void
 fsr_exchange(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
 {
@@ -996,7 +997,8 @@ fsr_exchange(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
    nir_variable *ready = nir_local_variable_create(impl, glsl_uint_type(), "kk_fsr_ready");
    nir_store_var(b, tries, nir_imm_int(b, 0), 1);
    nir_store_var(b, ready, nir_imm_int(b, 0), 1);
-   nir_if *wait = nir_push_if(b, nir_iand(b, nir_iand(b, ctx->lead, nir_inot(b, ctx->won)), active));
+   nir_def *reader = nir_iand(b, nir_ine_imm(b, ctx->alive, 0), nir_inot(b, ctx->real));
+   nir_if *wait = nir_push_if(b, nir_iand(b, reader, active));
    nir_def *taken[64 * 8 + 1];
    {
       nir_push_loop(b);
@@ -1036,7 +1038,8 @@ fsr_exchange(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
             ++k;
          }
       }
-      nir_def *value = fsr_broadcast(b, ctx, nir_vec(b, c, v->num_components));
+      nir_def *local = nir_vec(b, c, v->num_components);
+      nir_def *value = nir_bcsel(b, active, local, fsr_broadcast(b, ctx, local));
       nir_builder_instr_insert(b, &stores[i]->instr);
       nir_src_rewrite(&stores[i]->src[0], value);
    }
@@ -1104,7 +1107,13 @@ kk_nir_lower_fsr(nir_shader *nir, const struct kk_fsr_lower_options *opts)
       fsr_exchange(&b, &ctx, impl);
    /* The real lane's discard decides the fragment. */
    b.cursor = nir_after_impl(impl);
-   nir_demote_if(&b, fsr_broadcast(&b, &ctx, nir_load_var(&b, ctx.demoted)));
+   nir_def *discard = nir_load_var(&b, ctx.demoted);
+   nir_def *broadcast_discard = fsr_broadcast(&b, &ctx, discard);
+   if (ctx.sample_group)
+      discard = nir_bcsel(&b, nir_ine_imm(&b, ctx.slot, 0), discard, broadcast_discard);
+   else
+      discard = broadcast_discard;
+   nir_demote_if(&b, discard);
 
    nir->info.fs.needs_full_quad_helper_invocations = true;
    nir->info.fs.uses_discard = true;
