@@ -312,12 +312,15 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       goto fail_compiler;
 
    simple_mtx_init(&dev->blit_queue_mutex, mtx_plain);
-   if (pCreateInfo->queueCreateInfoCount > 0) {
-      result =
-         kk_queue_init(dev, &dev->queue, &pCreateInfo->pQueueCreateInfos[0], 0);
-      if (result != VK_SUCCESS)
-         goto fail_vab_memory;
-      dev->has_queue = true;
+   for (uint32_t i = 0; i < pCreateInfo->queueCreateInfoCount; ++i) {
+      const VkDeviceQueueCreateInfo *info = &pCreateInfo->pQueueCreateInfos[i];
+      for (uint32_t q = 0; q < info->queueCount; ++q) {
+         assert(dev->queue_count < ARRAY_SIZE(dev->queues));
+         result = kk_queue_init(dev, &dev->queues[dev->queue_count], info, q);
+         if (result != VK_SUCCESS)
+            goto fail_mem_cache;
+         ++dev->queue_count;
+      }
    }
 
    result = kk_device_init_meta(dev);
@@ -365,10 +368,8 @@ fail_query_table:
 fail_meta:
    kk_device_finish_meta(dev);
 fail_mem_cache:
-   if (dev->has_queue) {
-      kk_queue_finish(dev, &dev->queue);
-      dev->has_queue = false;
-   }
+   while (dev->queue_count > 0)
+      kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
 fail_vab_memory:
    simple_mtx_destroy(&dev->blit_queue_mutex);
    mtl_release(dev->residency_set.handle);
@@ -417,10 +418,8 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    if (dev->heap)
       kk_destroy_bo(dev, dev->heap);
 
-   if (dev->has_queue) {
-      kk_queue_finish(dev, &dev->queue);
-      dev->has_queue = false;
-   }
+   while (dev->queue_count > 0)
+      kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
 
    /* Release the residency set last once all BOs are released. */
    mtl_release(dev->residency_set.handle);

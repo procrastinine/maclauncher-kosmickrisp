@@ -287,6 +287,14 @@ kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
    cnd_init(&queue->cond);
 
    queue->mtl_handle = mtl_new_command_queue(dev->mtl_handle);
+   if (!queue->mtl_handle) {
+      cnd_destroy(&queue->cond);
+      mtx_destroy(&queue->mutex);
+      util_dynarray_fini(&queue->free_cmd_buffers);
+      kk_DestroyCommandPool(kk_device_to_handle(dev), pool_handle, NULL);
+      vk_queue_finish(&queue->vk);
+      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   }
    mtl_command_queue_add_residency_set(queue->mtl_handle,
                                        dev->residency_set.handle);
 

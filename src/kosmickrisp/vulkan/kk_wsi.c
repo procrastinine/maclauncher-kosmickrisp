@@ -131,7 +131,7 @@ static struct vk_queue *
 kk_get_blit_queue(VkDevice device)
 {
    VK_FROM_HANDLE(kk_device, dev, device);
-   if (!dev->has_queue)
+   if (dev->queue_count == 0)
       return NULL;
 
    simple_mtx_lock(&dev->blit_queue_mutex);
@@ -149,7 +149,7 @@ kk_get_blit_queue(VkDevice device)
       else
          mesa_logw("kk: failed to create the WSI queue");
    }
-   struct vk_queue *queue = dev->has_blit_queue ? &dev->blit_queue.vk : &dev->queue.vk;
+   struct vk_queue *queue = dev->has_blit_queue ? &dev->blit_queue.vk : &dev->queues[0].vk;
    simple_mtx_unlock(&dev->blit_queue_mutex);
    return queue;
 }

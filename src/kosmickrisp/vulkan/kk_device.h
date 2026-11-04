@@ -96,8 +96,9 @@ struct kk_device {
 
    struct kk_precompiled_cache precompiled_cache;
 
-   bool has_queue;
-   struct kk_queue queue;
+   uint32_t queue_count;
+   /* Two graphics queues and one queue per dedicated family. */
+   struct kk_queue queues[4];
    simple_mtx_t blit_queue_mutex;
    bool has_blit_queue;
    struct kk_queue blit_queue;
