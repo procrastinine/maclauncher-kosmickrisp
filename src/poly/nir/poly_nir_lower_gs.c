@@ -694,6 +694,8 @@ stream_multiplier(const nir_shader *gs)
  * Create a GS rasterization shader. This is a hardware vertex shader that
  * shades each rasterized output vertex in parallel.
  */
+#include "poly_gs_raster_bounds.h"
+
 static nir_shader *
 create_gs_rast_shader(const nir_shader *gs, const struct lower_gs_state *state)
 {
@@ -772,6 +774,8 @@ create_gs_rast_shader(const nir_shader *gs, const struct lower_gs_state *state)
    default:
       UNREACHABLE("invalid shape");
    }
+
+   nir_cursor raster_body_start = b->cursor;
 
    nir_shader_intrinsics_pass(shader, collect_output_types, nir_metadata_all,
                               rs.outputs);
@@ -911,6 +915,7 @@ create_gs_rast_shader(const nir_shader *gs, const struct lower_gs_state *state)
       nir_lower_default_point_size(shader);
    }
 
+   poly_guard_gs_raster(shader, gs, &rs, raster_body_start);
    return shader;
 }
 
