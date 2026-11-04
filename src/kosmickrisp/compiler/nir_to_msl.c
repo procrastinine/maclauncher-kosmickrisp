@@ -172,19 +172,81 @@ writemask_to_msl(struct nir_to_msl_ctx *ctx, unsigned write_mask,
 }
 
 /* Generated helpers use scalar/vector arguments and one thread-local
- * return pointer. Application function/deref lowering remains unchanged. */
+ * return pointer. Function temporaries are addressed as locals or elements of
+ * local arrays. Application function/deref lowering remains unchanged. */
+static void src_to_msl(struct nir_to_msl_ctx *ctx, nir_src *src);
+
 static void
 msl_helper_deref(struct nir_to_msl_ctx *ctx, nir_deref_instr *deref)
 {
-   if (deref->deref_type == nir_deref_type_var) {
+   switch (deref->deref_type) {
+   case nir_deref_type_var:
       assert(deref->var->data.mode == nir_var_function_temp);
       P(ctx, "(&local%u)", deref->var->index);
-   } else {
-      assert(deref->deref_type == nir_deref_type_cast);
-      nir_intrinsic_instr *param = nir_def_as_intrinsic(deref->parent.ssa);
-      assert(param->intrinsic == nir_intrinsic_load_param);
-      P(ctx, "p%u", nir_intrinsic_param_idx(param));
+      break;
+   case nir_deref_type_array:
+      P(ctx, "(&(*");
+      msl_helper_deref(ctx, nir_deref_instr_parent(deref));
+      P(ctx, ")[");
+      src_to_msl(ctx, &deref->arr.index);
+      P(ctx, "])");
+      break;
+   case nir_deref_type_cast: {
+      nir_intrinsic_instr *param = nir_src_as_intrinsic(deref->parent);
+      if (param && param->intrinsic == nir_intrinsic_load_param) {
+         P(ctx, "p%u", nir_intrinsic_param_idx(param));
+         break;
+      }
+      FALLTHROUGH;
    }
+   default:
+      msl_fail(ctx, "function temporary access without an MSL address");
+      P(ctx, "(&kk_unsupported)");
+      break;
+   }
+}
+
+/* buf0 is a parameter of the entry function only. Workarounds that test its
+ * address apply there; retained helper functions emit the plain operation. */
+static bool
+msl_has_buf0(const struct nir_to_msl_ctx *ctx)
+{
+   return !ctx->current_function || ctx->current_function->is_entrypoint;
+}
+
+/* Bit-preserving storage for function temporaries: numeric scalars and
+ * vectors use unsigned words of their width, booleans stay bool, and arrays
+ * keep their dimensions. Struct temporaries are split before emission. */
+static const char *
+msl_local_storage_type(const struct glsl_type *type)
+{
+   const struct glsl_type *element = glsl_without_array(type);
+   if (!glsl_type_is_vector_or_scalar(element))
+      return NULL;
+   unsigned bit_size = glsl_get_bit_size(element);
+   unsigned components = glsl_get_vector_elements(element);
+   if ((bit_size != 1 && bit_size != 8 && bit_size != 16 && bit_size != 32 &&
+        bit_size != 64) || components < 1 || components > 4)
+      return NULL;
+   return msl_uint_type(bit_size, components);
+}
+
+static void
+msl_local_declaration(struct nir_to_msl_ctx *ctx, const nir_variable *var)
+{
+   const char *storage = msl_local_storage_type(var->type);
+   if (!storage) {
+      msl_fail(ctx, "function temporary without an MSL storage type");
+      storage = "uint";
+   }
+   P_IND(ctx, "%s local%u", storage, var->index);
+   for (const struct glsl_type *type = var->type; glsl_type_is_array(type);
+        type = glsl_get_array_element(type)) {
+      if (!glsl_get_length(type))
+         msl_fail(ctx, "function temporary array without a length");
+      P(ctx, "[%u]", MAX2(glsl_get_length(type), 1u));
+   }
+   P(ctx, ";\n");
 }
 
 static void
@@ -429,7 +491,7 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
       ALU_BINOP("-");
       break;
    case nir_op_fmul:
-      if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&
+      if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) && msl_has_buf0(ctx) &&
           (nir_alu_instr_is_inf_preserve(instr) ||
            nir_alu_instr_is_nan_preserve(instr)))
          P(ctx, "!&buf0.contents[0] ? 1 : ")
@@ -611,7 +673,7 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
          P(ctx, " - ");
          alu_src_to_msl(ctx, instr, 0);
          P(ctx, ") * (");
-         if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&
+         if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) && msl_has_buf0(ctx) &&
              (nir_alu_instr_is_inf_preserve(instr) ||
               nir_alu_instr_is_nan_preserve(instr)))
             P(ctx, "!&buf0.contents[0] ? 1 : ")
@@ -760,7 +822,7 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    case nir_op_bcsel:
       /* KK_WORKAROUND_10 All shaders will have buf0 bound */
       if (!(ctx->disabled_workarounds & BITFIELD_BIT(10)) &&
-          ctx->shader->info.stage == MESA_SHADER_COMPUTE)
+          ctx->shader->info.stage == MESA_SHADER_COMPUTE && msl_has_buf0(ctx))
          P(ctx, "(ulong)&buf0.contents[0] && ");
       alu_src_to_msl(ctx, instr, 0);
       P(ctx, " ? ");
@@ -1293,15 +1355,21 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       }
       break;
    case nir_intrinsic_load_deref:
-      P(ctx, "as_type<%s>(*", msl_type_for_def(ctx->types, &instr->def));
+      /* Booleans cannot be reinterpreted with as_type. */
+      P(ctx, instr->def.bit_size == 1 ? "%s(*" : "as_type<%s>(*",
+        msl_type_for_def(ctx->types, &instr->def));
       msl_helper_deref(ctx, nir_src_as_deref(instr->src[0]));
       P(ctx, ");\n");
       break;
    case nir_intrinsic_store_deref: {
       nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
+      const char *storage = msl_local_storage_type(deref->type);
+      if (!storage) {
+         msl_fail(ctx, "function temporary store without an MSL storage type");
+         storage = "uint";
+      }
       P_IND(ctx, "*"); msl_helper_deref(ctx, deref);
-      P(ctx, " = as_type<%s>(", msl_uint_type(
-         glsl_get_bit_size(deref->type), glsl_get_vector_elements(deref->type)));
+      P(ctx, instr->src[1].ssa->bit_size == 1 ? " = %s(" : " = as_type<%s>(", storage);
       src_to_msl(ctx, &instr->src[1]);
       P(ctx, ");\n");
       break;
@@ -2442,11 +2510,13 @@ instr_to_msl(struct nir_to_msl_ctx *ctx, nir_instr *instr)
       P_IND(ctx, "%s(", call->callee->name);
       for (unsigned i = 0; i < call->num_params; ++i) {
          if (i) P(ctx, ", ");
-         if (!call->callee->params[i].is_return)
-            P(ctx, "as_type<%s>(", msl_uint_type(
-               call->callee->params[i].bit_size, call->callee->params[i].num_components));
+         const nir_parameter *param = &call->callee->params[i];
+         /* Booleans cannot be reinterpreted with as_type. */
+         if (!param->is_return)
+            P(ctx, param->bit_size == 1 ? "%s(" : "as_type<%s>(",
+              msl_uint_type(param->bit_size, param->num_components));
          src_to_msl(ctx, &call->params[i]);
-         if (!call->callee->params[i].is_return) P(ctx, ")");
+         if (!param->is_return) P(ctx, ")");
       }
       P(ctx, ");\n");
       break;
@@ -2927,10 +2997,8 @@ msl_emit_constant_data(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 static void
 msl_helper_locals(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
 {
-   nir_foreach_function_temp_variable(var, impl) {
-      P_IND(ctx, "%s local%u;\n", msl_uint_type(glsl_get_bit_size(var->type),
-         glsl_get_vector_elements(var->type)), var->index);
-   }
+   nir_foreach_function_temp_variable(var, impl)
+      msl_local_declaration(ctx, var);
 }
 
 static void
@@ -2945,12 +3013,13 @@ msl_emit_helpers(struct nir_to_msl_ctx *ctx)
       for (unsigned i = 0; i < function->num_params; ++i) {
          const nir_parameter *param = &function->params[i];
          if (i) P(ctx, ", ");
-         if (param->is_return) {
-            P(ctx, "thread %s *p%u", msl_uint_type(glsl_get_bit_size(param->type),
-               glsl_get_vector_elements(param->type)), i);
-         } else {
-            P(ctx, "%s p%u", msl_uint_type(param->bit_size, param->num_components), i);
+         const char *type = param->is_return ? msl_local_storage_type(param->type)
+                                             : msl_uint_type(param->bit_size, param->num_components);
+         if (!type || (param->is_return && glsl_type_is_array(param->type))) {
+            msl_fail(ctx, "helper parameter without an MSL type");
+            type = "uint";
          }
+         P(ctx, param->is_return ? "thread %s *p%u" : "%s p%u", type, i);
       }
       P(ctx, ")\n{\n"); ctx->indentlevel++;
       msl_helper_locals(ctx, impl);
@@ -2976,8 +3045,10 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    kk_float_controls_lower(shader);
 
    /* Meta shaders can reach emission without the application optimization
-    * passes. Only surviving deref storage needs a local declaration; dead
-    * aggregate or opaque variables have no scalar MSL storage type. */
+    * passes. Struct temporaries become one temporary per member. Only
+    * surviving deref storage needs a local declaration; dead aggregate or
+    * opaque variables have no MSL storage type. */
+   NIR_PASS(_, shader, nir_split_struct_vars, nir_var_function_temp);
    NIR_PASS(_, shader, nir_remove_dead_variables, nir_var_function_temp, NULL);
 
    struct nir_to_msl_ctx ctx;
@@ -3104,10 +3175,23 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    options->uses_pipeline_statistics = ctx.uses_pipeline_statistics;
    options->uses_sampler_emulation = ctx.uses_sampler_emulation;
    options->requires_sampler_emulation = ctx.requires_sampler_emulation;
-   char *ret = ctx.text->buf;
+   /* A construct without an MSL form, including a missing type name, yields
+    * source that Metal rejects with the reason, so pipeline creation fails
+    * instead of compiling a partial program. */
+   if (!ctx.error && strstr(ctx.text->buf, "(null)"))
+      ctx.error = "value without an MSL type";
+   char *ret;
+   if (ctx.error) {
+      mesa_loge("KosmicKrisp: MSL translation failed: %s", ctx.error);
+      ret = ralloc_asprintf(options->mem_ctx,
+                            "#error \"KosmicKrisp: MSL translation failed: %s\"\n",
+                            ctx.error);
+   } else {
+      ret = ctx.text->buf;
+      ralloc_steal(options->mem_ctx, ctx.text->buf);
+   }
    if (ctx.sampler_helpers) _mesa_hash_table_destroy(ctx.sampler_helpers, NULL);
    _mesa_hash_table_destroy(ctx.types, NULL);
-   ralloc_steal(options->mem_ctx, ctx.text->buf);
    ralloc_free(ctx.text);
    return ret;
 }

@@ -49,6 +49,8 @@ struct nir_to_msl_ctx {
    bool uses_matrix_coordinates;
    bool uses_poly_layer_selector;
    unsigned short indentlevel;
+   /* First construct that has no MSL form; the translation then fails. */
+   const char *error;
    bool uses_pipeline_statistics;
    bool uses_atomic64 : 1;
    bool uses_image_atomic64 : 1;
@@ -66,6 +68,13 @@ struct nir_to_msl_ctx {
    } while (0);
 
 #define P(ctx, ...) _mesa_string_buffer_printf((ctx)->text, __VA_ARGS__);
+
+static inline void
+msl_fail(struct nir_to_msl_ctx *ctx, const char *message)
+{
+   if (!ctx->error)
+      ctx->error = message;
+}
 
 #define P_INDENT(ctx)                                                          \
    do {                                                                        \

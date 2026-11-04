@@ -656,6 +656,13 @@ infer_types_from_instr(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       }
       return;
    }
+   case nir_instr_type_deref: {
+      /* Function temporary array elements are indexed with unsigned words. */
+      nir_deref_instr *deref = nir_instr_as_deref(instr);
+      if (deref->deref_type == nir_deref_type_array)
+         set_type(types, &deref->arr.index, TYPE_UINT);
+      return;
+   }
    case nir_instr_type_alu:
       infer_types_from_alu(types, nir_instr_as_alu(instr));
       return;
@@ -713,6 +720,18 @@ propagate_types(struct hash_table *types, nir_instr *instr)
             progress |= update_instr_type(types, parent_instr, unified_type);
          }
       }
+      break;
+   }
+   case nir_instr_type_deref: {
+      nir_deref_instr *deref = nir_instr_as_deref(instr);
+      if (deref->deref_type != nir_deref_type_array)
+         break;
+      ti_type src_type = get_type(types, &deref->arr.index);
+      ti_type def_type = get_type(types, deref->arr.index.ssa);
+      ti_type unified_type = unify_types(src_type, def_type);
+      if (unified_type > def_type)
+         progress |= update_instr_type(types, nir_def_instr(deref->arr.index.ssa),
+                                       unified_type);
       break;
    }
    case nir_instr_type_tex: {
