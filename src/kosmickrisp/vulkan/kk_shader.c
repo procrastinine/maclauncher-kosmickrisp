@@ -1174,6 +1174,24 @@ kk_nir_lower_vertex_id_zero_base(struct nir_shader *nir)
    return progress;
 }
 
+static bool
+kk_nir_requires_msl41(nir_shader *nir)
+{
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+            if (intr->intrinsic == nir_intrinsic_shared_atomic &&
+                nir_intrinsic_atomic_op(intr) == nir_atomic_op_fadd)
+               return true;
+         }
+      }
+   }
+   return false;
+}
+
 /* Consumes nir */
 static void
 kk_compile_msl_options(struct kk_physical_device *pdev, nir_shader *nir,
@@ -1227,6 +1245,7 @@ kk_compile_msl_options(struct kk_physical_device *pdev, nir_shader *nir,
       }
    }
 
+   data->requires_msl41 = kk_nir_requires_msl41(nir);
    data->code = nir_to_msl(nir, &translate_options);
    const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
 
@@ -1654,7 +1673,7 @@ kk_compile_compute_pipeline_mode(struct kk_device *device,
    struct kk_physical_device *pdev = kk_device_physical(device);
 
    mtl_library *library = mtl_new_library(
-      device->mtl_compiler_handle, data->code, pdev->info.msl_version,
+      device->mtl_compiler_handle, data->code, kk_msl_language_version(data, pdev->info.msl_version),
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
    if (library == NULL)
       return VK_ERROR_INVALID_SHADER_NV;
@@ -1796,6 +1815,7 @@ kk_msl_copy(struct msl_compile_data *dst, const struct msl_compile_data *src)
 {
    dst->code = ralloc_strdup(NULL, src->code);
    dst->entrypoint_name = ralloc_strdup(NULL, src->entrypoint_name);
+   dst->requires_msl41 = src->requires_msl41;
 }
 
 /* Copies all msl shader data to the vertex and gathers information for pipeline
@@ -2042,7 +2062,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    const struct msl_compile_data *vs_data = polygon ? &vs->polygon[2 * polygon] :
       vs->info.polygon_native ? &vs->polygon_native : &vs->msl_data[vs_stage];
    mtl_library *vertex_library = mtl_new_library(
-      device->mtl_compiler_handle, vs_data->code, pdev->info.msl_version,
+      device->mtl_compiler_handle, vs_data->code, kk_msl_language_version(vs_data, pdev->info.msl_version),
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
    if (vertex_library == NULL)
       return VK_ERROR_INVALID_SHADER_NV;
@@ -2054,7 +2074,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    const struct msl_compile_data *fs_data = polygon ? &vs->polygon[2 * polygon + 1] :
       vs->info.polygon_native ? &vs->polygon_native_fs : &vs->msl_data[MESA_SHADER_FRAGMENT];
    mtl_library *fragment_library = mtl_new_library(
-      device->mtl_compiler_handle, fs_data->code, pdev->info.msl_version,
+      device->mtl_compiler_handle, fs_data->code, kk_msl_language_version(fs_data, pdev->info.msl_version),
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
    if (fragment_library == NULL) {
       result = VK_ERROR_INVALID_SHADER_NV;
@@ -2555,6 +2575,7 @@ kk_msl_serialize(const struct msl_compile_data *data, struct blob *blob)
    uint32_t code_length = strlen(data->code) + 1;
    blob_write_uint32(blob, entrypoint_length);
    blob_write_uint32(blob, code_length);
+   blob_write_uint8(blob, data->requires_msl41);
    blob_write_bytes(blob, data->entrypoint_name, entrypoint_length);
    blob_write_bytes(blob, data->code, code_length);
 }
@@ -2595,6 +2616,7 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
 {
    const uint32_t entrypoint_length = blob_read_uint32(blob);
    const uint32_t code_length = blob_read_uint32(blob);
+   data->requires_msl41 = blob_read_uint8(blob) != 0;
    data->entrypoint_name = ralloc_array(NULL, char, entrypoint_length);
    if (data->entrypoint_name == NULL)
       return VK_ERROR_OUT_OF_HOST_MEMORY;

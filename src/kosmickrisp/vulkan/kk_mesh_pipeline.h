@@ -12,7 +12,7 @@ kk_mesh_function(struct kk_device *dev, const struct msl_compile_data *data,
    char *source = virtual ? ralloc_asprintf(NULL,
       "#define KK_MESH_VIRTUAL 1\n#define KK_MESH_VIRTUAL_ONLY 1\n%s", data->code) : NULL;
    *library = mtl_new_library(dev->mtl_compiler_handle,
-      source ? source : data->code, pdev->info.msl_version,
+      source ? source : data->code, kk_msl_language_version(data, pdev->info.msl_version),
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
    ralloc_free(source);
    if (!*library)

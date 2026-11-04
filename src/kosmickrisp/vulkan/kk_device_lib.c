@@ -20,8 +20,6 @@
 static VkResult
 build_precompiled_shaders(struct kk_device *dev)
 {
-   struct kk_physical_device *pdev = kk_device_physical(dev);
-
    uint32_t i = 0u;
    for (; i < LIBKK_NUM_PROGRAMS; ++i) {
       const uint32_t *bin = libkk_AppleSilicon[i];
@@ -29,7 +27,7 @@ build_precompiled_shaders(struct kk_device *dev)
       const char *msl = (const char *)bin + sizeof(*info);
 
       mtl_library *library = mtl_new_library(
-         dev->mtl_compiler_handle, msl, pdev->info.msl_version,
+         dev->mtl_compiler_handle, msl, MTL_LANGUAGE_VERSION_4_0,
          MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
       if (library == NULL)
          goto fail;

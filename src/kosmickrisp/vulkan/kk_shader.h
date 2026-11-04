@@ -223,7 +223,17 @@ struct kk_pipeline_handles {
 struct msl_compile_data {
    char *code;
    char *entrypoint_name;
+   bool requires_msl41;
 };
+
+static inline enum mtl_language_version
+kk_msl_language_version(const struct msl_compile_data *data,
+                        enum mtl_language_version supported)
+{
+   assert(!data->requires_msl41 || supported >= MTL_LANGUAGE_VERSION_4_1);
+   return data->requires_msl41 ? MTL_LANGUAGE_VERSION_4_1
+                              : MTL_LANGUAGE_VERSION_4_0;
+}
 
 struct kk_shader {
    struct vk_shader vk;
