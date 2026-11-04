@@ -17,8 +17,8 @@
        Controls: ``shaderDenormPreserveFloat16``, ``shaderDenormPreserveFloat32``, ``shaderDenormPreserveFloat64``.
      - mixed native / software. FP16 uses native half arithmetic. Requested FP32 add, multiply, FMA and divide use native operations with subnormal-operand and result guards, with exact software handling in out-of-line cold functions; other preservation operations retain their numerical helpers. FP64 uses software binary64.
      - No Apple family
-     - On
-     - vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.
+     - Off
+     - Requested preservation still runs integer repair for zero and subnormal results and integer ordering for comparisons; shader model reporting follows the disabled capability.
      - Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.
      - ``performance,+denorm_preserve``
    * - ``denorm_flush``

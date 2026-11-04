@@ -106,9 +106,10 @@ Two modes set the starting selection:
 Performance defaults are selected for the running Apple GPU family. Native
 paths and bounded compatibility work remain available; software ray traversal,
 FP64, virtual mesh dispatch and coarse fragment shading require explicit
-selection. Buffer atomic64, denormal controls, raster ordering and conservative
-rasterization retain their selected emulation costs to supply the FL12_1 and
-SM6.8 compatibility floor.
+selection. Buffer atomic64, flush controls, raster ordering and conservative
+rasterization retain their selected emulation costs. Requested FP32 denormal
+preservation requires explicit selection because its arithmetic repair remains
+software on every implemented family path.
 
 Apple10 and Apple11 select fragment barycentrics because eligible pipelines use
 native pre-raster per-vertex inputs. Topology and replay combinations outside
@@ -121,7 +122,8 @@ with hardware ray tracing.
 For example, vkd3d-proton reports shader model 6.2 and later only when FP32
 flush-to-zero, FP32 denormal preservation and independent denormal controls
 are all reported. Disabling either denormal entry limits vkd3d-proton to
-shader model 6.1, so both entries stay on in performance mode.
+shader model 6.1. Performance mode leaves preservation off; conformance mode
+enables both controls and the remaining requirements for shader model 6.9.
 
 ``KK_EMULATION`` is read once, when the physical device is created. Its value
 is a comma-separated list of tokens. Whitespace around each token is ignored.

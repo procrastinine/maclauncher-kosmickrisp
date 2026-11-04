@@ -11,12 +11,12 @@
      - Apple11
      - Implemented path and cost
    * - ``denorm_preserve``
-     - On
-     - On
-     - On
-     - On
-     - On
-     - On Apple7-11 to retain SM6.8: requested FP32 preservation retains guarded arithmetic/cold repair. Apple11 native denorm hardware is listed by Apple, but this compiler still retains the repair path.
+     - Off
+     - Off
+     - Off
+     - Off
+     - Off
+     - Off Apple7-11: e7e8d449464 isolates add/mul/FMA/div repair, but normal operations still classify operands and result, zero/subnormal results call integer repair, and comparisons/minmax use integer helpers. Apple11 native denorm hardware is not yet selected by this compiler.
    * - ``denorm_flush``
      - On
      - On

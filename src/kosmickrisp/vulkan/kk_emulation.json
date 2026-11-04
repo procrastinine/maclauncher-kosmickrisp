@@ -11,18 +11,12 @@
       "shaderDenormPreserveFloat32",
       "shaderDenormPreserveFloat64"
     ],
-    "performance": true,
-    "performance_reason": "vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.",
+    "performance": false,
+    "performance_reason": "Requested preservation still runs integer repair for zero and subnormal results and integer ordering for comparisons; shader model reporting follows the disabled capability.",
     "off_consequence": "Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.",
     "native_from": null,
-    "performance_families": [
-      7,
-      8,
-      9,
-      10,
-      11
-    ],
-    "family_cost_note": "On Apple7-11 to retain SM6.8: requested FP32 preservation retains guarded arithmetic/cold repair. Apple11 native denorm hardware is listed by Apple, but this compiler still retains the repair path."
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: e7e8d449464 isolates add/mul/FMA/div repair, but normal operations still classify operands and result, zero/subnormal results call integer repair, and comparisons/minmax use integer helpers. Apple11 native denorm hardware is not yet selected by this compiler."
   },
   {
     "name": "denorm_flush",
