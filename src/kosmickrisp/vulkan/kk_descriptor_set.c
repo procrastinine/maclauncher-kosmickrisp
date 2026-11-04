@@ -175,6 +175,9 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
          desc[plane].sampler_reduction_mode = sampler->reduction_mode;
          desc[plane].sampler_filter_bits = sampler->filter_bits;
          desc[plane].sampler_address_modes = sampler->address_modes;
+         /* Byte 40 stays numeric on both encodings: the native Metal3 bias
+          * path and the metadata reader take the sampler bias from it. */
+         desc[plane].sampler_query_lod_bias_fp16 = sampler->query_lod_bias_fp16;
          desc[plane].clamp_0_sampler_index_or_negative = -1;
       }
 
