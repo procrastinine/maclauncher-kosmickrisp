@@ -411,17 +411,14 @@ struct kk_library_work {
    mtl_compiler *compiler;
    MTL4LibraryDescriptor *descriptor;
    mtl_library *result;
+   bool vertex;
 };
 
 static void
 kk_library_work_execute(void *data)
 {
    struct kk_library_work *work = data;
-   NSError *error = nil;
-   work->result = [(id<MTL4Compiler>)work->compiler newLibraryWithDescriptor:work->descriptor error:&error];
-   if (!work->result)
-      fprintf(stderr, "Failed to create MTLLibrary: %s\n",
-              error.localizedDescription.UTF8String ?: "Unknown Metal error");
+   work->result = kk_graphics_library(work->compiler, work->descriptor, work->vertex, false);
 }
 
 static void
@@ -448,27 +445,26 @@ mtl_new_library_pair(mtl_compiler *compiler,
       KK_FOREGROUND_SCOPE(compiler);
       libraries[0] = libraries[1] = NULL;
       struct kk_library_work work[2] = {
-         {compiler, mtl_library_descriptor(sources[0].code, sources[0].language_version, math_mode, math_fp_fns), NULL},
-         {compiler, mtl_library_descriptor(sources[1].code, sources[1].language_version, math_mode, math_fp_fns), NULL},
+         {compiler, mtl_library_descriptor(sources[0].code, sources[0].language_version, math_mode, math_fp_fns), NULL, true},
+         {compiler, mtl_library_descriptor(sources[1].code, sources[1].language_version, math_mode, math_fp_fns), NULL, false},
       };
-      KKPipelineArchive *cache = kk_compiler_archive(compiler);
-      work[0].result = kk_cached_vertex_library(cache, work[0].descriptor);
-      bool cached_vertex = work[0].result != NULL;
+      /* Completed hits need no worker or queue admission. Pending requests
+       * join only on entry to execute, preserving independent stage overlap. */
+      for (unsigned i = 0; i < 2; ++i)
+         work[i].result = kk_graphics_library(compiler, work[i].descriptor, work[i].vertex, true);
       void *task = NULL;
       @try {
-         if (!cached_vertex && !kk_background_thread)
+         if (!work[0].result && !kk_background_thread)
             task = kk_compiler_submit(compiler, &work[0], kk_library_work_execute,
                kk_library_work_failed, kk_library_work_cleanup, true);
-         if (!cached_vertex && !task) kk_library_work_execute(&work[0]);
-         kk_library_work_execute(&work[1]);
+         if (!task && !work[0].result) kk_library_work_execute(&work[0]);
+         if (!work[1].result) kk_library_work_execute(&work[1]);
       } @catch (NSException *exception) {
          kk_library_work_failed(NULL, exception.reason.UTF8String);
       } @finally {
          mtl_compiler_task_wait(task);
          [(id)task release];
       }
-      if (!cached_vertex && work[0].result)
-         kk_remember_vertex_library(cache, work[0].descriptor, (id<MTLLibrary>)work[0].result);
       bool ready = work[0].result && work[1].result;
       for (unsigned i = 0; i < 2; ++i) {
          if (ready) libraries[i] = work[i].result;

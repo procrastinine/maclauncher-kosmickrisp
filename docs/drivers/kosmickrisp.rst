@@ -126,3 +126,18 @@ These workarounds can be found in:
    :maxdepth: 1
 
    kosmickrisp/workarounds
+
+Graphics library reuse
+----------------------
+
+Each cached compiler retains up to 128 graphics libraries and 8 MiB of
+UTF-16 shader source. Reuse requires identical generated source, including
+any diagnostic salt, and identical language version, math mode and floating
+point function options. Concurrent identical requests share the synchronous
+native compilation. Completed entries are evicted in insertion order; active
+entries are retained until compilation finishes. Requests outside the bounds
+compile without retention. Failed compilations are retried by later requests.
+
+This in-memory reuse applies to vertex and fragment libraries. Function
+constants and render pipeline state remain part of pipeline creation. Single
+library compute compilation and persistent archive identities are unchanged.
