@@ -1402,6 +1402,8 @@ get_metal_limits(struct kk_physical_device *pdev)
    pdev->info.max_sampler_count =
       mtl_device_max_argument_buffer_sampler_count(pdev->mtl_dev_handle);
    pdev->info.placement_sparse = mtl_device_supports_placement_sparse(pdev->mtl_dev_handle);
+   pdev->info.supports_32_bit_float_filtering =
+      mtl_device_supports_32_bit_float_filtering(pdev->mtl_dev_handle);
    pdev->info.gpu_apple_family =
       mtl_device_get_gpu_apple_family(pdev->mtl_dev_handle);
 

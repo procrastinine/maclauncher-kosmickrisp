@@ -26,6 +26,17 @@
 #include "vk_format.h"
 #include "wsi_common_private.h"
 
+static bool
+format_is_32bit_float(enum pipe_format p_format)
+{
+   const struct util_format_description *desc =
+      util_format_description(p_format);
+   int c = util_format_get_first_non_void_channel(p_format);
+
+   return c >= 0 && desc->channel[c].type == UTIL_FORMAT_TYPE_FLOAT &&
+          desc->channel[c].size == 32;
+}
+
 static VkFormatFeatureFlags2
 kk_get_image_plane_format_features(struct kk_physical_device *pdev,
                                    VkFormat vk_format, VkImageTiling tiling,
@@ -73,7 +84,10 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
    features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT;
    features |= VK_FORMAT_FEATURE_2_BLIT_SRC_BIT;
 
-   if (va_format->filter) {
+   /* Not all GPUs support linear filtering of 32bit float formats (A chips) */
+   const bool native_filter = va_format->filter &&
+      (pdev->info.supports_32_bit_float_filtering || !format_is_32bit_float(p_format));
+   if (native_filter) {
       features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
 
    }
@@ -82,7 +96,7 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
     * integer, normalized, sRGB, compressed and depth values. Native Metal
     * reduction retains its format-filter capability boundary. */
    if (pdev->vk.supported_extensions.EXT_sampler_filter_minmax &&
-       (pdev->info.gpu_apple_family < 10 || va_format->filter))
+       (pdev->info.gpu_apple_family < 10 || native_filter))
       features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT;
 
    /* TODO: VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT */

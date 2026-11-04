@@ -56,6 +56,7 @@ struct kk_device_info {
    bool supports_32bit_msaa;
    bool supports_query_texture_lod;
    bool supports_bc_texture_compression;
+   bool supports_32_bit_float_filtering;
 };
 
 struct kk_env_settings {
