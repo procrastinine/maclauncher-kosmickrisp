@@ -352,6 +352,8 @@ struct wsi_metal_present_info {
 
    struct u_cnd_monotonic present_id_cond;
    uint64_t present_id;
+   /* Protected by mutex; callbacks can outlive the swapchain. */
+   struct wsi_metal_swapchain *chain;
 };
 
 struct wsi_metal_swapchain {
@@ -368,6 +370,7 @@ struct wsi_metal_swapchain {
    struct wsi_metal_present_info *present_info;
 
    uint32_t current_image_index;
+   struct wsi_image_timing_request timing_request;
 
    /* VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR */
    bool opaque_composition;
@@ -730,12 +733,56 @@ wsi_metal_swapchain_set_present_mode(struct wsi_swapchain *wsi_chain,
    wsi_metal_layer_set_immediate(chain->surface->pLayer, immediate_mode);
 }
 
+static uint64_t
+wsi_metal_poll_refresh_duration(struct wsi_swapchain *wsi_chain, uint64_t *interval)
+{
+   struct wsi_metal_swapchain *chain = (struct wsi_metal_swapchain *)wsi_chain;
+   *interval = 0; /* CoreVideo nominal duration does not assert fixed-rate pacing. */
+   return wsi_metal_layer_refresh_duration(chain->surface->pLayer);
+}
+
 static void
-wsi_metal_present_complete(void *present_info_ptr, uint64_t present_id)
+wsi_metal_set_timing_request(struct wsi_swapchain *wsi_chain,
+                            const struct wsi_image_timing_request *request)
+{
+   struct wsi_metal_swapchain *chain = (struct wsi_metal_swapchain *)wsi_chain;
+   chain->timing_request = *request;
+   if (request->feedback) {
+      uint64_t interval;
+      uint64_t duration = wsi_metal_poll_refresh_duration(wsi_chain, &interval);
+      if (duration)
+         wsi_swapchain_present_timing_update_refresh_rate(wsi_chain, duration, interval, 0);
+   }
+}
+
+static void
+wsi_metal_present_complete(void *present_info_ptr, uint64_t present_id,
+                           uint64_t timing_serial, uint32_t image_index, uint64_t actual_time)
 {
    struct wsi_metal_present_info *present_info = present_info_ptr;
 
    mtx_lock(&present_info->mutex);
+   struct wsi_metal_swapchain *chain = present_info->chain;
+   if (chain && timing_serial) {
+      if (actual_time) {
+         wsi_swapchain_present_timing_notify_completion(&chain->base, timing_serial,
+                                                        actual_time, &chain->images[image_index].base);
+      } else {
+         /* Only displayed images have past presentation timings. Remove skipped
+          * drawables so they cannot block delivery of later real feedback. */
+         mtx_lock(&chain->base.present_timing.lock);
+         for (size_t i = 0; i < chain->base.present_timing.timings_count; i++) {
+            if (chain->base.present_timing.timings[i].serial != timing_serial)
+               continue;
+            memmove(&chain->base.present_timing.timings[i],
+                    &chain->base.present_timing.timings[i + 1],
+                    (--chain->base.present_timing.timings_count - i) *
+                       sizeof(chain->base.present_timing.timings[0]));
+            break;
+         }
+         mtx_unlock(&chain->base.present_timing.lock);
+      }
+   }
    if (present_id > present_info->present_id) {
       present_info->present_id = present_id;
       u_cnd_monotonic_broadcast(&present_info->present_id_cond);
@@ -758,11 +805,12 @@ wsi_metal_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
 
    struct wsi_metal_image *image = &chain->images[image_index];
 
-   if (present_id && wsi_chain->present_wait_enabled) {
+   uint64_t timing_serial = chain->timing_request.feedback ? chain->timing_request.serial : 0;
+   if ((present_id && wsi_chain->present_wait_enabled) || timing_serial) {
       wsi_metal_retain_present_info(chain->present_info);
       wsi_metal_layer_add_presented_handler(
          image->drawable, wsi_metal_present_complete, chain->present_info,
-         present_id);
+         present_id, timing_serial, image_index);
    }
 
    if (wsi_chain->wsi->sw) {
@@ -770,10 +818,10 @@ wsi_metal_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
          &image->drawable,
          image->base.cpu_map,
          chain->extent.width, chain->extent.height,
-         image->base.row_pitches[0]);
+         image->base.row_pitches[0], chain->timing_request.time);
    } else {
       /* Blit is already recorded, just present now */
-      wsi_metal_layer_present(&image->drawable);
+      wsi_metal_layer_present(&image->drawable, chain->timing_request.time);
    }
 
    uint32_t width = 0u, height = 0u;
@@ -901,6 +949,11 @@ wsi_metal_swapchain_destroy(struct wsi_swapchain *wsi_chain,
    struct wsi_metal_swapchain *chain =
       (struct wsi_metal_swapchain *)wsi_chain;
 
+   /* Exclude callbacks before destroying images, timing history or locks. */
+   mtx_lock(&chain->present_info->mutex);
+   chain->present_info->chain = NULL;
+   mtx_unlock(&chain->present_info->mutex);
+
    for (uint32_t i = 0; i < chain->base.image_count; i++) {
       struct wsi_metal_image *image = &chain->images[i];
       if (image->drawable) {
@@ -1024,6 +1077,13 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
       result = VK_ERROR_OUT_OF_HOST_MEMORY;
       goto fail_present_info;
    }
+
+   chain->present_info->chain = chain;
+   chain->base.set_timing_request = wsi_metal_set_timing_request;
+   chain->base.poll_early_refresh = wsi_metal_poll_refresh_duration;
+   /* CAMetalDrawable times use the Mach host clock in seconds, expressed here
+    * as nanoseconds. No scheduled callback time is used as presentation time. */
+   chain->base.present_timing.time_domain = VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR;
 
    if (wsi_device->metal.get_mtl4_command_queue) {
       void *mtl4_queue = wsi_device->metal.get_mtl4_command_queue(chain->base.device);

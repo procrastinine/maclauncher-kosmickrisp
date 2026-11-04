@@ -35,6 +35,7 @@ else
 endif
 
 if with_platform_macos
+  platform_deps += dependency('appleframeworks', modules : ['CoreVideo'])
   files_vulkan_wsi += files('wsi_common_metal.c', 'wsi_common_metal_layer.m')
 endif
 

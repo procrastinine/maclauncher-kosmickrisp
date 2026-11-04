@@ -10,6 +10,8 @@
 
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
+#import <AppKit/AppKit.h>
+#import <CoreVideo/CoreVideo.h>
 
 void
 wsi_metal_layer_size(const CAMetalLayer *metal_layer,
@@ -291,15 +293,46 @@ wsi_metal_release_drawable(CAMetalDrawable *drawable_ptr)
    [(id<CAMetalDrawable>)drawable_ptr release];
 }
 
+/* An unattached layer has no known display. Do not invent a refresh rate. */
+uint64_t
+wsi_metal_layer_refresh_duration(const CAMetalLayer *metal_layer)
+{
+   @autoreleasepool {
+      NSScreen *screen = nil;
+      for (CALayer *layer = (CALayer *)metal_layer; layer; layer = layer.superlayer) {
+         id delegate = layer.delegate;
+         if ([delegate respondsToSelector:@selector(window)]) {
+            screen = ((NSView *)delegate).window.screen;
+            if (screen)
+               break;
+         }
+      }
+      if (!screen)
+         return 0;
+      CGDirectDisplayID display = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
+      CVDisplayLinkRef link = NULL;
+      if (CVDisplayLinkCreateWithCGDisplay(display, &link) != kCVReturnSuccess)
+         return 0;
+      CVTime period = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
+      CVDisplayLinkRelease(link);
+      if ((period.flags & kCVTimeIsIndefinite) || period.timeValue <= 0 || period.timeScale <= 0)
+         return 0;
+      return (uint64_t)((double)period.timeValue * 1e9 / period.timeScale);
+   }
+}
+
 void
 wsi_metal_layer_add_presented_handler(CAMetalDrawable *drawable_ptr,
-                                      void (*presented_handler)(void *, uint64_t),
-                                      void *present_info_ptr, uint64_t present_id)
+                                      void (*presented_handler)(void *, uint64_t, uint64_t, uint32_t, uint64_t),
+                                      void *present_info_ptr, uint64_t present_id,
+                                      uint64_t timing_serial, uint32_t image_index)
 {
    @autoreleasepool {
       id<CAMetalDrawable> drawable = (id<CAMetalDrawable>)drawable_ptr;
       [drawable addPresentedHandler: ^(id<MTLDrawable> mtlDrwbl) {
-         presented_handler(present_info_ptr, present_id);
+         /* A callback may also describe a skipped drawable, whose time is zero. */
+         uint64_t actual_time = timing_serial ? (uint64_t)(mtlDrwbl.presentedTime * 1e9) : 0;
+         presented_handler(present_info_ptr, present_id, timing_serial, image_index, actual_time);
       }];
    }
 }
@@ -336,7 +369,7 @@ wsi_destroy_metal_layer_blit_context(struct wsi_metal_layer_blit_context *contex
 void
 wsi_metal_layer_blit_and_present(struct wsi_metal_layer_blit_context *context,
    CAMetalDrawable **drawable_ptr, void *buffer,
-   uint32_t width, uint32_t height, uint32_t row_pitch)
+   uint32_t width, uint32_t height, uint32_t row_pitch, uint64_t target_time)
 {
    @autoreleasepool {
       id<CAMetalDrawable> drawable = [(id<CAMetalDrawable>)*drawable_ptr autorelease];
@@ -360,7 +393,10 @@ wsi_metal_layer_blit_and_present(struct wsi_metal_layer_blit_context *context,
          destinationLevel:0
          destinationOrigin:MTLOriginMake(0, 0, 0)];
       [commandEncoder endEncoding];
-      [commandBuffer presentDrawable:drawable];
+      if (target_time)
+         [commandBuffer presentDrawable:drawable atTime:(double)target_time * 1e-9];
+      else
+         [commandBuffer presentDrawable:drawable];
       [commandBuffer commit];
 
       *drawable_ptr = nil;
@@ -368,11 +404,14 @@ wsi_metal_layer_blit_and_present(struct wsi_metal_layer_blit_context *context,
 }
 
 void
-wsi_metal_layer_present(CAMetalDrawable **drawable_ptr)
+wsi_metal_layer_present(CAMetalDrawable **drawable_ptr, uint64_t target_time)
 {
    @autoreleasepool {
       id<CAMetalDrawable> drawable = [(id<CAMetalDrawable>)*drawable_ptr autorelease];
-      [drawable present];
+      if (target_time)
+         [drawable presentAtTime:(double)target_time * 1e-9];
+      else
+         [drawable present];
 
       *drawable_ptr = nil;
    }
