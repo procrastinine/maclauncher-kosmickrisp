@@ -1286,9 +1286,13 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
 
    struct vk_device_extension_table supported_extensions;
    kk_get_device_extensions(instance, pdev, &supported_extensions);
+   supported_extensions.EXT_memory_priority = true;
+   supported_extensions.EXT_pageable_device_local_memory = true;
 
    struct vk_features supported_features;
    kk_get_device_features(pdev, &supported_extensions, &supported_features);
+   supported_features.memoryPriority = true;
+   supported_features.pageableDeviceLocalMemory = true;
    if (pdev->info.gpu_apple_family >= 7) {
       supported_extensions.EXT_fragment_shader_interlock = true;
       supported_features.fragmentShaderSampleInterlock = true;

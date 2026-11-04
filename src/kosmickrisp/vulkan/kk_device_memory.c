@@ -97,6 +97,64 @@ kk_GetMemoryHostPointerPropertiesEXT(
    return VK_SUCCESS;
 }
 
+/* Metal has no per-allocation scalar priority. Use two residency classes:
+ * priorities above the default 0.5 prefetch and retain idle residency, while
+ * default/lower priorities use execution-scoped residency on every queue.
+ * This is a residency hint, not a promise of physical page placement. */
+static void
+kk_device_memory_set_priority(struct kk_device *dev,
+                              struct kk_device_memory *mem, float priority)
+{
+   mem->priority = priority;
+   if (!dev->residency_set.priority_handle)
+      return;
+
+   bool retain = priority > 0.5f;
+   simple_mtx_lock(&dev->residency_set.mutex);
+   if (retain != mem->priority_resident) {
+      mtl_allocation *allocation = mem->bo->mtl_handle
+         ? (mtl_allocation *)mem->bo->mtl_handle : (mtl_allocation *)mem->bo->map;
+      /* Imported VkDeviceMemory objects can refer to the same native heap.
+       * Keep its one native retention request until the final high-priority
+       * alias is released. Hints run at allocation/update, never per draw. */
+      if (!retain)
+         list_del(&mem->priority_link);
+      bool retained_alias = false;
+      list_for_each_entry(struct kk_device_memory, alias,
+                          &dev->residency_set.priority_memories, priority_link) {
+         mtl_allocation *other = alias->bo->mtl_handle
+            ? (mtl_allocation *)alias->bo->mtl_handle
+            : (mtl_allocation *)alias->bo->map;
+         if (other == allocation) {
+            retained_alias = true;
+            break;
+         }
+      }
+      if (!retained_alias) {
+         if (retain)
+            mtl_residency_set_add_allocation(dev->residency_set.priority_handle,
+                                             allocation);
+         else
+            mtl_residency_set_remove_allocation(dev->residency_set.priority_handle,
+                                                allocation);
+         mtl_residency_set_commit(dev->residency_set.priority_handle);
+      }
+      if (retain)
+         list_addtail(&mem->priority_link, &dev->residency_set.priority_memories);
+      mem->priority_resident = retain;
+   }
+   simple_mtx_unlock(&dev->residency_set.mutex);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+kk_SetDeviceMemoryPriorityEXT(VkDevice device, VkDeviceMemory memory,
+                              float priority)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   VK_FROM_HANDLE(kk_device_memory, mem, memory);
+   kk_device_memory_set_priority(dev, mem, priority);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
                   const VkAllocationCallbacks *pAllocator, VkDeviceMemory *pMem)
@@ -210,6 +268,11 @@ fail_import:
       }
    }
 
+   const VkMemoryPriorityAllocateInfoEXT *priority_info =
+      vk_find_struct_const(pAllocateInfo->pNext, MEMORY_PRIORITY_ALLOCATE_INFO_EXT);
+   kk_device_memory_set_priority(dev, mem,
+                                 priority_info ? priority_info->priority : 0.5f);
+
    *pMem = kk_device_memory_to_handle(mem);
 
    return VK_SUCCESS;
@@ -233,6 +296,7 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
    if (mem->map)
       kk_bo_unmap(dev, mem->bo, mem->map, false);
 
+   kk_device_memory_set_priority(dev, mem, 0.0f);
    kk_destroy_bo(dev, mem->bo);
 
    vk_device_memory_destroy(&dev->vk, pAllocator, &mem->vk);

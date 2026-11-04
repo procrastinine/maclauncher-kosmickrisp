@@ -368,7 +368,19 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (dev->residency_set.handle == NULL)
       goto fail_compiler;
 
+   /* The optional set can fail into cleanup that destroys this mutex. */
    simple_mtx_init(&dev->blit_queue_mutex, mtx_plain);
+   list_inithead(&dev->residency_set.priority_memories);
+   if (dev->vk.enabled_features.memoryPriority ||
+       dev->vk.enabled_features.pageableDeviceLocalMemory) {
+      dev->residency_set.priority_handle = mtl_new_residency_set(dev->mtl_handle);
+      if (!dev->residency_set.priority_handle) {
+         result = vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+         goto fail_vab_memory;
+      }
+      mtl_residency_set_request_residency(dev->residency_set.priority_handle);
+   }
+
    for (uint32_t i = 0; i < pCreateInfo->queueCreateInfoCount; ++i) {
       const VkDeviceQueueCreateInfo *info = &pCreateInfo->pQueueCreateInfos[i];
       for (uint32_t q = 0; q < info->queueCount; ++q) {
@@ -451,6 +463,10 @@ fail_mem_cache:
       kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
 fail_vab_memory:
    simple_mtx_destroy(&dev->blit_queue_mutex);
+   if (dev->residency_set.priority_handle) {
+      mtl_residency_set_end_residency(dev->residency_set.priority_handle);
+      mtl_release(dev->residency_set.priority_handle);
+   }
    mtl_release(dev->residency_set.handle);
    simple_mtx_destroy(&dev->residency_set.mutex);
 fail_compiler:
@@ -507,6 +523,10 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_sparse_device_finish(dev);
 
    /* Release the residency set last once all BOs are released. */
+   if (dev->residency_set.priority_handle) {
+      mtl_residency_set_end_residency(dev->residency_set.priority_handle);
+      mtl_release(dev->residency_set.priority_handle);
+   }
    mtl_release(dev->residency_set.handle);
    simple_mtx_destroy(&dev->residency_set.mutex);
 
@@ -620,7 +640,11 @@ kk_device_make_resources_resident(struct kk_device *dev)
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    mtl_residency_set_commit(dev->residency_set.handle);
-   mtl_residency_set_request_residency(dev->residency_set.handle);
+   /* Every Metal queue already uses this set for execution-scoped residency.
+    * Pageable mode leaves idle pages to the OS instead of requesting lifetime
+    * residency for every allocation. The priority set requests extra retention. */
+   if (!dev->vk.enabled_features.pageableDeviceLocalMemory)
+      mtl_residency_set_request_residency(dev->residency_set.handle);
    simple_mtx_unlock(&dev->residency_set.mutex);
 }
 

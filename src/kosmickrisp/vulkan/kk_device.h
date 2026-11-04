@@ -36,6 +36,9 @@ struct kk_residency_set {
    simple_mtx_t mutex;
    mtl_residency_set *handle;
    struct list_head allocations;
+   /* Requested only for the high-priority working set, including while idle. */
+   mtl_residency_set *priority_handle;
+   struct list_head priority_memories;
 };
 
 struct mtl_sampler_packed {
