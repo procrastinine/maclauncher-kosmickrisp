@@ -2,6 +2,31 @@
 #ifndef KK_POLY_LAYER_REPLAY_NIR_H
 #define KK_POLY_LAYER_REPLAY_NIR_H
 
+static bool
+kk_poly_layer_alias_possible(const struct vk_graphics_pipeline_state *state,
+                              const struct vk_features *features)
+{
+   /* Unused attachments may be absent from the pipeline formats. Incomplete
+    * pipeline libraries likewise cannot rule out an attachment alias. */
+   if (features->dynamicRenderingUnusedAttachments || !state || !state->rp ||
+       !vk_render_pass_state_has_attachment_info(state->rp))
+      return true;
+
+   /* The shared image runtime permits uncompressed views of compressed
+    * blocks only in the 64- and 128-bit format classes. Depth/stencil and
+    * other complete known color formats cannot select this replay path. */
+   for (unsigned i = 0; i < state->rp->color_attachment_count; ++i) {
+      VkFormat format = state->rp->color_attachment_formats[i];
+      if (format == VK_FORMAT_UNDEFINED || vk_format_is_compressed(format) ||
+          vk_format_aspects(format) != VK_IMAGE_ASPECT_COLOR_BIT)
+         continue;
+      unsigned bytes = vk_format_get_blocksize(format);
+      if (bytes == 8 || bytes == 16)
+         return true;
+   }
+   return false;
+}
+
 static nir_def *
 kk_poly_layer_selector(nir_builder *b)
 {

@@ -49,13 +49,32 @@ kk_lower_non_seamless_cube(nir_builder *b, nir_tex_instr *tex, void *data)
    nir_variable *var = nir_deref_instr_get_variable(sampler);
    const struct kk_descriptor_set_binding_layout *binding =
       var ? get_binding_layout(var->data.descriptor_set, var->data.binding, ctx) : NULL;
+   /* Immutable bindings specialize this operation at compilation. A mixed
+    * dynamically indexed array still needs the runtime sampler metadata. */
+   int non_seamless = -1;
    if (binding && binding->immutable_samplers) {
-      bool any = false;
-      for (unsigned i = 0; i < binding->array_size; ++i)
-         any |= (binding->immutable_samplers[i]->filter_bits &
-            KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE) != 0;
-      if (!any)
-         return false;
+      if (sampler->deref_type == nir_deref_type_array &&
+          nir_deref_instr_parent(sampler)->deref_type == nir_deref_type_var &&
+          nir_src_is_const(sampler->arr.index)) {
+         unsigned index = nir_src_as_uint(sampler->arr.index);
+         if (index < binding->array_size)
+            non_seamless = !!(binding->immutable_samplers[index]->filter_bits &
+               KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE);
+      }
+      if (non_seamless < 0) {
+         bool any = false, all = true;
+         for (unsigned i = 0; i < binding->array_size; ++i) {
+            bool flag = binding->immutable_samplers[i]->filter_bits &
+               KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE;
+            any |= flag;
+            all &= flag;
+            /* A mixed dynamic binding is already fully classified. */
+            if (any && !all) break;
+         }
+         if (!any) return false;
+         if (all) non_seamless = 1;
+      }
+      if (non_seamless == 0) return false;
    }
    b->cursor = nir_before_instr(&tex->instr);
    nir_def *coord = nir_get_tex_src(tex, nir_tex_src_coord);
@@ -73,17 +92,20 @@ kk_lower_non_seamless_cube(nir_builder *b, nir_tex_instr *tex, void *data)
          dy = nir_fmul(b, dy, scale);
       }
    }
-   nir_def *flags = load_resource_deref_desc(b, 1, 16, sampler,
-      offsetof(struct kk_sampled_image_descriptor, sampler_filter_bits), ctx);
+   bool dynamic_sampler = non_seamless < 0;
+   nir_def *flags = dynamic_sampler ?
+      load_resource_deref_desc(b, 1, 16, sampler,
+         offsetof(struct kk_sampled_image_descriptor, sampler_filter_bits), ctx) : NULL;
    // Preserve implicit cube sampling, including anisotropy, outside divergent
    // control flow. The selected 2D operation uses explicit face gradients.
    nir_tex_instr *seamless = NULL;
-   if (implicit) {
+   if (implicit && dynamic_sampler) {
       seamless = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
       nir_builder_instr_insert(b, &seamless->instr);
    }
-   nir_push_if(b, nir_ine_imm(b,
-      nir_iand_imm(b, flags, KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE), 0));
+   if (dynamic_sampler)
+      nir_push_if(b, nir_ine_imm(b,
+         nir_iand_imm(b, flags, KK_SAMPLER_FILTER_NON_SEAMLESS_CUBE), 0));
    nir_def *face;
    nir_def *uv = nir_fmul_imm(b, kk_minmax_cube_uv(b, coord, &face), 0.5);
    nir_def *layer = nir_i2f32(b, face);
@@ -117,13 +139,17 @@ kk_lower_non_seamless_cube(nir_builder *b, nir_tex_instr *tex, void *data)
       nir_src_rewrite(&sample->src[yi].src, kk_cube_face_gradient(b, coord, dy, face));
    }
    b->cursor = nir_after_instr(&sample->instr);
-   nir_push_else(b, NULL);
-   if (!implicit) {
-      seamless = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
-      nir_builder_instr_insert(b, &seamless->instr);
+   nir_def *result = &sample->def;
+   if (dynamic_sampler) {
+      nir_push_else(b, NULL);
+      if (!implicit) {
+         seamless = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
+         nir_builder_instr_insert(b, &seamless->instr);
+      }
+      nir_pop_if(b, NULL);
+      result = nir_if_phi(b, &sample->def, &seamless->def);
    }
-   nir_pop_if(b, NULL);
-   nir_def_replace(&tex->def, nir_if_phi(b, &sample->def, &seamless->def));
+   nir_def_replace(&tex->def, result);
    return true;
 }
 

@@ -1,6 +1,29 @@
 /* Copyright 2026 MacLauncher contributors
  * SPDX-License-Identifier: MIT */
 
+static bool
+kk_line_effects_possible(const struct vk_graphics_pipeline_state *state)
+{
+   return kk_wide_line_possible(state) &&
+      (state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+       state->rs->line.stipple.enable ||
+       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
+       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE));
+}
+
+/* Linked GS/tessellation output arity can rule out line state that the
+ * pipeline-stage mask alone had to treat conservatively. */
+static bool
+kk_line_effects_for_primitive(const struct vk_graphics_pipeline_state *state,
+                                unsigned primitive_vertices)
+{
+   return kk_line_effects_possible(state) &&
+      (!primitive_vertices || primitive_vertices == 2 ||
+       (primitive_vertices > 2 &&
+        (state->rs->polygon_mode == VK_POLYGON_MODE_LINE ||
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE))));
+}
+
 /* Coverage is inserted before fixed-function blending. Native raster shaders
  * resolve the compile-time placeholder to one; expanded lines resolve it to
  * analytic rectangle coverage. No marker or extra work survives natively. */
@@ -52,6 +75,7 @@ static void
 kk_line_fragment(nir_shader *nir, bool expanded,
                  const struct vk_graphics_pipeline_state *state)
 {
+   if (!kk_line_effects_possible(state)) return;
    nir_builder b = nir_builder_at(nir_before_impl(nir_shader_get_entrypoint(nir)));
    nir_def *one = nir_imm_float(&b, 1);
    nir_def *coverage = one;
@@ -231,8 +255,10 @@ kk_line_lower_pure_early(nir_shader *nir,
    if (!nir->info.fs.early_fragment_tests) return;
    /* Vulkan ignores these shader exports with forced early tests. Removing
     * the early attribute must not make either ignored export effective. */
-   nir_shader_intrinsics_pass(nir, kk_line_remove_early_exports,
-                              nir_metadata_control_flow, NULL);
+   if (nir->info.outputs_written & (BITFIELD64_BIT(FRAG_RESULT_DEPTH) |
+                                    BITFIELD64_BIT(FRAG_RESULT_STENCIL)))
+      nir_shader_intrinsics_pass(nir, kk_line_remove_early_exports,
+                                 nir_metadata_control_flow, NULL);
    nir->info.outputs_written &= ~(BITFIELD64_BIT(FRAG_RESULT_DEPTH) |
                                   BITFIELD64_BIT(FRAG_RESULT_STENCIL));
    if (!stipple) return;

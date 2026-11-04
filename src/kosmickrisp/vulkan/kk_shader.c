@@ -128,6 +128,9 @@ kk_vi_is_static(const struct vk_graphics_pipeline_state *state)
 #include "kk_interlock_layers_nir.h"
 
 static bool kk_conservative_possible(const struct vk_graphics_pipeline_state *state);
+static bool kk_wide_line_possible(const struct vk_graphics_pipeline_state *state);
+static bool kk_poly_layer_alias_possible(const struct vk_graphics_pipeline_state *state,
+                                         const struct vk_features *features);
 
 struct kk_vs_key {
    bool is_points;
@@ -300,6 +303,8 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       kk_make_feature_key(enabled_features),
    };
    _mesa_blake3_update(&blake3_ctx, &feature_key, sizeof(feature_key));
+   const bool layer_alias = kk_poly_layer_alias_possible(state, enabled_features);
+   _mesa_blake3_update(&blake3_ctx, &layer_alias, sizeof(layer_alias));
    if (kk_conservative_possible(state)) {
       uint32_t conservative = BITFIELD_BIT(KK_FEAT_CONSERVATIVE_RASTER);
       _mesa_blake3_update(&blake3_ctx, &conservative, sizeof(conservative));
@@ -314,6 +319,15 @@ kk_hash_graphics_state(struct vk_physical_device *device,
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE),
       };
       _mesa_blake3_update(&blake3_ctx, raster_key, sizeof(raster_key));
+      if (kk_wide_line_possible(state)) {
+         bool dynamic_width = BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_WIDTH);
+         bool dynamic_stipple = BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
+         float width = dynamic_width ? 0 : kk_polygon_line_width(state->rs->line.width);
+         const uint32_t line_key[] = {dynamic_width, dynamic_stipple,
+            dynamic_stipple ? 0 : state->rs->line.stipple.enable};
+         _mesa_blake3_update(&blake3_ctx, &width, sizeof(width));
+         _mesa_blake3_update(&blake3_ctx, line_key, sizeof(line_key));
+      }
    }
 
    /* Representation changes whether a Poly raster pipeline is required.
@@ -672,7 +686,7 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
    nir->info.fs.uses_sample_shading |=
       state->ms && state->ms->sample_shading_enable;
 
-   if (state && state->rs &&
+   if (kk_line_effects_possible(state) &&
        (state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE)))
       nir_shader_intrinsics_pass(nir, kk_line_alpha, nir_metadata_control_flow, NULL);
@@ -1422,15 +1436,13 @@ kk_vrs_finish_captured_fragment(nir_shader *point_fs,
    const struct kk_compile_options *opts,
    const struct vk_pipeline_robustness_state *robustness, bool pixel_envelope)
 {
-      bool point_line_effects = state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
-         state->rs->line.stipple.enable ||
-         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
-         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
+      bool point_line_effects = kk_line_effects_for_primitive(state,
+         prev_stage ? prev_stage->info.polygon.primitive_vertices : 0);
       if (!opts->poly_layer_replay || (prev_stage && prev_stage->info.polygon_point))
       if (!prev_stage || prev_stage->info.polygon.primitive_vertices != 1)
       nir_shader_intrinsics_pass(point_fs, kk_polygon_point_coord,
                                  nir_metadata_control_flow, point_line_effects ? (void *)1 : NULL);
-      kk_line_fragment(point_fs, true, state);
+      kk_line_fragment(point_fs, point_line_effects, state);
       if (opts->poly_layer_replay) kk_poly_layer_lower_fs(point_fs);
       if (pixel_envelope)
          nir_shader_intrinsics_pass(point_fs, kk_interlock_trim_native_output,
@@ -1449,14 +1461,12 @@ void
 kk_poly_retained_lower_fragment(nir_shader *nir, const struct kk_shader_info *producer,
    const struct vk_graphics_pipeline_state *state)
 {
-   bool effects = state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
-      state->rs->line.stipple.enable ||
-      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
-      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
+   bool effects = kk_line_effects_for_primitive(state,
+      producer->polygon.primitive_vertices);
    if (producer->polygon.primitive_vertices != 1)
       nir_shader_intrinsics_pass(nir, kk_polygon_point_coord,
          nir_metadata_control_flow, effects ? (void *)1 : NULL);
-   kk_line_fragment(nir, true, state);
+   kk_line_fragment(nir, effects, state);
    kk_poly_layer_lower_fs(nir);
 }
 
@@ -1500,8 +1510,6 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    }
    gather_shader_info(shader, nir, state);
    shader->info.interlock_envelope = pixel_envelope;
-   if (pixel_envelope && stage == MESA_SHADER_FRAGMENT)
-      shader->info.fs.noperspective_outputs = kk_polygon_noperspective_outputs(nir);
    shader->info.poly_layer_replay = opts->poly_layer_replay;
    if (stage == MESA_SHADER_FRAGMENT)
       shader->info.fs.line_geometry_stipple = kk_line_geometry_stipple(nir, state);
@@ -1701,10 +1709,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             kk_interlock_source_vertex_shader(&shader->info.polygon, nir->options,
                mesa_vertices_per_prim(shader->info.gs.mode)) :
             kk_polygon_vertex_shader(&shader->info.polygon, nir->options,
-            state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
-            state->rs->line.stipple.enable ||
-            BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
-            BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE));
+               kk_line_effects_for_primitive(state,
+                  shader->info.polygon.primitive_vertices), state);
          if (opts->poly_layer_replay) kk_poly_layer_lower_vs(point_vs);
          NIR_PASS(_, point_vs, kk_nir_lower_polygon_scalar_outputs,
                   shader->info.polygon.outputs);
@@ -2731,6 +2737,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
     * the application has no Layer output. Mesh owns its canonical reader. */
    poly_layer_replay |= layer_producer != MESA_SHADER_NONE && state &&
       state->mv && state->mv->view_mask;
+   poly_layer_replay = poly_layer_replay &&
+      kk_poly_layer_alias_possible(state, enabled_features);
    /* Compile the existing captured sibling for an explicitly enabled VRS
     * consumer. The ordinary native pair remains selected until begin(). */
    poly_layer_replay |= layer_producer != MESA_SHADER_NONE &&
@@ -2830,7 +2838,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    nir_shader *native_pair[2] = {NULL, NULL};
    bool native_fragment_needs_finish = false;
    bool native_passthrough = !explicit_geometry && !xfb && !tess &&
-      (kk_wide_line_possible(state) || poly_layer_replay);
+      (kk_polygon_native_possible(state) || poly_layer_replay);
    nir_shader *native_vs = NULL, *native_fs = NULL;
    for (unsigned i = 0; i < shader_count; ++i) {
       nir_shader *n = nir_shaders[i];

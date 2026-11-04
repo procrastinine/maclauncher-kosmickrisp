@@ -98,23 +98,6 @@ emit_sysvals(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 
 #include "msl_interlock_guard.h"
 
-static bool
-msl_uses_poly_layer_selector(nir_shader *nir)
-{
-   nir_foreach_function_impl(impl, nir) {
-      nir_foreach_block(block, impl) {
-         nir_foreach_instr(instr, block) {
-            if (instr->type != nir_instr_type_intrinsic) continue;
-            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-            if (intr->intrinsic == nir_intrinsic_load_buffer_ptr_kk &&
-                nir_intrinsic_binding(intr) == KK_ARGUMENT_POLY_LAYER_REPLAY)
-               return true;
-         }
-      }
-   }
-   return false;
-}
-
 static void
 emit_inputs(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 {
@@ -126,7 +109,7 @@ emit_inputs(struct nir_to_msl_ctx *ctx, nir_shader *shader)
       break;
    }
    msl_interlock_inputs(ctx);
-   if (msl_uses_poly_layer_selector(shader))
+   if (ctx->uses_poly_layer_selector)
       P_IND(ctx, "constant uint2 *poly_layer_selector [[buffer(%u)]],\n",
             KK_ARGUMENT_POLY_LAYER_REPLAY);
    P_IND(ctx, "constant Buffer &buf0 [[buffer(%u)]],\n", KK_ARGUMENT_ROOT);

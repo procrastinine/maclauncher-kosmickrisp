@@ -1,6 +1,15 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef KK_POLY_RASTER_TOPOLOGY_H
 #define KK_POLY_RASTER_TOPOLOGY_H
+#include <math.h>
+#include "util/macros.h"
+
+/* Shared by the capture upload and statically specialized raster reader. */
+static inline float
+kk_polygon_line_width(float width)
+{
+   return CLAMP(floorf(width * 256.0f + 0.5f) / 256.0f, 1.0f, 4096.0f);
+}
 
 /* The cached reader emits native points for original point primitives. Line
  * and polygon-line readers use native Bresenham lines or expanded triangles;

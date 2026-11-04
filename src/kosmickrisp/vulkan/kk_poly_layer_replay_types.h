@@ -14,6 +14,7 @@ struct kk_poly_layer_replay_state {
    kk_poly_layer_bind bind;
    void *data;
    uint32_t layer_count;
+   bool selector_bound;
    uint64_t per_draw_address;
 };
 

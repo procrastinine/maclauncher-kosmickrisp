@@ -908,8 +908,10 @@ kk_polygon_expansion_active(struct kk_cmd_buffer *cmd)
    const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    const struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
    if (!vs || !vs->info.polygon_point) return false;
-   if ((cmd->state.gfx.layer_replay.bind || cmd->state.gfx.poly_retained.consume) &&
-       vs->info.poly_layer_replay) return true;
+   if (vs->info.poly_layer_replay &&
+       (cmd->state.gfx.poly_replay_active ||
+        (cmd->state.gfx.render.layered_bc && cmd->state.gfx.shader == vs)))
+      return true;
    if (vs->info.polygon.cull_count) return true;
    bool controlled_bias = dyn->rs.depth_bias.enable &&
       (dyn->rs.depth_bias.exact || dyn->rs.depth_bias.representation !=
@@ -1552,7 +1554,7 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
             !cmd->state.shaders[MESA_SHADER_TESS_EVAL] &&
             (dyn->ia.primitive_topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP ||
              dyn->ia.primitive_topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY),
-         .line_width = CLAMP(floorf(dyn->rs.line.width * 256.0f + 0.5f) / 256.0f, 1.0f, 4096.0f),
+         .line_width = kk_polygon_line_width(dyn->rs.line.width),
          .streams = capture->streams,
          .clip_count = capture->clip_count,
          .cull_count = capture->cull_count,
@@ -2957,7 +2959,10 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
             goto layered_bc_done;
          }
       } else {
-         kk_poly_layer_dispatch_draw(cmd, draw_data);
+         if (unlikely(gfx->poly_replay_active))
+            kk_poly_layer_dispatch_draw(cmd, draw_data);
+         else
+            kk_dispatch_draw(cmd, draw_data);
       }
       }
    }

@@ -21,6 +21,16 @@ kk_wide_line_possible(const struct vk_graphics_pipeline_state *state)
    return possible && line_class;
 }
 
+/* Dynamic POINT mode needs captured siblings, but FILL/LINE selections
+ * must retain a complete direct native pair when the original stages allow
+ * it. Declaring polygon mode dynamic alone need not make lines wide. */
+static bool
+kk_polygon_native_possible(const struct vk_graphics_pipeline_state *state)
+{
+   return kk_wide_line_possible(state) ||
+      (state && BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE));
+}
+
 static bool
 kk_polygon_regular_possible(const struct kk_device *dev, const struct vk_graphics_pipeline_state *state)
 {
@@ -109,7 +119,8 @@ kk_polygon_point_coord(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 
 static nir_shader *
 kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
-                          const nir_shader_compiler_options *options, bool line_effects)
+                          const nir_shader_compiler_options *options, bool line_effects,
+                          const struct vk_graphics_pipeline_state *state)
 {
    if (info->primitive_vertices == 1)
       return kk_polygon_retained_point_shader(info, options);
@@ -120,24 +131,33 @@ kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
    nir->info.outputs_written = (info->outputs & ~VARYING_BIT_PSIZ) | VARYING_BIT_PNTC;
    if (line_effects) nir->info.outputs_written |= VARYING_BIT_FOGC;
    nir_def *id = nir_load_vertex_id(&b);
-   nir_def *mode = kk_polygon_load(&b, 1, 32,
-      offsetof(struct poly_geometry_capture, polygon_mode), 4);
+   bool dynamic_polygon = !state ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
+   nir_def *mode = dynamic_polygon ? kk_polygon_load(&b, 1, 32,
+      offsetof(struct poly_geometry_capture, polygon_mode), 4) :
+      nir_imm_int(&b, state->rs->polygon_mode);
    nir_def *is_point = nir_ieq_imm(&b, mode, VK_POLYGON_MODE_POINT);
-   nir_def *line_expand = kk_polygon_load(&b, 1, 32,
-      offsetof(struct poly_geometry_capture, line_expand), 4);
+   nir_def *line_expand = info->primitive_vertices == 2 ? nir_imm_int(&b, 1) :
+      dynamic_polygon ? kk_polygon_load(&b, 1, 32,
+         offsetof(struct poly_geometry_capture, line_expand), 4) :
+      nir_imm_int(&b, state->rs->polygon_mode == VK_POLYGON_MODE_LINE);
    nir_def *is_line = nir_ine_imm(&b, line_expand, 0);
-   nir_def *line_mode = kk_polygon_load(&b, 1, 32,
-      offsetof(struct poly_geometry_capture, line_mode), 4);
+   nir_def *line_mode = !state || BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ?
+      kk_polygon_load(&b, 1, 32, offsetof(struct poly_geometry_capture, line_mode), 4) :
+      nir_imm_int(&b, state->rs->line.mode);
    nir_def *bresenham = nir_iand(&b, is_line, nir_ieq_imm(&b, line_mode, 2));
-   nir_def *stipple_flags = kk_polygon_load(&b, 1, 32,
-      offsetof(struct poly_geometry_capture, line_stipple_flags), 4);
+   bool stipple_possible = !state || state->rs->line.stipple.enable ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
+   nir_def *stipple_flags = stipple_possible ? kk_polygon_load(&b, 1, 32,
+      offsetof(struct poly_geometry_capture, line_stipple_flags), 4) : nir_imm_int(&b, 0);
    nir_def *geometry_stipple = nir_ine_imm(&b,
       nir_iand_imm(&b, stipple_flags, KK_LINE_STIPPLE_GEOMETRY), 0);
    nir_def *rectangle_stipple = nir_iand(&b, geometry_stipple, nir_inot(&b, bresenham));
    nir_def *packet_stride = nir_imul_imm(&b,
       nir_iadd_imm(&b, nir_b2i32(&b, geometry_stipple), util_bitcount64(info->outputs) + 1), 16);
-   nir_def *line_width = kk_polygon_load(&b, 1, 32,
-      offsetof(struct poly_geometry_capture, line_width), 4);
+   nir_def *line_width = !state || BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_WIDTH) ?
+      kk_polygon_load(&b, 1, 32, offsetof(struct poly_geometry_capture, line_width), 4) :
+      nir_imm_float(&b, kk_polygon_line_width(state->rs->line.width));
    nir_def *copies = nir_f2u32(&b, nir_ffloor(&b, nir_fadd_imm(&b, line_width, 0.5f)));
    nir_def *line_vertices = nir_bcsel(&b, bresenham,
       nir_bcsel(&b, geometry_stipple, nir_imm_int(&b, 2), nir_imul_imm(&b, copies, 2)), nir_imm_int(&b, 6));

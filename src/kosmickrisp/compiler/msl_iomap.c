@@ -11,6 +11,7 @@
 #include "nir_to_msl.h"
 
 #include "nir_builder.h"
+#include "kosmickrisp/libkk/kk_argument_table.h"
 
 /* Mapping from alu type to Metal scalar type */
 static const char *
@@ -337,6 +338,7 @@ fs_output_block(nir_shader *shader, struct nir_to_msl_ctx *ctx)
 }
 
 struct gather_ctx {
+   struct nir_to_msl_ctx *compiler;
    struct io_slot_info *input;
    struct io_slot_info *output;
 };
@@ -351,6 +353,10 @@ msl_nir_gather_io_info(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
        kk_mesh_gather_io(intrin, ctx->output))
       return false;
    switch (intrin->intrinsic) {
+   case nir_intrinsic_load_buffer_ptr_kk:
+      ctx->compiler->uses_poly_layer_selector |=
+         nir_intrinsic_binding(intrin) == KK_ARGUMENT_POLY_LAYER_REPLAY;
+      break;
    case nir_intrinsic_load_interpolated_input: {
       unsigned component = nir_intrinsic_component(intrin);
       struct nir_io_semantics io = nir_intrinsic_io_semantics(intrin);
@@ -445,6 +451,7 @@ msl_gather_io_info(struct nir_to_msl_ctx *ctx,
                    struct io_slot_info *info_array_output)
 {
    struct gather_ctx gather_ctx = {
+      .compiler = ctx,
       .input = info_array_input,
       .output = info_array_output,
    };

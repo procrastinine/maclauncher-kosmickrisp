@@ -124,6 +124,7 @@ struct kk_device {
 
    /* Published only after successful lazy allocation, retired on free. */
    uint32_t live_lazy_allocations;
+   bool poly_layer_argument;
    PFN_vkCmdBeginRendering whole_pass_begin_rendering;
    PFN_vkCmdEndRendering2KHR whole_pass_end_rendering;
 

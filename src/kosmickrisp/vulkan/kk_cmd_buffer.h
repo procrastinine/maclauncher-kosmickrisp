@@ -258,6 +258,7 @@ struct kk_graphics_state {
    uint64_t mesh_per_draw_address;
    struct kk_mesh_retained_consumer mesh_retained_consumer;
    bool polygon_points;
+   bool poly_replay_active;
    bool conservative;
    bool rasterizer_discard;
    uint64_t polygon_capture;

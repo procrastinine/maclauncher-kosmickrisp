@@ -38,6 +38,7 @@ struct nir_to_msl_ctx {
    uint32_t mesh_view_mask, mesh_view_index_offset;
    bool mesh_flat_heap;
    bool mesh_projected_basis;
+   bool uses_poly_layer_selector;
    unsigned mesh_flat_heap_offset;
    unsigned short indentlevel;
    struct io_slot_info inputs_info[NUM_TOTAL_VARYING_SLOTS];

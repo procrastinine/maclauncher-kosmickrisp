@@ -718,6 +718,11 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS) goto fail_init;
    dev->vk.shader_ops = &kk_device_shader_ops;
    dev->mtl_handle = pdev->mtl_dev_handle;
+   dev->poly_layer_argument = dev->vk.enabled_features.shaderOutputLayer ||
+      dev->vk.enabled_features.geometryShader || dev->vk.enabled_features.multiview ||
+      dev->vk.enabled_features.pipelineFragmentShadingRate ||
+      dev->vk.enabled_features.primitiveFragmentShadingRate ||
+      dev->vk.enabled_features.attachmentFragmentShadingRate;
    dev->vk.command_buffer_ops = &kk_cmd_buffer_ops;
    /* The extension dispatch is selected once; ordinary rendering has no
     * MSRTSS pNext walk or implicit attachment setup. */

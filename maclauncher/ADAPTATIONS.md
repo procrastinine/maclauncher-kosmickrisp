@@ -34,7 +34,7 @@ Implementation: [kk_shader.h](../src/kosmickrisp/vulkan/kk_shader.h), [kk_shader
 
 Vulkan contract: Native Metal line polygon state.
 
-Sets real Metal triangle fill state and restores FILL on transitions; POINT must also exist before fillModeNonSolid is advertised.
+Sets Metal triangle fill state only when polygon mode is dirty and restores FILL on transitions. Eligible dynamic polygon pipelines retain a complete native pair for FILL/LINE and captured siblings for POINT. Original tessellation, geometry, transform feedback and fragment primitive-ID requirements retain their producer path.
 
 Scope: raster state flush and FILL/LINE transitions. Device support and operation restrictions are defined by the linked implementation.
 
@@ -250,7 +250,7 @@ Implementation: [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_shader
 
 Vulkan contract: `VK_KHR_line_rasterization`, `VK_EXT_line_rasterization`, `wideLines`, `rectangularLines`, `smoothLines`, `stippledRectangularLines`, `stippledBresenhamLines`, `stippledSmoothLines`, `bresenhamLines`.
 
-Shared Poly capture and clipping expand rectangular and smooth lines, reproduce Bresenham coverage, and carry per-strip stipple phase through the existing prefix scan and restart unroller. Smooth coverage modifies alpha before blending. Pure fragment shaders use an initial stipple discard; observable forced-early shaders retain early tests and receive only ON spans from Poly. Ordinary unit-width native draws retain their existing GPU path.
+Shared Poly capture and clipping expand rectangular and smooth lines, reproduce Bresenham coverage, and carry per-strip stipple phase through the existing prefix scan and restart unroller. Smooth coverage modifies alpha before blending. Pure fragment shaders use an initial stipple discard; observable forced-early shaders retain early tests and receive only ON spans from Poly. Ordinary unit-width native draws retain their existing GPU path. Retained readers specialize immutable polygon, line and stipple state, using the same width quantization as capture uploads. Linked producer arity excludes line payloads from native points and filled polygons. Declared dynamic values remain in GPU parameters. Shader cache keys distinguish the specialized values.
 
 Limits and reported properties: `stippledRectangularLines = false`; `stippledSmoothLines = false`; `lineWidthRange = {1.0f, 4096.0f}`; `lineWidthGranularity = 1.0f / 256.0f`; `strictLines = false`; `nonStrictWideLinesUseParallelogram = true`.
 
@@ -756,7 +756,7 @@ Implementation: [kk_geometry.cl](../src/kosmickrisp/libkk/kk_geometry.cl).
 
 Vulkan contract: `VK_EXT_non_seamless_cube_map`, `nonSeamlessCubeMap`.
 
-Sampler flags select face-local 2D-array filtering for cube operations. Ordinary 2D and 3D instructions retain their native lowering. Quotient-rule gradients preserve mip selection and anisotropic footprints.
+Sampler flags select face-local 2D-array filtering for cube operations. Ordinary 2D and 3D instructions retain their native lowering. Quotient-rule gradients preserve mip selection and anisotropic footprints. Immutable sampler bindings select their filtering path at compilation, retaining one texture operation. Mixed dynamically indexed and mutable sampler bindings read their flag from the existing sampler metadata.
 
 Scope: shared descriptor auxiliary resource word, sampler filter metadata, texture view creation, texture lowering. Device support and operation restrictions are defined by the linked implementation.
 
@@ -1628,7 +1628,7 @@ Implementation: [kk_native_block_alias.h](../src/kosmickrisp/vulkan/kk_native_bl
 
 Vulkan contract: Cached Poly Layer replay.
 
-Rasterizes cached pre-raster outputs into selected logical attachment layers with original producer execution and a nullable selector in a dedicated argument-table entry. Ordinary per-draw uploads retain their original extent.
+Rasterizes cached pre-raster outputs into selected logical attachment layers with original producer execution and a nullable selector in a dedicated argument-table entry. Ordinary per-draw uploads retain their original extent. Device setup determines selector availability. Complete known attachment formats outside the uncompressed 64/128-bit block-view classes omit alias-only capture alternatives; incomplete formats and dynamic unused attachments retain them. Explicit retained raster consumers remain independent of attachment alias eligibility. The ordinary draw path bypasses replay handlers while neither a Layer nor a retained raster consumer is active. Selector declarations share the native IO gather and appear only in shaders reading that selector. Attachment replay selects the captured path before the first state flush. Begin and end update native raster state only when that selection changes; the selector binding is cleared only after a reader used it. An active original draw allocates its immutable per-layer selectors together in one command-retired block.
 
 Scope: Poly capture and generated raster readers. Device support and operation restrictions are defined by the linked implementation.
 

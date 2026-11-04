@@ -17,6 +17,7 @@ kk_poly_retained_begin(struct kk_cmd_buffer *cmd, struct kk_draw_command *draw,
        gfx->shader->info.stage == MESA_SHADER_MESH)
       return VK_ERROR_FEATURE_NOT_PRESENT;
    gfx->poly_retained = (struct kk_poly_retained_state){.consume = consume, .data = data};
+   gfx->poly_replay_active = true;
    /* The captured sibling and original native pair were compiled together.
     * Select the former before uploads and producer preparation, once. */
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
@@ -27,9 +28,9 @@ kk_poly_retained_begin(struct kk_cmd_buffer *cmd, struct kk_draw_command *draw,
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_FACTORS);
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_DEPTH_CLIP_ENABLE);
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_FRONT_FACE);
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
+      kk_flush_gfx_state(cmd);
    }
-   BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
-   kk_flush_gfx_state(cmd);
    draw->upload_mask |= build_per_draw_upload_mask(cmd);
    return cmd->vk.record_result;
 }
@@ -38,7 +39,9 @@ void
 kk_poly_retained_end(struct kk_cmd_buffer *cmd)
 {
    cmd->state.gfx.poly_retained = (struct kk_poly_retained_state){0};
-   BITSET_SET(cmd->vk.dynamic_graphics_state.dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
+   cmd->state.gfx.poly_replay_active = cmd->state.gfx.layer_replay.bind != NULL;
+   if (cmd->state.gfx.polygon_points != kk_polygon_expansion_active(cmd))
+      BITSET_SET(cmd->vk.dynamic_graphics_state.dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);
 }
 
 VkResult
