@@ -170,12 +170,13 @@ kk_archive_temporary_path(void)
 /* Bounds cached native objects, not persistent or in-flight coverage. */
 #define KK_RESIDENT_ARCHIVE_LIMIT 8
 
-/* Graphics libraries only: bounded source retention and native object count.
- * Specialization and PSO state remain on their original descriptor paths. */
-#define KK_GRAPHICS_LIBRARY_LIMIT 128
-#define KK_GRAPHICS_SOURCE_LIMIT (8 * 1024 * 1024)
+/* In-process MTLLibrary cache keyed by exact MSL source and compile options.
+ * Bounds the native object count and retained source characters (MSL is
+ * ASCII). Specialization and PSO state remain on their original paths. */
+#define KK_LIBRARY_CACHE_LIMIT 1024
+#define KK_LIBRARY_SOURCE_LIMIT (64 * 1024 * 1024)
 
-@interface KKGraphicsLibrary : NSObject {
+@interface KKCachedLibrary : NSObject {
 @public
    NSString *source;
    MTLLanguageVersion language;
@@ -186,7 +187,7 @@ kk_archive_temporary_path(void)
    bool complete;
 }
 @end
-@implementation KKGraphicsLibrary
+@implementation KKCachedLibrary
 - (void)dealloc
 {
    [source release];
@@ -212,8 +213,8 @@ kk_archive_temporary_path(void)
    NSMutableDictionary *pending_hints;
    NSMutableDictionary *piece_by_identity;
    NSMutableArray *resident_pieces;
-   NSMutableArray *graphics_libraries;
-   size_t graphics_source_bytes;
+   NSMutableArray *cached_libraries;
+   size_t cached_source_bytes;
    uint64_t generation, checkpointed, last_compile;
    bool available, scheduled, finished, gate_ready;
    struct mtl_compiler_cache_stats stats;
@@ -538,7 +539,7 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
 
 - (void)dealloc
 {
-   [graphics_libraries release];
+   [cached_libraries release];
    [pieces release];
    [hints release];
    [pending_hints release];
@@ -563,23 +564,28 @@ kk_compiler_archive(mtl_compiler *compiler)
  * never while enqueueing. Completed-only probes cannot wait. Thus pending entries cannot depend on queued work
  * behind their waiters. Native calls and waits hold no archive/cache lock. */
 static id<MTLLibrary>
-kk_graphics_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vertex, bool completed_only)
+kk_cached_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool vertex, bool completed_only)
 {
    KKPipelineArchive *cache = kk_compiler_archive(compiler);
-   KKGraphicsLibrary *entry = nil;
+   KKCachedLibrary *entry = nil;
    NSMutableArray *retired = nil;
    bool owner = false;
-   size_t bytes = desc.source.length * sizeof(unichar);
-   if (cache && desc.source && bytes <= KK_GRAPHICS_SOURCE_LIMIT) {
+   size_t bytes = desc.source.length;
+   if (cache && desc.source && bytes <= KK_LIBRARY_SOURCE_LIMIT) {
       @synchronized(cache) {
-         if (vertex && !completed_only) cache->stats.vertex_library_requests++;
-         for (KKGraphicsLibrary *candidate in cache->graphics_libraries) {
+         if (!completed_only) {
+            cache->stats.library_requests++;
+            if (vertex) cache->stats.vertex_library_requests++;
+         }
+         for (KKCachedLibrary *candidate in cache->cached_libraries) {
             if (completed_only && !__atomic_load_n(&candidate->complete, __ATOMIC_ACQUIRE)) continue;
             if (candidate->language == desc.options.languageVersion &&
                 candidate->math == desc.options.mathMode &&
                 candidate->floating == desc.options.mathFloatingPointFunctions &&
                 [candidate->source isEqualToString:desc.source]) {
                entry = [candidate retain];
+               if (completed_only) cache->stats.library_requests++;
+               cache->stats.library_hits++;
                if (vertex) {
                   if (completed_only) cache->stats.vertex_library_requests++;
                   cache->stats.vertex_library_hits++;
@@ -591,28 +597,28 @@ kk_graphics_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool ve
             /* FIFO eviction skips active compiles. If every slot is active,
              * use the ordinary synchronous path without retaining more state. */
             retired = [[NSMutableArray alloc] init];
-            for (NSUInteger i = 0; i < cache->graphics_libraries.count &&
-                 (cache->graphics_libraries.count >= KK_GRAPHICS_LIBRARY_LIMIT ||
-                  cache->graphics_source_bytes + bytes > KK_GRAPHICS_SOURCE_LIMIT);) {
-               KKGraphicsLibrary *old = cache->graphics_libraries[i];
+            for (NSUInteger i = 0; i < cache->cached_libraries.count &&
+                 (cache->cached_libraries.count >= KK_LIBRARY_CACHE_LIMIT ||
+                  cache->cached_source_bytes + bytes > KK_LIBRARY_SOURCE_LIMIT);) {
+               KKCachedLibrary *old = cache->cached_libraries[i];
                if (!__atomic_load_n(&old->complete, __ATOMIC_ACQUIRE)) { ++i; continue; }
                [retired addObject:old];
-               cache->graphics_source_bytes -= old->source.length * sizeof(unichar);
-               [cache->graphics_libraries removeObjectAtIndex:i];
+               cache->cached_source_bytes -= old->source.length;
+               [cache->cached_libraries removeObjectAtIndex:i];
             }
-            if (cache->graphics_libraries.count < KK_GRAPHICS_LIBRARY_LIMIT &&
-                cache->graphics_source_bytes + bytes <= KK_GRAPHICS_SOURCE_LIMIT) {
-               if (!cache->graphics_libraries) cache->graphics_libraries = [NSMutableArray new];
-               entry = [KKGraphicsLibrary new];
+            if (cache->cached_libraries.count < KK_LIBRARY_CACHE_LIMIT &&
+                cache->cached_source_bytes + bytes <= KK_LIBRARY_SOURCE_LIMIT) {
+               if (!cache->cached_libraries) cache->cached_libraries = [NSMutableArray new];
+               entry = [KKCachedLibrary new];
                if (entry) {
                   entry->source = [desc.source copy];
                   entry->language = desc.options.languageVersion;
                   entry->math = desc.options.mathMode;
                   entry->floating = desc.options.mathFloatingPointFunctions;
                   entry->changed = [NSCondition new];
-                  if (entry->source && entry->changed && cache->graphics_libraries) {
-                     [cache->graphics_libraries addObject:entry];
-                     cache->graphics_source_bytes += bytes;
+                  if (entry->source && entry->changed && cache->cached_libraries) {
+                     [cache->cached_libraries addObject:entry];
+                     cache->cached_source_bytes += bytes;
                      owner = true;
                   } else {
                      [entry release];
@@ -646,8 +652,8 @@ kk_graphics_library(mtl_compiler *compiler, MTL4LibraryDescriptor *desc, bool ve
          /* A failure wakes existing waiters but is never memoized. A later
           * request retries transient native errors with the same exact input. */
          if (!result) @synchronized(cache) {
-            cache->graphics_source_bytes -= bytes;
-            [cache->graphics_libraries removeObjectIdenticalTo:entry];
+            cache->cached_source_bytes -= bytes;
+            [cache->cached_libraries removeObjectIdenticalTo:entry];
          }
          [entry->changed lock];
          entry->library = [result retain];

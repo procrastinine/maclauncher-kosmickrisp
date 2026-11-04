@@ -388,15 +388,9 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
 {
    @autoreleasepool {
       KK_FOREGROUND_SCOPE(compiler);
-      id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
       MTL4LibraryDescriptor *desc =
          mtl_library_descriptor(src, msl_version, math_mode, math_fp_fns);
-      NSError *error = nil;
-      id<MTLLibrary> lib = [comp newLibraryWithDescriptor:desc error:&error];
-      if (kk_compiler_archive(compiler)) kk_remember_library_hint(lib, desc);
-      if (lib == nil)
-         fprintf(stderr, "Failed to create MTLLibrary: %s\n",
-                 error.localizedDescription.UTF8String ?: "Unknown Metal error");
+      id<MTLLibrary> lib = kk_cached_library(compiler, desc, false, false);
       if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE))
          mtl_gpu_timing_library(lib, src);
       return lib;
@@ -430,7 +424,7 @@ static void
 kk_library_work_execute(void *data)
 {
    struct kk_library_work *work = data;
-   work->result = kk_graphics_library(work->compiler, work->descriptor, work->vertex, false);
+   work->result = kk_cached_library(work->compiler, work->descriptor, work->vertex, false);
    if (__atomic_load_n(&mtl_gpu_timing_enabled, __ATOMIC_ACQUIRE)) {
       NSString *source = work->descriptor.source;
       if (debug_msl_prefix && [source hasPrefix:debug_msl_prefix])
@@ -469,7 +463,7 @@ mtl_new_library_pair(mtl_compiler *compiler,
       /* Completed hits need no worker or queue admission. Pending requests
        * join only on entry to execute, preserving independent stage overlap. */
       for (unsigned i = 0; i < 2; ++i)
-         work[i].result = kk_graphics_library(compiler, work[i].descriptor, work[i].vertex, true);
+         work[i].result = kk_cached_library(compiler, work[i].descriptor, work[i].vertex, true);
       void *task = NULL;
       @try {
          if (!work[0].result && !kk_background_thread)

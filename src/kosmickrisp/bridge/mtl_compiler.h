@@ -43,6 +43,9 @@ mtl_compiler *mtl_new_cached_compiler(mtl_device *device,
 struct mtl_compiler_cache_stats {
    uint64_t lookups, hits, native_compiles, stored_bytes;
    uint64_t checkpoints, snapshot_ns, capture_wait_ns, requests;
+   /* Every MTLLibrary request through the in-process source cache, and the
+    * vertex-stage subset of graphics library pairs. */
+   uint64_t library_requests, library_hits;
    uint64_t vertex_library_requests, vertex_library_hits;
    /* Disk-cache piece reads (load_piece) and native archive opens
     * (newArchiveWithURL), with the time spent in each call. */
