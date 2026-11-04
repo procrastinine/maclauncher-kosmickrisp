@@ -7,6 +7,7 @@
 #include "vulkan/vulkan_core.h"
 #include "msl_private.h"
 #include "kk-sampler-helper-flags.h"
+#include "kk_atomic_int64_usage.h"
 
 typedef enum ti_type {
    /* We haven't been able to assign a type yet */
@@ -323,6 +324,8 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       for (unsigned i = 0; i < 3; i++) set_type(types, &instr->src[i], TYPE_FLOAT);
       break;
    case nir_intrinsic_load_global:
+      ctx->uses_atomic64 |= kk_is_atomic64(instr);
+      FALLTHROUGH;
    case nir_intrinsic_load_push_constant:
       set_type(types, &instr->def, TYPE_GENERIC_DATA);
       set_type(types, &instr->src[0], TYPE_UINT);
@@ -332,6 +335,7 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
    case nir_intrinsic_global_atomic_swap:
    case nir_intrinsic_shared_atomic:
    case nir_intrinsic_shared_atomic_swap: {
+      ctx->uses_atomic64 |= instr->def.bit_size == 64;
       ti_type type =
          ti_type_from_nir(nir_atomic_op_type(nir_intrinsic_atomic_op(instr)));
       set_type(types, &instr->def, type);
@@ -341,6 +345,7 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       break;
    }
    case nir_intrinsic_store_global:
+      ctx->uses_atomic64 |= kk_is_atomic64(instr);
       set_type(types, &instr->src[0], TYPE_GENERIC_DATA);
       set_type(types, &instr->src[1], TYPE_UINT);
       break;
@@ -382,15 +387,19 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       set_type(types, &instr->src[0], TYPE_NONE);
       set_type(types, &instr->def, TYPE_NONE);
       break;
-   case nir_intrinsic_load_scratch:
    case nir_intrinsic_load_shared:
+      ctx->uses_atomic64 |= kk_is_atomic64(instr);
+      FALLTHROUGH;
+   case nir_intrinsic_load_scratch:
    case nir_intrinsic_load_task_payload:
    case nir_intrinsic_load_constant:
       set_type(types, &instr->def, TYPE_UINT);
       set_type(types, &instr->src[0], TYPE_UINT);
       break;
-   case nir_intrinsic_store_scratch:
    case nir_intrinsic_store_shared:
+      ctx->uses_atomic64 |= kk_is_atomic64(instr);
+      FALLTHROUGH;
+   case nir_intrinsic_store_scratch:
    case nir_intrinsic_store_task_payload:
       set_type(types, &instr->src[0], TYPE_UINT);
       set_type(types, &instr->src[1], TYPE_UINT);
@@ -469,6 +478,7 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
                ti_type_from_pipe_format(nir_intrinsic_format(instr)));
       break;
    case nir_intrinsic_bindless_image_load:
+      ctx->uses_image_atomic64 |= kk_is_image_atomic64(instr);
       set_type(types, &instr->def,
                ti_type_from_nir(nir_intrinsic_dest_type(instr)));
       set_type(types, &instr->src[1], TYPE_UINT); // coords
@@ -478,6 +488,7 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       set_type(types, &instr->def, TYPE_UINT);
       break;
    case nir_intrinsic_bindless_image_store:
+      ctx->uses_image_atomic64 |= kk_is_image_atomic64(instr);
       set_type(types, &instr->src[1], TYPE_UINT); // coords
       set_type(types, &instr->src[3],
                ti_type_from_nir(nir_intrinsic_src_type(instr)));
@@ -489,6 +500,7 @@ infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
       break;
    case nir_intrinsic_bindless_image_atomic:
    case nir_intrinsic_bindless_image_atomic_swap: {
+      ctx->uses_image_atomic64 |= instr->def.bit_size == 64;
       set_type(types, &instr->src[1], TYPE_UINT); // coords
       set_type(types, &instr->src[2], TYPE_UINT); // level
       ti_type type =
@@ -912,6 +924,7 @@ msl_infer_types(struct nir_to_msl_ctx *ctx)
    nir_shader *shader = ctx->shader;
    ctx->has_sampler_helpers = false;
    ctx->sparse_residency = false;
+   ctx->uses_atomic64 = ctx->uses_image_atomic64 = false;
    struct hash_table *types = _mesa_pointer_hash_table_create(NULL);
    bool progress = false;
    // First, seed the types for every instruction for every source and def

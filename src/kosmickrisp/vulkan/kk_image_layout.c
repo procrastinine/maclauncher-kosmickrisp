@@ -286,7 +286,8 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
       !(image->compr_flags & VK_IMAGE_COMPRESSION_DISABLED_EXT);
    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(
       usage, image->create_flags, supported_format->atomic);
-   layout->create_flags = image->create_flags;
+   layout->block_texel_view_compatible =
+      (image->create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) != 0;
    layout->format.pipe = kk_format_backing(format);
    layout->format.mtl = supported_format->mtl_pixel_format;
    layout->swizzle.red = supported_format->unswizzle.red;

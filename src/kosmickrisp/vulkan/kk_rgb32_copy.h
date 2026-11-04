@@ -2,6 +2,20 @@
 /* RGB32 transfers use bounded RGBA32 staging; only the requested RGB words
  * enter or leave the application's buffer. Image-to-image copies already use
  * the physical layout format, including cross-type bit-preserving copies. */
+static bool
+kk_prepare_rgb32_copy(struct kk_cmd_buffer *cmd)
+{
+   /* Preflight once per copy command, before staging or region/chunk loops.
+    * Dispatch and preflight share the device-owned per-program slot. */
+   VkResult result = kk_device_ensure_precompiled_shader(
+      kk_cmd_buffer_device(cmd), LIBKK_RGB32_COPY);
+   if (unlikely(result != VK_SUCCESS)) {
+      vk_command_buffer_set_error(&cmd->vk, result);
+      return false;
+   }
+   return true;
+}
+
 static void
 kk_copy_rgb32_buffer_image(struct kk_cmd_buffer *cmd, struct kk_buffer *buffer,
                           struct kk_image *image,

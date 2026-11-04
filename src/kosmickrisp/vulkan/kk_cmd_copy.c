@@ -15,12 +15,40 @@
 #include "kk_entrypoints.h"
 #include "kk_format.h"
 #include "vk_format.h"
+#include "vk_common_entrypoints.h"
 #include "kk_physical_device.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/vk_to_mtl_map.h"
 
 #include "util/format/u_format.h"
+
+VKAPI_ATTR void VKAPI_CALL
+kk_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
+                  const VkCopyBufferInfo2 *info)
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   VK_FROM_HANDLE(kk_buffer, src, info->srcBuffer);
+   VK_FROM_HANDLE(kk_buffer, dst, info->dstBuffer);
+
+   /* Sparse/address-only storage still needs the common address adapter.
+    * Concrete Metal buffers can copy without meta shader/root preparation. */
+   if (!src->metal.handle || !dst->metal.handle ||
+       ((src->vk.create_flags | dst->vk.create_flags) &
+        VK_BUFFER_CREATE_SPARSE_BINDING_BIT)) {
+      vk_common_CmdCopyBuffer2(commandBuffer, info);
+      return;
+   }
+
+   mtl_compute_encoder *encoder = cs_get_compute(cmd);
+   for (uint32_t i = 0; i < info->regionCount; ++i) {
+      const VkBufferCopy2 *region = &info->pRegions[i];
+      mtl_copy_from_buffer_to_buffer(
+         encoder, src->metal.handle,
+         kk_buffer_mtl_offset(src, region->srcOffset), dst->metal.handle,
+         kk_buffer_mtl_offset(dst, region->dstOffset), region->size);
+   }
+}
 
 struct kk_buffer_image_copy_info {
    struct mtl_buffer_image_copy mtl_data;
@@ -84,6 +112,8 @@ kk_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
    }
 
    if (kk_format_is_rgb32(vk_format_to_pipe_format(image->vk.format))) {
+      if (!kk_prepare_rgb32_copy(cmd))
+         return;
       for (uint32_t r = 0; r < pCopyBufferToImageInfo->regionCount; ++r)
          kk_copy_rgb32_buffer_image(cmd, buffer, image,
                                    &pCopyBufferToImageInfo->pRegions[r], true);
@@ -124,6 +154,8 @@ kk_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
    }
 
    if (kk_format_is_rgb32(vk_format_to_pipe_format(image->vk.format))) {
+      if (!kk_prepare_rgb32_copy(cmd))
+         return;
       for (uint32_t r = 0; r < pCopyImageToBufferInfo->regionCount; ++r)
          kk_copy_rgb32_buffer_image(cmd, buffer, image,
                                    &pCopyImageToBufferInfo->pRegions[r], false);

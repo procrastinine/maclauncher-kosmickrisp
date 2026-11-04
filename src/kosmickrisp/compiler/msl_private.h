@@ -41,6 +41,9 @@ struct nir_to_msl_ctx {
    bool uses_poly_layer_selector;
    unsigned mesh_flat_heap_offset;
    unsigned short indentlevel;
+   /* Use the alignment gap before the I/O records. */
+   bool uses_atomic64;
+   bool uses_image_atomic64;
    struct io_slot_info inputs_info[NUM_TOTAL_VARYING_SLOTS];
    struct io_slot_info outputs_info[NUM_TOTAL_VARYING_SLOTS];
 };

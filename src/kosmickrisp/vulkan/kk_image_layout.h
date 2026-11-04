@@ -42,9 +42,11 @@ struct kk_image_layout {
    /** Whether to allow Metal to optimize image contents for the GPU */
    uint8_t optimized_layout;
 
-   enum mtl_texture_usage usage;
+   /* The only create flag needed after layout construction. Full Vulkan
+    * flags remain in vk_image; this fits the existing scalar padding. */
+   uint8_t block_texel_view_compatible;
 
-   VkImageCreateFlags2KHR create_flags;
+   enum mtl_texture_usage usage;
 
    /** Texture format */
    struct {
@@ -174,8 +176,7 @@ kk_image_layout_level_offsets_defined(const struct kk_image_layout *layout)
 
    /* Tiled calculations have not been validated beyond block texel view
     * compatible images */
-   if (!(layout->create_flags &
-         VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT))
+   if (!layout->block_texel_view_compatible)
       return false;
 
    return true;

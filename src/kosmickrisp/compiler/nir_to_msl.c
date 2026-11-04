@@ -2773,9 +2773,9 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       P(&ctx, "#include <metal_simdgroup_matrix>\n");
    P(&ctx, "using namespace metal;\n");
    if (kk_uses_float8(shader)) P(&ctx, "%s", kk_float8_msl);
-   if (kk_uses_atomic64(shader) || kk_uses_image_atomic64(shader))
+   if (ctx.uses_atomic64 || ctx.uses_image_atomic64)
       P(&ctx, "%s", kk_atomic64_msl);
-   if (kk_uses_image_atomic64(shader)) P(&ctx, "%s", kk_image_atomic64_msl);
+   if (ctx.uses_image_atomic64) P(&ctx, "%s", kk_image_atomic64_msl);
    if (fp32_preserve_helpers) P(&ctx, "%s", kk_fp32_preserve_msl);
 
    if (shader->info.stage == MESA_SHADER_TASK || shader->info.stage == MESA_SHADER_MESH)

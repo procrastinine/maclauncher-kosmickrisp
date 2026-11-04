@@ -2,37 +2,8 @@
 #ifndef KK_ATOMIC_INT64_H
 #define KK_ATOMIC_INT64_H
 #include "kk_atomic_int64_msl.h"
+#include "kk_atomic_int64_usage.h"
 
-static inline bool
-kk_is_atomic64(nir_intrinsic_instr *intr)
-{
-   bool store = false;
-   switch (intr->intrinsic) {
-   case nir_intrinsic_global_atomic:
-   case nir_intrinsic_global_atomic_swap:
-   case nir_intrinsic_shared_atomic:
-   case nir_intrinsic_shared_atomic_swap:
-      return intr->def.bit_size == 64;
-   case nir_intrinsic_store_global:
-   case nir_intrinsic_store_shared: store = true; FALLTHROUGH;
-   case nir_intrinsic_load_global:
-   case nir_intrinsic_load_shared:
-      return (store ? intr->src[0].ssa->bit_size : intr->def.bit_size) == 64 &&
-             (nir_intrinsic_access(intr) & ACCESS_ATOMIC);
-   default: return false;
-   }
-}
-static inline bool
-kk_uses_atomic64(nir_shader *nir)
-{
-   nir_foreach_function_impl(impl, nir)
-      nir_foreach_block(block, impl)
-         nir_foreach_instr(instr, block)
-            if (instr->type == nir_instr_type_intrinsic &&
-                kk_is_atomic64(nir_instr_as_intrinsic(instr)))
-               return true;
-   return false;
-}
 static inline unsigned
 kk_atomic64_opcode(nir_atomic_op atomic_op)
 {
@@ -53,37 +24,6 @@ kk_atomic64_opcode(nir_atomic_op atomic_op)
    return op;
 }
 
-static inline bool
-kk_is_image64(nir_intrinsic_instr *intr)
-{
-   switch (intr->intrinsic) {
-   case nir_intrinsic_bindless_image_load:
-   case nir_intrinsic_bindless_image_atomic:
-   case nir_intrinsic_bindless_image_atomic_swap:
-      return intr->def.bit_size == 64;
-   case nir_intrinsic_bindless_image_store:
-      return intr->src[3].ssa->bit_size == 64;
-   default: return false;
-   }
-}
-static inline bool
-kk_is_image_atomic64(nir_intrinsic_instr *intr)
-{
-   return kk_is_image64(intr) &&
-      (nir_intrinsic_has_atomic_op(intr) ||
-       (nir_intrinsic_access(intr) & ACCESS_ATOMIC));
-}
-static inline bool
-kk_uses_image_atomic64(nir_shader *nir)
-{
-   nir_foreach_function_impl(impl, nir)
-      nir_foreach_block(block, impl)
-         nir_foreach_instr(instr, block)
-            if (instr->type == nir_instr_type_intrinsic &&
-                kk_is_image_atomic64(nir_instr_as_intrinsic(instr)))
-               return true;
-   return false;
-}
 static inline bool
 kk_emit_image64(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *intr)
 {

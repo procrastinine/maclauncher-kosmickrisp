@@ -564,7 +564,7 @@ Implementation: [kk_format.c](../src/kosmickrisp/vulkan/kk_format.c), [kk_image.
 
 Vulkan contract: Alpha, packed 16-bit and swizzled BGRA sampled images.
 
-Adds A8 and packed 16-bit image formats and sampled-only BGRA SNORM/UINT/SINT views. Fixed opaque black uses the shared sampler correction. A8 color attachments remain unavailable.
+Adds A8 and packed 16-bit image formats and sampled-only BGRA SNORM/UINT/SINT views. Fixed opaque black uses the shared sampler correction; the alpha and packed image operations below provide attachment and storage behavior.
 
 Scope: format properties, shared descriptor and Metal representation. Device support and operation restrictions are defined by the linked implementation.
 
@@ -684,7 +684,7 @@ Implementation: [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c).
 
 Vulkan contract: RGB32 image backing and exact transfer conversion.
 
-RGB32 optimal images use RGBA32 backing with exact packed RGB copies, sampled/storage views, and RGB32 texel-buffer load/store lowering. Staging stays bounded to four MiB and only RGB operations invoke conversion.
+RGB32 optimal images use RGBA32 backing with exact packed RGB copies, sampled/storage views, and RGB32 texel-buffer load/store lowering. Staging stays bounded to four MiB and only RGB operations invoke conversion. The conversion pipeline is created on the first RGB32 buffer/image transfer and shared across command-recording threads. Typed storage-buffer operations with other declared formats omit RGB32 expansion; RGB32 loads fetch only the consumed channels, while sparse loads retain the complete residency result.
 
 Scope: shared image and descriptor handling. Device support and operation restrictions are defined by the linked implementation.
 
@@ -780,7 +780,7 @@ Implementation: [kk_buffer.c](../src/kosmickrisp/vulkan/kk_buffer.c), [kk_buffer
 
 Vulkan contract: `VK_EXT_shader_image_atomic_int64`, `VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT.shaderImageInt64Atomics`.
 
-Uses exact RG32Uint backing for R64_UINT and R64_SINT images, with the shared full-width operation evaluator and CAS lock table for returning and signed atomics, and address-based lowering for buffer views.
+Uses exact RG32Uint backing for R64_UINT and R64_SINT images, with the shared full-width operation evaluator and CAS lock table for returning and signed atomics, and address-based lowering for buffer views. Helper requirements are collected during type inference; shaders without the corresponding atomics emit no atomic helper source.
 
 Scope: storage images, storage texel buffers, 64-bit atomic lock table. Device support and operation restrictions are defined by the linked implementation.
 
@@ -1472,7 +1472,7 @@ Implementation: [wsi_common_metal.c](../src/vulkan/wsi/wsi_common_metal.c).
 
 Vulkan contract: RGB32 uniform texel buffer views.
 
-RGB32 float, unsigned and signed buffer SRVs fetch three native R32 components while retaining logical offsets, lengths and empty views. Storage RGB32 access is not advertised.
+RGB32 float, unsigned and signed buffer SRVs fetch native R32 components while retaining logical offsets, lengths and empty views. The shared RGB32 image backing adaptation also provides storage texel-buffer operations.
 
 Scope: format properties, shared descriptor and Metal representation. Device support and operation restrictions are defined by the linked implementation.
 
@@ -1509,6 +1509,8 @@ Implementation: [nir_to_msl.c](../src/kosmickrisp/compiler/nir_to_msl.c).
 Vulkan contract: `VK_KHR_device_address_commands`, `deviceAddressCommands`.
 
 Shares the Vulkan meta address-copy backend across handle and address commands, stages image-copy rows through the existing format paths, and includes address-range barriers and transform feedback address bindings.
+
+Ordinary copies between concrete Metal buffers use native buffer copies. Sparse and address-only storage uses the common device-address adapter. Image-address transfers allocate bounded row staging only when those transfer commands are recorded.
 
 Scope: buffer copy, buffer fill and update, buffer and image copies, transform feedback. Device support and operation restrictions are defined by the linked implementation.
 

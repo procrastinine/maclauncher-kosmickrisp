@@ -11,6 +11,7 @@
 #include "kk_descriptor_set_layout.h"
 #include "kk_shader.h"
 #include "kk_sparse.h"
+#include "kk_format.h"
 
 #include "kosmickrisp/compiler/nir_to_msl.h"
 
@@ -378,12 +379,14 @@ load_resource_deref_desc(nir_builder *b, unsigned num_components,
 /* Preserve logical view bounds before adding the Metal-alignment prefix.
  * Negative and overflowing coordinates must not access that prefix. */
 static nir_def *
-kk_texel_buffer_coord(nir_builder *b, nir_def *coord, nir_def *metadata)
+kk_texel_buffer_coord(nir_builder *b, nir_def *coord, nir_def *metadata,
+                      bool may_be_rgb32)
 {
    nir_def *word = nir_channel(b, metadata, 0);
-   nir_def *offset = nir_iand_imm(b, word, ~KK_TEXEL_BUFFER_RGB32);
-   nir_def *stride = nir_bcsel(b, nir_ine_imm(b, nir_iand_imm(b, word, KK_TEXEL_BUFFER_RGB32), 0),
-                              nir_imm_int(b, 3), nir_imm_int(b, 1));
+   nir_def *offset = may_be_rgb32 ? nir_iand_imm(b, word, ~KK_TEXEL_BUFFER_RGB32) : word;
+   nir_def *stride = may_be_rgb32 ?
+      nir_bcsel(b, nir_ine_imm(b, nir_iand_imm(b, word, KK_TEXEL_BUFFER_RGB32), 0),
+                 nir_imm_int(b, 3), nir_imm_int(b, 1)) : nir_imm_int(b, 1);
    nir_def *count = nir_channel(b, metadata, 1);
    nir_def *x = nir_channel(b, coord, 0);
    nir_def *in_bounds = nir_ult(b, x, count);
@@ -454,7 +457,10 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
    nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
    if (kk_lower_buffer64(b, intr, deref, ctx)) return true;
 
+   bool may_be_rgb32 = false;
    if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF) {
+      const enum pipe_format format = nir_intrinsic_format(intr);
+      may_be_rgb32 = format == PIPE_FORMAT_NONE || kk_format_is_rgb32(format);
       nir_def *metadata = load_resource_deref_desc(
          b, 2, 32, deref,
          offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
@@ -468,7 +474,7 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
           intr->intrinsic == nir_intrinsic_image_deref_atomic ||
           intr->intrinsic == nir_intrinsic_image_deref_atomic_swap)
       {
-         nir_def *coord = kk_texel_buffer_coord(b, intr->src[1].ssa, metadata);
+         nir_def *coord = kk_texel_buffer_coord(b, intr->src[1].ssa, metadata, may_be_rgb32);
          nir_src_rewrite(&intr->src[1], coord);
          if (intr->intrinsic == nir_intrinsic_image_deref_sparse_load) {
             nir_def *residency = load_resource_deref_desc(b, 4, 32, deref,
@@ -560,8 +566,9 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
 
    if (kk_standard_3d_lower_image(b, intr, deref, type, resource_addr, ctx)) return true;
 
-   if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF &&
-       (intr->intrinsic == nir_intrinsic_bindless_image_load ||
+   if (may_be_rgb32 && nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF &&
+       ((intr->intrinsic == nir_intrinsic_bindless_image_load &&
+         (nir_def_components_read(&intr->def) & ~1u)) ||
         intr->intrinsic == nir_intrinsic_bindless_image_store)) {
       nir_def *metadata = load_resource_deref_desc(
          b, 2, 32, deref,
@@ -578,7 +585,12 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
          nir_builder_instr_insert(b, &first->instr);
          nir_push_if(b, rgb32);
          nir_def *rgb[4] = {nir_channel(b, &first->def, 0)};
+         unsigned components = nir_def_components_read(&intr->def);
          for (unsigned c = 1; c < 3; ++c) {
+            if (!(components & BITFIELD_BIT(c))) {
+               rgb[c] = nir_undef(b, 1, intr->def.bit_size);
+               continue;
+            }
             nir_def *at = nir_vector_insert_imm(b, coord,
                nir_bcsel(b, valid, nir_iadd_imm(b, base, c), base), 0);
             nir_intrinsic_instr *component = nir_instr_as_intrinsic(
@@ -783,7 +795,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       }
       int coord_src = nir_tex_instr_src_index(tex, nir_tex_src_coord);
       if (coord_src >= 0) {
-         nir_def *coord = kk_texel_buffer_coord(b, tex->src[coord_src].src.ssa, metadata);
+         nir_def *coord = kk_texel_buffer_coord(b, tex->src[coord_src].src.ssa, metadata, true);
          nir_src_rewrite(&tex->src[coord_src].src, coord);
          if (tex->is_sparse) {
             nir_def *residency = load_resource_deref_desc(b, 4, 32,
@@ -893,7 +905,8 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
 
    if (kk_standard_3d_lower_fetch(b, tex, texture, plane_offset_B, standard_resource_address, ctx)) return true;
 
-   if (tex->sampler_dim == GLSL_SAMPLER_DIM_BUF && tex->op == nir_texop_txf) {
+   if (tex->sampler_dim == GLSL_SAMPLER_DIM_BUF && tex->op == nir_texop_txf &&
+       (tex->is_sparse || (nir_def_components_read(&tex->def) & ~1u))) {
       nir_def *metadata = load_resource_deref_desc(
          b, 2, 32, nir_src_as_deref(nir_src_for_ssa(texture)),
          offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
@@ -909,7 +922,12 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       nir_push_if(b, rgb32);
       nir_def *rgb[5] = {nir_channel(b, &first->def, 0)};
       if (tex->is_sparse) rgb[4] = nir_channel(b, &first->def, 4);
+      unsigned components = nir_def_components_read(&tex->def);
       for (unsigned c = 1; c < 3; ++c) {
+         if (!tex->is_sparse && !(components & BITFIELD_BIT(c))) {
+            rgb[c] = nir_undef(b, 1, tex->def.bit_size);
+            continue;
+         }
          nir_tex_instr *component = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
          int coord_src = nir_tex_instr_src_index(component, nir_tex_src_coord);
          nir_def *component_coord = nir_bcsel(b, valid, nir_iadd_imm(b, base, c), base);
