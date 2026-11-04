@@ -235,5 +235,21 @@
     "performance": false,
     "performance_reason": "These advanced multiview combinations are not required by the checked D3D maximum shader-model, feature-level or translator device-creation predicates; ordinary multiview remains available.",
     "off_consequence": "No D3D maximum shader-model, feature-level or translator device-creation loss in checked paths; vkd3d-proton ViewInstancingTier can fall from tier 2 to unsupported when its advanced-multiview predicate requires these features."
+  },
+  {
+    "name": "quad_control",
+    "description": "Full-quad helper invocation and quad derivative control around native quad operations.",
+    "cost_class": "native quad operations / helper merge guard",
+    "cost_note": "Native quad and subgroup instructions are retained. A shader requiring full or coarse quad helper invocations can add the existing barycentric triangle-merge guard, or a sample-mask output when no color store exists; unused helper requirements emit neither guard.",
+    "extensions": [
+      "VK_KHR_shader_quad_control"
+    ],
+    "features": [
+      "shaderQuadControl"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "vkd3d-proton requires shaderQuadControl together with maximal reconvergence to advance from SM 6.6 to SM 6.7 and later; only affected fragment requirements select the helper guard.",
+    "off_consequence": "vkd3d-proton cannot expose SM 6.7 or later through its ordinary quad-control/reconvergence path when the earlier SM 6.6 requirements are satisfied; no additional feature-level or device-creation loss is established."
   }
 ]
