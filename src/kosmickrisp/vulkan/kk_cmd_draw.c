@@ -1507,7 +1507,8 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          .vertex_stride = util_bitcount64(capture->outputs) * 16,
          .vertices_out = capture->vertices_out,
          .primitive_vertices = capture->primitive_vertices,
-         .line_expand = capture->primitive_vertices == 2 || dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE,
+         .line_expand = capture->primitive_vertices == 2 ||
+            (capture->primitive_vertices == 3 && dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE),
          .line_mode = dyn->rs.line.mode,
          .line_stipple_flags = dyn->rs.line.stipple.enable ?
             KK_LINE_STIPPLE_ENABLED |

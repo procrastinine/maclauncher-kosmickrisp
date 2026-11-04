@@ -1549,17 +1549,21 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
       nir_shader *count = NULL, *rast = NULL, *pre_gs = NULL;
       nir_shader *capture = NULL, *capture_xfb = NULL;
-      bool polygon = (kk_polygon_possible(dev, state) || opts->poly_layer_replay) &&
+      bool retained_points = opts->poly_layer_replay &&
+         u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_POINTS;
+      bool polygon = retained_points || ((kk_polygon_possible(dev, state) || opts->poly_layer_replay) &&
          (u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_TRIANGLES ||
           u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_LINES ||
-          u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_POINTS);
+          u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_POINTS));
       NIR_PASS(_, nir, poly_nir_lower_gs_capture, &count, &rast, &pre_gs,
                &shader->info.gs, &shader->info.polygon,
                (polygon || pixel_envelope) ? &capture : NULL,
                (polygon || pixel_envelope) ? &capture_xfb : NULL);
       if (polygon || pixel_envelope) {
          shader->info.polygon_point = polygon;
-         nir_shader *point_vs = pixel_envelope && mesa_vertices_per_prim(shader->info.gs.mode) < 3 ?
+         nir_shader *point_vs = retained_points ?
+            kk_polygon_retained_point_shader(&shader->info.polygon, nir->options) :
+            pixel_envelope && mesa_vertices_per_prim(shader->info.gs.mode) < 3 ?
             kk_interlock_source_vertex_shader(&shader->info.polygon, nir->options,
                mesa_vertices_per_prim(shader->info.gs.mode)) :
             kk_polygon_vertex_shader(&shader->info.polygon, nir->options,
@@ -1617,16 +1621,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
       /* From here on, nir is the rasterization VS of the GS */
       nir = rast;
-      /* Point output keeps Poly's ordinary cached GS reader and point size. */
-      if (opts->poly_layer_replay && !polygon) {
-         nir_shader *layer_vs = nir_shader_clone(NULL, rast);
-         NIR_PASS(_, layer_vs, nir_lower_global_vars_to_local);
-         kk_poly_layer_lower_vs(layer_vs);
-         kk_lower_hw_vs(layer_vs, state, shader->info.gs.mode == MESA_PRIM_POINTS);
-         msl_nir_lower_clip_cull_distance(layer_vs, 0);
-         NIR_PASS(_, layer_vs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
-         kk_compile_msl(pdev, layer_vs, state, &shader->polygon[2]);
-      }
+      /* Layered point output uses the retained reader compiled above.
+       * Never clone this ordinary raster body for physical-layer replay. */
 
       /* poly selects the rasterized vertex through shader_temp variables,
        * localize them so msl_optimize_nir turns them into SSA */
