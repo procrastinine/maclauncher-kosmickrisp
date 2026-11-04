@@ -24,8 +24,6 @@ kk_timeline_init(struct vk_device *device, struct vk_sync *sync,
    if (mtx_init(&timeline->publish_mutex, mtx_plain) != thrd_success)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    timeline->mtl_handle = mtl_new_shared_event(dev->mtl_handle);
-   if (!timeline->mtl_handle)
-      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
    if (!timeline->mtl_handle) {
       mtx_destroy(&timeline->publish_mutex);
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
