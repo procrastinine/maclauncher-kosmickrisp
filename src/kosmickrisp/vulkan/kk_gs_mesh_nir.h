@@ -552,4 +552,36 @@ kk_gs_mesh_lower_gs(nir_shader *gs, const struct kk_gs_mesh_layout *l,
    NIR_PASS(_, gs, nir_lower_indirect_derefs_to_if_else_trees,
             nir_var_function_temp, UINT32_MAX);
 }
+
+/* A GS that emits vertices but never completes an output primitive lowers to
+ * a mesh body that writes no vertex and no primitive. Metal's compiler
+ * service fails to build that render pipeline at the first draw
+ * (XPC_ERROR_CONNECTION_INTERRUPTED). Fold the emitted-vertex counters the
+ * lowering introduced; with no primitive store left, the compute route draws
+ * the GS. Loops that are not folded keep their stores and the mesh route. */
+static bool
+kk_gs_mesh_writes_primitive(nir_shader *mesh)
+{
+   bool progress;
+   do {
+      progress = false;
+      NIR_PASS(progress, mesh, nir_lower_vars_to_ssa);
+      NIR_PASS(progress, mesh, nir_opt_copy_prop);
+      NIR_PASS(progress, mesh, nir_opt_constant_folding);
+      NIR_PASS(progress, mesh, nir_opt_dead_cf);
+      NIR_PASS(progress, mesh, nir_opt_dce);
+   } while (progress);
+   nir_foreach_function_impl(impl, mesh)
+      nir_foreach_block(block, impl)
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+            if (in->intrinsic == nir_intrinsic_store_per_primitive_output &&
+                nir_intrinsic_io_semantics(in).location ==
+                   VARYING_SLOT_PRIMITIVE_INDICES)
+               return true;
+         }
+   return false;
+}
 #endif

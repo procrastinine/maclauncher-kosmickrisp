@@ -3435,9 +3435,14 @@ kk_compile_gs_mesh(struct kk_device *dev, nir_shader *vs, nir_shader *gs,
       return VK_SUCCESS;
    nir_shader *n[3] = {nir_shader_clone(NULL, vs), nir_shader_clone(NULL, gs),
                        nir_shader_clone(NULL, fs)};
+   kk_gs_mesh_lower_gs(n[1], &layout, state);
+   if (!kk_gs_mesh_writes_primitive(n[1])) {
+      for (unsigned i = 0; i < 3; i++)
+         ralloc_free(n[i]);
+      return VK_SUCCESS;
+   }
    kk_lower_vs_vbo(n[0], state, robustness);
    kk_gs_mesh_lower_vs(n[0], &layout, input);
-   kk_gs_mesh_lower_gs(n[1], &layout, state);
    for (unsigned i = 0; i < 2; i++) {
       NIR_PASS(_, n[i], nir_opt_dce);
       NIR_PASS(_, n[i], kk_nir_lower_descriptors, false, robustness, 0, NULL);
