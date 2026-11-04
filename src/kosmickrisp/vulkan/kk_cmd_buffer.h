@@ -53,6 +53,8 @@ struct kk_root_descriptor_table {
       } draw;
       struct {
          uint32_t base_group[3];
+         /* Coordinates, not a lane map: a native load owns distribution. */
+         uint16_t matrix_coordinates[64];
       } cs;
    };
 

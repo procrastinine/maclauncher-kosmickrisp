@@ -283,9 +283,13 @@ alu_fcmp_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,
 
 #include "kk_fp32_preserve.h"
 
+#include "kk_float8.h"
+#include "kk_float8_msl.h"
+
 static void
 alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
 {
+   if (kk_emit_float8_alu(ctx, instr)) return;
    if (kk_fp32_preserve_alu(ctx, instr)) return;
    switch (instr->op) {
    case nir_op_isign:
@@ -2662,6 +2666,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (shader->info.stage == MESA_SHADER_COMPUTE && shader->info.cs.has_cooperative_matrix)
       P(&ctx, "#include <metal_simdgroup_matrix>\n");
    P(&ctx, "using namespace metal;\n");
+   if (kk_uses_float8(shader)) P(&ctx, "%s", kk_float8_msl);
    if (kk_uses_atomic64(shader) || kk_uses_image_atomic64(shader))
       P(&ctx, "%s", kk_atomic64_msl);
    if (kk_uses_image_atomic64(shader)) P(&ctx, "%s", kk_image_atomic64_msl);

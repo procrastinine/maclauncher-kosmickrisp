@@ -609,6 +609,15 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
    case nir_intrinsic_load_workgroup_size:
       UNREACHABLE("Should have been lowered by nir_lower_cs_intrinsics()");
 
+   case nir_intrinsic_load_cmat_map_kk: {
+      b->cursor = nir_before_instr(&intrin->instr);
+      nir_def *root = nir_load_buffer_ptr_kk(b, 1, 64, .binding = 0);
+      nir_def_rewrite_uses(&intrin->def, nir_iadd_imm(b, root,
+         kk_root_descriptor_offset(cs.matrix_coordinates)));
+      nir_instr_remove(&intrin->instr);
+      return true;
+   }
+
    case nir_intrinsic_load_base_workgroup_id:
       return lower_sysval_to_root_table(b, intrin, cs.base_group);
 

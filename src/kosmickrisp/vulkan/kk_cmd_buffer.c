@@ -6,6 +6,7 @@
  */
 
 #include "kk_cmd_buffer.h"
+#include "util/half_float.h"
 #include "kk-writable-msaa.h"
 #include "kk_sparse.h"
 #include "kk_dgc.h"
@@ -253,6 +254,8 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    }
 
    vk_command_buffer_begin(&cmd->vk, pBeginInfo);
+   for (unsigned i = 0; i < 64; i++)
+      cmd->state.cs.descriptors.root.cs.matrix_coordinates[i] = _mesa_float_to_half((float)i);
    cmd->enqueue_commands = cmd->vk.level != VK_COMMAND_BUFFER_LEVEL_PRIMARY ||
       kk_cmd_buffer_device(cmd)->vk.enabled_features.descriptorHeap;
    struct kk_device *sparse_dev = kk_cmd_buffer_device(cmd);

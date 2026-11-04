@@ -51,6 +51,8 @@ kk_get_device_extensions(const struct kk_instance *instance,
                          struct vk_device_extension_table *ext)
 {
    *ext = (struct vk_device_extension_table){
+      .KHR_cooperative_matrix = pdev->info.gpu_apple_family >= 7,
+      .EXT_shader_float8 = true,
       .EXT_shader_long_vector = true,
       /* Vulkan 1.1 */
       .KHR_16bit_storage = true,
@@ -363,6 +365,10 @@ kk_get_device_features(
       .scalarBlockLayout = true,
       .separateDepthStencilLayouts = true,
       .shaderFloat16 = true,
+      .cooperativeMatrix = pdev->info.gpu_apple_family >= 7,
+      .cooperativeMatrixRobustBufferAccess = false,
+      .shaderFloat8 = true,
+      .shaderFloat8CooperativeMatrix = pdev->info.gpu_apple_family >= 7,
       .shaderInputAttachmentArrayDynamicIndexing = true,
       .shaderInputAttachmentArrayNonUniformIndexing = true,
       .shaderInt8 = true,
@@ -652,6 +658,7 @@ kk_get_device_properties(
    kk_descriptor_stride_align_for_type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, NULL, &stride, &alignment);
    buffer_stride = MAX2(buffer_stride, stride);
    *properties = (struct vk_properties){
+      .cooperativeMatrixSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT,
       .maxVectorComponents = 1024,
       .primitiveOverestimationSize = 1.0f / 256.0f,
       .maxExtraPrimitiveOverestimationSize = 0.0f,
@@ -1603,3 +1610,5 @@ kk_GetPhysicalDeviceMultisamplePropertiesEXT(
       pMultisampleProperties->maxSampleLocationGridSize = (VkExtent2D){0, 0};
    }
 }
+
+#include "kk_cooperative_matrix.h"
