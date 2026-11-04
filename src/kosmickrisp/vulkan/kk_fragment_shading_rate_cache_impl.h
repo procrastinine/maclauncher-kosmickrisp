@@ -8,8 +8,8 @@
 #include "kosmickrisp/bridge/mtl_fragment_shading_rate.h"
 #include "kk_fragment_shading_rate_cells_nir.h"
 
-#define KK_VRS_SOURCE_SCHEMA 18u
-#define KK_VRS_ARTIFACT_SCHEMA 4u
+#define KK_VRS_SOURCE_SCHEMA 19u
+#define KK_VRS_ARTIFACT_SCHEMA 5u
 #define KK_VRS_KEY_SIZE 48u
 struct kk_vrs_source {
    struct kk_vrs_source_data data;
@@ -300,9 +300,9 @@ kk_vrs_artifact_deserialize(struct vk_pipeline_cache *cache,
    if (reads > 1) goto fail;
    artifact->framebuffer_reads = reads;
    artifact->input_stride = blob_read_uint32(blob);
-   if (((const uint8_t *)key)[13] == KK_VRS_TRANSACTION) {
+   if (((const uint8_t *)key)[13] >= KK_VRS_TRANSACTION) {
       if (artifact->input_stride < 32 || artifact->input_stride % 16 ||
-          artifact->input_stride > ALIGN_POT(UINT16_MAX + 64u, 16))
+          artifact->input_stride > ALIGN_POT(UINT16_MAX + 96u, 16))
          goto fail;
    } else if (artifact->input_stride) {
       goto fail;
@@ -333,8 +333,8 @@ static const struct vk_pipeline_cache_object_ops kk_vrs_artifact_ops = {
    .destroy = kk_vrs_artifact_destroy,
 };
 
-static VkResult kk_vrs_build_transaction_artifact(struct kk_device *,
-   const struct kk_vrs_source_data *, struct kk_vrs_artifact *);
+static VkResult kk_vrs_build_state_artifact(struct kk_device *,
+   const struct kk_vrs_source_data *, enum kk_vrs_fragment_kind, struct kk_vrs_artifact *);
 
 static VkResult
 kk_vrs_artifact_get_keyed(struct kk_device *dev,
@@ -357,8 +357,8 @@ kk_vrs_artifact_get_keyed(struct kk_device *dev,
       memcpy(artifact->key, key, sizeof(artifact->key));
       vk_pipeline_cache_object_init(&dev->vk, &artifact->base,
          &kk_vrs_artifact_ops, artifact->key, sizeof(artifact->key));
-      result = kind == KK_VRS_TRANSACTION
-         ? kk_vrs_build_transaction_artifact(dev, data, artifact)
+      result = kind >= KK_VRS_TRANSACTION
+         ? kk_vrs_build_state_artifact(dev, data, kind, artifact)
          : build(dev, data, kind, &artifact->data, &artifact->version,
             &artifact->math, &artifact->functions, &artifact->framebuffer_reads);
       if (result == VK_SUCCESS) result = kk_vrs_artifact_native(dev, artifact);
@@ -583,7 +583,7 @@ kk_vrs_build_linked_fragment_impl(struct kk_device *dev,
           (KK_VRS_FREQUENCY_KNOWN | (sample_frequency ? KK_VRS_SAMPLE_FREQUENCY : 0)))
       goto finish;
    bool lowered;
-   if (kind == KK_VRS_TRANSACTION) {
+   if (kind >= KK_VRS_TRANSACTION) {
       if (sample_frequency || (samples != 1 && samples != 2 && samples != 4)) {
          result = VK_ERROR_FEATURE_NOT_PRESENT;
          goto finish;
@@ -596,24 +596,31 @@ kk_vrs_build_linked_fragment_impl(struct kk_device *dev,
       if (!application || !kk_vrs_capture_layout(nir, application, &render.inputs))
          goto finish;
       if (input_stride)
-         *input_stride = ALIGN_POT(render.inputs.stride + 32u +
-            (render.inputs.point_coord ? 32u : 0u), 16);
-      struct kk_interlock_framebuffer_nir framebuffer = {
-         .transaction = {.render = &render}, .depth_bits = 32,
-      };
-      switch (rp.depth_attachment_format) {
-      case VK_FORMAT_D16_UNORM: case VK_FORMAT_D16_UNORM_S8_UINT:
-         framebuffer.depth_bits = 16; break;
-      case VK_FORMAT_X8_D24_UNORM_PACK32: case VK_FORMAT_D24_UNORM_S8_UINT:
-         framebuffer.depth_bits = 24; break;
-      default: break;
+         *input_stride = kk_vrs_capture_input_stride(&render.inputs);
+      if (kind == KK_VRS_CAPTURE) {
+         nir_shader *capture = kk_vrs_capture_shader(&kk_nir_options, &render.inputs, samples);
+         ralloc_free(nir);
+         nir = capture;
+         if (!nir) goto finish;
+         lowered = true;
+      } else {
+         struct kk_interlock_framebuffer_nir framebuffer = {
+            .transaction = {.render = &render}, .depth_bits = 32,
+         };
+         switch (rp.depth_attachment_format) {
+         case VK_FORMAT_D16_UNORM: case VK_FORMAT_D16_UNORM_S8_UINT:
+            framebuffer.depth_bits = 16; break;
+         case VK_FORMAT_X8_D24_UNORM_PACK32: case VK_FORMAT_D24_UNORM_S8_UINT:
+            framebuffer.depth_bits = 24; break;
+         default: break;
+         }
+         for (unsigned physical = 0; physical < count; physical++)
+            if (cal.color_map[physical] != MESA_VK_ATTACHMENT_UNUSED)
+               framebuffer.color_format[cal.color_map[physical]] =
+                  vk_format_to_pipe_format(rp.color_attachment_formats[physical]);
+         lowered = kk_vrs_cells_shader(nir, &framebuffer, samples,
+            source->application_flags & KK_VRS_CUSTOM_RESOLVE, NULL);
       }
-      for (unsigned physical = 0; physical < count; physical++)
-         if (cal.color_map[physical] != MESA_VK_ATTACHMENT_UNUSED)
-            framebuffer.color_format[cal.color_map[physical]] =
-               vk_format_to_pipe_format(rp.color_attachment_formats[physical]);
-      lowered = kk_vrs_cells_shader(nir, &framebuffer, samples,
-         source->application_flags & KK_VRS_CUSTOM_RESOLVE, NULL);
    } else {
       lowered = kind == KK_VRS_COARSE_BODY
          ? kk_nir_lower_linked_native_coarse_fragment(nir)
@@ -649,10 +656,11 @@ kk_vrs_build_linked_fragment(struct kk_device *dev,
 }
 
 static VkResult
-kk_vrs_build_transaction_artifact(struct kk_device *dev,
-   const struct kk_vrs_source_data *source, struct kk_vrs_artifact *artifact)
+kk_vrs_build_state_artifact(struct kk_device *dev,
+   const struct kk_vrs_source_data *source, enum kk_vrs_fragment_kind kind,
+   struct kk_vrs_artifact *artifact)
 {
-   return kk_vrs_build_linked_fragment_impl(dev, source, KK_VRS_TRANSACTION,
+   return kk_vrs_build_linked_fragment_impl(dev, source, kind,
       &artifact->data, &artifact->version, &artifact->math, &artifact->functions,
       &artifact->framebuffer_reads, &artifact->input_stride);
 }
@@ -699,10 +707,11 @@ kk_vrs_transaction_state(const struct kk_vrs_transaction_options *state,
 
 static void
 kk_vrs_transaction_key(const struct kk_vrs_source *source,
-   const struct blob *epilogue, uint8_t key[KK_VRS_KEY_SIZE])
+   const struct blob *epilogue, enum kk_vrs_fragment_kind kind,
+   uint8_t key[KK_VRS_KEY_SIZE])
 {
    memcpy(key, source->key, KK_VRS_KEY_SIZE);
-   key[13] = KK_VRS_TRANSACTION;
+   key[13] = kind;
    struct mesa_blake3 hash;
    _mesa_blake3_init(&hash);
    _mesa_blake3_update(&hash, source->key, KK_VRS_KEY_SIZE);
@@ -711,9 +720,10 @@ kk_vrs_transaction_key(const struct kk_vrs_source *source,
    _mesa_blake3_final(&hash, key + 16);
 }
 
-VkResult
-kk_vrs_transaction_get(struct kk_device *dev, struct kk_vrs_source *source,
-   const struct kk_vrs_transaction_options *state, struct kk_vrs_artifact **out)
+static VkResult
+kk_vrs_state_get(struct kk_device *dev, struct kk_vrs_source *source,
+   const struct kk_vrs_transaction_options *state, enum kk_vrs_fragment_kind kind,
+   struct kk_vrs_artifact **out)
 {
    *out = NULL;
    if (!dev->vrs || !source ||
@@ -742,14 +752,28 @@ kk_vrs_transaction_get(struct kk_device *dev, struct kk_vrs_source *source,
       return result;
    }
    uint8_t key[KK_VRS_KEY_SIZE];
-   kk_vrs_transaction_key(source, &epilogue, key);
+   kk_vrs_transaction_key(source, &epilogue, kind, key);
    struct kk_vrs_source_data data = source->data;
    data.epilogue = epilogue.data;
    data.epilogue_size = epilogue.size;
-   VkResult result = kk_vrs_artifact_get_keyed(dev, &data, KK_VRS_TRANSACTION,
+   VkResult result = kk_vrs_artifact_get_keyed(dev, &data, kind,
       key, NULL, kk_vrs_build_linked_fragment, out);
    blob_finish(&epilogue);
    return result;
+}
+
+VkResult
+kk_vrs_transaction_get(struct kk_device *dev, struct kk_vrs_source *source,
+   const struct kk_vrs_transaction_options *state, struct kk_vrs_artifact **out)
+{
+   return kk_vrs_state_get(dev, source, state, KK_VRS_TRANSACTION, out);
+}
+
+VkResult
+kk_vrs_capture_get(struct kk_device *dev, struct kk_vrs_source *source,
+   const struct kk_vrs_transaction_options *state, struct kk_vrs_artifact **out)
+{
+   return kk_vrs_state_get(dev, source, state, KK_VRS_CAPTURE, out);
 }
 
 #include "kk_fragment_shading_rate_support_cache.h"

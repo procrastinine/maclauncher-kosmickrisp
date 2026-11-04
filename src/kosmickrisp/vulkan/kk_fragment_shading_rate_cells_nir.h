@@ -2,6 +2,7 @@
 #ifndef KK_FRAGMENT_SHADING_RATE_CELLS_NIR_H
 #define KK_FRAGMENT_SHADING_RATE_CELLS_NIR_H
 #include "kk_fragment_shading_rate_transaction_nir.h"
+#include "kk_fragment_shading_rate_capture_nir.h"
 
 /* One dispatch assigns256 linear lanes to four8x8 regions. Four ordered
  * region_base values cover the existing32x32 leaf, not a framebuffer-sized
@@ -139,7 +140,8 @@ kk_vrs_cells_sample(nir_builder *b, struct kk_interlock_program_nir *program,
    nir_def *anchor = kk_interlock_quad_anchor(b, env, pixel, storage);
    nir_def *record = kk_interlock_record(b, env, anchor, sample);
    nir_def *zw = kk_interlock_quad_load(b,
-      nir_iadd_imm(b, record, s->framebuffer->transaction.render->inputs.stride), 8, 2, 32, pixel);
+      nir_iadd_imm(b, record, kk_vrs_capture_fine_zw_offset(
+         &s->framebuffer->transaction.render->inputs)), 8, 2, 32, pixel);
    nir_def *metadata = nir_load_global_constant(b, 4, 32, nir_iadd(b,
       kk_interlock_env(b, env, metadata), nir_u2u64(b, nir_imul_imm(b, anchor, 16))), .align_mul = 16);
    nir_def *origin = nir_vec2(b, kk_interlock_env(b, env, tile_x), kk_interlock_env(b, env, tile_y));

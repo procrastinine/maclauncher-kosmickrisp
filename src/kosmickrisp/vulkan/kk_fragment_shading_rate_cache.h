@@ -17,6 +17,7 @@ enum kk_vrs_fragment_kind {
    KK_VRS_COARSE_BODY,
    KK_VRS_FINE_REPLAY,
    KK_VRS_TRANSACTION,
+   KK_VRS_CAPTURE,
    KK_VRS_FRAGMENT_KIND_COUNT,
 };
 struct msl_compile_data;
@@ -88,6 +89,10 @@ struct kk_vrs_transaction_options {
 /* Explicit coarse request only, through the same per-device/common cache and
  * native function factory. No state variants are compiled at PSO creation. */
 VkResult kk_vrs_transaction_get(struct kk_device *, struct kk_vrs_source *,
+   const struct kk_vrs_transaction_options *, struct kk_vrs_artifact **);
+/* Same state/key/cache boundary; captures original inputs only. Native DS,
+ * color writes, A2C and query counting must be bypassed by its phase owner. */
+VkResult kk_vrs_capture_get(struct kk_device *, struct kk_vrs_source *,
    const struct kk_vrs_transaction_options *, struct kk_vrs_artifact **);
 /* Producer and fragment are the actual bound pair. The command/attachment
  * owner holds their normal lifetime and owns the resulting native PSOs. */
