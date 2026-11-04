@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #include "kk_frame_capture.h"
+#include "kk_frame_capture_request.h"
 #include "kk_device.h"
 #include "kk_entrypoints.h"
 #include "kk_instance.h"
@@ -31,7 +32,7 @@ struct kk_capture_job {
    uint32_t width, height, stride;
    VkFormat format;
    VkResult present_result;
-   uint64_t frame, time;
+   uint64_t frame, time, readback_ready_time;
    struct stat request;
 };
 
@@ -107,10 +108,18 @@ kk_capture_write(struct kk_frame_capture *capture, struct kk_capture_job *job)
       goto out;
    }
    image = NULL;
+   const uint64_t ppm_closed_time = os_time_get_nano();
+   const struct timespec request_mtime = kk_frame_capture_request_mtime(&job->request);
    info = fopen(info_path, "w");
    if (!info || fprintf(info, "time_ns=%" PRIu64 " size=%ux%u frame=%" PRIu64
-                        " format=%u layer=0\n", job->time, job->width,
-                        job->height, job->frame, job->format) < 0)
+                        " format=%u layer=0 request_dev=%" PRIuMAX
+                        " request_inode=%" PRIuMAX " request_size=%" PRIdMAX
+                        " request_mtime_sec=%" PRIdMAX " request_mtime_nsec=%ld"
+                        " readback_ready_ns=%" PRIu64 " ppm_closed_ns=%" PRIu64 "\n",
+                        job->time, job->width, job->height, job->frame, job->format,
+                        (uintmax_t)job->request.st_dev, (uintmax_t)job->request.st_ino,
+                        (intmax_t)job->request.st_size, (intmax_t)request_mtime.tv_sec,
+                        request_mtime.tv_nsec, job->readback_ready_time, ppm_closed_time) < 0)
       goto out;
    ok = fclose(info) == 0;
    info = NULL;
@@ -161,15 +170,14 @@ kk_capture_worker(void *data)
          };
          result = d->InvalidateMappedMemoryRanges(device, 1, &range);
       }
+      job->readback_ready_time = os_time_get_nano();
       if (result == VK_SUCCESS &&
           (job->present_result == VK_SUCCESS || job->present_result == VK_SUBOPTIMAL_KHR) &&
           kk_capture_write(capture, job)) {
          /* Leave a replaced request intact for the next present. */
          struct stat current;
          if (stat(capture->request_path, &current) == 0 &&
-             current.st_ino == job->request.st_ino &&
-             current.st_size == job->request.st_size &&
-             current.st_mtime == job->request.st_mtime)
+             kk_frame_capture_request_matches(&current, &job->request))
             unlink(capture->request_path);
       } else if (result != VK_SUCCESS) {
          mesa_logw("kk: frame capture completion failed: %d", result);

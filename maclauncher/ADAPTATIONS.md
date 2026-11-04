@@ -1808,7 +1808,12 @@ first swapchain in the next available present. One capture is in flight at a
 time. Rendering semaphores order an image-to-host-buffer copy before ordinary
 presentation. A worker writes `frame-<frame>.ppm` and a one-line
 `frame-<frame>.txt` containing monotonic time in nanoseconds, dimensions, present
-number and source format, then removes the request. PPM stores RGB8; higher
+number and source format, then removes the request. Metadata also records the
+request's file identity and nanosecond modification time, the worker's readback
+readiness time and the PPM close time. The latter two are host observations, not
+GPU timestamps. Acknowledgement compares the request's file identity and
+nanosecond change times. Capture clients serialize requests in the directory.
+PPM stores RGB8; higher
 precision formats are converted to that range. Capture covers the swapchain
 image before surface scaling or display composition and needs no Screen
 Recording permission. File writing and GPU completion waits run on the worker.
