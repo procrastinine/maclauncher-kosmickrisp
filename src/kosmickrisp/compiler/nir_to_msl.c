@@ -282,6 +282,7 @@ alu_fcmp_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,
 }
 
 #include "kk_fp32_preserve.h"
+#include "kk_integer_wrap.h"
 
 #include "kk_float8.h"
 #include "kk_float8_msl.h"
@@ -290,6 +291,7 @@ static void
 alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
 {
    if (kk_emit_float8_alu(ctx, instr)) return;
+   if (kk_msl_integer_wrap(ctx, instr)) return;
    if (kk_fp32_preserve_alu(ctx, instr)) return;
    switch (instr->op) {
    case nir_op_isign:
