@@ -1983,6 +1983,8 @@ kk_flush_gfx_state(struct kk_cmd_buffer *cmd)
 
    kk_flush_render_pass(cmd);
    kk_flush_pipeline(cmd);
+   if (gfx->render.view_mask)
+      kk_cmd_buffer_apply_view_mask(cmd);
 
    if (desc->push_dirty)
       kk_cmd_buffer_flush_push_descriptors(cmd, desc);

@@ -518,10 +518,11 @@ kk_cmd_bind_compute_arguments(struct kk_cmd_buffer *cmd,
       cmd->compute_bound_table = table;
 }
 
+/* BeginRendering can precede pipeline binding. Reconcile again after the
+ * selected pipeline is known; mixed Mesh/VS passes restore either direction. */
 void
-cs_start_render(struct kk_cmd_buffer *cmd)
+kk_cmd_buffer_apply_view_mask(struct kk_cmd_buffer *cmd)
 {
-   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_SETUP, setup);
    struct kk_graphics_state *state = &cmd->state.gfx;
    uint32_t view_mask = state->render.view_mask;
    /* Mesh replays each original view and writes its Layer explicitly. Do
@@ -534,6 +535,21 @@ cs_start_render(struct kk_cmd_buffer *cmd)
        (vs->info.poly_layer_replay && state->polygon_points) ||
        cmd->state.shaders[MESA_SHADER_TESS_EVAL]))
       view_mask = 0; /* A Poly replay writes its explicit layer. */
+   if (!cmd->metal.render || state->amplification_view_mask == view_mask)
+      return;
+   uint32_t layer_ids[KK_MAX_MULTIVIEW_VIEW_COUNT] = {};
+   uint32_t count = 0;
+   u_foreach_bit(id, view_mask) layer_ids[count++] = id;
+   if (!count) layer_ids[count++] = 0;
+   mtl_set_vertex_amplification_count(cmd->metal.render, layer_ids, count);
+   state->amplification_view_mask = view_mask;
+}
+
+void
+cs_start_render(struct kk_cmd_buffer *cmd)
+{
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_SETUP, setup);
+   struct kk_graphics_state *state = &cmd->state.gfx;
    assert(state->render_pass_descriptor);
 
    /* Ensure no other active encoder, aka compute */
@@ -561,16 +577,11 @@ cs_start_render(struct kk_cmd_buffer *cmd)
    state->render.ds_write_available = false;
    state->render.storage_write_available = false;
 
-   uint32_t layer_ids[KK_MAX_MULTIVIEW_VIEW_COUNT] = {};
-   uint32_t count = 0u;
-   u_foreach_bit(id, view_mask)
-      layer_ids[count++] = id;
-   if (view_mask == 0u) {
-      layer_ids[count++] = 0;
-   }
    {
       KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_SETUP_BINDS, binds);
-      mtl_set_vertex_amplification_count(cmd->metal.render, layer_ids, count);
+      /* Pipeline binding may occur after BeginRendering. Force first apply. */
+      state->amplification_view_mask = ~state->render.view_mask;
+      kk_cmd_buffer_apply_view_mask(cmd);
       /* Fresh encoders have no table state, even when Metal reuses a pointer.
        * Bind once here; graphics state invalidation remains per encoder. */
       mtl_render_set_argument_table(cmd->metal.render, cmd->argument_table,

@@ -290,6 +290,7 @@ struct kk_graphics_state {
    uint64_t mesh_primitives_query;
    uint64_t mesh_payloads, mesh_records, mesh_batch, mesh_slices;
    uint32_t mesh_payload_capacity;
+   uint32_t amplification_view_mask;
    uint64_t mesh_native_batch, mesh_native_slices;
    uint64_t mesh_retained_outputs, mesh_retained_output_bytes;
    uint64_t mesh_per_draw_address;
@@ -587,6 +588,7 @@ kk_get_descriptors_state(struct kk_cmd_buffer *cmd,
 
 void cs_start_render(struct kk_cmd_buffer *cmd);
 mtl_render_encoder *cs_get_render(struct kk_cmd_buffer *cmd);
+void kk_cmd_buffer_apply_view_mask(struct kk_cmd_buffer *cmd);
 mtl_compute_encoder *cs_get_compute(struct kk_cmd_buffer *cmd);
 mtl_compute_encoder *cs_get_compute_for_dispatch(struct kk_cmd_buffer *cmd);
 /* Internal implementation boundaries retain their ordering contract. */
