@@ -112,9 +112,16 @@ kk_rt_trace(struct kk_cmd_buffer *cmd,const VkStridedDeviceAddressRegionKHR *ray
    uint64_t launches = 0, lane_bytes;
    uint32_t physical;
    bool is_indirect = indirect || indirect2;
-   /* Reuse each lane arena across its launches when a full grid would
-    * consume more than one eighth of the device working set. */
-   uint64_t budget = mtl_device_recommended_max_working_set_size(dev->mtl_handle) / 8;
+   /* A launch larger than the lane arena runs as consecutive dispatches over
+    * it. The arena is limited to 1/64 of the device working set, enough lanes
+    * to occupy the GPU at large per-lane stacks; a pipeline whose stack leaves
+    * fewer than 1024 lanes in that may use up to 1/8. Every trace in the
+    * command buffer reuses the one arena: a full grid per trace held
+    * gigabytes per launch until the command buffer was reset. */
+   uint64_t working_set = mtl_device_recommended_max_working_set_size(dev->mtl_handle);
+   uint64_t budget = working_set / 64, lane_size = stride + sizeof(struct kk_rt_lane_state);
+   if (budget / lane_size < 1024)
+      budget = lane_size > working_set / 8 / 1024 ? working_set / 8 : lane_size * 1024;
    if ((!is_indirect && (!kk_rt_u64_mul(width, height, &launches) ||
                          !kk_rt_u64_mul(launches, depth, &launches))) ||
        !kk_rt_dispatch_plan(launches, is_indirect, stride, budget,
@@ -122,7 +129,16 @@ kk_rt_trace(struct kk_cmd_buffer *cmd,const VkStridedDeviceAddressRegionKHR *ray
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
       return;
    }
-   struct kk_ptr stack = kk_rt_arena(cmd, bytes), lanes = kk_rt_arena(cmd, lane_bytes);
+   struct kk_rt_command_state *rt = cmd->state.rt;
+   bool reuse = rt->arena_stack.gpu && bytes <= rt->arena_stack_bytes &&
+                lane_bytes <= rt->arena_lane_bytes;
+   if (!reuse) {
+      rt->arena_stack = kk_rt_arena(cmd, bytes);
+      rt->arena_lanes = kk_rt_arena(cmd, lane_bytes);
+      rt->arena_stack_bytes = rt->arena_stack.gpu ? bytes : 0;
+      rt->arena_lane_bytes = rt->arena_lanes.gpu ? lane_bytes : 0;
+   }
+   struct kk_ptr stack = rt->arena_stack, lanes = rt->arena_lanes;
    if(!stack.gpu||!lanes.gpu)return;
    struct kk_ptr error = kk_pool_alloc(cmd, sizeof(struct kk_rt_error_report), 16);
    if (!error.gpu) return;
@@ -174,6 +190,9 @@ kk_rt_trace(struct kk_cmd_buffer *cmd,const VkStridedDeviceAddressRegionKHR *ray
     * ordinary compute binding cache through its existing encoder helper. */
    mtl_compute_encoder *encoder=cs_get_compute(cmd);
    KK_CMD_BARRIER(cmd, mtl_barrier_after_encoder_stages_with_options, encoder,MTL_STAGE_DISPATCH,MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
+   /* An earlier trace that used this arena may sit in an earlier encoder. */
+   if (reuse)
+      KK_CMD_BARRIER(cmd, mtl_barrier_after_queue_stages_with_options, encoder, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH, MTL_VISIBILITY_RESOURCE_ALIAS);
    uint64_t prior_root=cmd->state.root_addr;
    mtl_compute_set_pipeline_state(encoder,pipeline->native.pipeline);
    for(uint64_t i=0;i<chunks;++i){

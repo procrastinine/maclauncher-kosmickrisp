@@ -10,6 +10,10 @@ struct kk_rt_command_state {
    uint64_t stack_size;
    uint32_t ray_queries;
    struct kk_rt_report *reports;
+   /* The launch arena every trace in this command buffer reuses. Its memory
+    * is one of the command buffer's large BOs and is released with them. */
+   struct kk_ptr arena_stack, arena_lanes;
+   uint64_t arena_stack_bytes, arena_lane_bytes;
 };
 struct kk_descriptor_state *kk_rt_descriptors(struct kk_cmd_buffer *cmd);
 void kk_rt_descriptor_dispatch_init(struct kk_device *dev);

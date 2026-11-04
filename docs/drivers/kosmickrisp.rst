@@ -132,7 +132,12 @@ transport only in shaders that request them. Apple10 and Apple11 use native
 pre-raster per-vertex inputs for eligible pipelines, and topology and replay
 combinations outside that path retain corner transport. Hardware availability
 alone does not select a feature: the ray-tracing implementation uses software
-traversal even on GPUs with hardware ray tracing.
+traversal even on GPUs with hardware ray tracing. Ray-tracing launches run on
+a per-lane stack arena that every launch in a command buffer reuses and that is
+released when the command buffer is reset. The arena is limited to 1/64 of the
+device working set, or up to 1/8 when a pipeline's per-lane stack leaves fewer
+than 1024 lanes in 1/64; a launch with more invocations than arena lanes runs as
+consecutive dispatches over the same arena.
 
 .. include:: kosmickrisp/emulation-performance-families.rst
 
