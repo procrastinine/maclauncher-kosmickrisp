@@ -251,5 +251,24 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires shaderQuadControl together with maximal reconvergence to advance from SM 6.6 to SM 6.7 and later; only affected fragment requirements select the helper guard.",
     "off_consequence": "vkd3d-proton cannot expose SM 6.7 or later through its ordinary quad-control/reconvergence path when the earlier SM 6.6 requirements are satisfied; no additional feature-level or device-creation loss is established."
+  },
+  {
+    "name": "texel_buffer_alignment",
+    "description": "Single-texel-offset buffer views over aligned native textures and raw buffer addresses.",
+    "cost_class": "native access / coordinate adjustment",
+    "cost_note": "Typed native buffer access adds logical range comparison, prefix addition and invalid-coordinate selection; dynamic RGB32 views also select stride and fetch consumed components. Raw/R64 and sparse accesses retain required range and residency work. Unused shaders emit no texel-view code. Runtime cost is unmeasured.",
+    "extensions": [
+      "VK_EXT_texel_buffer_alignment"
+    ],
+    "features": [
+      "texelBufferAlignment"
+    ],
+    "properties": [
+      "storageTexelBufferOffsetSingleTexelAlignment",
+      "uniformTexelBufferOffsetSingleTexelAlignment"
+    ],
+    "performance": true,
+    "performance_reason": "vkd3d-proton requires both single-texel alignment promises for D3D12 device creation at the supported 16-byte native alignment; only shaders accessing texel-buffer views pay the adjustment cost.",
+    "off_consequence": "vkd3d-proton v3.1 rejects D3D12 device creation when either single-texel alignment promise is absent at 16-byte alignment, making all D3D12 feature levels unavailable."
   }
 ]
