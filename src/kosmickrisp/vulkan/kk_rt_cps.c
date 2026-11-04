@@ -243,9 +243,17 @@ lower_part(nir_builder *b, nir_intrinsic_instr *in, void *unused)
          offsetof(struct kk_rt_cps_context, tmax),
          offsetof(struct kk_rt_cps_context, payload),
       };
-      for (unsigned i = 0; i < ARRAY_SIZE(fields); ++i)
-         context_store(b, fields[i], (i == 0 || i == 10) ?
-            nir_u2u64(b, in->src[i].ssa) : in->src[i].ssa);
+      /* Only the low 8 cull-mask bits, 4 SBT offset and stride bits and 16
+       * miss-index bits of traceRayEXT operands are used. */
+      static const uint32_t used_bits[ARRAY_SIZE(fields)] = {
+         [2] = 0xff, [3] = 0xf, [4] = 0xf, [5] = 0xffff,
+      };
+      for (unsigned i = 0; i < ARRAY_SIZE(fields); ++i) {
+         nir_def *value = in->src[i].ssa;
+         if (used_bits[i])
+            value = nir_iand_imm(b, value, used_bits[i]);
+         context_store(b, fields[i], (i == 0 || i == 10) ? nir_u2u64(b, value) : value);
+      }
       break;
    }
    case nir_intrinsic_rt_execute_callable:
