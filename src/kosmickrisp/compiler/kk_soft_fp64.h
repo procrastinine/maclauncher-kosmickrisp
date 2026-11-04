@@ -172,6 +172,26 @@ kk_soft_fp64_exact(nir_builder *b, nir_instr *instr, void *data)
    nir_def *result = kk_soft_fp64_bits_call(b, alu, function, return_type, half_input);
    if (alu->def.bit_size != result->bit_size)
       result = nir_u2uN(b, result, alu->def.bit_size);
+   const bool to_signed = alu->op == nir_op_f2i8 || alu->op == nir_op_f2i16 ||
+                          alu->op == nir_op_f2i32;
+   if (to_signed || alu->op == nir_op_f2u8 || alu->op == nir_op_f2u16 ||
+       alu->op == nir_op_f2u32) {
+      /* The 64-bit integer conversion wraps; out-of-range values saturate
+       * like the native conversions. Classify by the binary64 exponent. */
+      const unsigned n = alu->def.bit_size;
+      nir_def *hi = nir_unpack_64_2x32_split_y(b, nir_mov_alu(b, alu->src[0], 1));
+      nir_def *exp = nir_ubitfield_extract_imm(b, hi, 20, 11);
+      nir_def *neg = nir_ilt_imm(b, hi, 0);
+      if (to_signed) {
+         nir_def *sat = nir_bcsel(b, neg, nir_imm_intN_t(b, u_intN_min(n), n),
+                                  nir_imm_intN_t(b, u_intN_max(n), n));
+         result = nir_bcsel(b, nir_uge_imm(b, exp, 1023 + n - 1), sat, result);
+      } else {
+         result = nir_bcsel(b, nir_uge_imm(b, exp, 1023 + n),
+                            nir_imm_intN_t(b, u_uintN_max(n), n), result);
+         result = nir_bcsel(b, neg, nir_imm_intN_t(b, 0, n), result);
+      }
+   }
    if (alu->op == nir_op_f2f32 &&
        nir_is_denorm_flush_to_zero(b->shader->info.float_controls_execution_mode, 32))
       result = nir_bcsel(b, nir_ieq_imm(b, nir_iand_imm(b, result, 0x7f800000), 0),
