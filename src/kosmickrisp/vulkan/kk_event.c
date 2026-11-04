@@ -11,6 +11,7 @@
 #include "kk_cmd_buffer.h"
 #include "kk_device.h"
 #include "kk_entrypoints.h"
+#include "kk_event_dependencies.h"
 
 #define KK_EVENT_MEM_SIZE sizeof(VkResult)
 
@@ -112,5 +113,5 @@ kk_CmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount,
                   const VkEvent *pEvents,
                   const VkDependencyInfo *pDependencyInfos)
 {
-   /* We do nothing, event should already be set by the time we are here. */
+   kk_event_wait_dependencies(commandBuffer, eventCount, pDependencyInfos);
 }
