@@ -36,19 +36,19 @@ mtl_drawable_get_texture(void *drawable_ptr)
 void *
 mtl_retain(void *handle)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       NSObject *obj = (NSObject *)handle;
       return [obj retain];
-   }
+   });
 }
 
 void
 mtl_release(void *handle)
 {
-   @autoreleasepool {
+   KK_MTL_REPLAY_POOL({
       NSObject *obj = (NSObject *)handle;
       [obj release];
-   }
+   });
 }
 
 /* Thread-local dynamic extent, never shared between recording workers. */
