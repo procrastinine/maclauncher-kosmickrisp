@@ -24,9 +24,7 @@ kk_vrs_cmd_prepare_native(struct kk_cmd_buffer *cmd,
    uint32_t samples = cmd->vk.dynamic_graphics_state.ms.rasterization_samples;
    if ((samples != 1 && samples != 2 && samples != 4) ||
        (parameters->reserved && parameters->reserved != samples) ||
-       parameters->width != 32 || parameters->height != 32 ||
-       render->area.offset.x || render->area.offset.y ||
-       render->area.extent.width != 32 || render->area.extent.height != 32 ||
+       !kk_vrs_window_valid(parameters, &render->area) ||
        render->view_mask || render->layer_count != 1)
       return VK_ERROR_FEATURE_NOT_PRESENT;
    const struct kk_vrs_source_data *source = kk_vrs_source_data(fragment->vrs_source);

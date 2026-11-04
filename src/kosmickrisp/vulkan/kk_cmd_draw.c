@@ -27,6 +27,7 @@
 #include "kk_layered_bc.h"
 #include "kk_physical_device.h"
 #include "kk_query_pool.h"
+#include "kk_render_scissors.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/vk_to_mtl_map.h"
@@ -811,25 +812,7 @@ kk_flush_vp_state(struct kk_cmd_buffer *cmd)
    /* Need to clamp scissor rectangles to render area, otherwise Metal doesn't
     * like it */
    struct mtl_scissor_rect rects[KK_MAX_VIEWPORTS] = {0};
-   VkOffset2D origin = cmd->state.gfx.render.area.offset;
-   VkOffset2D end = {.x = origin.x + cmd->state.gfx.render.area.extent.width,
-                     .y = origin.y + cmd->state.gfx.render.area.extent.height};
-   for (uint32_t i = 0; i < dyn->vp.scissor_count; i++) {
-      const VkRect2D *rect = &dyn->vp.scissors[i];
-
-      size_t x0 = CLAMP(rect->offset.x, origin.x, end.x);
-      size_t x1 = CLAMP(rect->offset.x + rect->extent.width, origin.x, end.x);
-      size_t y0 = CLAMP(rect->offset.y, origin.y, end.y);
-      size_t y1 = CLAMP(rect->offset.y + rect->extent.height, origin.y, end.y);
-      size_t minx = MIN2(x0, x1);
-      size_t miny = MIN2(y0, y1);
-      size_t maxx = MAX2(x0, x1);
-      size_t maxy = MAX2(y0, y1);
-      rects[i].x = minx;
-      rects[i].y = miny;
-      rects[i].width = maxx - minx;
-      rects[i].height = maxy - miny;
-   }
+   kk_render_scissors(&dyn->vp, &cmd->state.gfx.render.area, rects);
 
    mtl_render_encoder *encoder = cs_get_render(cmd);
    mtl_set_scissor_rects(encoder, rects, count);

@@ -176,7 +176,9 @@ kk_nir_lower_coarse_fragment(nir_shader *nir)
    nir_def *pipeline = clamp_extent(&b, nir_vec2(&b,
       CTX(&b, context, fragment_width, 32), CTX(&b, context, fragment_height, 32)));
    nir_def *primitive = clamp_extent(&b, decode_extent(&b, CTX(&b, context, primitive_rate, 32)));
-   nir_def *attachment = clamp_extent(&b, decode_extent(&b, load_rate_image(&b, context, rx, ry)));
+   nir_def *attachment = clamp_extent(&b, decode_extent(&b, load_rate_image(&b, context,
+      nir_iadd(&b, rx, CTX(&b, context, origin_x, 32)),
+      nir_iadd(&b, ry, CTX(&b, context, origin_y, 32)))));
    nir_def *extent = clamp_extent(&b, combine_extent(&b,
       clamp_extent(&b, combine_extent(&b, pipeline, primitive, CTX(&b, context, combiner0, 32))),
       attachment, CTX(&b, context, combiner1, 32)));
@@ -222,8 +224,8 @@ kk_nir_lower_coarse_fragment(nir_shader *nir)
    struct coarse_values v = {
       .mask = mask, .helper = nir_ieq_imm(&b, mask, 0),
       .position = nir_vec4(&b,
-         nir_fadd(&b, nir_u2f32(&b, x), nir_fmul_imm(&b, nir_u2f32(&b, fw), 0.5)),
-         nir_fadd(&b, nir_u2f32(&b, y), nir_fmul_imm(&b, nir_u2f32(&b, fh), 0.5)), z, rw),
+         nir_fadd(&b, nir_u2f32(&b, nir_iadd(&b, x, CTX(&b, context, origin_x, 32))), nir_fmul_imm(&b, nir_u2f32(&b, fw), 0.5)),
+         nir_fadd(&b, nir_u2f32(&b, nir_iadd(&b, y, CTX(&b, context, origin_y, 32))), nir_fmul_imm(&b, nir_u2f32(&b, fh), 0.5)), z, rw),
       .rate = nir_ior(&b, nir_ishl_imm(&b, nir_ufind_msb(&b, fw), 2), nir_ufind_msb(&b, fh)),
       .primitive = CTX(&b, context, api_primitive, 32),
    };
@@ -574,8 +576,10 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
    v.original_per_draw = CTX(&b, context, original_per_draw, 64);
    nir_def *native_helper = nir_is_helper_invocation(&b, 1);
    nir_def *native_mask = nir_load_sample_mask_in(&b);
-   nir_def *ix = nir_f2u32(&b, nir_channel(&b, native_position, 0));
-   nir_def *iy = nir_f2u32(&b, nir_channel(&b, native_position, 1));
+   nir_def *origin_x = CTX(&b, context, origin_x, 32);
+   nir_def *origin_y = CTX(&b, context, origin_y, 32);
+   nir_def *ix = nir_isub(&b, nir_f2u32(&b, nir_channel(&b, native_position, 0)), origin_x);
+   nir_def *iy = nir_isub(&b, nir_f2u32(&b, nir_channel(&b, native_position, 1)), origin_y);
    nir_def *px = nir_iand_imm(&b, ix, 1), *py = nir_iand_imm(&b, iy, 1);
    nir_def *physical = nir_ior(&b, px, nir_ishl_imm(&b, py, 1));
    nir_def *limit = nir_imm_ivec2(&b, 2, 2);
@@ -583,7 +587,8 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
       CTX(&b, context, fragment_height, 32)), limit);
    nir_def *prim = nir_umin(&b, decode_extent(&b, CTX(&b, context, primitive_rate, 32)), limit);
    nir_def *att = nir_umin(&b, decode_extent(&b, load_rate_image(&b, context,
-      nir_iand_imm(&b, ix, ~1u), nir_iand_imm(&b, iy, ~1u))), limit);
+      nir_iadd(&b, nir_iand_imm(&b, ix, ~1u), origin_x),
+      nir_iadd(&b, nir_iand_imm(&b, iy, ~1u), origin_y))), limit);
    nir_def *extent = nir_umin(&b, combine_extent(&b,
       nir_umin(&b, combine_extent(&b, p, prim, CTX(&b, context, combiner0, 32)), limit),
       att, CTX(&b, context, combiner1, 32)), limit);
@@ -644,8 +649,8 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
    v.rate = nir_ior(&b, nir_ishl_imm(&b, nir_ufind_msb(&b, fw), 2), nir_ufind_msb(&b, fh));
    nir_def *qx = nir_imul(&b, nir_udiv(&b, ix, nir_imul_imm(&b, fw, 2)), nir_imul_imm(&b, fw, 2));
    nir_def *qy = nir_imul(&b, nir_udiv(&b, iy, nir_imul_imm(&b, fh, 2)), nir_imul_imm(&b, fh, 2));
-   nir_def *sx = nir_fadd(&b, nir_u2f32(&b, nir_iadd(&b, qx, nir_imul(&b, lx, fw))), nir_fmul_imm(&b, nir_u2f32(&b, fw), .5));
-   nir_def *sy = nir_fadd(&b, nir_u2f32(&b, nir_iadd(&b, qy, nir_imul(&b, ly, fh))), nir_fmul_imm(&b, nir_u2f32(&b, fh), .5));
+   nir_def *sx = nir_fadd(&b, nir_u2f32(&b, nir_iadd(&b, origin_x, nir_iadd(&b, qx, nir_imul(&b, lx, fw)))), nir_fmul_imm(&b, nir_u2f32(&b, fw), .5));
+   nir_def *sy = nir_fadd(&b, nir_u2f32(&b, nir_iadd(&b, origin_y, nir_iadd(&b, qy, nir_imul(&b, ly, fh)))), nir_fmul_imm(&b, nir_u2f32(&b, fh), .5));
    nir_def *base = nir_quad_broadcast(&b, native_position, nir_imm_int(&b, 0));
    nir_def *dx = nir_fsub(&b, nir_quad_broadcast(&b, native_position, nir_imm_int(&b, 1)), base);
    nir_def *dy = nir_fsub(&b, nir_quad_broadcast(&b, native_position, nir_imm_int(&b, 2)), base);
@@ -667,10 +672,12 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
          nir_def *valid = nir_iand(&b,
             nir_iand(&b, nir_ult(&b, nir_imm_int(&b, pixel & 1), fw),
                         nir_ult(&b, nir_imm_int(&b, pixel >> 1), fh)),
-            nir_iand(&b, nir_ult(&b, cx, width), nir_ult(&b, cy, height)));
+            nir_iand(&b, nir_ult(&b, nir_isub(&b, cx, origin_x), width),
+                        nir_ult(&b, nir_isub(&b, cy, origin_y), height)));
          nir_def *zero = nir_imm_int(&b, 0);
          nir_push_if(&b, valid);
-         nir_def *index = nir_iadd(&b, nir_imul(&b, cy, width), cx);
+         nir_def *index = nir_iadd(&b, nir_imul(&b, nir_isub(&b, cy, origin_y), width),
+            nir_isub(&b, cx, origin_x));
          nir_def *covered = nir_load_global(&b, 1, 32, nir_iadd(&b, coverage,
             nir_imul_imm(&b, nir_u2u64(&b, index), sizeof(struct kk_vrs_coverage))), .align_mul = 4);
          nir_pop_if(&b, NULL);
@@ -964,8 +971,10 @@ kk_nir_lower_linked_replay_fragment(nir_shader *nir, unsigned samples)
       }
    }
    nir_def *position = nir_load_frag_coord(&b);
-   nir_def *x = nir_f2u32(&b, nir_channel(&b, position, 0));
-   nir_def *y = nir_f2u32(&b, nir_channel(&b, position, 1));
+   nir_def *x = nir_isub(&b, nir_f2u32(&b, nir_channel(&b, position, 0)),
+      CTX(&b, context, origin_x, 32));
+   nir_def *y = nir_isub(&b, nir_f2u32(&b, nir_channel(&b, position, 1)),
+      CTX(&b, context, origin_y, 32));
    nir_def *valid = nir_iand(&b, nir_inot(&b, nir_is_helper_invocation(&b, 1)),
       nir_iand(&b, nir_ult(&b, x, CTX(&b, context, width, 32)),
                   nir_ult(&b, y, CTX(&b, context, height, 32))));

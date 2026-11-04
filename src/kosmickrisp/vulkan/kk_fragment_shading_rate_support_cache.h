@@ -11,7 +11,7 @@
 #include "util/blob.h"
 #include "vk_pipeline_cache.h"
 
-#define KK_VRS_SUPPORT_SCHEMA 2u
+#define KK_VRS_SUPPORT_SCHEMA 3u
 
 struct kk_vrs_support {
    struct vk_pipeline_cache_object base;

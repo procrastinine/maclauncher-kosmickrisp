@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_fragment_shading_rate_command.h"
 #include "kk_fragment_shading_rate_resources.h"
+#include "kk_render_scissors.h"
 #include "kk_shader.h"
 #include "kk_mesh_pipeline_api.h"
 #include "kk_poly_retained_raster_types.h"
@@ -35,11 +36,12 @@ kk_vrs_cmd_encode_phases(struct kk_cmd_buffer *cmd,
    if ((samples != 1 && samples != 2 && samples != 4) ||
        (context->reserved ? context->reserved : 1) != samples ||
        mtl_vrs_pipelines_samples(pipelines) != samples ||
-       context->width != 32 || context->height != 32 ||
-       render->area.offset.x || render->area.offset.y ||
-       render->area.extent.width != 32 || render->area.extent.height != 32 ||
+       !kk_vrs_window_valid(context, &render->area) ||
        render->layer_count != 1 || render->view_mask)
       return VK_ERROR_FEATURE_NOT_PRESENT;
+
+   if (cmd->vk.dynamic_graphics_state.rs.rasterizer_discard_enable)
+      return VK_SUCCESS;
 
    const struct kk_depth_stencil_snapshot *snapshot;
    VkResult result = kk_cmd_capture_depth_stencil(cmd, actual_producer, &snapshot);
@@ -49,6 +51,22 @@ kk_vrs_cmd_encode_phases(struct kk_cmd_buffer *cmd,
     * draw. The snapshot owns it through command retirement. */
    if (!kk_cmd_depth_stencil_variant(snapshot, KK_DEPTH_STENCIL_BYPASS))
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+
+   /* Native early tests commit before any shader-side window predicate.
+    * Clip every actual viewport scissor before the first coverage draw, then
+    * restore precisely the ordinary render-area scissors on every exit. */
+   VkRect2D window = {
+      .offset = {MAX2(context->origin_x, render->area.offset.x),
+                 MAX2(context->origin_y, render->area.offset.y)},
+   };
+   window.extent.width = MIN2((uint64_t)context->origin_x + 32,
+      (uint64_t)render->area.offset.x + render->area.extent.width) - window.offset.x;
+   window.extent.height = MIN2((uint64_t)context->origin_y + 32,
+      (uint64_t)render->area.offset.y + render->area.extent.height) - window.offset.y;
+   struct mtl_scissor_rect scissors[KK_MAX_VIEWPORTS] = {0};
+   kk_render_scissors(&cmd->vk.dynamic_graphics_state.vp, &window, scissors);
+   mtl_set_scissor_rects(snapshot->encoder, scissors,
+      MAX2(cmd->vk.dynamic_graphics_state.vp.scissor_count, 1));
 
    const enum mtl_visibility_result_mode visibility = cmd->state.gfx.occlusion.mode;
    const size_t visibility_offset = cmd->state.gfx.occlusion.index * sizeof(uint64_t);
@@ -85,6 +103,10 @@ restore:
    } else {
       VkResult restored = kk_cmd_bind_depth_stencil(snapshot, KK_DEPTH_STENCIL_ORIGINAL);
       restore_raster(snapshot->encoder, data);
+      memset(scissors, 0, sizeof(scissors));
+      kk_render_scissors(&cmd->vk.dynamic_graphics_state.vp, &render->area, scissors);
+      mtl_set_scissor_rects(snapshot->encoder, scissors,
+         MAX2(cmd->vk.dynamic_graphics_state.vp.scissor_count, 1));
       if (visibility != MTL_VISIBILITY_RESULT_MODE_DISABLED)
          mtl_set_visibility_result_mode(snapshot->encoder, visibility, visibility_offset);
       if (result == VK_SUCCESS)

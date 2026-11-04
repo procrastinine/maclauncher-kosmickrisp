@@ -4,6 +4,20 @@
 #include "kk_cmd_buffer.h"
 #include "kosmickrisp/libkk/kk_fragment_shading_rate_types.h"
 
+/* Origins align to complete logical quads for every supported rate. A final
+ * window may extend past the render area; native scissors clip its actual
+ * coverage while the fixed scratch window remains fully initialized. */
+static inline bool
+kk_vrs_window_valid(const struct kk_vrs_context *context, const VkRect2D *area)
+{
+   return context->width == 32 && context->height == 32 &&
+      !(context->origin_x % 32) && !(context->origin_y % 32) &&
+      (uint64_t)context->origin_x < (uint64_t)area->offset.x + area->extent.width &&
+      (uint64_t)context->origin_y < (uint64_t)area->offset.y + area->extent.height &&
+      (uint64_t)context->origin_x + 32 > (uint32_t)area->offset.x &&
+      (uint64_t)context->origin_y + 32 > (uint32_t)area->offset.y;
+}
+
 struct kk_shader;
 struct kk_vrs_prepared {
    const struct kk_vrs_context *context;

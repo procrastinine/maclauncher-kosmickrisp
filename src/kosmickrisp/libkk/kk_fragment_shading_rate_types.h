@@ -16,6 +16,7 @@ struct kk_vrs_context { \
    U32 texel_width; U32 texel_height; U32 primitive_rate; \
    U32 combiner0; U32 combiner1; U32 has_attachment; U64 pixel_results; \
    U32 result_stride; U32 sample_mask; U64 original_per_draw; \
+   U32 origin_x; U32 origin_y; \
 }; \
 struct kk_vrs_coverage { U32 mask; F32 z; F32 reciprocal_w; U32 reserved; }; \
 struct kk_vrs_result { F32 color[4]; U32 mask; U32 api_primitive; U32 rate; U32 reserved; }; \
@@ -44,8 +45,9 @@ _Static_assert(sizeof(struct kk_vrs_mesh_jobs_state) == 24, "GPU Mesh cursor lay
 _Static_assert(offsetof(struct kk_vrs_mesh_jobs_state, job) == 0, "original Mesh job prefix");
 _Static_assert(offsetof(struct kk_vrs_mesh_prepare, advance) == 108, "preparation mode uses existing padding");
 _Static_assert(sizeof(struct kk_vrs_mesh_prepare) == 112, "Mesh preparation layout");
-_Static_assert(sizeof(struct kk_vrs_context) == 120, "coarse context layout");
+_Static_assert(sizeof(struct kk_vrs_context) == 128, "coarse context layout");
 _Static_assert(offsetof(struct kk_vrs_context, sample_mask) == 108, "sample mask uses existing padding");
+_Static_assert(offsetof(struct kk_vrs_context, origin_x) == 120, "window origin suffix");
 _Static_assert(sizeof(struct kk_vrs_coverage) == 16, "coverage layout");
 _Static_assert(sizeof(struct kk_vrs_result) == 32, "result layout");
 #endif

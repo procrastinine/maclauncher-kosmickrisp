@@ -28,7 +28,7 @@ static const char support_msl[] =
    KK_VRS_MESH_PREPARE_MSL
    "inline void kk_vrs_capture_pixel(float4 position, uint mask,\n"
    " constant kk_vrs_context &ctx) {\n"
-   " uint2 xy=uint2(position.xy);\n"
+   " uint2 xy=uint2(position.xy)-uint2(ctx.origin_x,ctx.origin_y);\n"
    " if(simd_is_helper_thread() || !mask || xy.x>=ctx.width || xy.y>=ctx.height)return;\n"
    " device kk_vrs_coverage *coverage=(device kk_vrs_coverage*)ctx.coverage;\n"
    " uint p=xy.y*ctx.width+xy.x;\n"
@@ -42,7 +42,7 @@ static const char support_msl[] =
    " constant kk_vrs_context &ctx [[buffer(KK_ARGUMENT_PER_DRAW)]]) { kk_vrs_capture_pixel(in.position,mask,ctx); }\n"
    "fragment O kk_vrs_replay(V in [[stage_in]],\n"
    " constant kk_vrs_context &ctx [[buffer(KK_ARGUMENT_PER_DRAW)]]) {\n"
-   " uint2 xy=uint2(in.position.xy);\n"
+   " uint2 xy=uint2(in.position.xy)-uint2(ctx.origin_x,ctx.origin_y);\n"
    " if(simd_is_helper_thread() || xy.x>=ctx.width || xy.y>=ctx.height)return {float4(0),0};\n"
    " device const kk_vrs_result *results=(device const kk_vrs_result*)ctx.results;\n"
    " device const uint *map=(device const uint*)ctx.pixel_results;\n"
