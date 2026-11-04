@@ -91,6 +91,17 @@ void kk_descriptor_heap_finish(struct kk_device *dev);
 void kk_descriptor_heap_image_finish(struct kk_device *dev, struct kk_image *image);
 void kk_descriptor_heap_buffer_bind(struct kk_device *dev, struct kk_buffer *buffer);
 void kk_descriptor_heap_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer);
+/* Shared address registry and typed writer. Callers hold descriptor_heap_lock.
+ * Entries and cached views have the registered VkBuffer's lifetime. Lookup
+ * returns a live covering registration, not an original-handle provenance
+ * guarantee when logical address ranges overlap. */
+void kk_descriptor_buffer_register_locked(struct kk_device *dev,
+   struct kk_buffer *buffer);
+struct kk_buffer *kk_descriptor_buffer_from_address_locked(struct kk_device *dev,
+   uint64_t address, uint64_t size);
+VkResult kk_descriptor_write_texel_buffer_locked(struct kk_device *dev,
+   uint64_t address, uint64_t size, VkFormat format, VkDescriptorType type,
+   void *destination, uint32_t descriptor_size);
 VkResult kk_heap_embedded_sampler_table(struct kk_device *dev,
    uint32_t count, const struct vk_sampler_state *states, uint64_t *gpu_address);
 VkResult kk_heap_sampler_state(struct kk_device *dev,

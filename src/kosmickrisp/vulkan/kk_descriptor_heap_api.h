@@ -187,16 +187,23 @@ kk_descriptor_heap_image_finish(struct kk_device *dev, struct kk_image *image)
 }
 
 void
-kk_descriptor_heap_buffer_bind(struct kk_device *dev, struct kk_buffer *buffer)
+kk_descriptor_buffer_register_locked(struct kk_device *dev,
+                                      struct kk_buffer *buffer)
 {
-   if (!dev->vk.enabled_features.descriptorHeap)
-      return;
-   simple_mtx_lock(&dev->descriptor_heap_lock);
    if (!buffer->heap_registered) {
       buffer->heap_next = dev->heap_buffers;
       dev->heap_buffers = buffer;
       buffer->heap_registered = true;
    }
+}
+
+void
+kk_descriptor_heap_buffer_bind(struct kk_device *dev, struct kk_buffer *buffer)
+{
+   if (!dev->vk.enabled_features.descriptorHeap)
+      return;
+   simple_mtx_lock(&dev->descriptor_heap_lock);
+   kk_descriptor_buffer_register_locked(dev, buffer);
    simple_mtx_unlock(&dev->descriptor_heap_lock);
 }
 
@@ -563,8 +570,9 @@ kk_heap_image_view_locked(struct kk_device *dev,
    return VK_SUCCESS;
 }
 
-static struct kk_buffer *
-kk_heap_buffer_from_address(struct kk_device *dev, uint64_t address, uint64_t size)
+struct kk_buffer *
+kk_descriptor_buffer_from_address_locked(struct kk_device *dev,
+                                          uint64_t address, uint64_t size)
 {
    for (struct kk_buffer *buffer = dev->heap_buffers; buffer;
         buffer = buffer->heap_next) {
@@ -576,15 +584,15 @@ kk_heap_buffer_from_address(struct kk_device *dev, uint64_t address, uint64_t si
    return NULL;
 }
 
-static VkResult
-kk_heap_texel_view_locked(struct kk_device *dev,
-                          const VkTexelBufferDescriptorInfoEXT *info,
-                          VkDescriptorType type, void *destination,
-                          uint32_t descriptor_size)
+VkResult
+kk_descriptor_write_texel_buffer_locked(struct kk_device *dev,
+   uint64_t address, uint64_t size, VkFormat format, VkDescriptorType type,
+   void *destination, uint32_t descriptor_size)
 {
-   const uint64_t address = info->addressRange.address;
-   const uint64_t size = info->addressRange.size;
-   struct kk_buffer *buffer = kk_heap_buffer_from_address(dev, address, size);
+   assert(type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER ||
+          type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER);
+   struct kk_buffer *buffer =
+      kk_descriptor_buffer_from_address_locked(dev, address, size);
    assert(buffer && "texel descriptor address is backed by a live buffer");
    if (!buffer)
       return vk_error(dev, VK_ERROR_UNKNOWN);
@@ -594,7 +602,7 @@ kk_heap_texel_view_locked(struct kk_device *dev,
    if (result != VK_SUCCESS)
       return result;
    const struct kk_heap_buffer_view_key key = {
-      .offset = offset, .size = size, .format = info->format,
+      .offset = offset, .size = size, .format = format,
    };
    struct kk_heap_buffer_view *entry = kk_heap_cache_lookup(buffer->heap_views,
                                                            &key, kk_heap_buffer_view_equal);
@@ -606,7 +614,7 @@ kk_heap_texel_view_locked(struct kk_device *dev,
       const VkBufferViewCreateInfo create = {
          .sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO,
          .buffer = kk_buffer_to_handle(buffer),
-         .format = info->format,
+         .format = format,
          .offset = offset,
          .range = size,
       };
@@ -724,7 +732,8 @@ kk_WriteResourceDescriptorsEXT(VkDevice _device, uint32_t resourceCount,
          const VkDeviceAddressRangeEXT *range = resource->data.pAddressRange;
          if (range) {
             struct kk_buffer *buffer = range->address ?
-               kk_heap_buffer_from_address(dev, range->address, range->size) : NULL;
+               kk_descriptor_buffer_from_address_locked(dev, range->address,
+                                                        range->size) : NULL;
             if (range->address && !buffer) {
                result = vk_error(dev, VK_ERROR_UNKNOWN);
                break;
@@ -743,8 +752,9 @@ kk_WriteResourceDescriptorsEXT(VkDevice _device, uint32_t resourceCount,
       case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: {
          const VkTexelBufferDescriptorInfoEXT *info = resource->data.pTexelBuffer;
          if (info && info->addressRange.address && info->addressRange.size) {
-            result = kk_heap_texel_view_locked(dev, info, resource->type,
-                                                dst->address, size);
+            result = kk_descriptor_write_texel_buffer_locked(dev,
+               info->addressRange.address, info->addressRange.size, info->format,
+               resource->type, dst->address, size);
          }
          break;
       }
