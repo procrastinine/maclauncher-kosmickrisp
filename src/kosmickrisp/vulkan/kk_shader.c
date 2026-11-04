@@ -28,6 +28,7 @@
 #include "kk_physical_device.h"
 #include "kk_sampler.h"
 #include "kk_embedded_sampler_runtime.h"
+#include "kk_sampler_emulation.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/ns_process_info.h"
@@ -1143,6 +1144,23 @@ static const struct vk_shader_ops kk_shader_ops;
 static void kk_interlock_shader_finish(struct kk_interlock_shader *);
 void kk_interlock_pipeline_finish(struct kk_interlock_pipeline *);
 
+/* Fold already-produced metadata once before executable publication. No IR
+ * walk, descriptor inspection or mutable sampler snapshot is involved. */
+static void
+kk_shader_sampler_info(struct kk_shader *shader)
+{
+   bool uses = shader->gs_main.uses_sampler_emulation ||
+               shader->polygon_native.uses_sampler_emulation ||
+               shader->polygon_native_fs.uses_sampler_emulation;
+   for (unsigned i = 0; i < ARRAY_SIZE(shader->msl_data); ++i)
+      uses |= shader->msl_data[i].uses_sampler_emulation;
+   for (unsigned i = 0; i < ARRAY_SIZE(shader->polygon); ++i)
+      uses |= shader->polygon[i].uses_sampler_emulation;
+   for (unsigned i = 0; i < ARRAY_SIZE(shader->gs_aux); ++i)
+      uses |= shader->gs_aux[i].uses_sampler_emulation;
+   shader->info.uses_sampler_emulation = uses;
+}
+
 static void
 kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
                   const VkAllocationCallbacks *pAllocator)
@@ -1438,6 +1456,8 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
    if (unlikely(dev->perf))
       kk_perf_msl_source(dev->perf, nir->info.stage, data->code);
    data->uses_pipeline_statistics = translate_options.uses_pipeline_statistics;
+   data->uses_sampler_emulation = translate_options.uses_sampler_emulation;
+   data->requires_sampler_emulation = translate_options.requires_sampler_emulation;
    const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
 
    /* We need to steal so it doesn't get destroyed with the nir. Needs to happen
@@ -1872,6 +1892,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       kk_vrs_source_attach_captured(source, shader->vrs_source);
       shader->vrs_source = source;
    }
+   kk_shader_sampler_info(shader);
    *shader_out = shader;
 
    return result;
@@ -1969,7 +1990,7 @@ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
 }
 
 static VkResult
-kk_compile_compute_with_library(struct kk_device *device,
+kk_compile_compute_with_library(struct kk_device *device, struct kk_shader *shader,
    const struct msl_compile_data *data, uint32_t local_size_threads,
    mtl_compute_pipeline_state **pipe, bool indirect,
    mtl_function_descriptor **retained_function, mtl_library *library)
@@ -1978,25 +1999,24 @@ kk_compile_compute_with_library(struct kk_device *device,
       return VK_ERROR_INVALID_SHADER_NV;
 
    mtl_function_descriptor *function = NULL;
-   VkResult result = kk_msl_function(device, data, library, data->entrypoint_name,
+   VkResult result = kk_msl_function_sampler_base(device, data, library, data->entrypoint_name,
                                    &function);
    if (result != VK_SUCCESS) {
       mtl_release(library);
       return result;
    }
 
-   mtl_compute_pipeline_state *pipeline = indirect
-      ? KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, kk_dgc_new_compute_pipeline_state(device->mtl_compiler_handle, function,
-                                           local_size_threads))
-      : KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_compute_pipeline_state(device->mtl_compiler_handle, function,
-                                        local_size_threads));
+   mtl_compute_pipeline_state *pipeline = NULL;
+   result = kk_sampler_create_compute(device, shader, function,
+      data->uses_sampler_emulation, data->requires_sampler_emulation,
+      local_size_threads, indirect, &pipeline, false);
    if (pipeline && retained_function)
       *retained_function = mtl_retain(function);
    mtl_release(function);
    mtl_release(library);
 
-   if (pipeline == NULL)
-      return VK_ERROR_INVALID_SHADER_NV;
+   if (result != VK_SUCCESS)
+      return result;
 
    *pipe = pipeline;
 
@@ -2004,7 +2024,7 @@ kk_compile_compute_with_library(struct kk_device *device,
 }
 
 static VkResult
-kk_compile_compute_pipeline_mode(struct kk_device *device,
+kk_compile_compute_pipeline_mode(struct kk_device *device, struct kk_shader *shader,
                             const struct msl_compile_data *data,
                             uint32_t local_size_threads,
                             mtl_compute_pipeline_state **pipe, bool indirect,
@@ -2015,16 +2035,16 @@ kk_compile_compute_pipeline_mode(struct kk_device *device,
    mtl_library *library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY, mtl_new_library(
       device->mtl_compiler_handle, data->code, kk_msl_language_version(data, pdev->info.msl_version),
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
-   return kk_compile_compute_with_library(device, data, local_size_threads,
+   return kk_compile_compute_with_library(device, shader, data, local_size_threads,
       pipe, indirect, retained_function, library);
 }
 
 static VkResult
-kk_compile_compute_pipeline(struct kk_device *device,
+kk_compile_compute_pipeline(struct kk_device *device, struct kk_shader *shader,
                             const struct msl_compile_data *data,
                             uint32_t threads, mtl_compute_pipeline_state **pipe)
 {
-   return kk_compile_compute_pipeline_mode(device, data, threads, pipe, false, NULL);
+   return kk_compile_compute_pipeline_mode(device, shader, data, threads, pipe, false, NULL);
 }
 
 static VkResult
@@ -2037,16 +2057,16 @@ kk_compile_async_compute(struct kk_device *device, struct kk_shader *shader)
          kk_msl_language_version(data, pdev->info.msl_version), MTL_MATH_MODE_FAST,
          MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
    struct mtl_size local = shader->info.cs.local_size;
-   return kk_compile_compute_with_library(device, data, local.x * local.y * local.z,
+   return kk_compile_compute_with_library(device, shader, data, local.x * local.y * local.z,
                                           &shader->pipeline.cs, false, NULL, library);
 }
 
 VkResult
-kk_compile_indirect_compute_pipeline(struct kk_device *device,
+kk_compile_indirect_compute_pipeline(struct kk_device *device, struct kk_shader *shader,
    const struct msl_compile_data *data, uint32_t threads,
    mtl_compute_pipeline_state **pipe)
 {
-   return kk_compile_compute_pipeline_mode(device, data, threads, pipe, true, NULL);
+   return kk_compile_compute_pipeline_mode(device, shader, data, threads, pipe, true, NULL);
 }
 
 VkResult
@@ -2056,7 +2076,7 @@ kk_shader_get_statistics_pre_gs(struct kk_device *device, struct kk_shader *shad
    struct kk_statistics_pre_gs *statistics = kk_statistics_pre_gs(shader);
    *pipeline = p_atomic_read(&statistics->pipeline);
    if (*pipeline)
-      return VK_SUCCESS;
+      return kk_sampler_compute_pipeline(device, shader, *pipeline, pipeline);
    struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
    simple_mtx_lock(&cache->mutex);
    mtl_compute_pipeline_state *compiled = statistics->pipeline;
@@ -2067,8 +2087,10 @@ kk_shader_get_statistics_pre_gs(struct kk_device *device, struct kk_shader *shad
       if (!function) {
          result = VK_ERROR_OUT_OF_HOST_MEMORY;
       } else {
-         compiled = KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE,
-            mtl_new_compute_pipeline_state(device->mtl_compiler_handle, function, 1));
+         result = kk_sampler_create_compute(device, shader, function,
+            shader->gs_aux[1].uses_sampler_emulation,
+            shader->gs_aux[1].requires_sampler_emulation,
+            1, false, &compiled, true);
          mtl_release(function);
          if (compiled)
             p_atomic_set(&statistics->pipeline, compiled);
@@ -2078,7 +2100,8 @@ kk_shader_get_statistics_pre_gs(struct kk_device *device, struct kk_shader *shad
    }
    *pipeline = compiled;
    simple_mtx_unlock(&cache->mutex);
-   return result;
+   return result == VK_SUCCESS ?
+      kk_sampler_compute_pipeline(device, shader, compiled, pipeline) : result;
 }
 
 static mtl_depth_stencil_state *
@@ -2535,9 +2558,10 @@ kk_configure_render_pipeline(struct kk_device *device, struct kk_shader *vs,
 static VkResult
 kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
                              mtl_render_pipeline_descriptor *descriptor,
-                             unsigned kind, bool statistics)
+                             unsigned kind, bool statistics, uint32_t sampler_stages,
+                             uint32_t sampler_required)
 {
-   if (!statistics && !shader->info.geometry_statistics &&
+   if (!sampler_stages && !statistics && !shader->info.geometry_statistics &&
        !kk_attachment_dynamic_variants(device, shader))
       return VK_SUCCESS;
    VkResult result = kk_attachment_pipelines_create(device, shader);
@@ -2548,6 +2572,9 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
    if (!cache->descriptor[kind]) {
       cache->descriptor[kind] = mtl_retain(descriptor);
       cache->statistics[kind] = statistics;
+      cache->sampler_stages[kind] = sampler_stages;
+      cache->sampler_required[kind] = sampler_required;
+      if (sampler_stages) p_atomic_set(&cache->sampler_render, true);
       cache->topology[kind] = kind == KK_PIPELINE_CONSERVATIVE ?
          MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE : kind == KK_PIPELINE_POLYGON ?
          shader->info.vs.polygon_topology : shader->info.vs.topology;
@@ -2580,7 +2607,7 @@ kk_compile_graphics_prerender(struct kk_device *device, struct kk_shader *vs,
       uint32_t local_thread_size = vs_stage == MESA_SHADER_TESS_CTRL
                                       ? vs->info.vs.tess_local_thread_size
                                       : KK_POLY_WG_SIZE;
-      result = kk_compile_compute_pipeline(device, &vs->msl_data[vs_stage],
+      result = kk_compile_compute_pipeline(device, vs, &vs->msl_data[vs_stage],
                                            local_thread_size,
                                            &pipe->gfx.pre_render[i]);
 
@@ -2594,7 +2621,7 @@ kk_compile_graphics_prerender(struct kk_device *device, struct kk_shader *vs,
    if (vs->info.vs.additional_stages_bits &
        BITFIELD_BIT(MESA_SHADER_GEOMETRY)) {
       result = kk_compile_compute_pipeline(
-         device, &vs->gs_main, KK_POLY_WG_SIZE,
+         device, vs, &vs->gs_main, KK_POLY_WG_SIZE,
          &pipe->gfx.pre_render[pipe->gfx.pre_render_count++]);
       if (result != VK_SUCCESS)
          return VK_ERROR_INVALID_SHADER_NV;
@@ -2634,7 +2661,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    mtl_library *vertex_library = libraries[0];
    mtl_library *fragment_library = libraries[1];
    mtl_function_descriptor *vertex_function = NULL;
-   result = kk_msl_function(device, vs_data, vertex_library,
+   result = kk_msl_function_sampler_base(device, vs_data, vertex_library,
                             vs_data->entrypoint_name, &vertex_function);
    if (result != VK_SUCCESS) {
       mtl_release(fragment_library);
@@ -2643,7 +2670,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    }
 
    mtl_function_descriptor *fragment_function = NULL;
-   result = kk_msl_function(device, fs_data, fragment_library,
+   result = kk_msl_function_sampler_base(device, fs_data, fragment_library,
                             fs_data->entrypoint_name, &fragment_function);
    if (result != VK_SUCCESS) {
       mtl_release(vertex_function);
@@ -2666,8 +2693,14 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
 
    kk_configure_render_pipeline(device, vs, pipe, pipeline_descriptor, polygon);
 
-   mtl_render_pipeline_state *render =
-      kk_attachment_compile_pipeline(device, vs, pipeline_descriptor);
+   uint32_t sampler_stages =
+      (vs_data->uses_sampler_emulation ? MTL_SAMPLER_EMULATION_VERTEX : 0) |
+      (fs_data->uses_sampler_emulation ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
+   uint32_t sampler_required =
+      (vs_data->requires_sampler_emulation ? MTL_SAMPLER_EMULATION_VERTEX : 0) |
+      (fs_data->requires_sampler_emulation ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
+   mtl_render_pipeline_state *render = kk_attachment_compile_pipeline(device, vs,
+      pipeline_descriptor, sampler_stages, sampler_required);
    if (polygon == 2) pipe->gfx.conservative_render = render;
    else if (polygon) pipe->gfx.polygon_render = render;
    else pipe->gfx.render = render;
@@ -2676,7 +2709,8 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
 
    if (render)
       result = kk_record_render_descriptor(device, vs, pipeline_descriptor,
-                                          polygon, fs_data->uses_pipeline_statistics);
+                                          polygon, fs_data->uses_pipeline_statistics,
+                                          sampler_stages, sampler_required);
    mtl_release(pipeline_descriptor);
    mtl_release(fragment_function);
    mtl_release(fragment_library);
@@ -2697,11 +2731,11 @@ kk_compile_polygon_siblings(struct kk_device *device, struct kk_shader *vs)
          return result;
    }
    if (vs->info.polygon_point || vs->info.interlock_envelope) {
-   result = kk_compile_compute_pipeline(device, &vs->polygon[0], KK_POLY_WG_SIZE,
+   result = kk_compile_compute_pipeline(device, vs, &vs->polygon[0], KK_POLY_WG_SIZE,
                                         &vs->pipeline.gfx.polygon_capture);
    if (result != VK_SUCCESS) return result;
    if (vs->polygon[1].code) {
-      result = kk_compile_compute_pipeline(device, &vs->polygon[1], KK_POLY_WG_SIZE,
+      result = kk_compile_compute_pipeline(device, vs, &vs->polygon[1], KK_POLY_WG_SIZE,
                                            &vs->pipeline.gfx.polygon_xfb);
       if (result != VK_SUCCESS) return result;
    }
@@ -2736,6 +2770,7 @@ kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader)
 static VkResult
 kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
 {
+   kk_shader_sampler_info(vs);
    u_foreach_bit(i, vs->info.gs_aux_mask)
       vs->pipeline.gfx.gs_aux_once[i] = (util_once_flag)UTIL_ONCE_FLAG_INIT;
    if (vs->info.conservative) {
@@ -3314,7 +3349,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          !s->msl_data[MESA_SHADER_COMPUTE].uses_atomic64_locks && !sparse_modes &&
          kk_async_compute_start(dev, s, kk_compile_async_compute);
       if (!deferred)
-         result = kk_compile_compute_pipeline(dev, &s->msl_data[MESA_SHADER_COMPUTE],
+         result = kk_compile_compute_pipeline(dev, s, &s->msl_data[MESA_SHADER_COMPUTE],
                                               local_size_threads, &s->pipeline.cs);
       if (result == VK_SUCCESS && s->info.indirect_bindable &&
           !kk_dgc_get_compute_pipeline(dev, s))
@@ -3394,7 +3429,9 @@ kk_msl_serialize(const struct msl_compile_data *data, struct blob *blob)
    blob_write_uint8(blob, 0x80u | (data->requires_msl41 ? 1u : 0u) |
                          (data->uses_matrix_coordinates ? 2u : 0u) |
                          (data->uses_atomic64_locks ? 4u : 0u) |
-                         (data->uses_pipeline_statistics ? 8u : 0u));
+                         (data->uses_pipeline_statistics ? 8u : 0u) |
+                         (data->uses_sampler_emulation ? 16u : 0u) |
+                         (data->requires_sampler_emulation ? 32u : 0u));
    blob_write_bytes(blob, data->entrypoint_name, entrypoint_length);
    blob_write_bytes(blob, data->code, code_length);
 }
@@ -3455,6 +3492,8 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
    data->uses_matrix_coordinates = (flags & 2u) != 0;
    data->uses_atomic64_locks = (flags & 4u) != 0;
    data->uses_pipeline_statistics = (flags & 8u) != 0;
+   data->uses_sampler_emulation = (flags & 16u) != 0;
+   data->requires_sampler_emulation = (flags & 32u) != 0;
    data->entrypoint_name = ralloc_array(NULL, char, entrypoint_length);
    if (data->entrypoint_name == NULL)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -3468,7 +3507,8 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
 
    if (blob->overrun || !entrypoint_length || !code_length ||
        data->entrypoint_name[entrypoint_length - 1] || data->code[code_length - 1] ||
-       (flags & ~0x8fu) || (!(flags & 0x80u) && (flags & 12u)))
+       (flags & ~0xbfu) || (!(flags & 0x80u) && (flags & 60u)) ||
+       ((flags & 32u) && !(flags & 16u)))
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    /* Old ordinary source remains reusable. Old atomic source loaded its
     * address from root word0 and must be recompiled for specialization. */
@@ -3559,12 +3599,13 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
    }
    result = kk_interlock_shader_deserialize(shader, blob);
    if (result != VK_SUCCESS) goto fail;
+   kk_shader_sampler_info(shader);
    if (info.stage == MESA_SHADER_COMPUTE) {
       uint32_t local_size_threads = shader->info.cs.local_size.x *
                                     shader->info.cs.local_size.y *
                                     shader->info.cs.local_size.z;
       result = kk_compile_compute_pipeline(
-         dev, &shader->msl_data[MESA_SHADER_COMPUTE], local_size_threads,
+         dev, shader, &shader->msl_data[MESA_SHADER_COMPUTE], local_size_threads,
          &shader->pipeline.cs);
       if (result == VK_SUCCESS && shader->info.indirect_bindable &&
           !kk_dgc_get_compute_pipeline(dev, shader))

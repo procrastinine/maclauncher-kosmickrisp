@@ -35,7 +35,7 @@ kk_mesh_function(struct kk_device *dev, const struct msl_compile_data *data,
    if (!*library)
       return VK_ERROR_INVALID_SHADER_NV;
    char *entry = suffix ? ralloc_asprintf(NULL, "%s_%s", data->entrypoint_name, suffix) : NULL;
-   VkResult result = kk_msl_function(dev, data, *library,
+   VkResult result = kk_msl_function_sampler_base(dev, data, *library,
       entry ? entry : data->entrypoint_name, function);
    ralloc_free(entry);
    return result;
@@ -63,6 +63,10 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
        * All later variants share these immutable fragment dependencies. */
       runtime->fragment = *fragment_program;
    }
+   /* Native linked fragments supply the same compiled-use metadata. This
+    * first build precedes publication; lazy variants only inherit it. */
+   if (!shader->info.uses_sampler_emulation && fragment_program->uses_sampler_emulation)
+      shader->info.uses_sampler_emulation = true;
    bool virtual = info->has_task &&
       (force_virtual || info->task_grid_bound > KK_MESH_NATIVE_GROUPS);
    void *temporary = NULL;
@@ -102,8 +106,9 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
          goto out;
       if (virtual) {
          struct mtl_size local = info->task_local_size;
-         pipe->gfx.pre_render[0] = mtl_new_compute_pipeline_state(
-            dev->mtl_compiler_handle, task, local.x * local.y * local.z);
+         result = kk_sampler_create_compute(dev, shader, task,
+            task_data->uses_sampler_emulation, task_data->requires_sampler_emulation,
+            local.x * local.y * local.z, false, &pipe->gfx.pre_render[0], false);
          if (!pipe->gfx.pre_render[0]) {
             result = VK_ERROR_INVALID_SHADER_NV;
             goto out;
@@ -136,7 +141,24 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
       mtl_render_pipeline_descriptor_set_fragment_shader(descriptor, fragment);
    }
    kk_configure_render_pipeline(dev, shader, pipe, descriptor, false);
-   pipe->gfx.render = mtl_new_render_pipeline(dev->mtl_compiler_handle, descriptor);
+   bool fragment_uses = fragment_program->monolithic ?
+      fragment_program->monolithic->uses_sampler_emulation :
+      fragment_program->uses_sampler_emulation;
+   bool fragment_requires = fragment_program->monolithic ?
+      fragment_program->monolithic->requires_sampler_emulation :
+      fragment_program->requires_sampler_emulation;
+   uint32_t sampler_stages =
+      (mesh_data->uses_sampler_emulation ? MTL_SAMPLER_EMULATION_MESH : 0) |
+      (!virtual && task_data && task_data->uses_sampler_emulation ?
+         MTL_SAMPLER_EMULATION_OBJECT : 0) |
+      (fragment_uses ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
+   uint32_t sampler_required =
+      (mesh_data->requires_sampler_emulation ? MTL_SAMPLER_EMULATION_MESH : 0) |
+      (!virtual && task_data && task_data->requires_sampler_emulation ?
+         MTL_SAMPLER_EMULATION_OBJECT : 0) |
+      (fragment_requires ? MTL_SAMPLER_EMULATION_FRAGMENT : 0);
+   pipe->gfx.render = kk_attachment_compile_pipeline(dev, shader, descriptor,
+      sampler_stages, sampler_required);
    if (!pipe->gfx.render) {
       result = VK_ERROR_INVALID_SHADER_NV;
    } else {
@@ -149,7 +171,7 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
          result = kk_record_render_descriptor(dev, shader, descriptor,
             kind, fragment_program->monolithic ?
                fragment_program->monolithic->uses_pipeline_statistics :
-               fragment_program->uses_pipeline_statistics);
+               fragment_program->uses_pipeline_statistics, sampler_stages, sampler_required);
    }
 out:
    mtl_release(descriptor);

@@ -13,6 +13,8 @@ struct kk_rt_function {
    char *source;
    bool requires_msl41;
    bool uses_atomic64_locks;
+   bool uses_sampler_emulation;
+   bool requires_sampler_emulation;
    mtl_library *library;
    mtl_function_descriptor *descriptor;
 };

@@ -18,7 +18,7 @@
 
 #include "vk_common_entrypoints.h"
 
-static void
+static bool
 kk_flush_compute_state(struct kk_cmd_buffer *cmd)
 {
    KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_STATE, state);
@@ -35,14 +35,17 @@ kk_flush_compute_state(struct kk_cmd_buffer *cmd)
    if (desc->root.addr)
       kk_cmd_bind_root_to_argument_table(cmd, desc->root.addr);
 
-   mtl_compute_pipeline_state *pipeline =
-      cmd->state.shaders[MESA_SHADER_COMPUTE]->pipeline.cs;
+   struct kk_shader *shader = cmd->state.shaders[MESA_SHADER_COMPUTE];
+   mtl_compute_pipeline_state *pipeline = kk_cmd_sampler_compute_pipeline(
+      cmd, shader, shader->pipeline.cs);
+   if (!pipeline) return false;
    if (cmd->state.cs.bound_pipeline != pipeline ||
        (cmd->state.dirty_shaders & BITFIELD_BIT(MESA_SHADER_COMPUTE))) {
       mtl_compute_set_pipeline_state(encoder, pipeline);
       cmd->state.cs.bound_pipeline = pipeline;
    }
    cmd->state.dirty_shaders &= ~BITFIELD_BIT(MESA_SHADER_COMPUTE);
+   return true;
 }
 
 static void
@@ -120,7 +123,7 @@ kk_CmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX,
       kk_count_compute_invocations(cmd, patched.gpu, (struct mtl_size){0}, local_size);
 
       /* Flush compute state after predication dispatch */
-      kk_flush_compute_state(cmd);
+      if (!kk_flush_compute_state(cmd)) return;
       mtl_dispatch_threadgroups_with_indirect_buffer(encoder, patched.gpu,
                                                      local_size);
    } else {
@@ -128,7 +131,7 @@ kk_CmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX,
          (struct mtl_size){groupCountX, groupCountY, groupCountZ}, local_size);
       struct mtl_size groups = {groupCountX, groupCountY, groupCountZ};
 
-      kk_flush_compute_state(cmd);
+      if (!kk_flush_compute_state(cmd)) return;
       mtl_dispatch_threadgroups(encoder, groups, local_size);
    }
 }
@@ -164,13 +167,13 @@ kk_CmdDispatchIndirect2KHR(VkCommandBuffer commandBuffer,
       kk_count_compute_invocations(cmd, patched.gpu, (struct mtl_size){0}, local_size);
 
       /* Flush compute state after predication dispatch */
-      kk_flush_compute_state(cmd);
+      if (!kk_flush_compute_state(cmd)) return;
       mtl_dispatch_threadgroups_with_indirect_buffer(encoder, patched.gpu,
                                                      local_size);
    } else {
       kk_count_compute_invocations(cmd, pInfo->addressRange.address,
                                     (struct mtl_size){0}, local_size);
-      kk_flush_compute_state(cmd);
+      if (!kk_flush_compute_state(cmd)) return;
       mtl_dispatch_threadgroups_with_indirect_buffer(
          encoder, pInfo->addressRange.address, local_size);
    }

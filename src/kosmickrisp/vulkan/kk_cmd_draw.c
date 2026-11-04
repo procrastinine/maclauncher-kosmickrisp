@@ -1126,7 +1126,9 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
       bind_dynamic_ds = true;
    }
 
-   if (gfx->encoder_dirty || (gfx->dirty & KK_DIRTY_FRAGMENT_STATISTICS) ||
+   if ((gfx->shader->info.uses_sampler_emulation &&
+        kk_attachment_sampler_emulation_changed(cmd, gfx->shader)) ||
+       gfx->encoder_dirty || (gfx->dirty & KK_DIRTY_FRAGMENT_STATISTICS) ||
        (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) || IS_DIRTY(RS_POLYGON_MODE) ||
        IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(COLOR_ATTACHMENT_MAP) ||
        IS_DIRTY(MS_RASTERIZATION_SAMPLES) || IS_DIRTY(RS_LINE_MODE)) {
@@ -1140,6 +1142,8 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
          return;
       }
       mtl_render_set_pipeline_state(enc, pipeline);
+      if (vs->info.uses_sampler_emulation)
+         gfx->sampler_emulation = kk_attachment_sampler_emulation_value(device, vs);
       mtl_depth_stencil_state *ds = kk_cmd_selected_depth_stencil(cmd, vs);
       if (ds || bind_dynamic_ds)
          mtl_set_depth_stencil_state(enc, ds);
@@ -2522,7 +2526,9 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
 
    mtl_compute_encoder *enc = cs_get_compute(cmd);
    {
-      mtl_compute_pipeline_state *pipeline = vs->pipeline.gfx.pre_render[0];
+      mtl_compute_pipeline_state *pipeline = kk_cmd_sampler_compute_pipeline(
+         cmd, vs, vs->pipeline.gfx.pre_render[0]);
+      if (!pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
       struct mtl_size local_size = {KK_POLY_WG_SIZE, 1, 1};
       mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
                                        MTL_STAGE_DISPATCH);
@@ -2530,7 +2536,9 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
       kk_dispatch_compute(enc, grid_vs, local_size);
    }
    {
-      mtl_compute_pipeline_state *pipeline = vs->pipeline.gfx.pre_render[1];
+      mtl_compute_pipeline_state *pipeline = kk_cmd_sampler_compute_pipeline(
+         cmd, vs, vs->pipeline.gfx.pre_render[1]);
+      if (!pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
       struct mtl_size local_size = {tcs->info.tess.tcs_output_patch_size, 1, 1};
       /* Avoid Metal validation error by trying to launch empty compute. Return
        * empty data. We set restart to true to avoid unroll. */
@@ -2621,7 +2629,7 @@ kk_pre_gs_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
          return NULL;
       }
    }
-   return pipeline;
+   return kk_cmd_sampler_compute_pipeline(cmd, shader, pipeline);
 }
 
 #include "kk_polygon_command.h"
@@ -2692,8 +2700,10 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
 
    mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
                                     MTL_STAGE_DISPATCH);
-   mtl_compute_set_pipeline_state(
-      enc, vs->pipeline.gfx.pre_render[pre_render_count - 2u]);
+   mtl_compute_pipeline_state *producer_pipeline = kk_cmd_sampler_compute_pipeline(
+      cmd, vs, vs->pipeline.gfx.pre_render[pre_render_count - 2u]);
+   if (!producer_pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
+   mtl_compute_set_pipeline_state(enc, producer_pipeline);
    kk_dispatch_compute(enc, grid_vs, local_size);
    if (gfx->polygon_points || cmd->interlock_heap_active)
       return kk_launch_polygon_points(cmd, grid_gs, geometry_params);
@@ -2709,7 +2719,10 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
       }
       if (vs->info.gs_aux_mask & BITFIELD_BIT(0)) {
          mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
-         mtl_compute_set_pipeline_state(enc, vs->pipeline.gfx.gs_aux[0]);
+         mtl_compute_pipeline_state *count_pipeline = kk_cmd_sampler_compute_pipeline(
+            cmd, vs, vs->pipeline.gfx.gs_aux[0]);
+         if (!count_pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
+         mtl_compute_set_pipeline_state(enc, count_pipeline);
          kk_dispatch_compute(enc, grid_gs, local_size);
       }
       if (gs->info.geometry.prefix_sum)
@@ -2726,8 +2739,10 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
    }
    mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
                                     MTL_STAGE_DISPATCH);
-   mtl_compute_set_pipeline_state(
-      enc, vs->pipeline.gfx.pre_render[pre_render_count - 1u]);
+   mtl_compute_pipeline_state *geometry_pipeline = kk_cmd_sampler_compute_pipeline(
+      cmd, vs, vs->pipeline.gfx.pre_render[pre_render_count - 1u]);
+   if (!geometry_pipeline) return (struct kk_draw_data){.grid = kk_grid_1d(0)};
+   mtl_compute_set_pipeline_state(enc, geometry_pipeline);
    kk_dispatch_compute(enc, grid_gs, local_size);
 
    struct kk_draw_data rast = {

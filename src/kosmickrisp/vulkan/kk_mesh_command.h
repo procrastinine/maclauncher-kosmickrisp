@@ -458,7 +458,10 @@ kk_draw_mesh_unsliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          mtl_set_address(table, cmd->state.gfx.descriptors.root.addr, KK_ARGUMENT_ROOT);
          mtl_set_address(table, args.gpu, KK_ARGUMENT_MESH_PARAMETERS);
          mtl_compute_set_argument_table(enc, table);
-         mtl_compute_set_pipeline_state(enc, pipe->gfx.pre_render[0]);
+         mtl_compute_pipeline_state *task_pipeline = kk_cmd_sampler_compute_pipeline(
+            cmd, shader, pipe->gfx.pre_render[0]);
+         if (!task_pipeline) return;
+         mtl_compute_set_pipeline_state(enc, task_pipeline);
          mtl_dispatch_threadgroups_with_indirect_buffer(enc,
             p.batch + offsetof(struct kk_mesh_batch, task_dispatch), shader->mesh->info.task_local_size);
          mtl_compute_set_argument_table(enc, cmd->argument_table);
@@ -801,7 +804,10 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          mtl_set_address(table, cmd->state.gfx.descriptors.root.addr, KK_ARGUMENT_ROOT);
          mtl_set_address(table, args.gpu, KK_ARGUMENT_MESH_PARAMETERS);
          mtl_compute_set_argument_table(enc, table);
-         mtl_compute_set_pipeline_state(enc, pipe->gfx.pre_render[0]);
+         mtl_compute_pipeline_state *task_pipeline = kk_cmd_sampler_compute_pipeline(
+            cmd, shader, pipe->gfx.pre_render[0]);
+         if (!task_pipeline) goto finish;
+         mtl_compute_set_pipeline_state(enc, task_pipeline);
          mtl_dispatch_threadgroups_with_indirect_buffer(enc,
             p.batch + offsetof(struct kk_mesh_batch, task_dispatch), shader->mesh->info.task_local_size);
          mtl_compute_set_argument_table(enc, cmd->argument_table);

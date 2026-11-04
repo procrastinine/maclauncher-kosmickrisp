@@ -116,6 +116,20 @@ mtl_function_descriptor *mtl_specialize_pipeline_statistics(
 mtl_render_pipeline_descriptor *mtl_statistics_render_descriptor(
    mtl_render_pipeline_descriptor *descriptor);
 
+/* Constant values wrap the complete caller chain; retained descriptors remain
+ * reusable for either sampler variant. The bits identify actual source users. */
+enum mtl_sampler_emulation_stage {
+   MTL_SAMPLER_EMULATION_VERTEX = 1u << 0,
+   MTL_SAMPLER_EMULATION_FRAGMENT = 1u << 1,
+   MTL_SAMPLER_EMULATION_OBJECT = 1u << 2,
+   MTL_SAMPLER_EMULATION_MESH = 1u << 3,
+};
+mtl_function_descriptor *mtl_specialize_sampler_emulation(
+   mtl_function_descriptor *function, bool enabled);
+mtl_render_pipeline_descriptor *mtl_sampler_emulation_render_descriptor(
+   mtl_render_pipeline_descriptor *descriptor, uint32_t stages,
+   uint32_t enabled_stages);
+
 /* Compute pipeline */
 mtl_compute_pipeline_state *
 mtl_new_compute_pipeline_state(mtl_compiler *compiler,

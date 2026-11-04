@@ -303,6 +303,7 @@ struct kk_graphics_state {
    bool is_cull_front_and_back;
    bool need_to_start_render_pass;
    bool encoder_dirty;
+   bool sampler_emulation;
 
    enum kk_dirty dirty;
    uint32_t pipeline_sample_count;

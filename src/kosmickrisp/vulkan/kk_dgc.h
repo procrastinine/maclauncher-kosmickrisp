@@ -46,7 +46,7 @@ struct msl_compile_data;
 mtl_render_pipeline_descriptor *kk_dgc_render_descriptor(mtl_render_pipeline_descriptor *source);
 mtl_compute_pipeline_state *kk_dgc_new_compute_pipeline_state(mtl_compiler *compiler, mtl_function_descriptor *function, uint64_t threads);
 mtl_compute_pipeline_state *kk_dgc_get_compute_pipeline(struct kk_device *dev, struct kk_shader *shader);
-VkResult kk_compile_indirect_compute_pipeline(struct kk_device *device, const struct msl_compile_data *data, uint32_t threads, mtl_compute_pipeline_state **pipe);
+VkResult kk_compile_indirect_compute_pipeline(struct kk_device *device, struct kk_shader *shader, const struct msl_compile_data *data, uint32_t threads, mtl_compute_pipeline_state **pipe);
 VkResult kk_dgc_eager_graphics_pipeline(struct kk_device *device, struct kk_shader *shader);
 bool kk_dgc_init(struct kk_device *dev);
 void kk_dgc_finish(struct kk_device *dev);

@@ -22,6 +22,10 @@ struct kk_mesh_fragment_program {
    /* The native core/epilog owner supplies the actual application-use flag.
     * Monolithic programs use their compiled metadata instead. */
    bool uses_pipeline_statistics;
+   /* attach leaves sampler10 unspecialized; the common builder supplies the
+    * effective value while preserving all other constants. */
+   bool uses_sampler_emulation;
+   bool requires_sampler_emulation;
    const void *core;
    const void *epilog;
    VkResult (*attach)(struct kk_device *device,

@@ -209,16 +209,22 @@ mtl_compute_pipeline_state *kk_dgc_new_compute_pipeline_state(mtl_compiler *comp
 mtl_compute_pipeline_state *kk_dgc_get_compute_pipeline(struct kk_device *dev, struct kk_shader *shader)
 {
    mtl_compute_pipeline_state *cached = p_atomic_read(&shader->dgc_compute);
-   if (cached) return cached;
+   if (cached) {
+      mtl_compute_pipeline_state *selected = NULL;
+      return kk_sampler_compute_pipeline(dev, shader, cached, &selected) == VK_SUCCESS
+         ? selected : NULL;
+   }
    if (!kk_dgc_init(dev)) return NULL;
    simple_mtx_lock(&dev->dgc->pipeline_mutex);
    if (!shader->dgc_compute) {
       uint32_t threads = shader->info.cs.local_size.x * shader->info.cs.local_size.y * shader->info.cs.local_size.z;
       mtl_compute_pipeline_state *pipeline = NULL;
-      kk_compile_indirect_compute_pipeline(dev, &shader->msl_data[MESA_SHADER_COMPUTE], threads, &pipeline);
+      kk_compile_indirect_compute_pipeline(dev, shader, &shader->msl_data[MESA_SHADER_COMPUTE], threads, &pipeline);
       p_atomic_set(&shader->dgc_compute, pipeline);
    }
    mtl_compute_pipeline_state *pipeline = shader->dgc_compute;
    simple_mtx_unlock(&dev->dgc->pipeline_mutex);
-   return pipeline;
+   mtl_compute_pipeline_state *selected = NULL;
+   return kk_sampler_compute_pipeline(dev, shader, pipeline, &selected) == VK_SUCCESS
+      ? selected : NULL;
 }

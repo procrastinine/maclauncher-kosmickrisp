@@ -76,6 +76,19 @@ mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
    return NULL;
 }
 
+mtl_function_descriptor *
+mtl_specialize_sampler_emulation(mtl_function_descriptor *function, bool enabled)
+{
+   return NULL;
+}
+
+mtl_render_pipeline_descriptor *
+mtl_sampler_emulation_render_descriptor(mtl_render_pipeline_descriptor *descriptor,
+                                        uint32_t stages, uint32_t enabled_stages)
+{
+   return NULL;
+}
+
 /* Compute pipeline */
 
 mtl_compute_pipeline_state *

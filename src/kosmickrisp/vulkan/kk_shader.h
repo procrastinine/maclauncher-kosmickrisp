@@ -131,6 +131,7 @@ struct kk_shader_info {
    bool depth_bounds_emulation;
    mesa_shader_stage stage;
    bool uses_per_draw_data;
+   bool uses_sampler_emulation;
    uint8_t sparse_modes; /* Native code compiled for these residency classes. */
    uint8_t framebuffer_read_mask;
    uint32_t push_size;
@@ -265,6 +266,8 @@ struct msl_compile_data {
    bool uses_matrix_coordinates;
    bool uses_atomic64_locks;
    bool uses_pipeline_statistics;
+   bool uses_sampler_emulation;
+   bool requires_sampler_emulation;
 };
 
 static inline enum mtl_language_version
@@ -366,6 +369,24 @@ VkResult kk_mesh_get_sliced_pipeline(struct kk_device *dev, struct kk_shader *sh
    bool virtual, struct kk_pipeline_handles **out);
 void kk_mesh_release_pipeline(struct kk_device *dev, struct kk_shader *shader,
    struct kk_pipeline_handles *pipe, unsigned kind);
+
+VkResult kk_sampler_compute_pipeline(struct kk_device *device,
+   struct kk_shader *shader, mtl_compute_pipeline_state *base,
+   mtl_compute_pipeline_state **out);
+mtl_compute_pipeline_state *kk_cmd_sampler_compute_pipeline_used(
+   struct kk_cmd_buffer *cmd, struct kk_shader *shader,
+   mtl_compute_pipeline_state *base);
+static inline mtl_compute_pipeline_state *
+kk_cmd_sampler_compute_pipeline(struct kk_cmd_buffer *cmd,
+   struct kk_shader *shader, mtl_compute_pipeline_state *base)
+{
+   return shader->info.uses_sampler_emulation ?
+      kk_cmd_sampler_compute_pipeline_used(cmd, shader, base) : base;
+}
+bool kk_attachment_sampler_emulation_changed(struct kk_cmd_buffer *cmd,
+   struct kk_shader *shader);
+bool kk_attachment_sampler_emulation_value(struct kk_device *device,
+   const struct kk_shader *shader);
 
 extern const struct vk_device_shader_ops kk_device_shader_ops;
 void kk_sparse_shader_finish(struct kk_shader *shader);

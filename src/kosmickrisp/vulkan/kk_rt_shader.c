@@ -73,7 +73,8 @@ kk_rt_shader_serialize(struct vk_device *device, const struct vk_shader *base,
          return false;
       blob_write_uint32(blob, n);
       blob_write_uint32(blob, s);
-      blob_write_uint32(blob, f->requires_msl41 | (f->uses_atomic64_locks << 1));
+      blob_write_uint32(blob, f->requires_msl41 | (f->uses_atomic64_locks << 1) |
+         (f->uses_sampler_emulation << 2) | (f->requires_sampler_emulation << 3));
       blob_write_bytes(blob, f->name, n);
       blob_write_bytes(blob, f->source, s);
    }
@@ -126,7 +127,9 @@ kk_rt_function_compile(struct kk_device *device, struct kk_rt_function *f)
    if(f->requires_msl41 && pdev->info.msl_version < MTL_LANGUAGE_VERSION_4_1)
       return false;
    const struct msl_compile_data language={.requires_msl41=f->requires_msl41,
-      .uses_atomic64_locks=f->uses_atomic64_locks};
+      .uses_atomic64_locks=f->uses_atomic64_locks,
+      .uses_sampler_emulation=f->uses_sampler_emulation,
+      .requires_sampler_emulation=f->requires_sampler_emulation};
    f->library = mtl_new_library(device->mtl_compiler_handle, f->source,
       kk_msl_language_version(&language,pdev->info.msl_version),
       MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
@@ -198,6 +201,8 @@ kk_rt_compile_one(struct vk_device *device, nir_shader *nir,
       f->source = msl.code;
       f->requires_msl41=msl.requires_msl41;
       f->uses_atomic64_locks=msl.uses_atomic64_locks;
+      f->uses_sampler_emulation=msl.uses_sampler_emulation;
+      f->requires_sampler_emulation=msl.requires_sampler_emulation;
       if (!f->name || !f->source)
          goto finish_parts;
       if (!kk_rt_function_compile(dev, f)) {
@@ -327,9 +332,11 @@ kk_rt_shader_deserialize(struct vk_device *device, struct blob_reader *blob,
    for (uint32_t i = 0; i < count; ++i) {
       uint32_t n = blob_read_uint32(blob), s = blob_read_uint32(blob);
       uint32_t flags = blob_read_uint32(blob);
-      if (flags & ~3u) goto fail;
+      if ((flags & ~15u) || ((flags & 8u) && !(flags & 4u))) goto fail;
       shader->functions[i].requires_msl41 = flags & 1u;
       shader->functions[i].uses_atomic64_locks = flags & 2u;
+      shader->functions[i].uses_sampler_emulation = flags & 4u;
+      shader->functions[i].requires_sampler_emulation = flags & 8u;
       if (!n || !s || blob->overrun || (uint64_t)n + s > (uint64_t)(blob->end - blob->current))
          goto fail;
       const char *name = blob_read_bytes(blob, n), *source = blob_read_bytes(blob, s);

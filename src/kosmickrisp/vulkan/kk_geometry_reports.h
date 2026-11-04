@@ -20,14 +20,14 @@ kk_compile_geometry_report_once(const void *data)
        build->shader->gs_aux[i].code) {
       VkResult result = kk_attachment_pipelines_create(build->dev, build->shader);
       if (result == VK_SUCCESS)
-         result = kk_compile_compute_pipeline_mode(build->dev,
+         result = kk_compile_compute_pipeline_mode(build->dev, build->shader,
             &build->shader->gs_aux[i], 1, &pipe->gfx.gs_aux[i], false,
             &kk_statistics_pre_gs(build->shader)->function);
       pipe->gfx.gs_aux_result[i] = result;
       return;
    }
    pipe->gfx.gs_aux_result[i] = build->shader->gs_aux[i].code ?
-      kk_compile_compute_pipeline(build->dev, &build->shader->gs_aux[i],
+      kk_compile_compute_pipeline(build->dev, build->shader, &build->shader->gs_aux[i],
          i ? 1 : KK_POLY_WG_SIZE, &pipe->gfx.gs_aux[i]) :
       VK_ERROR_INVALID_SHADER_NV;
 }

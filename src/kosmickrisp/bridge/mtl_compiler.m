@@ -351,6 +351,61 @@ mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
    }
 }
 
+mtl_function_descriptor *
+mtl_specialize_sampler_emulation(mtl_function_descriptor *function, bool enabled)
+{
+   @autoreleasepool {
+      if (!function) return NULL;
+      MTLFunctionConstantValues *values =
+         [[MTLFunctionConstantValues new] autorelease];
+      if (!values) return NULL;
+      [values setConstantValue:&enabled type:MTLDataTypeBool
+                       atIndex:KK_FUNCTION_CONSTANT_SAMPLER_EMULATION];
+      MTL4SpecializedFunctionDescriptor *desc =
+         [MTL4SpecializedFunctionDescriptor new];
+      desc.functionDescriptor = (MTL4FunctionDescriptor *)function;
+      desc.constantValues = values;
+      return (void *)desc;
+   }
+}
+
+mtl_render_pipeline_descriptor *
+mtl_sampler_emulation_render_descriptor(mtl_render_pipeline_descriptor *descriptor,
+                                        uint32_t stages, uint32_t enabled_stages)
+{
+   @autoreleasepool {
+      MTL4PipelineDescriptor *copy = [(id)descriptor copy];
+      if (!copy) return NULL;
+#define KK_SAMPLER_STAGE(type, field, bit) do { \
+   if (stages & (bit)) { \
+      mtl_function_descriptor *function = mtl_specialize_sampler_emulation( \
+         (void *)((type *)copy).field, (enabled_stages & (bit)) != 0); \
+      if (!function) { [copy release]; return NULL; } \
+      ((type *)copy).field = (id)function; \
+      [(id)function release]; \
+   } \
+} while (0)
+      if ([copy isKindOfClass:[MTL4RenderPipelineDescriptor class]]) {
+         KK_SAMPLER_STAGE(MTL4RenderPipelineDescriptor, vertexFunctionDescriptor,
+                          MTL_SAMPLER_EMULATION_VERTEX);
+         KK_SAMPLER_STAGE(MTL4RenderPipelineDescriptor, fragmentFunctionDescriptor,
+                          MTL_SAMPLER_EMULATION_FRAGMENT);
+      } else if ([copy isKindOfClass:[MTL4MeshRenderPipelineDescriptor class]]) {
+         KK_SAMPLER_STAGE(MTL4MeshRenderPipelineDescriptor, objectFunctionDescriptor,
+                          MTL_SAMPLER_EMULATION_OBJECT);
+         KK_SAMPLER_STAGE(MTL4MeshRenderPipelineDescriptor, meshFunctionDescriptor,
+                          MTL_SAMPLER_EMULATION_MESH);
+         KK_SAMPLER_STAGE(MTL4MeshRenderPipelineDescriptor, fragmentFunctionDescriptor,
+                          MTL_SAMPLER_EMULATION_FRAGMENT);
+      } else {
+         [copy release];
+         return NULL;
+      }
+#undef KK_SAMPLER_STAGE
+      return (void *)copy;
+   }
+}
+
 /* Compute pipeline */
 mtl_compute_pipeline_state *
 mtl_new_compute_pipeline_state(mtl_compiler *compiler,
