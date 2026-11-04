@@ -333,9 +333,14 @@ fsr_setup(nir_builder *b, struct fsr_ctx *ctx)
    if (opts->primitive_rate) {
       nir_io_semantics io = {.location = VARYING_SLOT_PRIMITIVE_SHADING_RATE,
                              .num_slots = 1};
-      primitive = nir_iand_imm(b, nir_load_input(b, 1, 32, nir_imm_int(b, 0),
-         .base = 0, .component = 0, .dest_type = nir_type_int32,
-         .io_semantics = io), 0xf);
+      nir_def *input = opts->primitive_rate_per_primitive
+         ? nir_load_per_primitive_input(b, 1, 32, nir_imm_int(b, 0),
+              .base = 0, .component = 0, .dest_type = nir_type_int32,
+              .io_semantics = io)
+         : nir_load_input(b, 1, 32, nir_imm_int(b, 0),
+              .base = 0, .component = 0, .dest_type = nir_type_int32,
+              .io_semantics = io);
+      primitive = nir_iand_imm(b, input, 0xf);
       b->shader->info.inputs_read |= VARYING_BIT_PRIMITIVE_SHADING_RATE;
       if (opts->primitive_rate_per_primitive)
          b->shader->info.per_primitive_inputs |= VARYING_BIT_PRIMITIVE_SHADING_RATE;
