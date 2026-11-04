@@ -65,6 +65,10 @@
    .bit_widths = width, .filter = 1u, .write = 0u, .color = 0u, .blend = 0u,   \
    .msaa = 1u, .resolve = 1u, .sparse = 0u, .atomic = 0u
 
+#define MTL_FMT_SAMPLE(width) \
+   .bit_widths = width, .filter = 0u, .write = 0u, .color = 0u, .blend = 0u, \
+   .msaa = 0u, .resolve = 0u, .sparse = 0u, .atomic = 0u
+
 // Filter, Sparse
 #define MTL_FMT_FS(width)                                                      \
    .bit_widths = width, .filter = 1u, .write = 0u, .color = 0u, .blend = 0u,   \
@@ -169,10 +173,7 @@
 static const struct kk_va_format kk_vf_formats[] = {
    // 8-bit formats
    MTL_FMT_NATIVE(R8_UNORM, MTL_FMT_ALL_NO_ATOMIC(8), MTL_FMT_TB_ALL),
-   /* Hardware has issues with border color opaque black, and since it's not
-    * required by Vulkan, we can just disable it.
-    */
-   /* MTL_FMT_NATIVE(A8_UNORM, MTL_FMT_ALL_NO_ATOMIC(8), MTL_FMT_TB_ALL), */
+   MTL_FMT_NATIVE(A8_UNORM, MTL_FMT_FS(8), MTL_FMT_TB_NONE),
    MTL_FMT_NATIVE(R8_SRGB, MTL_FMT_ALL_NO_ATOMIC(8), MTL_FMT_TB_NONE),
    MTL_FMT_NATIVE(R8_SNORM, MTL_FMT_ALL_NO_ATOMIC(8), MTL_FMT_TB_WR),
    MTL_FMT_NATIVE(R8_UINT, MTL_FMT_WCMS(8), MTL_FMT_TB_ALL),
@@ -207,6 +208,10 @@ static const struct kk_va_format kk_vf_formats[] = {
    MTL_FMT_NATIVE(B8G8R8A8_UNORM, MTL_FMT_ALL_NO_ATOMIC(32), MTL_FMT_TB_R),
    MTL_FMT_NATIVE(B8G8R8A8_SRGB, MTL_FMT_ALL_NO_ATOMIC(32), MTL_FMT_TB_NONE),
 
+   MTL_FMT(B8G8R8A8_SNORM, R8G8B8A8_SNORM, MTL_SWIZZLE_BGRA, MTL_FMT_FS(32), MTL_FMT_TB_NONE, false),
+   MTL_FMT(B8G8R8A8_UINT, R8G8B8A8_UINT, MTL_SWIZZLE_BGRA, MTL_FMT_SAMPLE(32), MTL_FMT_TB_NONE, false),
+   MTL_FMT(B8G8R8A8_SINT, R8G8B8A8_SINT, MTL_SWIZZLE_BGRA, MTL_FMT_SAMPLE(32), MTL_FMT_TB_NONE, false),
+
    // 64-bit formats
    MTL_FMT_NATIVE(R32G32_UINT, MTL_FMT_WCMS(64), MTL_FMT_TB_WR),
    MTL_FMT_NATIVE(R32G32_SINT, MTL_FMT_WCMS(64), MTL_FMT_TB_WR),
@@ -226,10 +231,10 @@ static const struct kk_va_format kk_vf_formats[] = {
 
    // 16-bit packed formats
    MTL_FMT_NATIVE(B5G6R5_UNORM, MTL_FMT_FCBMRS(16), MTL_FMT_TB_NONE),
-   /* Hardware has issues with border color opaque black, and since it's not
-    * required by Vulkan, we can just disable it.
-    */
-   /* MTL_FMT_NATIVE(A1B5G5R5_UNORM, MTL_FMT_FCBMRS(16), MTL_FMT_TB_NONE), */
+   MTL_FMT_NATIVE(A1B5G5R5_UNORM, MTL_FMT_FCBMRS(16), MTL_FMT_TB_NONE),
+   MTL_FMT(R5G6B5_UNORM, B5G6R5_UNORM, MTL_SWIZZLE_BGRA, MTL_FMT_FS(16), MTL_FMT_TB_NONE, false),
+   MTL_FMT(A1R5G5B5_UNORM, A1B5G5R5_UNORM, MTL_SWIZZLE_BGRA, MTL_FMT_FS(16), MTL_FMT_TB_NONE, false),
+   MTL_FMT(R5G5B5A1_UNORM, B5G5R5A1_UNORM, MTL_SWIZZLE_BGRA, MTL_FMT_FS(16), MTL_FMT_TB_NONE, false),
    MTL_FMT_NATIVE(B5G5R5A1_UNORM, MTL_FMT_FCBMRS(16), MTL_FMT_TB_NONE),
    MTL_FMT_NATIVE(A4B4G4R4_UNORM, MTL_FMT_FCBMRS(16), MTL_FMT_TB_NONE),
    MTL_FMT(R4G4B4A4_UNORM, A4B4G4R4_UNORM, MTL_SWIZZLE_ABGR, MTL_FMT_FCBMRS(16),

@@ -167,7 +167,10 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
    if (!sampler)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   bool custom_border = dev->vk.enabled_features.customBorderColors &&
+   /* Opaque black is a core mode. A8 and packed formats need this
+    * correction even without the optional custom-border feature enabled. */
+   bool custom_border = (dev->vk.enabled_features.customBorderColors ||
+                         pCreateInfo->borderColor == VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK) &&
                         uses_border(pCreateInfo) &&
                         is_border_color_custom(pCreateInfo->borderColor) &&
                         /* RGBA4 needs the colour workaround. Shadow
