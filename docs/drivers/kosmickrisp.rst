@@ -653,7 +653,15 @@ Native pipeline archives
 Native pipeline archives share Mesa's disk-cache namespace and storage
 budget. Checkpoint journals retain all referenced archive pieces. Up to eight
 opened archive objects are retained in an in-memory least-recently-used set;
-active requests retain their own archive and backing file.
+active requests retain their own archive.
+
+An archive piece is opened from a ``kk-metal-<pid>-<random>`` file in the user
+temporary directory, and the file is unlinked as soon as the archive is open,
+so its storage ends with the process. Checkpoint snapshots use the same names
+and are removed once read. The first archive load in a process removes
+``kk-metal-`` names whose owner process has exited, including names that
+continue after the owner field, and names without an owner field once they are
+a day old.
 
 Lookup hints combine shader-library source hashes and compiler options with
 selected resolved compute, render, mesh or tile pipeline state. Each
