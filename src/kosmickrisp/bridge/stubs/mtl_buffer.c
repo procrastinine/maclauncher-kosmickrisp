@@ -18,8 +18,16 @@ mtl_buffer_get_gpu_address(mtl_buffer *buffer)
    return 0u;
 }
 
+bool
+mtl_buffer_ranges_alias(mtl_buffer *a, uint64_t a_offset,
+                        mtl_buffer *b, uint64_t b_offset, uint64_t size)
+{
+   return false;
+}
+
 void *
 mtl_get_contents(mtl_buffer *buffer)
+
 {
    return NULL;
 }

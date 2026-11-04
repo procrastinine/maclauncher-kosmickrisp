@@ -10,12 +10,17 @@
 #include "mtl_types.h"
 
 #include <inttypes.h>
+#include <stdbool.h>
 
 struct kk_image_layout;
 
 /* Utils */
 uint64_t mtl_buffer_get_length(mtl_buffer *buffer);
 uint64_t mtl_buffer_get_gpu_address(mtl_buffer *buffer);
+/* Prove equal storage intervals from live native resources, never GPU VAs.
+ * Offsets are buffer-relative; callers keep both resources valid. */
+bool mtl_buffer_ranges_alias(mtl_buffer *a, uint64_t a_offset,
+                             mtl_buffer *b, uint64_t b_offset, uint64_t size);
 /* Gets CPU address */
 void *mtl_get_contents(mtl_buffer *buffer);
 

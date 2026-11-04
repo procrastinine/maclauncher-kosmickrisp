@@ -69,8 +69,42 @@ mtl_buffer_get_gpu_address(mtl_buffer *buffer)
    }
 }
 
+/* Used only when a caller needs proof that two live resource ranges alias.
+ * Automatic heaps report a zero heapOffset, so only placement offsets can
+ * establish identity across distinct buffers. No ownership is acquired. */
+bool
+mtl_buffer_ranges_alias(mtl_buffer *a, uint64_t a_offset,
+                        mtl_buffer *b, uint64_t b_offset, uint64_t size)
+{
+   if (!a || !b)
+      return false;
+   id<MTLBuffer> first = (id<MTLBuffer>)a;
+   id<MTLBuffer> second = (id<MTLBuffer>)b;
+   const uint64_t first_length = first.length;
+   const uint64_t second_length = second.length;
+   if (a_offset > first_length || size > first_length - a_offset ||
+       b_offset > second_length || size > second_length - b_offset)
+      return false;
+   if (a == b)
+      return a_offset == b_offset;
+
+   id<MTLHeap> heap = first.heap;
+   if (!heap || heap != second.heap || heap.type != MTLHeapTypePlacement)
+      return false;
+   const uint64_t heap_size = heap.size;
+   const uint64_t first_base = first.heapOffset;
+   const uint64_t second_base = second.heapOffset;
+   if (first_base > heap_size || a_offset > heap_size - first_base ||
+       second_base > heap_size || b_offset > heap_size - second_base)
+      return false;
+   const uint64_t first_start = first_base + a_offset;
+   const uint64_t second_start = second_base + b_offset;
+   return first_start == second_start && size <= heap_size - first_start;
+}
+
 void *
 mtl_get_contents(mtl_buffer *buffer)
+
 {
    @autoreleasepool {
       id<MTLBuffer> buf = (id<MTLBuffer>)buffer;
