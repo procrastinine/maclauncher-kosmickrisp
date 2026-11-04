@@ -18,6 +18,13 @@ mtl_new_render_pass_descriptor(void)
    return NULL;
 }
 
+void
+mtl_render_pass_descriptor_get_info(mtl_render_pass_descriptor *descriptor,
+                                     struct mtl_render_pass_info *info)
+{
+   *info = (struct mtl_render_pass_info) {0};
+}
+
 mtl_render_pass_attachment_descriptor *
 mtl_render_pass_descriptor_get_color_attachment(
    mtl_render_pass_descriptor *descriptor, uint32_t index)

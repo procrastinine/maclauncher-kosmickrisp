@@ -20,6 +20,27 @@ enum VkCompareOp;
 enum VkStencilOp;
 
 /* Render pass descriptor */
+#define MTL_RENDER_PASS_INFO_ATTACHMENTS 10
+
+/* Native render-pass snapshot: color slots 0..7, depth 8, stencil 9. */
+struct mtl_render_pass_attachment_info {
+   bool present;
+   uint32_t format;
+   uint32_t samples;
+   enum mtl_load_action load;
+   enum mtl_store_action store;
+};
+
+struct mtl_render_pass_info {
+   uint32_t default_samples;
+   struct mtl_render_pass_attachment_info
+      attachments[MTL_RENDER_PASS_INFO_ATTACHMENTS];
+};
+
+/* Read-only snapshot; callers opt in before requesting native properties. */
+void mtl_render_pass_descriptor_get_info(mtl_render_pass_descriptor *descriptor,
+                                          struct mtl_render_pass_info *info);
+
 mtl_render_pass_descriptor *mtl_new_render_pass_descriptor(void);
 
 mtl_render_pass_attachment_descriptor *

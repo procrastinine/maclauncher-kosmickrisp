@@ -6,6 +6,7 @@
 #include "kk_interlock_heap.h"
 #include "kk_cmd_buffer.h"
 #include "kk_device.h"
+#include "kk_perf.h"
 #include "kk_debug.h"
 #include <stdio.h>
 #include "kk_format.h"
@@ -163,6 +164,8 @@ kk_interlock_render_batch(struct kk_interlock_draw *p, unsigned program,
    mtl_render_pass_descriptor *pass = kk_interlock_pass(p, program);
    mtl_render_encoder *enc =
       mtl_new_render_command_encoder_with_descriptor(p->command, pass);
+   if (unlikely(p->device->perf != NULL))
+      kk_perf_render_begin(p->device->perf, enc, pass);
    mtl_release(pass);
    mtl_barrier_after_queue_stages(enc, MTL_STAGE_ALL,
       MTL_STAGE_VERTEX | MTL_STAGE_FRAGMENT);
@@ -215,6 +218,8 @@ kk_interlock_render_batch(struct kk_interlock_draw *p, unsigned program,
       program == KK_INTERLOCK_CAPTURE ? p->primitive * arity : 0,
       program == KK_INTERLOCK_REPLAY ? 3 : count * arity, 1, 0);
    mtl_end_encoding(enc);
+   if (unlikely(p->device->perf != NULL))
+      kk_perf_render_end(p->device->perf, enc);
    mtl_release(enc);
 }
 

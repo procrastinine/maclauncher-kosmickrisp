@@ -53,6 +53,12 @@ void kk_perf_gpu_frame(struct kk_perf *, uint64_t frame, double start,
                        double end, uint32_t command_buffers);
 void kk_perf_gpu(struct kk_perf *, double start, double end, uint32_t count);
 void kk_perf_cache_lookup(struct vk_device *, bool hit);
+/* Physical native pass counters are CPU recording observations, not GPU
+ * presentation counts. No bridge snapshot is made when tracking is disabled. */
+void kk_perf_render_begin(struct kk_perf *, const void *encoder, void *descriptor);
+void kk_perf_render_stores(struct kk_perf *, const void *encoder,
+                            const uint32_t stores[10]);
+void kk_perf_render_end(struct kk_perf *, const void *encoder);
 void kk_perf_init_dispatch(struct kk_device *);
 void kk_perf_init_wait_dispatch(struct kk_device *);
 void kk_perf_init_wsi_dispatch(struct kk_device *);

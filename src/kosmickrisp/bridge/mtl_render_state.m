@@ -17,6 +17,7 @@
 
 #include <Metal/MTL4RenderPass.h>
 #include <Metal/MTLDepthStencil.h>
+#include <Metal/MTLTexture.h>
 
 /* Render pass descriptor */
 mtl_render_pass_descriptor *
@@ -24,6 +25,38 @@ mtl_new_render_pass_descriptor(void)
 {
    KK_MTL_REPLAY_POOL({
       return [MTL4RenderPassDescriptor new];
+   });
+}
+
+static struct mtl_render_pass_attachment_info
+mtl_render_pass_attachment_get_info(MTLRenderPassAttachmentDescriptor *attachment)
+{
+   id<MTLTexture> texture = attachment.texture;
+   return (struct mtl_render_pass_attachment_info) {
+      .present = texture != nil,
+      .format = texture ? (uint32_t)texture.pixelFormat : 0,
+      .samples = texture ? (uint32_t)texture.sampleCount : 0,
+      .load = (enum mtl_load_action)attachment.loadAction,
+      .store = (enum mtl_store_action)attachment.storeAction,
+   };
+}
+
+void
+mtl_render_pass_descriptor_get_info(mtl_render_pass_descriptor *descriptor,
+                                     struct mtl_render_pass_info *info)
+{
+   KK_MTL_REPLAY_POOL({
+      MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+      *info = (struct mtl_render_pass_info) {
+         .default_samples = (uint32_t)desc.defaultRasterSampleCount,
+      };
+      for (uint32_t i = 0; i < 8; i++)
+         info->attachments[i] =
+            mtl_render_pass_attachment_get_info(desc.colorAttachments[i]);
+      info->attachments[8] =
+         mtl_render_pass_attachment_get_info(desc.depthAttachment);
+      info->attachments[9] =
+         mtl_render_pass_attachment_get_info(desc.stencilAttachment);
    });
 }
 

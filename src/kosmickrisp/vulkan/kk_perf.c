@@ -3,6 +3,7 @@
 #include "kosmickrisp/bridge/mtl_compiler.h"
 #include "kk_device.h"
 #include "kk_cmd_buffer.h"
+#include "kosmickrisp/bridge/mtl_render_state.h"
 #include "util/os_time.h"
 #include "util/mesa-blake3.h"
 #include <errno.h>
@@ -18,6 +19,18 @@ struct kk_perf_stat { uint64_t count, total, max; };
 struct kk_perf_gpu_stat {
    uint64_t frame, count, commands, total, max;
 };
+#define KK_PERF_MAX_RENDER_PASSES 256
+#define KK_PERF_MAX_ATTACHMENT_STATS 512
+
+struct kk_perf_render_pass {
+   const void *encoder;
+   struct mtl_render_pass_info info;
+};
+struct kk_perf_attachment_stat {
+   uint32_t aspect, format, samples, load, store;
+   uint64_t count;
+};
+
 struct kk_perf {
    pthread_mutex_t mutex;
    FILE *log;
@@ -32,6 +45,11 @@ struct kk_perf {
    struct kk_perf_stat stat[KK_PERF_METRIC_COUNT];
    struct kk_perf_gpu_stat gpu[256];
    unsigned gpu_count;
+   struct kk_perf_render_pass render_active[KK_PERF_MAX_RENDER_PASSES];
+   struct kk_perf_attachment_stat render_attachments[KK_PERF_MAX_ATTACHMENT_STATS];
+   unsigned render_attachment_count;
+   uint64_t render_count, render_samples[8];
+   uint64_t render_dropped_passes, render_dropped_attachments;
 };
 
 static const char *const names[KK_PERF_METRIC_COUNT] = {
@@ -48,6 +66,7 @@ static const char *const names[KK_PERF_METRIC_COUNT] = {
 uint64_t kk_perf_now(void) { return os_time_get_nano(); }
 
 static void flush_locked(struct kk_perf *, uint64_t, bool);
+static void render_flush_locked(struct kk_perf *);
 
 static uint64_t
 positive_option(const char *name, uint64_t fallback)
@@ -131,7 +150,9 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
               ",\"command_buffers\":%"PRIu64",\"sum_ms\":%.6f,\"max_ms\":%.6f}",
               i ? "," : "", g->frame, g->count, g->commands, g->total/1e6, g->max/1e6);
    }
-   fprintf(p->log, "]}\n");
+   fprintf(p->log, "]");
+   render_flush_locked(p);
+   fprintf(p->log, "}\n");
    fflush(p->log);
    memset(p->stat, 0, sizeof(p->stat));
    p->gpu_count = 0;
@@ -193,6 +214,145 @@ kk_perf_pipeline_end(struct kk_perf_pipeline_scope *scope, VkResult result)
       ",\"phase\":\"end\",\"kind\":\"%s\",\"thread\":%"PRIu64",\"count\":%u,\"result\":%d,\"wall_ms\":%.6f}\n",
       (void *)p, scope->id, scope->kind, scope->thread, scope->count, result, (end - scope->start) / 1e6);
    fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+}
+
+static unsigned
+render_sample_bucket(uint32_t samples)
+{
+   switch (samples) {
+   case 1: return 0;
+   case 2: return 1;
+   case 4: return 2;
+   case 8: return 3;
+   case 16: return 4;
+   case 32: return 5;
+   case 64: return 6;
+   default: return 7;
+   }
+}
+
+static void
+render_flush_locked(struct kk_perf *p)
+{
+   unsigned active = 0;
+   for (unsigned i = 0; i < ARRAY_SIZE(p->render_active); ++i)
+      active += p->render_active[i].encoder != NULL;
+   fprintf(p->log, ",\"render_passes\":{\"scope\":\"native_encoder_close_CPU_recording\","
+           "\"count\":%"PRIu64",\"active\":%u,\"dropped_passes\":%"PRIu64
+           ",\"dropped_attachments\":%"PRIu64",\"pass_max_sample_counts\":{",
+           p->render_count, active, p->render_dropped_passes,
+           p->render_dropped_attachments);
+   static const char *const samples[] = {"1", "2", "4", "8", "16", "32", "64", "other"};
+   for (unsigned i = 0; i < ARRAY_SIZE(samples); ++i)
+      fprintf(p->log, "%s\"%s\":%"PRIu64, i ? "," : "", samples[i], p->render_samples[i]);
+   fprintf(p->log, "},\"attachments\":[");
+   static const char *const aspects[] = {"color", "depth", "stencil"};
+   for (unsigned i = 0; i < p->render_attachment_count; ++i) {
+      const struct kk_perf_attachment_stat *a = &p->render_attachments[i];
+      fprintf(p->log, "%s{\"aspect\":\"%s\",\"metal_format\":%u,\"samples\":%u,"
+              "\"load_action\":%u,\"store_action\":%u,\"count\":%"PRIu64"}",
+              i ? "," : "", aspects[a->aspect], a->format, a->samples,
+              a->load, a->store, a->count);
+   }
+   fprintf(p->log, "]}");
+   p->render_count = p->render_dropped_passes = p->render_dropped_attachments = 0;
+   p->render_attachment_count = 0;
+   memset(p->render_samples, 0, sizeof(p->render_samples));
+}
+
+void
+kk_perf_render_begin(struct kk_perf *p, const void *encoder, void *descriptor)
+{
+   if (!encoder) {
+      pthread_mutex_lock(&p->mutex);
+      p->render_dropped_passes++;
+      pthread_mutex_unlock(&p->mutex);
+      return;
+   }
+   struct mtl_render_pass_info info;
+   mtl_render_pass_descriptor_get_info(descriptor, &info);
+   pthread_mutex_lock(&p->mutex);
+   unsigned free_slot = ARRAY_SIZE(p->render_active);
+   for (unsigned i = 0; i < ARRAY_SIZE(p->render_active); ++i) {
+      if (p->render_active[i].encoder == encoder) {
+         p->render_dropped_passes++;
+         free_slot = i;
+         break;
+      }
+      if (!p->render_active[i].encoder && free_slot == ARRAY_SIZE(p->render_active))
+         free_slot = i;
+   }
+   if (free_slot == ARRAY_SIZE(p->render_active))
+      p->render_dropped_passes++;
+   else
+      p->render_active[free_slot] = (struct kk_perf_render_pass){encoder, info};
+   pthread_mutex_unlock(&p->mutex);
+}
+
+void
+kk_perf_render_stores(struct kk_perf *p, const void *encoder,
+                       const uint32_t stores[10])
+{
+   if (!encoder)
+      return;
+   pthread_mutex_lock(&p->mutex);
+   for (unsigned i = 0; i < ARRAY_SIZE(p->render_active); ++i) {
+      struct kk_perf_render_pass *pass = &p->render_active[i];
+      if (pass->encoder != encoder)
+         continue;
+      for (unsigned a = 0; a < MTL_RENDER_PASS_INFO_ATTACHMENTS; ++a)
+         if (stores[a] != UINT32_MAX)
+            pass->info.attachments[a].store = (enum mtl_store_action)stores[a];
+      break;
+   }
+   pthread_mutex_unlock(&p->mutex);
+}
+
+void
+kk_perf_render_end(struct kk_perf *p, const void *encoder)
+{
+   if (!encoder)
+      return;
+   pthread_mutex_lock(&p->mutex);
+   for (unsigned i = 0; i < ARRAY_SIZE(p->render_active); ++i) {
+      struct kk_perf_render_pass *pass = &p->render_active[i];
+      if (pass->encoder != encoder)
+         continue;
+      uint32_t samples = 0;
+      p->render_count++;
+      for (unsigned a = 0; a < MTL_RENDER_PASS_INFO_ATTACHMENTS; ++a) {
+         const struct mtl_render_pass_attachment_info *info = &pass->info.attachments[a];
+         if (!info->present)
+            continue;
+         samples = MAX2(samples, info->samples);
+         const uint32_t aspect = a < 8 ? 0 : a == 8 ? 1 : 2;
+         unsigned k;
+         for (k = 0; k < p->render_attachment_count; ++k) {
+            struct kk_perf_attachment_stat *s = &p->render_attachments[k];
+            if (s->aspect == aspect && s->format == info->format &&
+                s->samples == info->samples && s->load == (uint32_t)info->load &&
+                s->store == (uint32_t)info->store) {
+               s->count++;
+               break;
+            }
+         }
+         if (k == p->render_attachment_count) {
+            if (k == ARRAY_SIZE(p->render_attachments))
+               p->render_dropped_attachments++;
+            else {
+               p->render_attachments[k] = (struct kk_perf_attachment_stat){
+                  aspect, info->format, info->samples, info->load, info->store, 1};
+               p->render_attachment_count++;
+            }
+         }
+      }
+      if (!samples)
+         samples = pass->info.default_samples;
+      p->render_samples[render_sample_bucket(samples)]++;
+      pass->encoder = NULL;
+      break;
+   }
    pthread_mutex_unlock(&p->mutex);
 }
 

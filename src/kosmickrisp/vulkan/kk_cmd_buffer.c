@@ -501,6 +501,9 @@ cs_start_render(struct kk_cmd_buffer *cmd)
 
    cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
       cmd->metal.cmd_buf, state->render_pass_descriptor);
+   if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL))
+      kk_perf_render_begin(kk_cmd_buffer_device(cmd)->perf, cmd->metal.render,
+                            state->render_pass_descriptor);
 
    apply_pending_barrier(cmd, cmd->metal.render);
    kk_encoder_update_debug(cmd, cmd->metal.render);
@@ -601,6 +604,9 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
    }
    cmd->closed_encoder_stages |= stages;
    mtl_end_encoding(encoder);
+   if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL) &&
+       encoder == cmd->metal.render)
+      kk_perf_render_end(kk_cmd_buffer_device(cmd)->perf, encoder);
    mtl_release(encoder);
 
    /* Fold the pending timestamp counter-heap resolves into `cmd_buf` */
@@ -1506,6 +1512,25 @@ kk_apply_attachment_store_ops(struct kk_cmd_buffer *cmd, bool force_store)
          stencil_store_action = MTL_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE;
 
       mtl_render_set_stencil_store_action(encoder, stencil_store_action);
+   }
+   /* Retain the final native setters for this physical pass. Repeated store
+    * decisions overwrite the snapshot and are counted only at encoder close. */
+   if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL)) {
+      uint32_t stores[10];
+      for (unsigned i = 0; i < ARRAY_SIZE(stores); ++i)
+         stores[i] = UINT32_MAX;
+      for (uint32_t i = 0; i < render->color_att_count; ++i) {
+         uint32_t logical_index = render->color_map[i];
+         if (render->color_att[i].iview && logical_index != MESA_VK_ATTACHMENT_UNUSED)
+            stores[logical_index] = kk_get_attachment_store_op(
+               &render->color_att[i], force_store,
+               render->rendering_to_whole_framebuffer, VK_IMAGE_ASPECT_COLOR_BIT);
+      }
+      if (render->depth_att.iview)
+         stores[8] = depth_store_action;
+      if (render->stencil_att.iview)
+         stores[9] = stencil_store_action;
+      kk_perf_render_stores(kk_cmd_buffer_device(cmd)->perf, encoder, stores);
    }
 }
 
