@@ -146,7 +146,9 @@ kk_interlock_pass(struct kk_interlock_draw *p, unsigned program)
       program == KK_INTERLOCK_TRANSACTION ? 1 : p->env->samples);
    mtl_render_pass_descriptor_set_render_target_array_length(pass,
       program == KK_INTERLOCK_CAPTURE ? p->capture_layers : 1);
-   if (program != KK_INTERLOCK_TRANSACTION)
+   /* Metal accepts custom positions only for 2, 4 and 8 samples; a
+    * single-sample transaction (depth bounds) keeps the pixel center. */
+   if (program != KK_INTERLOCK_TRANSACTION && p->env->samples > 1)
       mtl_render_pass_descriptor_set_sample_positions(pass,
          (const struct mtl_sample_position *)p->env->sample_positions, p->env->samples);
    if (program == KK_INTERLOCK_REPLAY) {

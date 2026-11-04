@@ -39,13 +39,24 @@ kk_depth_bounds_emulated(const struct kk_device *dev)
       !kk_depth_bounds_native(kk_device_physical(dev));
 }
 
+/* A pipeline that enables the test statically or makes the enable dynamic
+ * selects the transaction. Pipeline hashing uses the same selection. */
+static inline bool
+kk_depth_bounds_selected(const struct kk_physical_device *pdev,
+                         const struct vk_features *enabled,
+                         const struct vk_graphics_pipeline_state *state)
+{
+   return enabled->depthBounds && !kk_depth_bounds_native(pdev) && state &&
+      ((state->ds && state->ds->depth.bounds_test.enable) ||
+       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE));
+}
+
 static inline bool
 kk_depth_bounds_pipeline(const struct kk_device *dev,
                           const struct vk_graphics_pipeline_state *state)
 {
-   return kk_depth_bounds_emulated(dev) && state &&
-      ((state->ds && state->ds->depth.bounds_test.enable) ||
-       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_DS_DEPTH_BOUNDS_TEST_ENABLE));
+   return kk_depth_bounds_selected(kk_device_physical(dev),
+                                   &dev->vk.enabled_features, state);
 }
 
 /* Also accepts snapshot->ds and snapshot->tested_aspects. Copies state into

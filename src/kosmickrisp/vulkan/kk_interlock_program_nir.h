@@ -275,6 +275,13 @@ kk_interlock_wrap_program_nir(nir_shader *shader,
    nir_variable *index = nir_local_variable_create(b.impl,
       glsl_uint_type(), "sample_index");
    nir_store_var(&b, index, nir_imm_int(&b, 0), 1);
+   /* The wrapper's region uses the ordered pixel ROG, including for sources
+    * that declare no interlock, such as depth-bounds transactions. */
+   if (!shader->info.fs.pixel_interlock_ordered &&
+       !shader->info.fs.pixel_interlock_unordered &&
+       !shader->info.fs.sample_interlock_ordered &&
+       !shader->info.fs.sample_interlock_unordered)
+      shader->info.fs.pixel_interlock_ordered = true;
    nir_begin_invocation_interlock(&b);
    nir_scoped_memory_barrier(&b, SCOPE_DEVICE,
       NIR_MEMORY_ACQUIRE, nir_var_mem_global | nir_var_image | nir_var_mem_ssbo);

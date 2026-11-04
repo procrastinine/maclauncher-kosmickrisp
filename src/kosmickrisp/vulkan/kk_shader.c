@@ -348,6 +348,13 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       uint32_t conservative = BITFIELD_BIT(KK_FEAT_CONSERVATIVE_RASTER);
       _mesa_blake3_update(&blake3_ctx, &conservative, sizeof(conservative));
    }
+   /* Dynamic depth/stencil state leaves the bounds enable out of the FS key;
+    * a transaction pipeline must not alias its native sibling. */
+   if (kk_depth_bounds_selected(container_of(device, struct kk_physical_device, vk),
+                                enabled_features, state)) {
+      uint32_t bounds = BITFIELD_BIT(KK_FEAT_DEPTH_BOUNDS);
+      _mesa_blake3_update(&blake3_ctx, &bounds, sizeof(bounds));
+   }
 
    /* Serialized producer topology is pipeline state, including when the
     * same shader body is reused by different raster classes. */
@@ -3305,7 +3312,13 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          kk_finish_fragment_nir(dev, native_pair[1], state, info, features, NULL, false);
       }
    }
-   if (!explicit_geometry && (xfb || pixel_envelope || polygon_capture || poly_layer_replay)) {
+   /* Mesh producers feed the transaction from their retained raster outputs,
+    * never through a passthrough geometry stage. */
+   bool mesh_producer = false;
+   for (unsigned i = 0; i < shader_count; ++i)
+      mesh_producer |= nir_shaders[i]->info.stage == MESA_SHADER_MESH;
+   if (!explicit_geometry && !mesh_producer &&
+       (xfb || pixel_envelope || polygon_capture || poly_layer_replay)) {
       nir_shader *producer = NULL;
       unsigned insert = shader_count;
       for (unsigned i = 0; i < shader_count; ++i) {
