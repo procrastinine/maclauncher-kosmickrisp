@@ -72,3 +72,12 @@ libkk_mesh_snapshot_batch(global struct kk_mesh_params *parameters,
    uint32_t i = cl_global_id.x;
    if (i < count) kk_mesh_snapshot_grid(parameters + i, out + i * 4u);
 }
+
+/* Native mesh-only passes keep their GPU argument preparation before rendering. */
+KERNEL(64)
+libkk_mesh_native_pass(global struct kk_mesh_params *parameters,
+   global uint32_t *grids, uint32_t count)
+{
+   uint32_t i = cl_global_id.x;
+   if (i < count) kk_mesh_filter_slices(parameters + i, grids + i * 6u, 2);
+}

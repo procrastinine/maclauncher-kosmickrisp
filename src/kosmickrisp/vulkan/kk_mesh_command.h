@@ -960,7 +960,12 @@ kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    uint32_t stride, bool force_virtual)
 {
    if (cmd->mesh_pass && !cmd->mesh_prepared_grid) {
-      kk_mesh_pass_draw(cmd, direct, indirect, count, draw_count, stride, force_virtual);
+      if (!indirect && !cmd->state.cond_render.enabled) {
+         uint32_t known[]={direct.x,direct.y,direct.z};
+         cmd->mesh_prepared_grid=known;cmd->mesh_prepared_draw=0;
+         kk_draw_mesh(cmd,direct,0,0,draw_count,stride,force_virtual);
+         cmd->mesh_prepared_grid=NULL;
+      } else kk_mesh_pass_draw(cmd,direct,indirect,count,draw_count,stride,force_virtual);
       return;
    }
    const struct kk_mesh_shader_info *mesh_info = &cmd->state.gfx.shader->mesh->info;

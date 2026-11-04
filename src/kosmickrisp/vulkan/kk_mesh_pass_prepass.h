@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef KK_MESH_PASS_PREPASS_H
 #define KK_MESH_PASS_PREPASS_H
+#include "kk_debug.h"
 #include "vk_cmd_queue.h"
 #include "vk_pipeline.h"
 #include "vk_render_pass.h"
@@ -11,7 +12,7 @@
 struct kk_mesh_pass_call {
    struct mtl_size direct;
    uint64_t grid, count, predicate, source_grid;
-   uint32_t maximum, stride, actual, captured, inverted;
+   uint32_t maximum, stride, actual, captured, inverted, first;
    bool known;
    uint32_t *grids;
 };
@@ -21,11 +22,11 @@ struct kk_mesh_pass {
    struct vk_cmd_queue commands;
    struct vk_cmd_queue_entry *entries;
    struct kk_mesh_pass_call *calls;
-   struct kk_ptr inputs, parameters;
+   struct kk_ptr inputs, parameters, gpu_batches, gpu_grids;
    struct kk_mesh_pass_span *spans, *initial_spans;
    uint32_t span_count, initial_span_count;
    uint32_t entry_count, call_count, cursor, input_count;
-   bool uses_occlusion_queries;
+   bool uses_occlusion_queries, gpu_only;
 };
 
 /* Only CPU state setters may be evaluated ahead of the captured draw span.
@@ -132,7 +133,8 @@ static bool
 kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
 {
    const struct kk_shader *mesh = cmd->state.shaders[MESA_SHADER_MESH];
-   uint64_t inputs = 0; bool indirect = false; unsigned queries = 0;
+   uint64_t inputs = 0; bool indirect = false, only_mesh = true, direct_conditional = false;
+   bool conditional = cmd->state.cond_render.enabled; unsigned queries = 0;
    if (cmd->metal.render) return false;
    if (p->entries[0].type == VK_CMD_BEGIN_RENDERING) {
       if (p->entries[0].u.begin_rendering.rendering_info->flags &
@@ -154,10 +156,16 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
          const struct vk_shader *shader = vk_pipeline_get_shader(pipeline, MESA_SHADER_MESH);
          mesh = shader ? container_of(shader, struct kk_shader, vk) : NULL;
       }
+      if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING_EXT ||
+          e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING2_EXT) conditional = true;
+      else if (e->type == VK_CMD_END_CONDITIONAL_RENDERING_EXT) conditional = false;
       struct kk_mesh_pass_call call;
       if (kk_mesh_pass_call_info(e, &call)) {
+         if (!call.maximum) continue;
          if (!kk_mesh_pass_native_shader(mesh)) return false;
          inputs += call.maximum; indirect |= call.grid != 0;
+         only_mesh &= !mesh->mesh->info.has_task;
+         direct_conditional |= !call.grid && conditional;
 
       } else if (e->type == VK_CMD_CLEAR_ATTACHMENTS) {
          /* Attachment writes do not publish indirect buffers. */
@@ -170,6 +178,7 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
                  e->type == VK_CMD_INSERT_DEBUG_UTILS_LABEL_EXT) {
       } else if (!kk_mesh_pass_state_command(e->type)) return false;
    }
+   p->gpu_only = only_mesh && !direct_conditional && inputs <= 32;
    p->input_count = MIN2(inputs, (uint64_t)KK_MESH_PASS_INPUTS);
    return indirect && inputs && !queries;
 }
@@ -324,6 +333,9 @@ kk_mesh_pass_advance(struct kk_mesh_pass *p)
    return true;
 }
 
+static void kk_mesh_pass_gpu_draw(struct kk_cmd_buffer *, struct kk_mesh_pass *,
+   const struct kk_mesh_pass_call *);
+
 static void
 kk_mesh_pass_draw(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    uint64_t grid, uint64_t count, uint32_t maximum, uint32_t stride, bool force_virtual)
@@ -336,6 +348,7 @@ kk_mesh_pass_draw(struct kk_cmd_buffer *cmd, struct mtl_size direct,
        direct.y!=call->direct.y || direct.z!=call->direct.z))) {
       vk_command_buffer_set_error(&cmd->vk,VK_ERROR_INITIALIZATION_FAILED); return;
    }
+   if (p->gpu_only) { kk_mesh_pass_gpu_draw(cmd,p,call); return; }
    const uint32_t *inputs=call->grids;
    uint32_t actual=call->actual;
    __typeof__(cmd->state.cond_render) conditional=cmd->state.cond_render;
@@ -350,6 +363,123 @@ kk_mesh_pass_draw(struct kk_cmd_buffer *cmd, struct mtl_size direct,
 }
 
 static void
+kk_mesh_pass_condition(struct kk_conditional_rendering_state *conditional,
+   const struct vk_cmd_queue_entry *e)
+{
+   if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING2_EXT) {
+      const VkConditionalRenderingBeginInfo2EXT *info=e->u.begin_conditional_rendering2_ext.conditional_rendering_begin;
+      conditional->address=info->addressRange.address;
+      conditional->inverted=!!(info->flags&VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT);
+      conditional->enabled=true;
+   } else if (e->type == VK_CMD_BEGIN_CONDITIONAL_RENDERING_EXT) {
+      const VkConditionalRenderingBeginInfoEXT *info=e->u.begin_conditional_rendering_ext.conditional_rendering_begin;
+      conditional->address=vk_buffer_address(&kk_buffer_from_handle(info->buffer)->vk,info->offset);
+      conditional->inverted=!!(info->flags&VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT);
+      conditional->enabled=true;
+   } else if (e->type == VK_CMD_END_CONDITIONAL_RENDERING_EXT) conditional->enabled=false;
+}
+
+static bool
+kk_mesh_pass_build_calls(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p, bool advance)
+{
+   struct kk_conditional_rendering_state conditional=cmd->state.cond_render;
+   for (uint32_t i=1;i+1<p->entry_count;++i) {
+      struct vk_cmd_queue_entry *e=&p->entries[i]; struct kk_mesh_pass_call call;
+      if (kk_mesh_pass_call_info(e,&call)) {
+         /* An ordinary direct draw has no GPU input work at all. */
+         if (!call.maximum || (!call.grid && !conditional.enabled)) continue;
+         call.source_grid=call.grid;
+         if (!call.source_grid) {
+            uint32_t g[]={call.direct.x,call.direct.y,call.direct.z};
+            call.source_grid=kk_pool_upload(cmd,g,sizeof(g),4).gpu;
+            if (!call.source_grid) return false;
+         }
+         call.predicate=conditional.enabled?conditional.address:0;
+         call.inverted=conditional.inverted;
+         p->calls[p->call_count++]=call;
+      } else {
+         kk_mesh_pass_condition(&conditional,e);
+         if (advance && kk_mesh_pass_state_command(e->type)) {
+            struct vk_cmd_queue_entry copy=*e; struct vk_cmd_queue state;
+            kk_mesh_pass_queue(&state,&copy,1);
+            vk_cmd_queue_execute(&state,kk_cmd_buffer_to_handle(cmd),&kk_cmd_buffer_device(cmd)->vk.dispatch_table);
+         }
+      }
+   }
+   return true;
+}
+
+static void
+kk_mesh_pass_gpu_draw(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p,
+   const struct kk_mesh_pass_call *call)
+{
+   struct kk_shader *shader=cmd->state.gfx.shader; struct kk_pipeline_handles *pipe;
+   VkResult result=kk_mesh_get_sliced_pipeline(kk_cmd_buffer_device(cmd),shader,false,&pipe);
+   if (result!=VK_SUCCESS) { vk_command_buffer_set_error(&cmd->vk,result); return; }
+   uint32_t mask=cmd->state.gfx.render.view_mask, remaining=mask;
+   uint64_t saved_view=cmd->state.gfx.per_draw_data.multiview_index;
+   do {
+      if (mask) {
+         unsigned view=u_bit_scan(&remaining); cmd->state.gfx.render.view_mask=1u<<view;
+         cmd->state.gfx.per_draw_data.multiview_index=view;
+      }
+      kk_flush_gfx_state(cmd); mtl_argument_table *table=kk_mesh_table(cmd); if (!table) break;
+      for (uint32_t d=0;d<call->maximum;++d) {
+         if (!kk_mesh_bind_draw(cmd,table,d)) break;
+         struct kk_mesh_params params[2];
+         params[0]=kk_mesh_parameters(cmd,0,0,d,call->maximum);
+         params[0].predicate=0;
+         params[0].batch=p->gpu_batches.gpu+(uint64_t)(call->first+d)*sizeof(struct kk_mesh_batch);
+         params[0].payload_stride=KK_MESH_MAX_PHYSICAL_GROUPS;
+         params[1]=params[0]; params[1].task_base=KK_MESH_MAX_PHYSICAL_GROUPS;
+         uint64_t address=kk_pool_upload(cmd,params,sizeof(params),8).gpu;
+         if (!address || !kk_mesh_begin_batch(cmd,2,false)) break;
+         kk_mesh_render_slices_native(cmd,pipe,table,
+            p->gpu_grids.gpu+(uint64_t)(call->first+d)*6u*sizeof(uint32_t),address,2,false);
+      }
+      if (cmd->vk.record_result!=VK_SUCCESS) break;
+   } while (remaining);
+   cmd->state.gfx.render.view_mask=mask;
+   cmd->state.gfx.per_draw_data.multiview_index=saved_view;
+}
+
+static void
+kk_mesh_pass_gpu_execute(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
+{
+   p->calls=calloc(p->entry_count,sizeof(*p->calls));
+   if (!p->calls || !kk_mesh_pass_build_calls(cmd,p,false)) goto fail;
+   p->parameters=kk_pool_alloc(cmd,(uint64_t)p->input_count*sizeof(struct kk_mesh_params),8);
+   p->gpu_batches=kk_pool_alloc(cmd,(uint64_t)p->input_count*sizeof(struct kk_mesh_batch),8);
+   p->gpu_grids=kk_pool_alloc(cmd,(uint64_t)p->input_count*6u*sizeof(uint32_t),4);
+   if (!p->parameters.gpu || !p->gpu_batches.gpu || !p->gpu_grids.gpu) goto fail;
+   uint32_t n=0;
+   for (uint32_t i=0;i<p->call_count;++i) {
+      struct kk_mesh_pass_call *call=&p->calls[i];call->first=n;
+      for (uint32_t d=0;d<call->maximum;++d) {
+         ((struct kk_mesh_params *)p->parameters.cpu)[n]=(struct kk_mesh_params){
+            .indirect_grid=call->source_grid+(uint64_t)d*call->stride,
+            .indirect_count=call->count,.draw_id=d,.max_draw_count=call->maximum,
+            .predicate=call->predicate,.predicate_inverted=call->inverted,
+            .batch=p->gpu_batches.gpu+(uint64_t)n*sizeof(struct kk_mesh_batch),
+            .payload_stride=KK_MESH_MAX_PHYSICAL_GROUPS,
+         };++n;
+      }
+   }
+   if (KK_DEBUG(MSL))
+      fprintf(stderr, "mesh pass prelude: route=gpu inputs=%u calls=%u\n", n, p->call_count);
+   KK_CMD_BARRIER(cmd,mtl_barrier_after_encoder_stages_with_options,cs_get_compute(cmd),
+      MTL_STAGE_ALL,MTL_STAGE_DISPATCH,MTL_VISIBILITY_RESOURCE_ALIAS);
+   libkk_mesh_native_pass(cmd,kk_grid_1d(n),true,p->parameters.gpu,p->gpu_grids.gpu,n);
+   p->cursor=0; cmd->mesh_pass=p;
+   mtl_execute_command_queue(&p->commands,kk_cmd_buffer_to_handle(cmd),&kk_cmd_buffer_device(cmd)->vk.dispatch_table);
+   cmd->mesh_pass=NULL;
+   if (p->cursor!=p->call_count) vk_command_buffer_set_error(&cmd->vk,VK_ERROR_INITIALIZATION_FAILED);
+   kk_mesh_pass_free(p); return;
+fail:
+   vk_command_buffer_set_error(&cmd->vk,VK_ERROR_OUT_OF_HOST_MEMORY);kk_mesh_pass_free(p);
+}
+
+static void
 kk_mesh_pass_execute(VkCommandBuffer handle, void *data)
 {
    struct kk_mesh_pass *p=data;
@@ -359,6 +489,7 @@ kk_mesh_pass_execute(VkCommandBuffer handle, void *data)
       mtl_execute_command_queue(&p->commands,handle,&dev->vk.dispatch_table);
       kk_mesh_pass_free(p); return;
    }
+   if (p->gpu_only) { kk_mesh_pass_gpu_execute(cmd,p); return; }
    p->saved.device=dev; p->saved.state=cmd->state;
    p->uses_occlusion_queries=cmd->uses_occlusion_queries;
    memset(p->saved.state.gfx.descriptors.push,0,sizeof(p->saved.state.gfx.descriptors.push));
@@ -378,24 +509,7 @@ kk_mesh_pass_execute(VkCommandBuffer handle, void *data)
    p->parameters=kk_pool_alloc(cmd,(uint64_t)p->input_count*sizeof(struct kk_mesh_params),8);
    p->inputs=kk_pool_alloc(cmd,(uint64_t)p->input_count*4u*sizeof(uint32_t),8);
    if (!p->parameters.gpu || !p->inputs.gpu) goto fail;
-   for (uint32_t i=1;i+1<p->entry_count;++i) {
-      struct vk_cmd_queue_entry *e=&p->entries[i]; struct kk_mesh_pass_call call;
-      if (kk_mesh_pass_call_info(e,&call)) {
-         if (!call.maximum) continue;
-         call.source_grid=call.grid;
-         if (!call.source_grid) {
-            uint32_t g[]={call.direct.x,call.direct.y,call.direct.z};
-            call.source_grid=kk_pool_upload(cmd,g,sizeof(g),4).gpu; if (!call.source_grid) goto fail;
-         }
-         call.predicate=cmd->state.cond_render.enabled?cmd->state.cond_render.address:0;
-         call.inverted=cmd->state.cond_render.inverted;
-         p->calls[p->call_count++]=call;
-      } else if (kk_mesh_pass_state_command(e->type)) {
-         struct vk_cmd_queue_entry copy=*e; struct vk_cmd_queue state;
-         kk_mesh_pass_queue(&state,&copy,1);
-         vk_cmd_queue_execute(&state,handle,&dev->vk.dispatch_table);
-      }
-   }
+   if (!kk_mesh_pass_build_calls(cmd,p,true)) goto fail;
    VkResult result=kk_CreateCommandPool(kk_device_to_handle(dev),
       &(VkCommandPoolCreateInfo){.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
        .flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
@@ -417,6 +531,8 @@ kk_mesh_pass_execute(VkCommandBuffer handle, void *data)
     * reads after all preceding producers, before the first render encoder. */
    KK_CMD_BARRIER(cmd,mtl_barrier_after_encoder_stages_with_options,cs_get_compute(cmd),
       MTL_STAGE_ALL,MTL_STAGE_DISPATCH,MTL_VISIBILITY_RESOURCE_ALIAS);
+   if (KK_DEBUG(MSL))
+      fprintf(stderr, "mesh pass prelude: route=feedback inputs=%u calls=%u\n", first, p->call_count);
    libkk_mesh_snapshot_batch(cmd,kk_grid_1d(first),true,initial_parameters,p->inputs.gpu,first);
    result=kk_interlock_split(cmd,p,kk_mesh_pass_encode,kk_mesh_pass_finish);
    if (result==VK_SUCCESS) return;
