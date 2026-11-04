@@ -28,6 +28,8 @@ struct kk_sampler {
    bool native_only;
    bool is_virtual;
    uint64_t params_gpu_address;
+   /* Host alias of the same device-retained immutable arena record. */
+   const struct kk_sampler_params *params_cpu;
    uint16_t plane_filter_bits[2];
 
    uint8_t plane_count;

@@ -57,8 +57,10 @@ kk_sampler_cap_finalize(struct kk_device *dev, struct kk_sampler *sampler,
    /* Native materialization above has released its mutex. A heap producer
     * carries its existing lock explicitly; ordinary creation takes it once. */
    if (lock_context == KK_SAMPLER_PARAMS_HEAP_LOCK_HELD)
-      return kk_sampler_params_alloc_locked(dev, &params, &sampler->params_gpu_address);
+      return kk_sampler_params_alloc_locked(dev, &params, &sampler->params_gpu_address,
+         &sampler->params_cpu);
    assert(lock_context == KK_SAMPLER_PARAMS_UNLOCKED);
-   return kk_sampler_params_alloc(dev, &params, &sampler->params_gpu_address);
+   return kk_sampler_params_alloc(dev, &params, &sampler->params_gpu_address,
+         &sampler->params_cpu);
 }
 #endif

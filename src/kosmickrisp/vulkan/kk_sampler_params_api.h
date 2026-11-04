@@ -10,11 +10,14 @@ struct kk_device;
 
 /* The locked entry requires descriptor_heap_lock. The wrapper acquires it.
  * Both retain immutable records until valid device teardown. Neither entry
- * may be called while the native sampler mutex is held. */
+ * may be called while the native sampler mutex is held. Optional cpu_address
+ * aliases the same initialized bytes as gpu_address; neither owns another copy. */
 VkResult kk_sampler_params_alloc_locked(struct kk_device *dev,
-   const struct kk_sampler_params *params, uint64_t *gpu_address);
+   const struct kk_sampler_params *params, uint64_t *gpu_address,
+   const struct kk_sampler_params **cpu_address);
 VkResult kk_sampler_params_alloc(struct kk_device *dev,
-   const struct kk_sampler_params *params, uint64_t *gpu_address);
+   const struct kk_sampler_params *params, uint64_t *gpu_address,
+   const struct kk_sampler_params **cpu_address);
 
 static_assert(offsetof(struct kk_sampled_image_descriptor, sampler_lod_bias_fp16) == 12,
               "sampler parameter address chunk0");
