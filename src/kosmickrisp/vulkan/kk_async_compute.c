@@ -34,6 +34,12 @@ struct kk_async_compute {
    struct kk_perf_compile_scope scope;
    uint64_t request_id, parent_id, start, build_id;
    bool bound, used, cache_miss_reported;
+   /* Owner mutex: retired is set by the operation's cleanup; destroy, with a
+    * copy of the allocation callbacks, is set when the last shader reference
+    * goes away first. */
+   bool retired, has_allocator;
+   void (*destroy)(struct vk_device *, struct kk_shader *, const VkAllocationCallbacks *);
+   VkAllocationCallbacks allocator;
 };
 
 static void
@@ -127,6 +133,7 @@ job_cleanup(void *data)
    struct kk_async_compute **link = &owner->jobs;
    while (*link != job) { assert(*link); link = &(*link)->active_next; }
    *link = job->active_next;
+   job->retired = true;
    job->next = owner->retired;
    p_atomic_set(&owner->retired, job);
    --owner->active;
@@ -134,6 +141,19 @@ job_cleanup(void *data)
    pthread_mutex_unlock(&owner->mutex);
 }
 
+static void
+job_final_event(struct kk_async_compute *job)
+{
+   if (job->build_id)
+      kk_perf_build_event(job->dev->perf, job->build_id,
+         p_atomic_read(&job->cancel_requested) ? "cancelled" :
+         job->result != VK_SUCCESS ? "failed" :
+         p_atomic_read(&job->used) ? "completed-used" : "completed-unused", NULL, 0);
+}
+
+/* Runs on API threads. A shader whose last reference went away while its
+ * build was still queued or compiling is destroyed here, after the build
+ * retired, with the allocation callbacks copied at destruction. */
 void
 kk_async_compute_drain(struct kk_device *dev)
 {
@@ -145,6 +165,13 @@ kk_async_compute_drain(struct kk_device *dev)
    pthread_mutex_unlock(&owner->mutex);
    while (job) {
       struct kk_async_compute *next = job->next;
+      if (job->destroy) {
+         struct kk_shader *shader = job->shader;
+         job_final_event(job);
+         shader->pipeline.compute.pending = NULL;
+         job->destroy(&job->dev->vk, shader, job->has_allocator ? &job->allocator : NULL);
+         job_unref(job); /* the shader's reference */
+      }
       job_unref(job);
       job = next;
    }
@@ -210,15 +237,14 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
 }
 
 static void
-job_wait(struct kk_async_compute *job, const char *reason, bool require_finished)
+job_wait(struct kk_async_compute *job, const char *reason)
 {
-   bool pending = !p_atomic_read(&job->ready);
-   if (!pending && !require_finished) return;
+   if (p_atomic_read(&job->ready)) return;
    static const char *const modes[] = {
       [MTL_COMPILER_JOIN_NONE] = "none", [MTL_COMPILER_JOIN_HERE] = "here",
       [MTL_COMPILER_JOIN_QUEUED] = "queued", [MTL_COMPILER_JOIN_RUNNING] = "running",
    };
-   uint64_t start = pending && job->dev->perf ? kk_perf_now() : 0;
+   uint64_t start = job->dev->perf ? kk_perf_now() : 0;
    enum mtl_compiler_join join = mtl_compiler_task_join(job->task);
    if (start)
       kk_perf_async_join(job->dev->perf, job->parent_id, reason, modes[join],
@@ -231,7 +257,7 @@ join_shader(struct kk_shader *shader, const char *reason)
    if (!shader || shader->info.stage != MESA_SHADER_COMPUTE) return VK_SUCCESS;
    struct kk_async_compute *job = shader->pipeline.compute.pending;
    if (!job) return VK_SUCCESS;
-   job_wait(job, reason, false);
+   job_wait(job, reason);
    if (p_atomic_read(&job->cancel_requested)) return VK_ERROR_DEVICE_LOST;
    if (job->result == VK_SUCCESS) return VK_SUCCESS;
    if (p_atomic_cmpxchg(&job->reported, false, true))
@@ -284,24 +310,42 @@ kk_async_compute_serializable(struct kk_shader *shader)
 
 /* Called when the last reference to the shader goes away, so no pipeline,
  * cache or bind can use its native build again. A build that has not entered
- * its native compile is cancelled without compiling. Only a build already
- * compiling is joined, and its result is discarded. */
+ * its native compile is cancelled without compiling; a build already
+ * compiling finishes and its result is discarded. Destruction never waits for
+ * either: while the compile queue still owns the build, the shader and a copy
+ * of the allocation callbacks move to it and the first drain after the build
+ * retires destroys the shader. Returns false when the build has retired, and
+ * the caller destroys the shader now. */
+bool
+kk_async_compute_defer_destroy(struct kk_shader *shader, const VkAllocationCallbacks *allocator,
+   void (*destroy)(struct vk_device *, struct kk_shader *, const VkAllocationCallbacks *))
+{
+   struct kk_async_compute *job = shader->pipeline.compute.pending;
+   if (!p_atomic_read(&job->ready)) {
+      p_atomic_set(&job->cancel_requested, true);
+      mtl_compiler_task_cancel(job->task);
+   }
+   struct kk_async_compute_owner *owner = job->owner;
+   pthread_mutex_lock(&owner->mutex);
+   bool deferred = !job->retired;
+   if (deferred) {
+      if (allocator) job->allocator = *allocator;
+      job->has_allocator = allocator != NULL;
+      job->destroy = destroy;
+   }
+   pthread_mutex_unlock(&owner->mutex);
+   /* Once deferred, a drain on another thread may free the job and shader. */
+   return deferred;
+}
+
+/* The build has retired: its operation finished and its cleanup ran. */
 void
 kk_async_compute_shader_finish(struct kk_shader *shader)
 {
    if (shader->info.stage != MESA_SHADER_COMPUTE) return;
    struct kk_async_compute *job = shader->pipeline.compute.pending;
    if (!job) return;
-   if (!p_atomic_read(&job->ready)) {
-      p_atomic_set(&job->cancel_requested, true);
-      mtl_compiler_task_cancel(job->task);
-   }
-   job_wait(job, "destroy", true);
-   if (job->build_id)
-      kk_perf_build_event(job->dev->perf, job->build_id,
-         p_atomic_read(&job->cancel_requested) ? "cancelled" :
-         job->result != VK_SUCCESS ? "failed" :
-         p_atomic_read(&job->used) ? "completed-used" : "completed-unused", NULL, 0);
+   job_final_event(job);
    shader->pipeline.compute.pending = NULL;
    job_unref(job);
 }

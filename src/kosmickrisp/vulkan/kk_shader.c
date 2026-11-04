@@ -1582,9 +1582,14 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
 {
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
-   kk_gpl_shader_finish(dev, shader, pAllocator);
-   if (shader->info.stage == MESA_SHADER_COMPUTE && shader->pipeline.compute.pending)
+   /* A pending native build keeps the shader until the build retires; the
+    * next drain on an API thread destroys it. Destruction does not wait. */
+   if (shader->info.stage == MESA_SHADER_COMPUTE && shader->pipeline.compute.pending) {
+      if (kk_async_compute_defer_destroy(shader, pAllocator, kk_shader_destroy))
+         return;
       kk_async_compute_shader_finish(shader);
+   }
+   kk_gpl_shader_finish(dev, shader, pAllocator);
    if (shader->vk.stage == MESA_SHADER_VERTEX && shader->gs_mesh)
       kk_shader_destroy(vk_dev, shader->gs_mesh, pAllocator);
    if (shader->info.depth_bounds_emulation && shader->bounds_route)
