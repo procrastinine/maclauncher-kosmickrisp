@@ -7,17 +7,18 @@
 
 #include "poly/geometry.h"
 #include "poly/tessellator.h"
+#include "kk_tess_grid.h"
 
 KERNEL(1)
 libkk_tess_setup_indirect(
    global struct poly_tess_params *p,
-   global uint32_t *grids /* output: VS then TCS then tess */,
+   global struct kk_tess_grid *grids /* VS, TCS, tess */,
    global struct poly_vertex_params *vp /* output */, global uint32_t *indirect,
    uint64_t in_index_buffer, uint32_t in_index_buffer_range_el,
    uint32_t in_index_size_B, uint64_t vertex_outputs /* bitfield */,
 
    /* Tess control invocation counter if active, else zero */
-   global uint32_t *tcs_statistic)
+   global uint32_t *tcs_statistic, uint32_t vs_group_size)
 {
    uint count = indirect[0], instance_count = indirect[1];
    unsigned in_patches = count / p->input_patch_size;
@@ -76,18 +77,11 @@ libkk_tess_setup_indirect(
          poly_index_buffer_range_el(in_index_buffer_range_el, indirect[2]);
    }
 
-   /* VS grid size */
-   grids[0] = count;
-   grids[1] = instance_count;
-   grids[2] = 1;
-
-   /* TCS grid size */
-   grids[3] = in_patches * p->output_patch_size;
-   grids[4] = instance_count;
-   grids[5] = 1;
-
-   /* Tess grid size */
-   grids[6] = unrolled_patches;
-   grids[7] = 1;
-   grids[8] = 1;
+   grids[0] = (struct kk_tess_grid){
+      {count, instance_count, 1}, {vs_group_size, 1, 1}};
+   grids[1] = (struct kk_tess_grid){
+      {in_patches * p->output_patch_size, instance_count, 1},
+      {p->output_patch_size, 1, 1}};
+   grids[2] = (struct kk_tess_grid){
+      {unrolled_patches, 1, 1}, {1, 1, 1}};
 }
