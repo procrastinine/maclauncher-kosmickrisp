@@ -118,6 +118,7 @@ struct kk_shader_info {
    bool api_geometry;
    bool polygon_point;
    bool conservative;
+   bool conservative_full_coverage;
    uint64_t conservative_canonical_outputs;
    uint64_t conservative_canonical_components[2];
    struct poly_gs_capture_info polygon;

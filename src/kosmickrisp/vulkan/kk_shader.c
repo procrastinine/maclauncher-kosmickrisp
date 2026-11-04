@@ -1269,6 +1269,15 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
    shader->info.conservative = kk_conservative_possible(state);
    gather_shader_info(shader, nir, state);
+   if (stage == MESA_SHADER_FRAGMENT) {
+      shader->info.conservative_full_coverage =
+         BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FULLY_COVERED);
+      if (shader->info.conservative_full_coverage && !opts->independent_interface) {
+         nir_shader_intrinsics_pass(nir, kk_conservative_disabled_inner,
+                                    nir_metadata_control_flow, NULL);
+         nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+      }
+   }
    if (stage == MESA_SHADER_TASK || stage == MESA_SHADER_MESH) {
       shader->info.mesh.local_size = (struct mtl_size){
          nir->info.workgroup_size[0], nir->info.workgroup_size[1], nir->info.workgroup_size[2]};
@@ -1812,6 +1821,8 @@ gather_graphics_pipeline_create_info(
          kk_msl_copy(&vs->polygon[3], &s->polygon[3]);
       if (stage == MESA_SHADER_FRAGMENT && info->conservative)
          kk_msl_copy(&vs->polygon[5], &s->polygon[5]);
+      if (stage == MESA_SHADER_FRAGMENT)
+         info->conservative_full_coverage |= s->info.conservative_full_coverage;
 
       if (s->info.stage == MESA_SHADER_TESS_CTRL)
          info->vs.tess_local_thread_size = s->info.tess.tcs_output_patch_size;

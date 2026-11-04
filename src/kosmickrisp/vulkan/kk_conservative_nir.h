@@ -31,6 +31,8 @@ kk_conservative_packet(nir_builder *b)
       .io_semantics.num_slots = 1));
 }
 
+#include "kk_conservative_inner_nir.h"
+
 /* The input mask belongs to the original conservative primitive. A row
  * triangle's native mask describes only part of that primitive's samples. */
 static nir_def *
@@ -152,11 +154,18 @@ kk_conservative_fs_intrinsic(nir_builder *b, nir_intrinsic_instr *intr, void *da
    bool position = intr->intrinsic == nir_intrinsic_load_frag_coord;
    bool front = intr->intrinsic == nir_intrinsic_load_front_face;
    bool mask = intr->intrinsic == nir_intrinsic_load_sample_mask_in;
-   if (!interpolated && !flat && !per_vertex && !barycentric && !position && !front && !mask)
+   bool fully = intr->intrinsic == nir_intrinsic_load_fully_covered;
+   if (!interpolated && !flat && !per_vertex && !barycentric && !position && !front && !mask && !fully)
       return false;
    b->cursor = nir_before_instr(&intr->instr);
    nir_def *packet = kk_conservative_packet(b), *value;
-   if (mask) {
+   if (fully) {
+      nir_def *xy = nir_f2i32(b, nir_ffloor(b, nir_channels(b, nir_load_frag_coord(b), 3)));
+      nir_def *rectangle = nir_vec4(b, nir_channel(b, xy, 0), nir_channel(b, xy, 1),
+         nir_iadd_imm(b, nir_channel(b, xy, 0), 1),
+         nir_iadd_imm(b, nir_channel(b, xy, 1), 1));
+      value = kk_conservative_evaluate_inner_coverage(b, packet, rectangle);
+   } else if (mask) {
       value = kk_conservative_sample_mask(b, packet, context->sample_shading);
    } else if (position) {
       nir_def *raw = nir_load_frag_coord(b), *rho, *depth;

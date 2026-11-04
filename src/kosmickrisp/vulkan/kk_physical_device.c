@@ -652,7 +652,7 @@ kk_get_device_properties(
       .conservativePointAndLineRasterization = false,
       .degenerateTrianglesRasterized = true,
       .degenerateLinesRasterized = false,
-      .fullyCoveredFragmentShaderInputVariable = false,
+      .fullyCoveredFragmentShaderInputVariable = true,
       .conservativeRasterizationPostDepthCoverage = false,
       .apiVersion = kk_get_vk_version(),
       .driverVersion = vk_get_driver_version(),

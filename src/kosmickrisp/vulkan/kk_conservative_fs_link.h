@@ -49,6 +49,9 @@ struct kk_conservative_fs_link_info {
    const struct kk_conservative_fs_input *inputs;
    uint32_t input_count;
    const struct kk_per_vertex_map *canonical;
+   /* Optional MSL int4 expression: logical pixel bounds (x0,y0,x1,y1).
+    * NULL selects the 1x1 fragment only while coarse rates are unadvertised. */
+   const char *logical_fragment_rectangle;
 };
 
 /* Borrow all inputs for the call. Success returns complete MSL allocated
@@ -76,3 +79,10 @@ void kk_conservative_gather_canonical_components(nir_shader *fragment,
                                                  uint64_t components[2]);
 void kk_conservative_require_canonical_components(struct kk_shader *pipeline,
    uint64_t generic_locations, const uint64_t components[2]);
+
+#define KK_CONSERVATIVE_INNER_COVERAGE_API 1
+struct nir_builder;
+nir_def *kk_conservative_evaluate_inner_coverage(struct nir_builder *builder,
+   nir_def *packet, nir_def *logical_rectangle);
+/* Request optional inner edges on the final executable only. */
+void kk_conservative_require_inner_coverage(struct kk_shader *executable);

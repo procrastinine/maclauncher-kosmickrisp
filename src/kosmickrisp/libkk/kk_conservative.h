@@ -15,6 +15,7 @@ struct kk_conservative_params {
    uint32_t sample_mask;
    uint64_t canonical_locations;
    uint64_t canonical_provoking_components[2];
+   uint32_t inner_coverage;
 };
 
 /* Original corner values use the same 16-byte-per-location heap transport as
@@ -41,6 +42,11 @@ struct kk_conservative_primitive {
    float bias;
    float extra_size;
    uint32_t degenerate;
+   uint64_t inner_edges;
+};
+
+struct kk_conservative_inner_edge {
+   int64_t a, b, c;
 };
 
 struct kk_conservative_span {

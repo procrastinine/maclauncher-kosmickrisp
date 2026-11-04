@@ -13,6 +13,8 @@
 #define P(...) _mesa_string_buffer_printf(text, __VA_ARGS__)
 #define OFFSET(member) ((unsigned)offsetof(struct kk_conservative_primitive, member))
 
+#include "kk_conservative_inner_msl.h"
+
 static const char *
 builtin(const struct kk_conservative_fs_link_info *fs, gl_system_value value)
 {
@@ -117,6 +119,8 @@ kk_conservative_build_fs_prolog(void *mem_ctx,
      "   float3 v = cross(x,y);\n"
      "   if (linear) v *= float3(h[0].w,h[1].w,h[2].w);\n"
      "   return v / (v.x+v.y+v.z);\n}\n", OFFSET(degenerate), OFFSET(provoking), OFFSET(positions));
+   const char *fully = builtin(fs, SYSTEM_VALUE_FULLY_COVERED);
+   if (fully) kk_conservative_emit_inner(text);
    _mesa_string_buffer_append_len(text, prefix, input - prefix);
    P("KKConservativeIn kk_original [[stage_in]]");
    const char *position = builtin(fs, SYSTEM_VALUE_FRAG_COORD);
@@ -237,7 +241,20 @@ kk_conservative_build_fs_prolog(void *mem_ctx,
         "     %s.zw = float2(z,1.0f/den); }\n", OFFSET(positions), OFFSET(bias),
         OFFSET(depth_clamp), OFFSET(viewport)+16, position);
    }
-   _mesa_string_buffer_append_len(text, body+3, returning-body-3);
+   if (fully) {
+      char *initializer = ralloc_asprintf(tmp, "bool %s = false;", fully);
+      const char *found = strstr(body+3, initializer);
+      if (!found || found >= returning) { ralloc_free(tmp); return VK_ERROR_UNKNOWN; }
+      _mesa_string_buffer_append_len(text, body+3, found-body-3);
+      P("bool %s = kk_cr_fully_covered(kk_cr_p,", fully);
+      if (fs->logical_fragment_rectangle) P("%s", fs->logical_fragment_rectangle);
+      else P("int4(int2(floor(%s.xy)),int2(floor(%s.xy))+1)", position, position);
+      P(");");
+      const char *after = found+strlen(initializer);
+      _mesa_string_buffer_append_len(text, after, returning-after);
+   } else {
+      _mesa_string_buffer_append_len(text, body+3, returning-body-3);
+   }
    P("auto kk_cr_out = ");
    _mesa_string_buffer_append_len(text, returning+7, return_end-returning-7);
    P(";\n");
@@ -252,6 +269,12 @@ kk_conservative_build_fs_prolog(void *mem_ctx,
    *out_wrapper = ralloc_strdup(mem_ctx, text->buf);
    ralloc_free(tmp);
    return *out_wrapper ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
+void
+kk_conservative_require_inner_coverage(struct kk_shader *pipeline)
+{
+   pipeline->info.conservative_full_coverage = true;
 }
 
 void

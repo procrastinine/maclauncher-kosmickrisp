@@ -15,6 +15,8 @@ conservative_window(float4 position, global const float *vp, bool minus_one)
                    vp[4] + z * (vp[5] - vp[4]), inverse_w);
 }
 
+#include "kk_conservative_inner.cl"
+
 /* Intersect the square-expanded convex polygon with a row of pixel centers.
  * Emitting whole accepted pixels gives correct coverage before early tests. */
 static bool
@@ -120,6 +122,8 @@ libkk_conservative_prepare(global struct poly_geometry_params *geometry,
    out->provoking = provoking;
    out->front = front;
    out->degenerate = degenerate;
+   out->inner_edges = config->inner_coverage && !degenerate ?
+      kk_conservative_build_inner(heap, polygon, count, vp, p->negative_one_to_one) : 0;
    out->front_ccw = p->front_ccw;
    out->viewport_index = viewport;
    out->depth_clamp = p->depth_clamp;

@@ -1487,6 +1487,7 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
             .samples = MAX2(dyn->ms.rasterization_samples, 1),
             .sample_mask = dyn->ms.sample_mask,
             .canonical_locations = cmd->state.gfx.shader->info.conservative_canonical_outputs,
+            .inner_coverage = cmd->state.gfx.shader->info.conservative_full_coverage,
             .canonical_provoking_components = {
                cmd->state.gfx.shader->info.conservative_canonical_components[0],
                cmd->state.gfx.shader->info.conservative_canonical_components[1],
