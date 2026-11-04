@@ -968,6 +968,14 @@ Consumers: Vulkan descriptor heap pipelines.
 
 Implementation: [kk_cmd_buffer.h](../src/kosmickrisp/vulkan/kk_cmd_buffer.h), [kk_cmd_buffer.c](../src/kosmickrisp/vulkan/kk_cmd_buffer.c), [kk_cmd_dgc.c](../src/kosmickrisp/vulkan/kk_cmd_dgc.c), [kk_shader.h](../src/kosmickrisp/vulkan/kk_shader.h), [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_descriptor_set.h](../src/kosmickrisp/vulkan/kk_descriptor_set.h), [kk_descriptor_heap_api.h](../src/kosmickrisp/vulkan/kk_descriptor_heap_api.h), [kk_descriptor_heap_nir.h](../src/kosmickrisp/vulkan/kk_descriptor_heap_nir.h), [kk_embedded_sampler_runtime.h](../src/kosmickrisp/vulkan/kk_embedded_sampler_runtime.h).
 
+### CPU-side performance counters
+
+`KK_PERF_TRACKING=1` enables per-device JSON interval records; `KK_PERF_TRACKING_LOG` selects the output file. Tracking is disabled by default. Stage durations are nested elapsed wall times and cannot be added into CPU utilization.
+
+`command_bo_allocate` measures attempts to allocate command-upload backing storage. `command_bo_reuse` counts backing buffers taken from a command pool, with zero duration. `execution_residency_commit` measures actual dirty execution-residency commits; unchanged submissions do not increment it. These counters do not measure root-table or dynamic-descriptor upload bytes.
+
+Implementation: [kk_perf.c](../src/kosmickrisp/vulkan/kk_perf.c), [kk_cmd_pool.c](../src/kosmickrisp/vulkan/kk_cmd_pool.c), [kk_device.c](../src/kosmickrisp/vulkan/kk_device.c).
+
 ### Native depth/stencil state reuse
 
 Pipeline creation and dynamic depth/stencil changes share immutable Metal states within each device. The cache keys the native depth and stencil operations and masks; stencil references and depth bounds remain encoder state. It retains up to 1024 states, with ordinary state creation for additional combinations. Each caller owns a separate reference, and device destruction releases the cached references.

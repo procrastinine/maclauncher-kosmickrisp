@@ -8,6 +8,7 @@
 #include "kk_cmd_pool.h"
 
 #include "kk_device.h"
+#include "kk_perf.h"
 #include "kk_entrypoints.h"
 #include "kk_physical_device.h"
 
@@ -26,7 +27,8 @@ kk_cmd_bo_create(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
       return vk_error(pool, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    const VkResult result =
-      kk_alloc_bo(dev, &pool->vk.base, KK_CMD_BO_SIZE, 0, &bo->bo);
+      KK_PERF_CALL(dev, KK_PERF_COMMAND_BO_ALLOCATE,
+         kk_alloc_bo(dev, &pool->vk.base, KK_CMD_BO_SIZE, 0, &bo->bo));
    if (result != VK_SUCCESS) {
       vk_free(&pool->vk.alloc, bo);
       return vk_error(pool, VK_ERROR_OUT_OF_DEVICE_MEMORY);
@@ -61,6 +63,9 @@ kk_cmd_pool_alloc_bo(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
    if (!list_is_empty(&pool->free_bos)) {
       bo = list_first_entry(&pool->free_bos, struct kk_cmd_bo, link);
       pool->num_free_bos--;
+      struct kk_device *dev = kk_cmd_pool_device(pool);
+      if (unlikely(dev->perf))
+         kk_perf_add(dev->perf, KK_PERF_COMMAND_BO_REUSE, 0);
    }
 
    if (bo) {

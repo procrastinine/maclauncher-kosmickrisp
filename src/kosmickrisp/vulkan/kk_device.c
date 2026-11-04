@@ -804,7 +804,8 @@ kk_device_make_resources_resident(struct kk_device *dev)
 {
    simple_mtx_lock(&dev->residency_set.mutex);
    if (dev->residency_set.dirty) {
-      mtl_residency_set_commit(dev->residency_set.handle);
+      KK_PERF_VOID(dev, KK_PERF_EXECUTION_RESIDENCY_COMMIT,
+         mtl_residency_set_commit(dev->residency_set.handle));
       dev->residency_set.dirty = false;
    }
    /* Every Metal queue already uses this set for execution-scoped residency.

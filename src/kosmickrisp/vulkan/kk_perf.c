@@ -32,7 +32,8 @@ static const char *const names[KK_PERF_METRIC_COUNT] = {
    "present_wait", "fence_wait", "semaphore_wait", "sync_wait",
    "queue_wait", "drawable_wait", "deferred", "pipeline_create",
    "shader_compile", "nir", "msl", "metal_library", "metal_pipeline",
-   "cache_hit", "cache_miss", "cache_binary_hit", "metal_library_pair"
+   "cache_hit", "cache_miss", "cache_binary_hit", "metal_library_pair",
+   "command_bo_allocate", "command_bo_reuse", "execution_residency_commit"
 };
 
 uint64_t kk_perf_now(void) { return os_time_get_nano(); }
