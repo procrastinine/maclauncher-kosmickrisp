@@ -246,8 +246,19 @@ kk_sample_native_form(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
       P(ctx, ", level(float(tap_level))");
    } else {
       bool prepared = tex->backend_flags & KK_SAMPLE_PREPARE_2D;
+      bool has_min_lod = nir_tex_get_src(tex, nir_tex_src_min_lod) != NULL;
+      bool min_lod_in_level = has_min_lod &&
+         (prepared ? explicit_level :
+          (nir_tex_get_src(tex, nir_tex_src_lod) != NULL ||
+           ((tex->backend_flags & KK_SAMPLE_NATIVE_CUBE_LOD) &&
+            nir_tex_get_src(tex, nir_tex_src_ddx) != NULL)));
       if (prepared) {
-         P(ctx, explicit_level ? ", level(sample_lod)" : ", gradient2d(dx, dy)");
+         if (explicit_level) {
+            P(ctx, min_lod_in_level ? ", level(max(sample_lod, min_lod_value))" :
+                                     ", level(sample_lod)");
+         } else {
+            P(ctx, ", gradient2d(dx, dy)");
+         }
       }
       for (unsigned i = 0; i < ARRAY_SIZE(kk_sample_args); ++i) {
          nir_src *src = nir_tex_get_src(tex, kk_sample_args[i]);
@@ -255,13 +266,18 @@ kk_sample_native_form(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
                        kk_sample_args[i] == nir_tex_src_lod ||
                        kk_sample_args[i] == nir_tex_src_ddx ||
                        kk_sample_args[i] == nir_tex_src_ddy)) continue;
-         if (!src) continue;
+         if (!src || (min_lod_in_level &&
+                      kk_sample_args[i] == nir_tex_src_min_lod)) continue;
          switch (kk_sample_args[i]) {
          case nir_tex_src_bias: P(ctx, ", bias(bias_value)"); break;
-         case nir_tex_src_lod: P(ctx, ", level(lod_value)"); break;
+         case nir_tex_src_lod:
+            P(ctx, min_lod_in_level ? ", level(max(lod_value, min_lod_value))" :
+                                     ", level(lod_value)");
+            break;
          case nir_tex_src_ddx:
             if (tex->backend_flags & KK_SAMPLE_NATIVE_CUBE_LOD) {
-               P(ctx, ", level(native_cube_lod)");
+               P(ctx, min_lod_in_level ? ", level(max(native_cube_lod, min_lod_value))" :
+                                        ", level(native_cube_lod)");
             } else {
                P(ctx, ", gradient%s(dx, dy)", texture_dim(tex->sampler_dim));
             }
