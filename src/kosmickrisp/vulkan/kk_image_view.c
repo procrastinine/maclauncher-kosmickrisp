@@ -329,6 +329,17 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
             mtl_texture_get_gpu_resource_id(view->planes[view_plane].mtl_handle_cube_face);
       }
 
+      if (view->vk.usage & VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR) {
+         struct kk_view_layout rate_layout = view_layout;
+         rate_layout.view_type = VK_IMAGE_VIEW_TYPE_2D;
+         rate_layout.array_len = 1u;
+         rate_layout.num_levels = 1u;
+         view->planes[view_plane].mtl_handle_fsr =
+            mtl_new_texture_view_with(mtl_handle, &rate_layout);
+         view->planes[view_plane].fsr_gpu_resource_id =
+            mtl_texture_get_gpu_resource_id(view->planes[view_plane].mtl_handle_fsr);
+      }
+
       if (view->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) {
          /* For storage images, we can't have any cubes */
          if (view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE ||
@@ -434,6 +445,9 @@ kk_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
 
       if (view->planes[plane].mtl_handle_input)
          mtl_release(view->planes[plane].mtl_handle_input);
+
+      if (view->planes[plane].mtl_handle_fsr)
+         mtl_release(view->planes[plane].mtl_handle_fsr);
 
       if (view->planes[plane].transient_private)
          mtl_release(view->planes[plane].transient_private);

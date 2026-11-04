@@ -115,6 +115,11 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
    if (va_format->atomic)
       features |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_ATOMIC_BIT;
 
+   /* Quad-group fragment shaders read the rate attachment as a texture. */
+   if (vk_format == VK_FORMAT_R8_UINT && tiling == VK_IMAGE_TILING_OPTIMAL &&
+       pdev->vk.supported_features.attachmentFragmentShadingRate)
+      features |= VK_FORMAT_FEATURE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
+
    if (features != 0) {
       features |= VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT;
       features |= VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;

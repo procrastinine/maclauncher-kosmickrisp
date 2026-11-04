@@ -237,6 +237,15 @@
      - Applications that use reported barycentric support for all fragment interpolation move every pixel shader to corner transport; AnyPS5 does this and measured about 10% more GPU time per present on an Apple8 title screen.
      - SV_Barycentrics shaders are unavailable without a translator fallback, and vkd3d-proton disables mesh shaders, so feature level 12.2 requires +fragment_barycentric in addition to its other requirements. The maximum reported shader model is not independently reduced by this entry.
      - ``performance,+fragment_barycentric``
+   * - ``fragment_shading_rate``
+     - Pipeline, primitive and attachment fragment shading rates up to 2x2 pixels.
+       Controls: ``VK_KHR_fragment_shading_rate``, ``pipelineFragmentShadingRate``, ``primitiveFragmentShadingRate``, ``attachmentFragmentShadingRate``, ``minFragmentShadingRateAttachmentTexelSize``, ``maxFragmentShadingRateAttachmentTexelSize``, ``maxFragmentShadingRateAttachmentTexelSizeAspectRatio``, ``primitiveFragmentShadingRateWithMultipleViewports``, ``layeredShadingRateAttachments``, ``fragmentShadingRateNonTrivialCombinerOps``, ``maxFragmentSize``, ``maxFragmentSizeAspectRatio``, ``maxFragmentShadingRateCoverageSamples``, ``maxFragmentShadingRateRasterizationSamples``, ``fragmentShadingRateWithShaderDepthStencilWrites``, ``fragmentShadingRateWithSampleMask``, ``fragmentShadingRateWithShaderSampleMask``, ``fragmentShadingRateWithConservativeRasterization``, ``fragmentShadingRateWithFragmentShaderInterlock``, ``fragmentShadingRateWithCustomSampleLocations``, ``fragmentShadingRateStrictMultiplyCombiner``.
+     - fragment shader lowering / quad operations. Metal has no per-draw coarse shading. Each Metal quad or half quad forms one fragment: one lane per fragment runs the application side effects and its outputs are broadcast to the other lanes, while the remaining lanes evaluate the neighboring fragments that derivatives need. Inputs are extrapolated to the fragment centers through quad operations, derivatives and implicit texture levels are recomputed, and the final rate is combined in the shader. Every fragment shader of a pipeline that can select a rate above 1x1 takes this path, including draws whose rate is 1x1, and its root upload includes the full push constant range.
+     - No Apple family
+     - Off
+     - vkd3d-proton enables the dynamic rate on every graphics pipeline with render targets when the extension is reported, which would place every pixel shader on the quad-group path.
+     - vkd3d-proton reports variable shading rate tier 0, which keeps Direct3D 12 at feature level 12_1.
+     - ``performance,+fragment_shading_rate``
    * - ``sampler_filter_minmax``
      - Minimum and maximum sampler filtering on Apple8 and Apple9 GPUs.
        Controls: ``VK_EXT_sampler_filter_minmax``, ``samplerFilterMinmax``, ``filterMinmaxSingleComponentFormats``, ``filterMinmaxImageComponentMapping``, ``VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT``.

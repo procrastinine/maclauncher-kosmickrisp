@@ -178,6 +178,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_fragment_shader_barycentric =
          mtl_device_supports_shader_barycentric_coordinates(
             pdev->mtl_dev_handle),
+      .KHR_fragment_shading_rate = true,
       .KHR_maintenance7 = true,
       .KHR_maintenance8 = true,
       .KHR_maintenance9 = true,
@@ -471,6 +472,11 @@ kk_get_device_features(
       /* VK_KHR_fragment_shader_barycentric */
       .fragmentShaderBarycentric =
          supported_extensions->KHR_fragment_shader_barycentric,
+
+      /* VK_KHR_fragment_shading_rate: quad-group fragment emulation. */
+      .pipelineFragmentShadingRate = true,
+      .primitiveFragmentShadingRate = true,
+      .attachmentFragmentShadingRate = true,
 
       /* VK_KHR_maintenance7 */
       .maintenance7 = true,
@@ -1117,6 +1123,28 @@ kk_get_device_properties(
 
       /* VK_KHR_fragment_shader_barycentric */
       .triStripVertexOrderIndependentOfProvokingVertex = false,
+
+      /* VK_KHR_fragment_shading_rate. A fragment is one Metal quad or half
+       * quad, so sizes stop at 2x2 and attachment texels are a fixed 8x8. */
+      .minFragmentShadingRateAttachmentTexelSize = {KK_FSR_TEXEL_SIZE, KK_FSR_TEXEL_SIZE},
+      .maxFragmentShadingRateAttachmentTexelSize = {KK_FSR_TEXEL_SIZE, KK_FSR_TEXEL_SIZE},
+      .maxFragmentShadingRateAttachmentTexelSizeAspectRatio = 1,
+      .primitiveFragmentShadingRateWithMultipleViewports = false,
+      .layeredShadingRateAttachments = false,
+      .fragmentShadingRateNonTrivialCombinerOps = true,
+      .maxFragmentSize = {2, 2},
+      .maxFragmentSizeAspectRatio = 2,
+      .maxFragmentShadingRateCoverageSamples =
+         4u << (util_last_bit(pdev->info.supported_sample_counts) - 1),
+      .maxFragmentShadingRateRasterizationSamples =
+         1u << (util_last_bit(pdev->info.supported_sample_counts) - 1),
+      .fragmentShadingRateWithShaderDepthStencilWrites = false,
+      .fragmentShadingRateWithSampleMask = false,
+      .fragmentShadingRateWithShaderSampleMask = false,
+      .fragmentShadingRateWithConservativeRasterization = false,
+      .fragmentShadingRateWithFragmentShaderInterlock = false,
+      .fragmentShadingRateWithCustomSampleLocations = false,
+      .fragmentShadingRateStrictMultiplyCombiner = true,
    };
 
    char gpu_name[256u];
@@ -1734,6 +1762,26 @@ kk_GetPhysicalDeviceQueueFamilyProperties2(
          }
       }
    }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+kk_GetPhysicalDeviceFragmentShadingRatesKHR(
+   VkPhysicalDevice physicalDevice, uint32_t *pFragmentShadingRateCount,
+   VkPhysicalDeviceFragmentShadingRateKHR *pFragmentShadingRates)
+{
+   VK_FROM_HANDLE(kk_physical_device, pdev, physicalDevice);
+   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDeviceFragmentShadingRateKHR, out,
+                          pFragmentShadingRates, pFragmentShadingRateCount);
+   /* Largest width first, then largest height. */
+   static const VkExtent2D sizes[] = {{2, 2}, {2, 1}, {1, 2}, {1, 1}};
+   for (unsigned i = 0; i < ARRAY_SIZE(sizes); ++i) {
+      vk_outarray_append_typed(VkPhysicalDeviceFragmentShadingRateKHR, &out, rate) {
+         rate->sampleCounts = sizes[i].width == 1 && sizes[i].height == 1
+            ? ~0u : pdev->info.supported_sample_counts;
+         rate->fragmentSize = sizes[i];
+      }
+   }
+   return vk_outarray_status(&out);
 }
 
 VKAPI_ATTR void VKAPI_CALL

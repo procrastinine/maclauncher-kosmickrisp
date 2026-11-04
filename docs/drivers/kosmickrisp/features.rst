@@ -346,6 +346,20 @@ Feature table
      - SV_Barycentrics shaders are unavailable. vkd3d-proton disables mesh
        shaders, so D3D12 mesh shader tier 1 and feature level 12_2 are
        unavailable.
+   * - ``VK_KHR_fragment_shading_rate``
+     - Emulated: pipeline, primitive and attachment rates up to 2x2 pixels.
+       Each Metal quad or half quad forms one fragment. One covered lane per
+       fragment runs the shader body and its outputs are broadcast to the
+       other pixels; the other lanes evaluate neighboring fragments for
+       derivatives. Attachment texels are 8x8. Sample shading, shader depth,
+       stencil and sample mask writes, sample mask reads, interlock, custom
+       sample locations, conservative rasterization and a partial pipeline
+       sample mask select 1x1. Primitive rates are read from vertex shaders.
+     - No Apple family.
+     - ``fragment_shading_rate``
+     - Off
+     - vkd3d-proton reports variable shading rate tier 0, which keeps
+       Direct3D 12 at feature level 12_1.
    * - ``VK_KHR_shader_quad_control``
      - Native with emulated cases: quad operations are native. Full and
        coarse quad helper requirements add a triangle-merge guard.

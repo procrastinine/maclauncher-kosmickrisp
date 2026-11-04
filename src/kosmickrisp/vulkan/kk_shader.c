@@ -54,6 +54,7 @@
 #include "kk_dgc.h"
 #include "kk_unused_attachments.h"
 #include "kk_fragment_shading_rate_pipeline.h"
+#include "kk_nir_lower_fsr.h"
 #include "kk_dgc_pipeline.h"
 
 static const nir_shader_compiler_options *
@@ -344,6 +345,23 @@ kk_hash_graphics_state(struct vk_physical_device *device,
    _mesa_blake3_update(&blake3_ctx, &feature_key, sizeof(feature_key));
    const bool layer_alias = kk_poly_layer_alias_possible(state, enabled_features);
    _mesa_blake3_update(&blake3_ctx, &layer_alias, sizeof(layer_alias));
+   if ((enabled_features->pipelineFragmentShadingRate ||
+        enabled_features->primitiveFragmentShadingRate ||
+        enabled_features->attachmentFragmentShadingRate) && state) {
+      const uint32_t fsr_key[] = {
+         0x46535231, state->fsr ? state->fsr->fragment_size.width : 0,
+         state->fsr ? state->fsr->fragment_size.height : 0,
+         state->fsr ? state->fsr->combiner_ops[0] : 0,
+         state->fsr ? state->fsr->combiner_ops[1] : 0,
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_FSR),
+         !!(state->pipeline_flags &
+            VK_PIPELINE_CREATE_2_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR),
+         state->shader_stages,
+         state->rs ? state->rs->conservative_mode : 0,
+         state->ms ? state->ms->sample_locations_enable : 0,
+      };
+      _mesa_blake3_update(&blake3_ctx, fsr_key, sizeof(fsr_key));
+   }
    if (kk_conservative_possible(state)) {
       uint32_t conservative = BITFIELD_BIT(KK_FEAT_CONSERVATIVE_RASTER);
       _mesa_blake3_update(&blake3_ctx, &conservative, sizeof(conservative));
@@ -992,6 +1010,95 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
    NIR_PASS(_, nir, nir_lower_global_vars_to_local);
 }
 
+static bool
+kk_fsr_device(const struct kk_device *dev)
+{
+   const struct vk_features *f = &dev->vk.enabled_features;
+   return f->pipelineFragmentShadingRate || f->primitiveFragmentShadingRate ||
+          f->attachmentFragmentShadingRate;
+}
+
+static unsigned
+kk_fsr_log2(uint32_t size)
+{
+   return size >= 4 ? 2 : size >= 2 ? 1 : 0;
+}
+
+/* Fragment shaders of pipelines that can select a rate above 1x1 run the
+ * quad-group lowering. Conditions the reported properties exclude keep 1x1. */
+static void
+kk_lower_fs_rate(struct kk_device *dev, nir_shader *nir,
+                 const struct vk_graphics_pipeline_state *state)
+{
+   const struct vk_features *f = &dev->vk.enabled_features;
+   const bool dynamic = !state || !state->fsr ||
+      BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_FSR);
+   const bool attachment = f->attachmentFragmentShadingRate &&
+      (!state || (state->pipeline_flags &
+                  VK_PIPELINE_CREATE_2_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR));
+   const bool primitive = f->primitiveFragmentShadingRate && state &&
+      !(state->shader_stages & (VK_SHADER_STAGE_GEOMETRY_BIT |
+                                VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT |
+                                VK_SHADER_STAGE_MESH_BIT_EXT));
+   bool coarse = kk_vrs_pipeline_can_coarsen(state, primitive, attachment);
+   if (coarse && state && state->ms) {
+      const struct vk_multisample_state *ms = state->ms;
+      uint32_t samples = BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES)
+         ? KK_MAX_SAMPLES : MAX2(ms->rasterization_samples, 1);
+      uint32_t full = BITFIELD_MASK(samples);
+      coarse &= !ms->sample_shading_enable;
+      coarse &= BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK) ||
+                (ms->sample_mask & full) == full;
+      coarse &= !ms->sample_locations_enable ||
+                BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_LOCATIONS_ENABLE);
+   }
+   if (coarse && state && state->rs &&
+       !BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_CONSERVATIVE_MODE))
+      coarse &= state->rs->conservative_mode ==
+                VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
+   if (coarse)
+      coarse = kk_nir_fsr_supported(nir);
+   if (!coarse) {
+      NIR_PASS(_, nir, kk_nir_lower_fsr_fine);
+      return;
+   }
+
+   struct kk_fsr_lower_options opts = {
+      .dynamic_state = dynamic,
+      .attachment_rate = attachment,
+   };
+   if (!dynamic) {
+      const struct vk_fragment_shading_rate_state *fsr = state->fsr;
+      opts.static_state = (kk_fsr_log2(fsr->fragment_size.width) << 2) |
+                          kk_fsr_log2(fsr->fragment_size.height) |
+                          (fsr->combiner_ops[0] << 4) | (fsr->combiner_ops[1] << 8);
+      opts.primitive_rate = primitive &&
+         fsr->combiner_ops[0] != VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR;
+      opts.attachment_rate &=
+         fsr->combiner_ops[1] != VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR;
+   } else {
+      opts.primitive_rate = primitive;
+   }
+   NIR_PASS(_, nir, kk_nir_lower_fsr, &opts);
+}
+
+/* Each last vertex stage provides PrimitiveShadingRateKHR, 1x1 by default. */
+static bool
+kk_lower_vs_primitive_rate(nir_shader *nir)
+{
+   if (nir->info.outputs_written & VARYING_BIT_PRIMITIVE_SHADING_RATE)
+      return false;
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   nir_builder b = nir_builder_at(nir_after_impl(impl));
+   nir_io_semantics io = {.location = VARYING_SLOT_PRIMITIVE_SHADING_RATE,
+                          .num_slots = 1};
+   nir_store_output(&b, nir_imm_int(&b, 0), nir_imm_int(&b, 0), .base = 0,
+                    .write_mask = 1, .component = 0, .src_type = nir_type_int32,
+                    .io_semantics = io);
+   nir->info.outputs_written |= VARYING_BIT_PRIMITIVE_SHADING_RATE;
+   return nir_progress(true, impl, nir_metadata_control_flow);
+}
+
 static void
 kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
              bool defer_hw_vs,
@@ -1150,6 +1257,12 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
     * load_const, otherwise the pass will complain */
    NIR_PASS(_, nir, nir_opt_constant_folding);
 
+   if (nir->info.stage == MESA_SHADER_VERTEX && !emulated_stage &&
+       dev->vk.enabled_features.primitiveFragmentShadingRate && state &&
+       !(state->shader_stages & (VK_SHADER_STAGE_GEOMETRY_BIT |
+                                 VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)))
+      NIR_PASS(_, nir, kk_lower_vs_primitive_rate);
+
    /* These passes operate on lowered IO. */
    if ((nir->info.stage == MESA_SHADER_VERTEX ||
         nir->info.stage == MESA_SHADER_TESS_EVAL) &&
@@ -1164,6 +1277,8 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
          kk_lower_hw_vs(nir, state, is_point);
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, msl_nir_fs_io_types);
+      if (kk_fsr_device(dev))
+         kk_lower_fs_rate(dev, nir, state);
    }
 
    if (nir->info.stage != MESA_SHADER_FRAGMENT)
@@ -3070,6 +3185,8 @@ kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
    kk_finish_nir(dev, fs, info ? info->robustness : &rs_none,
       info ? info->set_layout_count : 0, info ? info->set_layouts : NULL, features,
       info ? info->flags : 0);
+   if (kk_fsr_device(dev) && dev->vk.enabled_features.attachmentFragmentShadingRate)
+      NIR_PASS(_, fs, kk_nir_lower_fsr_attachment);
    /* The shared embedded schema carries original-stage root loads; its
     * canonical sampler lifetime remains with the owning fine shader. */
    static_assert(KK_EMBEDDED_SAMPLER_BINDING_SCHEMA == 1u,
@@ -3609,6 +3726,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       }
    }
    push_size = MAX2(push_size, heap_push_size);
+   /* Rate state follows the push constants in the root table. */
+   if (kk_fsr_device(dev) && infos[0].stage != MESA_SHADER_COMPUTE &&
+       !mesa_shader_stage_is_rt(infos[0].stage))
+      push_size = KK_FSR_PUSH_SIZE;
    for (uint32_t i = 0; i < total_shaders; ++i) {
       shaders[i]->info.push_size = push_size;
       shaders[i]->info.descriptor_heap = infos[0].flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;

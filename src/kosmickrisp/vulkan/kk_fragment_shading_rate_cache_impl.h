@@ -36,9 +36,9 @@ struct kk_vrs_artifact {
 VkResult
 kk_vrs_device_init(struct kk_device *dev)
 {
-   if (!dev->vk.enabled_features.pipelineFragmentShadingRate &&
-       !dev->vk.enabled_features.primitiveFragmentShadingRate &&
-       !dev->vk.enabled_features.attachmentFragmentShadingRate)
+   /* Fragment shading rates use the quad-group lowering; this capture
+    * state stays unallocated. */
+   if (true)
       return VK_SUCCESS;
    dev->vrs = calloc(1, sizeof(*dev->vrs));
    if (!dev->vrs) return VK_ERROR_OUT_OF_HOST_MEMORY;

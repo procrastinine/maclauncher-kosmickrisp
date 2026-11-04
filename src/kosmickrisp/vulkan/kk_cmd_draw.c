@@ -13,6 +13,7 @@
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
+#include "vk_common_entrypoints.h"
 #include "kk_depth_stencil_state.h"
 #include "kk_depth_bias_control.h"
 #include "kk_depth_bounds.h"
@@ -362,6 +363,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    const VkRenderingFragmentShadingRateAttachmentInfoKHR *fsr_att_info =
       vk_find_struct_const(pRenderingInfo->pNext,
                            RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR);
+   struct kk_descriptor_state *fsr_desc = &cmd->state.gfx.descriptors;
    if (fsr_att_info != NULL && fsr_att_info->imageView != VK_NULL_HANDLE) {
       VK_FROM_HANDLE(kk_image_view, iview, fsr_att_info->imageView);
       render->fsr_att = (struct kk_attachment){
@@ -369,6 +371,11 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
          .iview = iview,
          .store_op = VK_ATTACHMENT_STORE_OP_NONE,
       };
+      fsr_desc->root.fsr.attachment = iview->planes[0].fsr_gpu_resource_id;
+      fsr_desc->root_dirty = true;
+   } else if (fsr_desc->root.fsr.attachment) {
+      fsr_desc->root.fsr.attachment = 0;
+      fsr_desc->root_dirty = true;
    }
 
    if (dev->vk.enabled_features.shaderStorageImageMultisample)
@@ -809,6 +816,24 @@ kk_CmdBeginCustomResolveEXT(
 
    kk_CmdEndRendering2KHR(commandBuffer, &end_info);
    kk_begin_rendering(commandBuffer, &rendering_info);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+kk_CmdSetFragmentShadingRateKHR(
+   VkCommandBuffer commandBuffer, const VkExtent2D *pFragmentSize,
+   const VkFragmentShadingRateCombinerOpKHR combinerOps[2])
+{
+   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   vk_common_CmdSetFragmentShadingRateKHR(commandBuffer, pFragmentSize, combinerOps);
+   /* Quad-group fragment shaders combine the rate from the root table. */
+   uint32_t lw = pFragmentSize->width >= 4 ? 2 : pFragmentSize->width >= 2 ? 1 : 0;
+   uint32_t lh = pFragmentSize->height >= 4 ? 2 : pFragmentSize->height >= 2 ? 1 : 0;
+   uint32_t state = (lw << 2) | lh | (combinerOps[0] << 4) | (combinerOps[1] << 8);
+   struct kk_descriptor_state *desc = &cmd->state.gfx.descriptors;
+   if (desc->root.fsr.state != state) {
+      desc->root.fsr.state = state;
+      desc->root_dirty = true;
+   }
 }
 
 VKAPI_ATTR void VKAPI_CALL

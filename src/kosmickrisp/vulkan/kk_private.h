@@ -20,6 +20,8 @@
 #define KK_MAX_DYNAMIC_BUFFERS           128
 #define KK_MAX_RTS                       8
 #define KK_MAX_SAMPLES                   8
+/* Fixed VK_KHR_fragment_shading_rate attachment texel size. */
+#define KK_FSR_TEXEL_SIZE                8
 #define KK_MIN_SSBO_ALIGNMENT            4
 #define KK_MIN_TEXEL_BUFFER_ALIGNMENT    16
 #define KK_MIN_UBO_ALIGNMENT             64

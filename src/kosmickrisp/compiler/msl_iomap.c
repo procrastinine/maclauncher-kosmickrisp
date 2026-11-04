@@ -68,6 +68,7 @@ static const struct {
    [VARYING_SLOT_PRIMITIVE_ID] = {"primitive_id"},
    [VARYING_SLOT_LAYER] = {"render_target_array_index"},
    [VARYING_SLOT_VIEWPORT] = {"viewport_array_index"},
+   [VARYING_SLOT_PRIMITIVE_SHADING_RATE] = {"primitive_shading_rate", .user = true},
    [VARYING_SLOT_CLIP_DIST0] = {"clip_0", .user = true, .scalarized = true},
    [VARYING_SLOT_CLIP_DIST1] = {"clip_1", .user = true, .scalarized = true},
    [VARYING_SLOT_CULL_DIST0] = {"cull_0", .user = true, .scalarized = true},

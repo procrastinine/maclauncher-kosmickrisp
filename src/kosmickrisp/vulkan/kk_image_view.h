@@ -64,6 +64,11 @@ struct kk_image_view {
       uint64_t sampled_gpu_resource_id;
       uint64_t storage_gpu_resource_id;
       uint64_t input_gpu_resource_id;
+
+      /* Single-layer 2D view read by quad-group fragment shaders when the
+       * view is a fragment shading rate attachment. */
+      mtl_texture *mtl_handle_fsr;
+      uint64_t fsr_gpu_resource_id;
    } planes[3];
 };
 

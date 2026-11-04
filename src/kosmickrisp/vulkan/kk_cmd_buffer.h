@@ -84,7 +84,22 @@ struct kk_root_descriptor_table {
 
    /* Client push constants: upload only the bound pipeline range. */
    uint8_t push[KK_MAX_PUSH_SIZE];
+
+   /* VK_KHR_fragment_shading_rate state. Only quad-group fragment shaders
+    * read it; their push range extends through this tail. */
+   struct kk_root_fsr {
+      /* MTLResourceID of the rate attachment, 0 without one. */
+      uint64_t attachment;
+      /* Dynamic pipeline rate in bits 0-3, combiner ops in 4-6 and 8-10. */
+      uint32_t state;
+      uint32_t pad;
+   } fsr;
 };
+
+#define KK_FSR_PUSH_SIZE (KK_MAX_PUSH_SIZE + sizeof(struct kk_root_fsr))
+static_assert(offsetof(struct kk_root_descriptor_table, fsr) ==
+                 offsetof(struct kk_root_descriptor_table, push) + KK_MAX_PUSH_SIZE,
+              "the rate tail directly follows push constants");
 
 static_assert(KK_MAX_SAMPLES <= 8, "dynamic sample mask fits the draw tail");
 

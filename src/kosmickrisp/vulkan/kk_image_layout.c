@@ -84,7 +84,8 @@ vk_image_usage_flags_to_mtl_texture_usage(VkImageUsageFlags2KHR usage_flags,
 
    const VkImageUsageFlags2KHR shader_read =
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-      VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+      VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+      VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
    if (usage_flags & shader_read)
       usage |= MTL_TEXTURE_USAGE_SHADER_READ;
 

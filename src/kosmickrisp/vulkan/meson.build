@@ -135,6 +135,7 @@ kk_files = [kk_emulation_generated] + files(
   'kk_nir_lower_custom_border.c',
   'kk_nir_lower_descriptors.c',
   'kk_nir_lower_image_view_min_lod.c',
+  'kk_nir_lower_fsr.c',
   'kk_nir_lower_multiview.c',
   'kk_nir_lower_null_images.c',
   'kk_nir_lower_textures.c',
