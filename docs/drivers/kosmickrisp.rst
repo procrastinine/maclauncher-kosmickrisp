@@ -441,6 +441,11 @@ as compute kernels. A batch retains at most 256 Task groups, with payload slots
 sized from the shader declaration. Prefix sums of the actual child grids map
 Mesh groups back to their parent Task group.
 
+Mesh multiview executes each original view with its explicit layer and view
+index, supporting up to 32 views. The feature and limit follow the selected
+Mesh entry on each family. Attachment clears use explicit layer rectangles
+with a single-view native pipeline.
+
 On Apple9 and later, pipelines without captured flat outputs expand the real
 Mesh count into native indirect commands and execute a GPU-written range.
 Other pipelines use indirect Mesh draws. A completed batch publishes its real
