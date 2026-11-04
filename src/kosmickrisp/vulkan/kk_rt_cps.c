@@ -335,6 +335,10 @@ kk_rt_split_shader_mode(nir_shader *shader, void *mem_ctx,
 
    NIR_PASS(_, shader, nir_lower_var_copies);
    lower_call_data(shader, &parts->payload_size, &parts->hit_attribute_size);
+   /* ShaderRecordBufferKHR blocks are constant-memory casts of the 64-bit
+    * record address and use the same global access as the call data. */
+   NIR_PASS(_, shader, nir_lower_explicit_io, nir_var_mem_constant,
+            nir_address_format_64bit_global);
    nir_shader_intrinsics_pass(shader, lower_system_value, nir_metadata_none, NULL);
    NIR_PASS(_, shader, nir_lower_vars_to_ssa);
    /* Invocation-private arrays that survive a call must live in the same
