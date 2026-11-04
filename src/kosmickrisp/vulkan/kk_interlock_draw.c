@@ -475,18 +475,7 @@ kk_interlock_record_draw(struct kk_cmd_buffer *cmd)
       p->pipeline[i] = mtl_retain(handle);
    }
    p->load = mtl_retain(shader->interlock_pipeline->load);
-   mtl_depth_stencil_descriptor *ds = mtl_new_depth_stencil_descriptor();
-   mtl_depth_stencil_descriptor_set_depth_compare_function(ds, VK_COMPARE_OP_ALWAYS);
-   mtl_depth_stencil_descriptor_set_depth_write_enabled(ds, p->info.depth);
-   mtl_stencil_descriptor *st = mtl_new_stencil_descriptor();
-   mtl_stencil_descriptor_set_stencil_compare_function(st, VK_COMPARE_OP_ALWAYS);
-   mtl_stencil_descriptor_set_depth_stencil_pass_operation(st, VK_STENCIL_OP_REPLACE);
-   mtl_stencil_descriptor_set_write_mask(st, 255);
-   mtl_depth_stencil_descriptor_set_front_face_stencil(ds, st);
-   mtl_depth_stencil_descriptor_set_back_face_stencil(ds, st);
-   p->replace = mtl_new_depth_stencil_state(dev->mtl_handle, ds);
-   mtl_release(st);
-   mtl_release(ds);
+   p->replace = mtl_retain(shader->interlock_pipeline->replace);
    p->scissor_count = MAX2(dyn->vp.scissor_count, 1);
    for (unsigned i = 0; i < p->scissor_count; ++i) {
       const VkRect2D *r = &dyn->vp.scissors[i];

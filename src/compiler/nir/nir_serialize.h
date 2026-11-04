@@ -32,7 +32,12 @@
 extern "C" {
 #endif
 
+struct shader_info;
+
 void nir_serialize(struct blob *blob, const nir_shader *nir, bool strip);
+/* Read only the shader metadata without allocating or decoding instructions.
+ * String pointers in info borrow the serialized blob's lifetime. */
+bool nir_deserialize_shader_info(struct blob_reader *blob, struct shader_info *info);
 nir_shader *nir_deserialize(void *mem_ctx,
                             const struct nir_shader_compiler_options *options,
                             struct blob_reader *blob);

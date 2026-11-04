@@ -1509,6 +1509,26 @@ vk_get_graphics_pipeline_compile_info(struct vk_graphics_pipeline_compile_info *
       !device->disable_lto &&
       (libs_info == NULL ||
        (pipeline_flags & VK_PIPELINE_CREATE_2_LINK_TIME_OPTIMIZATION_BIT_EXT));
+}
+
+static void
+vk_partition_graphics_pipeline_shaders(
+   struct vk_graphics_pipeline_compile_info *info, struct vk_device *device,
+   const VkGraphicsPipelineCreateInfo *pCreateInfo)
+{
+   VK_FROM_HANDLE(vk_pipeline_layout, pipeline_layout, pCreateInfo->layout);
+   const VkPipelineCreateFlags2KHR pipeline_flags =
+      vk_graphics_pipeline_create_flags(pCreateInfo);
+   bool require_linking = false;
+   if (!info->optimize && info->stage_count > 1 &&
+       device->shader_ops->require_graphics_stage_linking) {
+      const struct vk_pipeline_stage *fs = &info->stages[info->stage_count - 1];
+      if (fs->stage == MESA_SHADER_FRAGMENT) {
+         require_linking = device->shader_ops->require_graphics_stage_linking(
+            device, info->state,
+            fs->precomp ? &fs->precomp->nir_blob : NULL, fs->shader);
+      }
+   }
 
    /* Partition the shaders. Whenever pipelines are used,
     * vertex/geometry/fragment stages are always specified together, so should
@@ -1521,9 +1541,7 @@ vk_get_graphics_pipeline_compile_info(struct vk_graphics_pipeline_compile_info *
     */
    if (info->stage_count == 0) {
       info->part_count = 0;
-   } else if (info->optimize ||
-              (device->shader_ops->require_graphics_stage_linking &&
-               device->shader_ops->require_graphics_stage_linking(device))) {
+   } else if (info->optimize || require_linking) {
       info->partition[1] = info->stage_count;
       info->part_count = 1;
    } else if (info->stages[0].stage == MESA_SHADER_FRAGMENT) {
@@ -2148,6 +2166,7 @@ vk_create_graphics_pipeline(struct vk_device *device,
          stage_feedbacks[stage].duration += stage_end - stage_start;
       }
 
+      vk_partition_graphics_pipeline_shaders(&compile_info, device, pCreateInfo);
       result = vk_graphics_pipeline_compile_shaders(device, cache,
                                                     pipeline_flags,
                                                     pipeline_layout,

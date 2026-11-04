@@ -268,8 +268,15 @@ struct vk_device_shader_ops {
    VkShaderStageFlags (*get_rt_group_linking)(struct vk_physical_device *device,
                                               VkShaderStageFlags stages);
 
-   /** Require one compilation partition for all available graphics stages. */
-   bool (*require_graphics_stage_linking)(struct vk_device *device);
+   /** Require one compilation partition for the available graphics stages.
+    *
+    * Called after precompilation, only when ordinary partitioning would split
+    * the fragment stage. nir is cached fragment NIR when available;
+    * shader is the imported compiled fragment stage, or NULL.
+    */
+   bool (*require_graphics_stage_linking)(
+      struct vk_device *device, const struct vk_graphics_pipeline_state *state,
+      const struct blob *nir, const struct vk_shader *shader);
 
    /** Hash a vk_graphics_state object and a vk_features object.
     *

@@ -24,6 +24,7 @@ kk_interlock_pipeline_finish(struct kk_interlock_pipeline *pipeline)
    for (unsigned i = 0; i < ARRAY_SIZE(pipeline->descriptor); ++i)
       mtl_release(pipeline->descriptor[i]);
    mtl_release(pipeline->load);
+   mtl_release(pipeline->replace);
    simple_mtx_destroy(&pipeline->mutex);
    ralloc_free(pipeline);
 }
@@ -74,33 +75,34 @@ kk_interlock_pipeline_get(struct kk_device *dev,
    return VK_SUCCESS;
 }
 
+static mtl_function_descriptor *
+kk_interlock_function(struct kk_device *dev, const struct msl_compile_data *source)
+{
+   if (!source->code)
+      return NULL;
+   struct kk_physical_device *pdev = kk_device_physical(dev);
+   mtl_library *library = mtl_new_library(dev->mtl_compiler_handle, source->code,
+      pdev->info.msl_version, MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
+   if (!library)
+      return NULL;
+   mtl_function_descriptor *function =
+      mtl_new_library_function_descriptor(library, source->entrypoint_name);
+   mtl_release(library);
+   return function;
+}
+
 static VkResult
 kk_interlock_descriptor(struct kk_device *dev,
-   const struct msl_compile_data *vs, const struct msl_compile_data *fs,
+   mtl_function_descriptor *vertex, const struct msl_compile_data *fs,
    mtl_render_pipeline_descriptor **out)
 {
-   struct kk_physical_device *pdev = kk_device_physical(dev);
-   if (!vs->code || !fs->code)
+   mtl_function_descriptor *fragment = kk_interlock_function(dev, fs);
+   if (!fragment)
       return VK_ERROR_INVALID_SHADER_NV;
-   mtl_library *vertex = mtl_new_library(dev->mtl_compiler_handle, vs->code,
-      pdev->info.msl_version, MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
-   if (!vertex)
-      return VK_ERROR_INVALID_SHADER_NV;
-   mtl_library *fragment = mtl_new_library(dev->mtl_compiler_handle, fs->code,
-      pdev->info.msl_version, MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
-   if (!fragment) {
-      mtl_release(vertex);
-      return VK_ERROR_INVALID_SHADER_NV;
-   }
-   mtl_function_descriptor *v = mtl_new_library_function_descriptor(vertex, vs->entrypoint_name);
-   mtl_function_descriptor *f = mtl_new_library_function_descriptor(fragment, fs->entrypoint_name);
    mtl_render_pipeline_descriptor *desc = mtl_new_render_pipeline_descriptor();
-   mtl_render_pipeline_descriptor_set_vertex_shader(desc, v);
-   mtl_render_pipeline_descriptor_set_fragment_shader(desc, f);
+   mtl_render_pipeline_descriptor_set_vertex_shader(desc, vertex);
+   mtl_render_pipeline_descriptor_set_fragment_shader(desc, fragment);
    mtl_render_pipeline_descriptor_set_rasterization_enabled(desc, true);
-   mtl_release(v);
-   mtl_release(f);
-   mtl_release(vertex);
    mtl_release(fragment);
    *out = desc;
    return VK_SUCCESS;
@@ -132,20 +134,45 @@ kk_interlock_pipeline_compile(struct kk_device *dev, struct kk_shader *shader)
    mtl_release(library);
    if (!pipeline->load)
       return VK_ERROR_INVALID_SHADER_NV;
-   const struct msl_compile_data *tile = &source->program[KK_INTERLOCK_TILE_VERTEX];
-   for (unsigned i = 0; i <= KK_INTERLOCK_REPLAY; ++i) {
-      VkResult result = kk_interlock_descriptor(dev,
-         i == KK_INTERLOCK_CAPTURE ? &shader->polygon[2] : tile,
+   mtl_function_descriptor *capture = kk_interlock_function(dev, &shader->polygon[2]);
+   if (!capture)
+      return VK_ERROR_INVALID_SHADER_NV;
+   /* Transaction and replay use exactly the same tile vertex program. */
+   mtl_function_descriptor *tile =
+      kk_interlock_function(dev, &source->program[KK_INTERLOCK_TILE_VERTEX]);
+   VkResult result = tile ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
+   for (unsigned i = 0; result == VK_SUCCESS && i <= KK_INTERLOCK_REPLAY; ++i) {
+      result = kk_interlock_descriptor(dev,
+         i == KK_INTERLOCK_CAPTURE ? capture : tile,
          &source->program[i], &pipeline->descriptor[i]);
-      if (result != VK_SUCCESS)
-         return result;
    }
+   mtl_release(capture);
+   mtl_release(tile);
+   if (result != VK_SUCCESS)
+      return result;
+
+   /* Replay replaces the software-tested values. Its state depends only on
+    * this compiled envelope's depth attachment, never on dynamic app tests. */
+   mtl_depth_stencil_descriptor *ds = mtl_new_depth_stencil_descriptor();
+   mtl_depth_stencil_descriptor_set_depth_compare_function(ds, VK_COMPARE_OP_ALWAYS);
+   mtl_depth_stencil_descriptor_set_depth_write_enabled(ds, source->info.depth);
+   mtl_stencil_descriptor *st = mtl_new_stencil_descriptor();
+   mtl_stencil_descriptor_set_stencil_compare_function(st, VK_COMPARE_OP_ALWAYS);
+   mtl_stencil_descriptor_set_depth_stencil_pass_operation(st, VK_STENCIL_OP_REPLACE);
+   mtl_stencil_descriptor_set_write_mask(st, 255);
+   mtl_depth_stencil_descriptor_set_front_face_stencil(ds, st);
+   mtl_depth_stencil_descriptor_set_back_face_stencil(ds, st);
+   pipeline->replace = mtl_new_depth_stencil_state(dev->mtl_handle, ds);
+   mtl_release(st);
+   mtl_release(ds);
+   if (!pipeline->replace)
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
    enum mtl_pixel_format empty[8] = {MTL_PIXEL_FORMAT_INVALID};
    for (unsigned i = 0; i < ARRAY_SIZE(empty); ++i)
       empty[i] = MTL_PIXEL_FORMAT_INVALID;
    unsigned samples = MAX2(shader->info.vs.sample_count, 1);
    mtl_render_pipeline_state *unused;
-   VkResult result = kk_interlock_pipeline_get(dev, pipeline, KK_INTERLOCK_CAPTURE,
+   result = kk_interlock_pipeline_get(dev, pipeline, KK_INTERLOCK_CAPTURE,
       empty, samples, shader->info.vs.topology, &unused);
    if (result == VK_SUCCESS)
       result = kk_interlock_pipeline_get(dev, pipeline, KK_INTERLOCK_TRANSACTION,

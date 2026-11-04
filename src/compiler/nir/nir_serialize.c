@@ -2322,6 +2322,30 @@ nir_serialize(struct blob *blob, const nir_shader *nir, bool strip)
    serialize_internal(blob, nir, strip, true);
 }
 
+static enum nir_serialize_shader_flags
+read_shader_info(struct blob_reader *blob, struct shader_info *info)
+{
+   enum nir_serialize_shader_flags flags = blob_read_uint32(blob);
+   const char *name = (flags & NIR_SERIALIZE_SHADER_NAME) ? blob_read_string(blob) : NULL;
+   const char *label = (flags & NIR_SERIALIZE_SHADER_LABEL) ? blob_read_string(blob) : NULL;
+   const char *spec = (flags & NIR_SERIALIZE_SHADER_SPEC) ? blob_read_string(blob) : NULL;
+
+   blob_copy_bytes(blob, info, sizeof(*info));
+   info->name = name;
+   info->label = label;
+   info->spec = spec;
+   return flags;
+}
+
+bool
+nir_deserialize_shader_info(struct blob_reader *blob, struct shader_info *info)
+{
+   /* Skip the instruction index table's length. */
+   blob_read_uint32(blob);
+   read_shader_info(blob, info);
+   return !blob->overrun;
+}
+
 nir_shader *
 nir_deserialize(void *mem_ctx,
                 const struct nir_shader_compiler_options *options,
@@ -2333,13 +2357,8 @@ nir_deserialize(void *mem_ctx,
    ctx.idx_table_len = blob_read_uint32(blob);
    ctx.idx_table = calloc(ctx.idx_table_len, sizeof(uintptr_t));
 
-   enum nir_serialize_shader_flags flags = blob_read_uint32(blob);
-   char *name = (flags & NIR_SERIALIZE_SHADER_NAME) ? blob_read_string(blob) : NULL;
-   char *label = (flags & NIR_SERIALIZE_SHADER_LABEL) ? blob_read_string(blob) : NULL;
-   char *spec = (flags & NIR_SERIALIZE_SHADER_SPEC) ? blob_read_string(blob) : NULL;
-
    struct shader_info info;
-   blob_copy_bytes(blob, (uint8_t *)&info, sizeof(info));
+   enum nir_serialize_shader_flags flags = read_shader_info(blob, &info);
 
    ctx.nir = nir_shader_create(mem_ctx, info.stage, options);
 
@@ -2347,9 +2366,9 @@ nir_deserialize(void *mem_ctx,
    if (ctx.nir->has_debug_info)
       _mesa_hash_table_init(&ctx.strings, NULL, _mesa_hash_string, _mesa_key_string_equal);
 
-   info.name = name ? ralloc_strdup(ctx.nir, name) : NULL;
-   info.label = label ? ralloc_strdup(ctx.nir, label) : NULL;
-   info.spec = spec ? ralloc_strdup(ctx.nir, spec) : NULL;
+   info.name = info.name ? ralloc_strdup(ctx.nir, info.name) : NULL;
+   info.label = info.label ? ralloc_strdup(ctx.nir, info.label) : NULL;
+   info.spec = info.spec ? ralloc_strdup(ctx.nir, info.spec) : NULL;
 
    ctx.nir->info = info;
 

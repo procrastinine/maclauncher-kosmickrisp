@@ -37,6 +37,7 @@ struct kk_interlock_pipeline {
    mtl_render_pipeline_descriptor *descriptor[3];
    bool framebuffer_reads[3];
    mtl_compute_pipeline_state *load;
+   mtl_depth_stencil_state *replace;
    struct kk_interlock_pipeline_entry *entries;
    simple_mtx_t mutex;
 };

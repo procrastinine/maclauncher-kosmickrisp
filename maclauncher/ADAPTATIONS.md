@@ -1008,7 +1008,7 @@ Implementation: [kk_standard_sparse_3d_layout.h](../src/kosmickrisp/vulkan/kk_st
 
 Vulkan contract: `VK_EXT_fragment_shader_interlock`, `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT.fragmentShaderPixelInterlock`.
 
-Capture completion schedules private continuation work without a host wait in queue submission. Private gates preserve later queue work and application synchronization until completion, and device loss releases native waits before callback drain.
+Capture completion schedules private continuation work without a host wait in queue submission. Private gates preserve later queue work and application synchronization until completion, and device loss releases native waits before callback drain. Joint graphics-stage compilation is selected from cached fragment metadata only for multisampled pixel interlock. Ordinary shaders, sample interlock and static single-sample pixel interlock retain the normal graphics-library partitioning. Recorded continuation segments append in constant time.
 
 Limits and reported properties: `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT.fragmentShaderPixelInterlock = gpu_apple_family >= 7`.
 
