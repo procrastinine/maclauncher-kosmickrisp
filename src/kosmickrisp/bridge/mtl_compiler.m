@@ -15,10 +15,28 @@
 #include <Metal/MTLDevice.h>
 #include <Metal/MTL4CompilerTask.h>
 #include <dispatch/dispatch.h>
+#include <string.h>
+
+#include "mtl_pipeline_archive.h"
+
+/* Immutable process diagnostic, initialized before compiler publication. */
+static NSString *debug_msl_prefix;
+
+void
+mtl_init_debug_msl_salt(const char *salt)
+{
+   if (!salt || !salt[0]) return;
+   @autoreleasepool {
+      /* Base64 keeps arbitrary environment bytes inside one harmless comment. */
+      NSData *bytes = [NSData dataWithBytes:salt length:strlen(salt)];
+      debug_msl_prefix = [[NSString alloc] initWithFormat:
+         @"// KK_DEBUG_MSL_SALT(base64):%@\n#line 1\n", [bytes base64EncodedStringWithOptions:0]];
+   }
+}
 
 /* Compiler */
-mtl_compiler *
-mtl_new_compiler(mtl_device *device)
+static mtl_compiler *
+mtl_create_compiler(mtl_device *device, const struct mtl_compiler_cache_ops *ops, void *data)
 {
    @autoreleasepool {
       id<MTLDevice> dev = (id<MTLDevice>)device;
@@ -26,15 +44,40 @@ mtl_new_compiler(mtl_device *device)
       dev.shouldMaximizeConcurrentCompilation = YES;
       MTL4CompilerDescriptor *desc = [[MTL4CompilerDescriptor new] autorelease];
 
-      NSError *error;
+      KKPipelineArchive *cache = ops ? [[KKPipelineArchive alloc] initWithDevice:dev operations:ops data:data] : nil;
+      if (ops && !cache) ops->destroy(data);
+      if (cache) desc.pipelineDataSetSerializer = cache->serializer;
+      NSError *error = nil;
       id<MTL4Compiler> compiler = [dev newCompilerWithDescriptor:desc error:&error];
 
       if (compiler == nil) {
          fprintf(stderr, "Failed to create MTL4Compiler: %s\n", [error.localizedDescription UTF8String]);
       }
 
+      if (compiler && cache)
+         objc_setAssociatedObject(compiler, &kk_archive_association, cache, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      [cache release];
       return compiler;
    }
+}
+
+mtl_compiler *
+mtl_new_compiler(mtl_device *device)
+{
+   return mtl_create_compiler(device, NULL, NULL);
+}
+
+mtl_compiler *
+mtl_new_cached_compiler(mtl_device *device,
+   const struct mtl_compiler_cache_ops *ops, void *data)
+{
+   return mtl_create_compiler(device, ops, data);
+}
+
+void
+mtl_compiler_finish_cache(mtl_compiler *compiler)
+{
+   @autoreleasepool { [kk_compiler_archive(compiler) finish:(id<MTL4Compiler>)compiler]; }
 }
 
 /* Library */
@@ -50,6 +93,8 @@ mtl_library_descriptor(const char *src, enum mtl_language_version msl_version,
 
    MTL4LibraryDescriptor *desc = [[MTL4LibraryDescriptor new] autorelease];
    desc.source = [NSString stringWithCString:src encoding:NSASCIIStringEncoding];
+   if (debug_msl_prefix)
+      desc.source = [debug_msl_prefix stringByAppendingString:desc.source];
    desc.options = opts;
    return desc;
 }
@@ -146,8 +191,11 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
       desc.maxTotalThreadsPerThreadgroup = max_total_threads_per_threadgroup;
 
       NSError *error;
-      id<MTLComputePipelineState> pipeline = [comp newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil
-                                                                                   error:&error];
+      id<MTLComputePipelineState> pipeline = kk_archive_compute(compiler, desc);
+      if (!pipeline) {
+         pipeline = [comp newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error];
+         if (pipeline) [kk_compiler_archive(compiler) recordCompile];
+      }
 
       if (pipeline == nil) {
          fprintf(stderr, "Failed to create MTLComputePipelineState: %s\n", [error.localizedDescription UTF8String]);
@@ -246,8 +294,11 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
 
       NSError *error = nil;
-      id<MTLRenderPipelineState> pipeline = [comp newRenderPipelineStateWithDescriptor:desc compilerTaskOptions:nil
-                                                                                 error:&error];
+      id<MTLRenderPipelineState> pipeline = kk_archive_render(compiler, desc);
+      if (!pipeline) {
+         pipeline = [comp newRenderPipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error];
+         if (pipeline) [kk_compiler_archive(compiler) recordCompile];
+      }
 
       if (pipeline == nil) {
          fprintf(stderr, "Failed to create MTLRenderPipelineState: %s\n", [error.localizedDescription UTF8String]);

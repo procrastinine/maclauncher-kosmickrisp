@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_perf.h"
+#include "kosmickrisp/bridge/mtl_compiler.h"
 #include "kk_device.h"
 #include "kk_cmd_buffer.h"
 #include "util/os_time.h"
@@ -383,4 +384,22 @@ kk_perf_init_dispatch(struct kk_device *dev)
    dev->exposed_dispatch_table.CreateComputePipelines = kk_perf_CreateComputePipelines;
    kk_perf_init_wait_dispatch(dev);
    kk_perf_init_wsi_dispatch(dev);
+}
+
+/* The final client records native-compiler lifetime totals after its flush.
+ * Other Vulkan devices may have shared this compiler during the process. */
+void
+kk_perf_metal_archive(struct kk_perf *p, void *compiler)
+{
+   if (!p) return;
+   struct mtl_compiler_cache_stats stats;
+   if (!mtl_compiler_get_cache_stats(compiler, &stats)) return;
+   pthread_mutex_lock(&p->mutex);
+   fprintf(p->log, "{\"kk_metal_archive\":1,\"device\":\"%p\",\"compiler\":\"%p\","
+      "\"archive_loaded\":%s,\"lookups\":%"PRIu64",\"hits\":%"PRIu64
+      ",\"native_pipeline_successes\":%"PRIu64",\"store_requested_bytes\":%"PRIu64"}\n",
+      (void *)p, compiler, stats.archive_loaded ? "true" : "false",
+      stats.lookups, stats.hits, stats.native_compiles, stats.stored_bytes);
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
 }

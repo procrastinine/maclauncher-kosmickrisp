@@ -40,6 +40,7 @@ void kk_perf_msl_source(struct kk_perf *, unsigned stage, const char *source);
 
 struct kk_perf *kk_perf_create(void);
 void kk_perf_destroy(struct kk_perf *perf);
+void kk_perf_metal_archive(struct kk_perf *, void *compiler);
 uint64_t kk_perf_now(void);
 void kk_perf_add(struct kk_perf *, enum kk_perf_metric, uint64_t ns);
 void kk_perf_queue(struct kk_perf *, int64_t delta);

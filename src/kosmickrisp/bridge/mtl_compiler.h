@@ -11,6 +11,7 @@
 
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 /* Bridge enums */
 enum mtl_pixel_format;
@@ -21,7 +22,27 @@ mtl_render_pipeline_descriptor *mtl_new_mesh_pipeline_descriptor(
    uint32_t payload_bytes, uint32_t mesh_groups);
 
 /* Compiler */
+/* Initialize once before publishing the first compiler. No-op when unset. */
+void mtl_init_debug_msl_salt(const char *salt);
 mtl_compiler *mtl_new_compiler(mtl_device *device);
+/* The cached constructor owns data, including on compiler creation failure.
+ * load returns malloc-owned bytes; store copies them before returning. */
+struct mtl_compiler_cache_ops {
+   void *(*load)(void *data, size_t *size);
+   void (*store)(void *data, const void *bytes, size_t size);
+   void (*destroy)(void *data);
+};
+mtl_compiler *mtl_new_cached_compiler(mtl_device *device,
+   const struct mtl_compiler_cache_ops *ops, void *data);
+struct mtl_compiler_cache_stats {
+   uint64_t lookups, hits, native_compiles, stored_bytes;
+   bool archive_loaded;
+};
+/* Lifetime totals for this shared native compiler, not one Vulkan device. */
+bool mtl_compiler_get_cache_stats(mtl_compiler *compiler,
+   struct mtl_compiler_cache_stats *stats);
+/* Call only after the final compiler client has drained its queues. */
+void mtl_compiler_finish_cache(mtl_compiler *compiler);
 
 /* Library */
 mtl_library *

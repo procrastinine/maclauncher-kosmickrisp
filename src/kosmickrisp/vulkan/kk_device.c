@@ -8,6 +8,11 @@
 #include "kk_device.h"
 #include "kk_perf.h"
 #include "kk_frame_capture.h"
+#include "util/disk_cache.h"
+#ifdef ENABLE_SHADER_CACHE
+#include "util/disk_cache_os.h"
+#endif
+#include <sys/utsname.h>
 #include "kk_sampler.h"
 #include "kk-sampler-cap-keys.h"
 #include "kk_bo.h"
@@ -45,17 +50,124 @@
 struct kk_mtl_compiler {
    mtl_compiler *handle;
    uint32_t refcount;
+   bool finishing;
 };
 
 static struct hash_table compilers_ht;
-static simple_mtx_t compilers_ht_lock;
+static mtx_t compilers_ht_lock;
+static cnd_t compilers_ht_changed;
 static once_flag compilers_ht_once = ONCE_FLAG_INIT;
 
 static void
 kk_init_compiler_table()
 {
    _mesa_pointer_hash_table_init(&compilers_ht, NULL);
-   simple_mtx_init(&compilers_ht_lock, mtx_plain);
+   mtx_init(&compilers_ht_lock, mtx_plain);
+   cnd_init(&compilers_ht_changed);
+}
+
+/* Snapshot the opt-in diagnostic at first device/compiler creation. The
+ * environment is never read by a compile or draw path. */
+static once_flag compile_debug_once = ONCE_FLAG_INIT;
+static blake3_hash debug_msl_salt_digest;
+
+static void
+kk_init_compile_debug(void)
+{
+   const char *salt = getenv("KK_DEBUG_MSL_SALT");
+   if (!salt || !salt[0]) return;
+   _mesa_blake3_compute(salt, strlen(salt), debug_msl_salt_digest);
+   mtl_init_debug_msl_salt(salt);
+}
+
+/* Own factory inputs, not a physical-device/cache pointer: this compiler is
+ * shared across Vulkan devices and can outlive the first physical device. */
+#ifdef ENABLE_SHADER_CACHE
+struct kk_compiler_cache {
+   struct disk_cache *disk;
+   cache_key key;
+   blake3_hash driver_digest;
+   uint32_t apple_family;
+   uint64_t workarounds;
+   bool initialized;
+   struct {
+      char tag[sizeof("Metal4 pipelines")];
+      uint64_t registry;
+      char os_version[sizeof(((struct utsname *)0)->version)];
+      blake3_hash msl_salt;
+   } identity;
+};
+
+static bool
+kk_compiler_cache_init(struct kk_compiler_cache *cache)
+{
+   if (!cache->initialized) {
+      cache->initialized = true;
+      cache->disk = kk_create_disk_cache(cache->driver_digest, cache->apple_family,
+                                         cache->workarounds);
+      if (cache->disk)
+         disk_cache_compute_key(cache->disk, &cache->identity,
+                                sizeof(cache->identity), cache->key);
+   }
+   return cache->disk != NULL;
+}
+
+static void *
+kk_compiler_cache_load(void *data, size_t *size)
+{
+   struct kk_compiler_cache *cache = data;
+   *size = 0;
+   return kk_compiler_cache_init(cache) ? disk_cache_get(cache->disk, cache->key, size) : NULL;
+}
+
+static void
+kk_compiler_cache_store(void *data, const void *bytes, size_t size)
+{
+   struct kk_compiler_cache *cache = data;
+   if (size && kk_compiler_cache_init(cache))
+      disk_cache_put(cache->disk, cache->key, bytes, size, NULL);
+}
+
+static void
+kk_compiler_cache_destroy(void *data)
+{
+   struct kk_compiler_cache *cache = data;
+   if (cache->disk)
+      disk_cache_destroy(cache->disk);
+   free(cache);
+}
+
+#endif
+
+static mtl_compiler *
+kk_new_compiler(struct kk_device *dev)
+{
+   call_once(&compile_debug_once, kk_init_compile_debug);
+#ifndef ENABLE_SHADER_CACHE
+   return mtl_new_compiler(dev->mtl_handle);
+#else
+   struct kk_physical_device *pdev = kk_device_physical(dev);
+   if (!disk_cache_enabled())
+      return mtl_new_compiler(dev->mtl_handle);
+   struct kk_compiler_cache *cache = calloc(1, sizeof(*cache));
+   if (!cache)
+      return mtl_new_compiler(dev->mtl_handle);
+   memcpy(cache->driver_digest, pdev->disk_cache_digest, sizeof(cache->driver_digest));
+   cache->apple_family = pdev->info.gpu_apple_family;
+   cache->workarounds = pdev->settings.disabled_workarounds;
+   memcpy(cache->identity.tag, "Metal4 pipelines", sizeof("Metal4 pipelines"));
+   cache->identity.registry = mtl_device_get_registry_id(dev->mtl_handle);
+   memcpy(cache->identity.msl_salt, debug_msl_salt_digest, sizeof(debug_msl_salt_digest));
+   struct utsname os = {0};
+   if (!uname(&os))
+      memcpy(cache->identity.os_version, os.version, sizeof(os.version));
+   static const struct mtl_compiler_cache_ops ops = {
+      .load = kk_compiler_cache_load,
+      .store = kk_compiler_cache_store,
+      .destroy = kk_compiler_cache_destroy,
+   };
+   return mtl_new_cached_compiler(dev->mtl_handle, &ops, cache);
+#endif
 }
 
 static mtl_compiler *
@@ -64,38 +176,46 @@ kk_acquire_compiler(struct kk_device *dev)
    /* KK_WORKAROUND_11 */
    struct kk_physical_device *pdev = kk_device_physical(dev);
    if (pdev->settings.disabled_workarounds & BITFIELD64_BIT(11)) {
-      return mtl_new_compiler(dev->mtl_handle);
+      return kk_new_compiler(dev);
    }
 
    call_once(&compilers_ht_once, kk_init_compiler_table);
-   simple_mtx_lock(&compilers_ht_lock);
+   mtx_lock(&compilers_ht_lock);
 
-   struct hash_entry *ent =
-      _mesa_hash_table_search(&compilers_ht, dev->mtl_handle);
+   struct hash_entry *ent;
+   for (;;) {
+      ent = _mesa_hash_table_search(&compilers_ht, dev->mtl_handle);
+      if (!ent || !((struct kk_mtl_compiler *)ent->data)->finishing)
+         break;
+      /* Only the same native device waits for its final cache flush. Keep
+       * workaround 11's single compiler alive until serialization is done. */
+      cnd_wait(&compilers_ht_changed, &compilers_ht_lock);
+   }
 
    struct kk_mtl_compiler *compiler;
    if (ent == NULL) {
       compiler = ralloc(NULL, struct kk_mtl_compiler);
       if (compiler == NULL) {
-         simple_mtx_unlock(&compilers_ht_lock);
+         mtx_unlock(&compilers_ht_lock);
          return NULL;
       }
 
-      compiler->handle = mtl_new_compiler(dev->mtl_handle);
+      compiler->handle = kk_new_compiler(dev);
       if (compiler->handle == NULL) {
          ralloc_free(compiler);
-         simple_mtx_unlock(&compilers_ht_lock);
+         mtx_unlock(&compilers_ht_lock);
          return NULL;
       }
 
       compiler->refcount = 1;
+      compiler->finishing = false;
       _mesa_hash_table_insert(&compilers_ht, dev->mtl_handle, compiler);
    } else {
       compiler = ent->data;
       compiler->refcount++;
    }
 
-   simple_mtx_unlock(&compilers_ht_lock);
+   mtx_unlock(&compilers_ht_lock);
    return compiler->handle;
 }
 
@@ -105,11 +225,13 @@ kk_release_compiler(struct kk_device *dev)
    /* KK_WORKAROUND_11 */
    struct kk_physical_device *pdev = kk_device_physical(dev);
    if (pdev->settings.disabled_workarounds & BITFIELD64_BIT(11)) {
+      mtl_compiler_finish_cache(dev->mtl_compiler_handle);
+      kk_perf_metal_archive(dev->perf, dev->mtl_compiler_handle);
       mtl_release(dev->mtl_compiler_handle);
       return;
    }
 
-   simple_mtx_lock(&compilers_ht_lock);
+   mtx_lock(&compilers_ht_lock);
 
    struct hash_entry *ent =
       _mesa_hash_table_search(&compilers_ht, dev->mtl_handle);
@@ -118,13 +240,22 @@ kk_release_compiler(struct kk_device *dev)
       --compiler->refcount;
 
       if (compiler->refcount == 0) {
-         _mesa_hash_table_remove(&compilers_ht, ent);
+         compiler->finishing = true;
+         mtx_unlock(&compilers_ht_lock);
+         /* Final-client work must not hold the table lock across native
+          * compilation, disk IO, or destruction on an unrelated device. */
+         mtl_compiler_finish_cache(compiler->handle);
+         kk_perf_metal_archive(dev->perf, compiler->handle);
          mtl_release(compiler->handle);
+         mtx_lock(&compilers_ht_lock);
+         ent = _mesa_hash_table_search(&compilers_ht, dev->mtl_handle);
+         _mesa_hash_table_remove(&compilers_ht, ent);
          ralloc_free(compiler);
+         cnd_broadcast(&compilers_ht_changed);
       }
    }
 
-   simple_mtx_unlock(&compilers_ht_lock);
+   mtx_unlock(&compilers_ht_lock);
 }
 
 DERIVE_HASH_TABLE(mtl_sampler_packed);

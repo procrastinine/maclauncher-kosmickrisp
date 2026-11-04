@@ -9,11 +9,25 @@
 #include "mtl_format.h"
 
 /* Compiler */
+void mtl_init_debug_msl_salt(const char *salt) {}
 mtl_compiler *
 mtl_new_compiler(mtl_device *device)
 {
    return NULL;
 }
+
+mtl_compiler *
+mtl_new_cached_compiler(mtl_device *device,
+   const struct mtl_compiler_cache_ops *ops, void *data)
+{
+   ops->destroy(data);
+   return mtl_new_compiler(device);
+}
+
+bool mtl_compiler_get_cache_stats(mtl_compiler *compiler,
+   struct mtl_compiler_cache_stats *stats) { return false; }
+
+void mtl_compiler_finish_cache(mtl_compiler *compiler) {}
 
 /* Library */
 mtl_library *
