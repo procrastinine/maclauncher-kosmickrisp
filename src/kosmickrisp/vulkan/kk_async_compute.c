@@ -368,11 +368,15 @@ kk_async_compute_finish_creation(struct kk_device *dev, uint32_t count,
       bool ready = p_atomic_read(&job->ready);
       const VkPipelineCreationFeedbackCreateInfo *feedback =
          vk_find_struct_const(infos[i].pNext, PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
-      VkResult status = VK_SUCCESS;
       if (!ready && (vk_compute_pipeline_create_flags(&infos[i]) &
              VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_KHR)) {
-         status = VK_PIPELINE_COMPILE_REQUIRED;
-      } else if (force_wait || (ready && job->result != VK_SUCCESS)) {
+         /* Common cache-only creation can return a shader only on a hit.
+          * Reuse its existing pending job: this request schedules no compile
+          * and must not wait for it. The ordinary bind joins the same job. */
+         continue;
+      }
+      VkResult status = VK_SUCCESS;
+      if (force_wait || (ready && job->result != VK_SUCCESS)) {
          uint64_t begin = feedback ? os_time_get_nano() : 0;
          status = join_shader(shader, "creation");
          if (feedback) {
