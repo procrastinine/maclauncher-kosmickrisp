@@ -21,6 +21,9 @@
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 
+#include "util/log.h"
+#include "vk_enum_to_str.h"
+
 struct kk_query_report {
    uint64_t value;
 };
@@ -139,6 +142,18 @@ host_zero_queries(struct kk_device *dev, struct kk_query_pool *pool,
 
 #include "kk_timestamp_heaps.h"
 
+/* Every out-of-memory pool creation leaves one line on standard error, so a
+ * failure inside an application leaves a trace in its log. */
+static VkResult
+kk_query_pool_oom(struct kk_device *dev, const VkQueryPoolCreateInfo *info,
+                  VkResult result, const char *reason)
+{
+   mesa_logw("kk: vkCreateQueryPool of %u %s queries failed: %s (%s)",
+             info->queryCount, vk_QueryType_to_str(info->queryType), reason,
+             vk_Result_to_str(result));
+   return vk_error(dev, result);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
                    const VkAllocationCallbacks *pAllocator,
@@ -159,6 +174,10 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
 
    if (pCreateInfo->queryType == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {
       result = kk_device_init_primitives_generated_lib(dev);
+      if (result == VK_ERROR_OUT_OF_HOST_MEMORY ||
+          result == VK_ERROR_OUT_OF_DEVICE_MEMORY)
+         return kk_query_pool_oom(dev, pCreateInfo, result,
+                                  "primitives generated library");
       if (result != VK_SUCCESS)
          return result;
    }
@@ -166,7 +185,8 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
    pool =
       vk_query_pool_create(&dev->vk, pCreateInfo, pAllocator, sizeof(*pool));
    if (!pool)
-      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return kk_query_pool_oom(dev, pCreateInfo, VK_ERROR_OUT_OF_HOST_MEMORY,
+                               "pool object");
 
    /* VUID-VkQueryPoolCreateInfo-queryCount-02763: queryCount must be greater
     * than 0 */
@@ -188,7 +208,8 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
       align(index_start + index_size, sizeof(struct kk_query_report));
    if (bo_size > UINT32_MAX) {
       kk_DestroyQueryPool(device, kk_query_pool_to_handle(pool), pAllocator);
-      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return kk_query_pool_oom(dev, pCreateInfo, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                               "report buffer over 4 GiB");
    }
    pool->index_start = index_start;
 
@@ -212,12 +233,14 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
 
    if (bo_size > UINT32_MAX) {
       kk_DestroyQueryPool(device, kk_query_pool_to_handle(pool), pAllocator);
-      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return kk_query_pool_oom(dev, pCreateInfo, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                               "report buffer over 4 GiB");
    }
    result = kk_alloc_bo(dev, &dev->vk.base, bo_size, 8, &pool->bo);
    if (result != VK_SUCCESS) {
       kk_DestroyQueryPool(device, kk_query_pool_to_handle(pool), pAllocator);
-      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return kk_query_pool_oom(dev, pCreateInfo, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                               "report buffer");
    }
 
    if (kk_pool_is_oq(pool)) {
@@ -233,7 +256,9 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
          if (result != VK_SUCCESS) {
             kk_DestroyQueryPool(device, kk_query_pool_to_handle(pool),
                                 pAllocator);
-            return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+            return kk_query_pool_oom(dev, pCreateInfo,
+                                     VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                                     "occlusion query table full");
          }
 
          /* We increment as we go so we can clean up properly if we run out */
@@ -245,7 +270,10 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
       result = kk_timestamp_alloc_heaps(dev, pool, pAllocator);
       if (result != VK_SUCCESS) {
          kk_DestroyQueryPool(device, kk_query_pool_to_handle(pool), pAllocator);
-         return vk_error(dev, result);
+         return kk_query_pool_oom(dev, pCreateInfo, result,
+                                  result == VK_ERROR_OUT_OF_HOST_MEMORY
+                                     ? "timestamp chunk table"
+                                     : "no free timestamp heap entries");
       }
    }
 
