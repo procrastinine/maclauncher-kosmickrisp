@@ -8,6 +8,8 @@ kk_mesh_gather_io(nir_intrinsic_instr *intr, struct io_slot_info *outputs)
 {
    bool store;
    unsigned offset_src;
+   const bool primitive = intr->intrinsic == nir_intrinsic_store_per_primitive_output ||
+                          intr->intrinsic == nir_intrinsic_load_per_primitive_output;
    switch (intr->intrinsic) {
    case nir_intrinsic_store_per_vertex_output:
    case nir_intrinsic_store_per_primitive_output:
@@ -37,8 +39,30 @@ kk_mesh_gather_io(nir_intrinsic_instr *intr, struct io_slot_info *outputs)
                                 nir_intrinsic_dest_type(intr);
       outputs[i].num_components = MAX2(outputs[i].num_components,
                                        component + intr->num_components);
+      outputs[i].mesh_primitive |= primitive;
+      outputs[i].mesh_vertex |= !primitive;
    }
    return true;
+}
+
+/* Slots accessed after the last info gather, such as the second slot of a
+ * 64-bit vector output split into 32-bit halves, take their class from the
+ * accessing intrinsics so every block declares them. */
+static void
+kk_mesh_gather_masks(nir_shader *s, const struct io_slot_info *outputs)
+{
+   for (unsigned location = 0; location < 64; ++location) {
+      const struct io_slot_info *info = &outputs[location];
+      if (info->mesh_vertex == info->mesh_primitive)
+         continue;
+      const uint64_t bit = BITFIELD64_BIT(location);
+      if (!((s->info.outputs_written | s->info.outputs_read) & bit))
+         s->info.outputs_written |= bit;
+      if (info->mesh_primitive)
+         s->info.per_primitive_outputs |= bit;
+      else
+         s->info.per_primitive_outputs &= ~bit;
+   }
 }
 
 /* Mirror the emitted native (not packed staging) field layout. A vector3 has

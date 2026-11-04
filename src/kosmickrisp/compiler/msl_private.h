@@ -17,6 +17,9 @@ struct io_slot_info {
    bool sample;
    bool uses_interpolant;
    bool per_vertex;
+   /* Mesh outputs: accessed through per-vertex or per-primitive intrinsics. */
+   bool mesh_vertex;
+   bool mesh_primitive;
 };
 
 struct kk_mesh_msl_info {

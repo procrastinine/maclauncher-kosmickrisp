@@ -481,6 +481,8 @@ msl_gather_io_info(struct nir_to_msl_ctx *ctx,
    };
    nir_shader_intrinsics_pass(ctx->shader, msl_nir_gather_io_info,
                               nir_metadata_all, &gather_ctx);
+   if (ctx->shader->info.stage == MESA_SHADER_MESH)
+      kk_mesh_gather_masks(ctx->shader, info_array_output);
    if (ctx->per_vertex_inputs) {
       /* A vertex_value<T> input must have exactly its producer's T. Late
        * scalarization/shrinking may change either stage's instructions, but
