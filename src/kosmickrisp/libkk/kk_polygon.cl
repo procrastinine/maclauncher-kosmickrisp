@@ -201,13 +201,35 @@ polygon_clip_primitive(global struct poly_geometry_params *geometry,
        ((front && (p->cull_mode & 1)) || (!front && (p->cull_mode & 2))))
       return;
 
+   /* Point mode draws the original vertices that pass the point clip test,
+    * stored first. The clipped polygon follows them for depth bias; an 8-byte
+    * header before the record holds its vertex count. */
+   bool points = !defer_facing && p->primitive_vertices > 2 && p->polygon_mode == 2;
+   uint point_mask = points ? kk_polygon_point_vertices(positions, clip,
+      p->clip_count, p->depth_clip, p->negative_one_to_one) : 0;
+   if (points && !point_mask)
+      return;
+   uint drawn = popcount(point_mask);
+
    /* Count first, then prefix sum. Output vertices stay in primitive order
     * without allocating a worst-case varying packet for every clip plane. */
-   uint saved_bytes = count * sizeof(struct kk_polygon_vertex);
+   uint saved_bytes = (drawn + count) * sizeof(struct kk_polygon_vertex);
    bool geometry_stipple = p->line_stipple_flags & KK_LINE_STIPPLE_GEOMETRY;
    if (geometry_stipple) saved_bytes = align(saved_bytes, 8) + 8;
+   if (points) saved_bytes += 8;
    global struct kk_polygon_vertex *saved = poly_heap_alloc(
       heap, saved_bytes, geometry_stipple ? 8 : 4);
+   if (points) {
+      global uint *header = (global uint *)saved;
+      header[0] = count;
+      saved = (global struct kk_polygon_vertex *)(header + 2);
+      for (uint v = 0, i = 0; v < 3; ++v) {
+         if (!(point_mask & (1u << v))) continue;
+         for (uint c = 0; c < 4; ++c) saved[i].position[c] = positions[v][c];
+         for (uint c = 0; c < 3; ++c) saved[i].weight[c] = v == c ? 1.0f : 0.0f;
+         ++i;
+      }
+   }
    if (geometry_stipple) {
       global uint4 *primitives = (global uint4 *)p->triangles;
       /* GS vertices_out is 16-bit; the upper word is free strip metadata. */
@@ -216,7 +238,7 @@ polygon_clip_primitive(global struct poly_geometry_params *geometry,
       primitives[id] = primitive;
    }
    for (uint i = 0; i < count; ++i)
-      saved[i] = output[i];
+      saved[drawn + i] = output[i];
    clipped[id] = (uintptr_t)saved | (front ? 1ul : 0ul);
    if (p->line_phases) {
       float2 a = (float2)(output[0].position[0], output[0].position[1]) / output[0].position[3];
@@ -230,6 +252,7 @@ polygon_clip_primitive(global struct poly_geometry_params *geometry,
             (uint64_t)ceil(length);
    }
    counts[id] = p->primitive_vertices <= 2 ? count :
+      points ? drawn :
       p->polygon_mode == 2 ? count :
       p->polygon_mode == 1 ? count * 2 : (count - 2) * 3;
 }
@@ -455,6 +478,13 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
    if (geometry_stipple) count = vertices.w >> 16;
    global struct kk_polygon_vertex *polygon =
       (global struct kk_polygon_vertex *)(clipped & ~1ul);
+   /* Point mode: the drawn vertices come first, then the clipped polygon
+    * whose vertex count is in the clip pass's header. */
+   global struct kk_polygon_vertex *bias_polygon = polygon;
+   if (p->primitive_vertices > 2 && p->polygon_mode == 2) {
+      count = ((global uint *)polygon)[-2];
+      bias_polygon = polygon + output_count;
+   }
    float positions[3][4];
    for (uint i = 0; i < 3; ++i) {
       float4 pos = polygon_position(p, invocation, stream, vertices[i]);
@@ -465,7 +495,7 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
    global uint4 *provoking_output = polygon_vertex(p, invocation, stream, vertices[provoking]);
    uint viewport = (p->outputs & (1ul << VARYING_SLOT_VIEWPORT)) ?
       provoking_output[polygon_slot(p, VARYING_SLOT_VIEWPORT)].x : 0;
-   float bias = p->primitive_vertices == 2 ? 0 : polygon_depth_bias(p, viewport, polygon, count);
+   float bias = p->primitive_vertices == 2 ? 0 : polygon_depth_bias(p, viewport, bias_polygon, count);
    uint64_t phase = 0;
    if (p->line_phases) {
       uint maximum = sub_sat(p->vertices_out, 1u);

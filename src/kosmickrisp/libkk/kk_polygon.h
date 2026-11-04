@@ -116,6 +116,32 @@ kk_polygon_clip(const float position[3][4],
    return count;
 }
 
+/* VK_POLYGON_MODE_POINT draws the triangle's own vertices, each clipped as a
+ * point: kept unless a plane distance is negative, as kk_polygon_clip_point.
+ * Vertices that polygon clipping creates on a clip plane are not polygon
+ * vertices. Returns the mask of drawn vertices in original order. */
+static inline unsigned
+kk_polygon_point_vertices(const float position[3][4],
+                          const float clip[3][KK_POLYGON_CLIP_DISTANCES],
+                          unsigned clip_count, bool depth_clip,
+                          bool negative_one_to_one)
+{
+   unsigned mask = 0;
+   for (unsigned v = 0; v < 3; ++v) {
+      struct kk_polygon_vertex vertex;
+      for (unsigned c = 0; c < 4; ++c) vertex.position[c] = position[v][c];
+      for (unsigned c = 0; c < 3; ++c) vertex.weight[c] = v == c ? 1.0f : 0.0f;
+      bool inside = true;
+      for (unsigned plane = 0; plane < 6 + clip_count && inside; ++plane) {
+         if (!depth_clip && (plane == 4 || plane == 5)) continue;
+         inside = !(kk_polygon_plane_distance(&vertex, plane, clip,
+                                              negative_one_to_one) < 0.0f);
+      }
+      if (inside) mask |= 1u << v;
+   }
+   return mask;
+}
+
 /* Line clipping shares the polygon plane distances, original-vertex weights
  * and intersection interpolation. Cull distances reject an entire segment. */
 static inline unsigned
