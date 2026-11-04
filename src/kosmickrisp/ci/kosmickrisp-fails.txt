@@ -1,0 +1,3 @@
+# Software binary64 subgroup reduction in graphics stages.
+# The stock case reports incorrect values on Apple M2 Max on both CPU slices.
+dEQP-VK.subgroups.arithmetic.graphics.subgroupadd_dvec3,Fail
