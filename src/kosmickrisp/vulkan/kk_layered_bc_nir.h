@@ -180,7 +180,10 @@ kk_layered_bc_instruction(nir_builder *b, nir_instr *instr, void *data)
    nir_def *zero = nir_imm_int64(b, 0);
    nir_pop_if(b, NULL);
    nir_def *record = nir_if_phi(b, query, zero);
-   int coordinate = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+   /* An LOD query's coordinate has no array index. Every layer has the same
+    * size and levels, so it routes like a size query, to the first layer. */
+   int coordinate = tex->op == nir_texop_lod ? -1 :
+      nir_tex_instr_src_index(tex, nir_tex_src_coord);
    nir_def *layer = coordinate >= 0 ? nir_channel(b, tex->src[coordinate].src.ssa, 2) : NULL;
    bool integer_layer = tex->op == nir_texop_txf;
    nir_def *route = kk_layered_bc_route(b, address, record, layer, true, integer_layer);
