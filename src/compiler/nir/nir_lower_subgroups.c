@@ -809,85 +809,7 @@ build_scan_full(nir_builder *b, nir_intrinsic_op op, nir_op red_op,
 }
 
 /* Fully generic implementation of scan/reduce that takes a mask */
-static nir_def *
-build_scan_reduce(nir_builder *b, nir_intrinsic_op op, nir_op red_op,
-                  nir_def *data, nir_def *mask, unsigned max_mask_bits,
-                  const nir_lower_subgroups_options *options)
-{
-   bool unknown_size = !options->subgroup_size;
-   nir_def *subgroup_size = unknown_size ? nir_load_subgroup_size(b) : NULL;
-
-   nir_def *lt_mask = nir_load_subgroup_lt_mask(b, options->ballot_components,
-                                                options->ballot_bit_size);
-
-   /* Mask of all channels whose values we need to accumulate.  Our own value
-    * is already in accum, if inclusive, thanks to the initialization above.
-    * We only need to consider lower indexed invocations.
-    */
-   nir_def *remaining = nir_iand(b, mask, lt_mask);
-
-   for (unsigned i = 1; i < max_mask_bits; i *= 2) {
-      nir_def *old_data = data;
-      nir_def *old_remaining = remaining;
-
-      if (unknown_size)
-         nir_push_if(b, nir_ugt_imm(b, subgroup_size, i));
-
-      /* At each step, our buddy channel is the first channel we have yet to
-       * take into account in the accumulator.
-       */
-      nir_def *has_buddy = nir_bany_inequal(b, remaining, nir_imm_int(b, 0));
-      nir_def *buddy = nir_ballot_find_msb(b, remaining);
-
-      /* Accumulate with our buddy channel, if any */
-      nir_def *buddy_data = nir_shuffle(b, data, buddy);
-      nir_def *accum = nir_build_alu2(b, red_op, data, buddy_data);
-      data = nir_bcsel(b, has_buddy, accum, data);
-
-      /* We just took into account everything in our buddy's accumulator from
-       * the previous step.  The only things remaining are whatever channels
-       * were remaining for our buddy.
-       */
-      nir_def *buddy_remaining = nir_shuffle(b, remaining, buddy);
-      remaining = nir_bcsel(b, has_buddy, buddy_remaining, nir_imm_int(b, 0));
-
-      if (unknown_size) {
-         nir_pop_if(b, NULL);
-         data = nir_if_phi(b, data, old_data);
-         remaining = nir_if_phi(b, remaining, old_remaining);
-      }
-   }
-
-   switch (op) {
-   case nir_intrinsic_exclusive_scan: {
-      /* For exclusive scans, we need to shift one more time and fill in the
-       * bottom channel with identity.
-       *
-       * Some of this will get CSE'd with the first step but that's okay. The
-       * code is cleaner this way.
-       */
-      nir_def *lower = nir_iand(b, mask, lt_mask);
-      nir_def *has_buddy = nir_bany_inequal(b, lower, nir_imm_int(b, 0));
-      nir_def *buddy = nir_ballot_find_msb(b, lower);
-
-      nir_def *buddy_data = nir_shuffle(b, data, buddy);
-      nir_def *identity = build_identity(b, data->bit_size, red_op);
-      return nir_bcsel(b, has_buddy, buddy_data, identity);
-   }
-
-   case nir_intrinsic_inclusive_scan:
-      return data;
-
-   case nir_intrinsic_reduce: {
-      /* For reductions, we need to take the top value of the scan */
-      nir_def *idx = nir_ballot_find_msb(b, mask);
-      return nir_shuffle(b, data, idx);
-   }
-
-   default:
-      UNREACHABLE("Unsupported scan/reduce op");
-   }
-}
+#include "kk_soft_fp64_subgroups.h"
 
 static nir_def *
 build_cluster_mask(nir_builder *b, unsigned cluster_size,
@@ -943,6 +865,14 @@ lower_scan_reduce(nir_builder *b, nir_intrinsic_instr *intrin,
    /* Check if all invocations are active. If so, we use the fast path. */
    nir_def *mask = nir_ballot(b, options->ballot_components,
                               options->ballot_bit_size, nir_imm_true(b));
+
+   if (options->subgroup_size == 32 && intrin->def.bit_size == 64 &&
+       nir_alu_type_get_base_type(nir_op_infos[red_op].output_type) == nir_type_float) {
+      if (cluster_size < subgroup_size)
+         mask = nir_iand(b, mask, build_cluster_mask(b, cluster_size, options));
+      return build_scan_reduce(b, intrin->intrinsic, red_op,
+                               intrin->src[0].ssa, mask, cluster_size, options);
+   }
 
    nir_def *full, *partial;
    nir_push_if(b, nir_ball_iequal(b, mask, build_subgroup_mask(b, options)));

@@ -2285,6 +2285,8 @@ rename_main_entrypoint(struct nir_shader *nir)
    function->name = ralloc_strdup(function, entrypoint_name);
 }
 
+#include "kk_soft_fp64.h"
+
 static bool
 kk_scalarize_filter(const nir_instr *instr, const void *data)
 {
@@ -2319,6 +2321,7 @@ msl_preprocess_nir(struct nir_shader *nir)
 
    if (kk_fp32_preserve(nir))
       NIR_PASS(_, nir, nir_shader_instructions_pass, kk_fp32_preserve_prepare, nir_metadata_control_flow, NULL);
+   kk_soft_fp64_lower(nir);
    NIR_PASS(_, nir, nir_lower_frexp);
 
    NIR_PASS(_, nir, nir_lower_vars_to_ssa);

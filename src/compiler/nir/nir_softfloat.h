@@ -47,7 +47,7 @@ nir_lower_softfloat_func(nir_builder *b,
       nir_alu_type n_type =
          nir_alu_type_get_base_type(nir_op_infos[instr->op].input_types[i]);
       /* Add bitsize */
-      n_type = n_type | instr->src[0].src.ssa->bit_size;
+      n_type = n_type | instr->src[i].src.ssa->bit_size;
 
       const struct glsl_type *param_type =
          glsl_scalar_type(nir_get_glsl_base_type_for_nir_type(n_type));
