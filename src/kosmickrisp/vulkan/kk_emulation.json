@@ -3,7 +3,7 @@
     "name": "denorm_preserve",
     "description": "Gradual underflow for requested floating-point preservation modes.",
     "cost_class": "mixed native / software",
-    "cost_note": "FP16 uses native half arithmetic; FP32 replaces most arithmetic and comparisons with software; FP64 uses software binary64. About 7x GPU time was reported for a workload requesting FP32 preservation. Per-operation cost is unmeasured.",
+    "cost_note": "FP16 uses native half arithmetic. Requested FP32 add, multiply, FMA and divide use native operations with subnormal-operand and result guards, with exact software handling in out-of-line cold functions; other preservation operations retain their numerical helpers. FP64 uses software binary64.",
     "extensions": [],
     "features": [],
     "properties": [
