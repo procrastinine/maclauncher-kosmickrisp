@@ -1329,6 +1329,17 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ubo,
             kk_buffer_addr_format(rs->uniform_buffers));
 
+   /* Mesh and tessellation control outputs are shared between invocations,
+    * so SPIR-V component accesses reach them as array derefs of a vector;
+    * nir_lower_io would read those indices as slot offsets. */
+   if (nir->info.stage == MESA_SHADER_MESH ||
+       nir->info.stage == MESA_SHADER_TESS_CTRL)
+      NIR_PASS(_, nir, nir_lower_array_deref_of_vec, nir_var_shader_out, NULL,
+               nir_lower_direct_array_deref_of_vec_load |
+                  nir_lower_indirect_array_deref_of_vec_load |
+                  nir_lower_direct_array_deref_of_vec_store |
+                  nir_lower_indirect_array_deref_of_vec_store);
+
    NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
             type_size_vec4,
             nir_lower_io_lower_64bit_to_32 |
