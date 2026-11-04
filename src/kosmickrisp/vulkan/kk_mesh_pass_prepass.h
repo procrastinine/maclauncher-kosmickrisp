@@ -775,6 +775,23 @@ kk_mesh_pass_gpu_draw(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p,
 }
 
 static void
+kk_mesh_pass_debug(const struct kk_mesh_pass *p, const char *route, uint32_t inputs)
+{
+   if (!KK_DEBUG(MSL)) return;
+   uint32_t scopes = 0, boundaries = 0, raster = 0, subpasses = 1;
+   for (uint32_t i = 0; i < p->entry_count; ++i) {
+      const struct vk_cmd_queue_entry *e = &p->entries[i];
+      scopes += e->type == VK_CMD_BEGIN_RENDERING || e->type == VK_CMD_BEGIN_RENDER_PASS ||
+                e->type == VK_CMD_BEGIN_RENDER_PASS2;
+      boundaries += kk_mesh_pass_boundary(e);
+      raster += kk_mesh_pass_raster_command(e->type);
+      subpasses += e->type == VK_CMD_NEXT_SUBPASS || e->type == VK_CMD_NEXT_SUBPASS2;
+   }
+   fprintf(stderr, "mesh pass prelude: route=%s inputs=%u calls=%u scopes=%u boundaries=%u raster=%u subpasses=%u\n",
+      route, inputs, p->call_count, scopes, boundaries, raster, subpasses);
+}
+
+static void
 kk_mesh_pass_gpu_execute(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
 {
    p->calls=calloc(p->entry_count,sizeof(*p->calls));
@@ -796,8 +813,7 @@ kk_mesh_pass_gpu_execute(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
          };++n;
       }
    }
-   if (KK_DEBUG(MSL))
-      fprintf(stderr, "mesh pass prelude: route=gpu inputs=%u calls=%u\n", n, p->call_count);
+   kk_mesh_pass_debug(p, "gpu", n);
    KK_CMD_BARRIER(cmd,mtl_barrier_after_encoder_stages_with_options,cs_get_compute(cmd),
       MTL_STAGE_ALL,MTL_STAGE_DISPATCH,MTL_VISIBILITY_RESOURCE_ALIAS);
    libkk_mesh_native_pass(cmd,kk_grid_1d(n),true,p->parameters.gpu,p->gpu_grids.gpu,n);
@@ -862,8 +878,7 @@ kk_mesh_pass_execute(VkCommandBuffer handle, void *data)
     * reads after all preceding producers, before the first render encoder. */
    KK_CMD_BARRIER(cmd,mtl_barrier_after_encoder_stages_with_options,cs_get_compute(cmd),
       MTL_STAGE_ALL,MTL_STAGE_DISPATCH,MTL_VISIBILITY_RESOURCE_ALIAS);
-   if (KK_DEBUG(MSL))
-      fprintf(stderr, "mesh pass prelude: route=feedback inputs=%u calls=%u\n", first, p->call_count);
+   kk_mesh_pass_debug(p, "feedback", first);
    libkk_mesh_snapshot_batch(cmd,kk_grid_1d(first),true,initial_parameters,p->inputs.gpu,first);
    result=kk_interlock_split(cmd,p,kk_mesh_pass_encode,kk_mesh_pass_finish);
    if (result==VK_SUCCESS) return;
