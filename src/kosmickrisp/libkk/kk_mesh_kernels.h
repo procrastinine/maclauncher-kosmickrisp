@@ -137,10 +137,10 @@ kk_mesh_filter_slices(KK_MESH_GLOBAL struct kk_mesh_params *p,
    b->input_grid[1] = y;
    b->input_grid[2] = z;
    for (uint32_t i = 0; i < slice_count; ++i) {
-      uint32_t base = i * p->payload_stride;
+      uint32_t base = p->task_base + i * p->payload_stride;
       uint32_t left = total > base ? total - base : 0;
       uint32_t count = left < p->payload_stride ? left : p->payload_stride;
-      if (i == 0 && count == total) {
+      if (base == 0 && count == total) {
          slices[0] = x;
          slices[1] = y;
          slices[2] = z;

@@ -482,6 +482,11 @@ struct kk_cmd_buffer {
    struct util_dynarray mesh_command_buffers;
    struct util_dynarray mesh_allocators;
    uint32_t mesh_batches_in_part, mesh_draws_in_part;
+   /* Nonzero only in a submit-owned, bounded indirect Mesh continuation. */
+   struct {
+      bool active;
+      uint32_t groups, base, draw, maximum;
+   } mesh_chunk;
    /* Pending timestamp resolves (struct kk_ts_resolve), flushed at cs_end. */
    bool writable_msaa_meta;
    uint32_t writable_msaa_render_attachments;

@@ -48,3 +48,17 @@ libkk_mesh_filter_slices(global struct kk_mesh_params *p,
 {
    kk_mesh_filter_slices(p, slices, slice_count);
 }
+
+/* Snapshot in queue order, after preceding producers and before this draw.
+ * The host continuation consumes only this fixed four-word packet. */
+KERNEL(1)
+libkk_mesh_snapshot(global struct kk_mesh_params *p, global uint32_t *out)
+{
+   uint32_t count = p->indirect_count ? *(global uint32_t *)p->indirect_count : p->max_draw_count;
+   out[3] = min(count, p->max_draw_count);
+   global uint32_t *grid = (global uint32_t *)p->indirect_grid;
+   bool active = p->draw_id < out[3] && kk_mesh_draw_enabled(p);
+   out[0] = active ? grid[0] : 0;
+   out[1] = active ? grid[1] : 1;
+   out[2] = active ? grid[2] : 1;
+}

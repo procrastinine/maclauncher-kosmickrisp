@@ -33,7 +33,8 @@ struct kk_interlock_queue {
 VkResult
 kk_interlock_submission_init(struct kk_device *dev)
 {
-   if (!dev->vk.enabled_features.fragmentShaderPixelInterlock && !kk_depth_bounds_emulated(dev))
+   if (!dev->vk.enabled_features.fragmentShaderPixelInterlock &&
+       !dev->vk.enabled_features.meshShader && !kk_depth_bounds_emulated(dev))
       return VK_SUCCESS;
    struct kk_interlock_registry *r = vk_zalloc(&dev->vk.alloc, sizeof(*r), 8,
                                                VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);

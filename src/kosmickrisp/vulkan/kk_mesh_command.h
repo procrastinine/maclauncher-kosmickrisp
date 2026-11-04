@@ -271,6 +271,11 @@ kk_mesh_parameters(struct kk_cmd_buffer *cmd, uint64_t grid, uint64_t count,
       .predicate = cmd->state.cond_render.enabled ? cmd->state.cond_render.address : 0,
       .predicate_inverted = cmd->state.cond_render.inverted,
    };
+   if (cmd->mesh_chunk.active) {
+      params.draw_id = cmd->mesh_chunk.draw;
+      params.max_draw_count = cmd->mesh_chunk.maximum;
+      params.task_base = cmd->mesh_chunk.base;
+   }
    if (cmd->state.gfx.shader->mesh->info.queries) {
       params.task_statistic = kk_pipeline_stat_addr(cmd,
          VK_QUERY_PIPELINE_STATISTIC_TASK_SHADER_INVOCATIONS_BIT_EXT);
@@ -425,6 +430,10 @@ kk_draw_mesh_unsliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          p.pad = kk_mesh_canonical_span(cmd);
          p.max_draw_count = task_limit;
       }
+      if (virtual && cmd->mesh_chunk.active) {
+         p.pad = kk_mesh_canonical_span(cmd);
+         p.max_draw_count = cmd->mesh_chunk.groups;
+      }
       if (!virtual) {
          if (params_needed && !kk_mesh_bind_parameters(cmd, table, &p))
             return;
@@ -444,12 +453,13 @@ kk_draw_mesh_unsliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
       p.records = cmd->state.gfx.mesh_records;
       p.payloads = cmd->state.gfx.mesh_payloads;
       p.payload_stride = 16384;
-      uint64_t groups = direct.x ? (uint64_t)direct.x * direct.y * direct.z : KK_MESH_MAX_GROUPS;
+      uint64_t groups = cmd->mesh_chunk.active ? cmd->mesh_chunk.groups :
+         (direct.x ? (uint64_t)direct.x * direct.y * direct.z : KK_MESH_MAX_GROUPS);
       uint32_t batches = DIV_ROUND_UP(groups, task_limit);
       for (uint32_t batch = 0; batch < batches; ++batch) {
          if (!kk_mesh_begin_batch(cmd, 1, true))
             return;
-         p.task_base = batch * task_limit;
+         p.task_base = (cmd->mesh_chunk.active ? cmd->mesh_chunk.base : 0) + batch * task_limit;
          struct kk_ptr args = kk_pool_upload(cmd, &p, sizeof(p), 8);
          if (!args.gpu) return;
          mtl_compute_encoder *enc = cs_get_compute(cmd);
@@ -743,7 +753,7 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          return;
       slice_grids = p.gpu;
    }
-   uint64_t groups = indirect ? KK_MESH_MAX_GROUPS : (uint64_t)direct.x * direct.y * direct.z;
+   uint64_t groups = indirect ? (cmd->mesh_chunk.active ? cmd->mesh_chunk.groups : KK_MESH_MAX_GROUPS) : (uint64_t)direct.x * direct.y * direct.z;
    if (!indirect) {
       uint32_t grid[] = {direct.x, direct.y, direct.z};
       indirect = kk_pool_upload(cmd, grid, sizeof(grid), 4).gpu;
@@ -767,10 +777,15 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
       p.batch = virtual ? cmd->state.gfx.mesh_batch : cmd->state.gfx.mesh_native_batch;
       p.records = cmd->state.gfx.mesh_records;
       p.payloads = cmd->state.gfx.mesh_payloads;
-      p.payload_stride = virtual ? 16384u : span;
+      p.payload_stride = virtual ? 16384u :
+         (cmd->mesh_chunk.active ? MIN2(span, cmd->mesh_chunk.groups) : span);
       if ((canonical || retained) && virtual) {
          p.pad = span;
          p.max_draw_count = task_limit;
+      }
+      if (virtual && cmd->mesh_chunk.active) {
+         p.pad = span;
+         p.max_draw_count = cmd->mesh_chunk.groups;
       }
       for (uint32_t i = 0; i < slice_count; ++i) {
          parameters[i] = p;
@@ -778,7 +793,7 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
          if (virtual)
             parameters[i].pad = i * ((canonical || retained) ? span : KK_MESH_MAX_PHYSICAL_GROUPS);
          else
-            parameters[i].task_base = i * span;
+            parameters[i].task_base = (cmd->mesh_chunk.active ? cmd->mesh_chunk.base : 0) + i * span;
       }
       uint64_t slice_params = kk_pool_upload(cmd, parameters,
          slice_count * sizeof(*parameters), 8).gpu;
@@ -800,7 +815,7 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
       for (uint32_t batch = 0; batch < batches; ++batch) {
          if (!kk_mesh_begin_batch(cmd, canonical ? 0 : slice_count, true))
             goto finish;
-         p.task_base = batch * task_limit;
+         p.task_base = (cmd->mesh_chunk.active ? cmd->mesh_chunk.base : 0) + batch * task_limit;
          struct kk_ptr args = kk_pool_upload(cmd, &p, sizeof(p), 8);
          if (!args.gpu)
             goto finish;
@@ -844,7 +859,7 @@ kk_draw_mesh_one_view(struct kk_cmd_buffer *cmd, struct mtl_size direct,
       force_virtual = true;
    bool virtual = info->has_task &&
       (force_virtual || info->task_grid_bound > KK_MESH_NATIVE_GROUPS);
-   uint64_t groups = indirect ? KK_MESH_MAX_GROUPS : (uint64_t)direct.x * direct.y * direct.z;
+   uint64_t groups = indirect ? (cmd->mesh_chunk.active ? cmd->mesh_chunk.groups : KK_MESH_MAX_GROUPS) : (uint64_t)direct.x * direct.y * direct.z;
    uint32_t span = physical_span;
    uint32_t slices;
    if (virtual) {
@@ -872,6 +887,10 @@ kk_draw_mesh_one_view(struct kk_cmd_buffer *cmd, struct mtl_size direct,
                          virtual, span, slices);
 }
 
+static void kk_draw_mesh(struct kk_cmd_buffer *, struct mtl_size,
+   uint64_t, uint64_t, uint32_t, uint32_t, bool);
+#include "kk_mesh_continuation.h"
+
 /* Original-view execution belongs here, outside attachment alias repetition.
  * Once per selected Vulkan view, never once per alias layer. Effective Layer
  * is that actual ViewIndex; application Layer is not added to it. */
@@ -880,6 +899,14 @@ kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    uint64_t indirect, uint64_t count, uint32_t draw_count,
    uint32_t stride, bool force_virtual)
 {
+   if (indirect && !cmd->mesh_chunk.active &&
+       cmd->state.gfx.shader->mesh->info.has_task &&
+       !kk_mesh_retained_active(cmd) && !cmd->state.gfx.render.layered_bc) {
+      VkResult result = kk_mesh_continue_indirect(cmd, indirect, count,
+         draw_count, stride, force_virtual);
+      if (result != VK_SUCCESS) vk_command_buffer_set_error(&cmd->vk, result);
+      return;
+   }
    if (cmd->state.gfx.render.layered_bc) {
       if (!kk_layered_bc_prepare_draw(cmd)) return;
       kk_flush_gfx_state(cmd);
