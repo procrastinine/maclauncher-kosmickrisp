@@ -22,6 +22,8 @@ struct kk_perf {
    pthread_mutex_t mutex;
    FILE *log;
    bool close_log, compile_details;
+   bool device_features_known;
+   bool pipeline_statistics_query, writable_msaa, dynamic_rendering;
    uint64_t compile_sequence;
    uint64_t created, interval_start, frames, interval_frames;
    uint64_t frame_interval, time_interval, sequence;
@@ -107,7 +109,15 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
               "\"mean_ms\":%.6f,\"max_ms\":%.6f}", i ? "," : "", names[i],
               s->count, s->total/1e6, s->count ? s->total/1e6/s->count : 0., s->max/1e6);
    }
-   fprintf(p->log, "},\"deferred_pending\":%"PRId64",\"deferred_peak\":%"PRIu64
+   if (p->device_features_known)
+      fprintf(p->log, "},\"device_features\":{\"pipeline_statistics_query\":%s,"
+              "\"shader_storage_image_multisample\":%s,\"dynamic_rendering\":%s}",
+              p->pipeline_statistics_query ? "true" : "false",
+              p->writable_msaa ? "true" : "false",
+              p->dynamic_rendering ? "true" : "false");
+   else
+      fprintf(p->log, "},\"device_features\":null");
+   fprintf(p->log, ",\"deferred_pending\":%"PRId64",\"deferred_peak\":%"PRIu64
            ",\"compiler_active\":%"PRId64",\"compiler_peak\":%"PRIu64
            ",\"gpu_unavailable\":%"PRIu64,
            p->pending, p->pending_peak, p->compiler_active, p->compiler_peak, p->invalid_gpu);
@@ -376,6 +386,15 @@ kk_perf_init_dispatch(struct kk_device *dev)
 {
    if (!dev->perf)
       return;
+   /* Cache enabled feature state once; it does not report active queries. */
+   pthread_mutex_lock(&dev->perf->mutex);
+   dev->perf->pipeline_statistics_query =
+      dev->vk.enabled_features.pipelineStatisticsQuery;
+   dev->perf->writable_msaa =
+      dev->vk.enabled_features.shaderStorageImageMultisample;
+   dev->perf->dynamic_rendering = dev->vk.enabled_features.dynamicRendering;
+   dev->perf->device_features_known = true;
+   pthread_mutex_unlock(&dev->perf->mutex);
    dev->exposed_dispatch_table.BeginCommandBuffer = kk_perf_BeginCommandBuffer;
    dev->exposed_dispatch_table.EndCommandBuffer = kk_perf_EndCommandBuffer;
    dev->exposed_dispatch_table.ResetCommandBuffer = kk_perf_ResetCommandBuffer;
