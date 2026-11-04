@@ -1020,6 +1020,12 @@ modify_nir_info(nir_shader *nir)
                    SYSTEM_VALUE_BARYCENTRIC_LINEAR_CENTROID);
       BITSET_CLEAR(nir->info.system_values_read,
                    SYSTEM_VALUE_BARYCENTRIC_LINEAR_SAMPLE);
+
+      /* Perspective [[barycentric_coord]] returns wrong values unless
+       * [[position]] is also declared. */
+      if (BITSET_TEST(nir->info.system_values_read,
+                      SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD))
+         BITSET_SET(nir->info.system_values_read, SYSTEM_VALUE_FRAG_COORD);
    }
 }
 

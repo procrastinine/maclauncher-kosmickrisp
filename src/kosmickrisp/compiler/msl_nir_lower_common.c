@@ -338,10 +338,15 @@ msl_disable_triangle_merge(nir_shader *nir)
 
    nir_builder b = nir_builder_at(nir_before_impl(entrypoint));
 
+   bool use_linear = BITSET_TEST(nir->info.system_values_read,
+                                 SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD);
    nir_def *barycentric = nir_load_barycentric_coord_pixel(
-      &b, 32u, .interp_mode = INTERP_MODE_SMOOTH);
+      &b, 32u,
+      .interp_mode =
+         use_linear ? INTERP_MODE_NOPERSPECTIVE : INTERP_MODE_SMOOTH);
    BITSET_SET(nir->info.system_values_read,
-              SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD);
+              use_linear ? SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD
+                         : SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD);
 
    nir_def *all_negative =
       nir_flt_imm(&b, nir_channel(&b, barycentric, 0u), 0.0);

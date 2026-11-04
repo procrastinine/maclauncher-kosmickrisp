@@ -129,6 +129,15 @@ mtl_device_supports_sample_count(mtl_device *dev, uint32_t sample_count)
    }
 }
 
+bool
+mtl_device_supports_shader_barycentric_coordinates(mtl_device *dev)
+{
+   @autoreleasepool {
+      id<MTLDevice> device = (id<MTLDevice>)dev;
+      return [device supportsShaderBarycentricCoordinates];
+   }
+}
+
 struct mtl_size
 mtl_device_max_threads_per_threadgroup(mtl_device *dev)
 {

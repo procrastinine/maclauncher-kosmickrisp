@@ -62,7 +62,9 @@ static const char *sysval_table[SYSTEM_VALUE_MAX] = {
    [SYSTEM_VALUE_SAMPLE_MASK_IN] = "uint gl_SampleMask [[sample_mask]]",
    [SYSTEM_VALUE_PRIMITIVE_ID] = "uint gl_PrimitiveID [[primitive_id]]",
    [SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD] =
-      "float3 gl_BaryCoord [[barycentric_coord]]",
+      "float3 gl_BaryCoord [[barycentric_coord, center_perspective]]",
+   [SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD] =
+      "float3 gl_BaryCoordNoPersp [[barycentric_coord, center_no_perspective]]",
    [SYSTEM_VALUE_AMPLIFICATION_ID_KK] =
       "uint mtl_AmplificationID [[amplification_id]]",
    [SYSTEM_VALUE_FIRST_VERTEX] = "uint gl_FirstVertex [[base_vertex]]",
@@ -1225,7 +1227,11 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       P(ctx, "gl_PrimitiveID;\n");
       break;
    case nir_intrinsic_load_barycentric_coord_pixel:
-      P(ctx, "gl_BaryCoord;\n");
+      if (nir_intrinsic_interp_mode(instr) == INTERP_MODE_NOPERSPECTIVE) {
+         P(ctx, "gl_BaryCoordNoPersp;\n");
+      } else {
+         P(ctx, "gl_BaryCoord;\n");
+      }
       break;
    case nir_intrinsic_load_sample_pos:
       P(ctx, "get_sample_position(gl_SampleID);\n");

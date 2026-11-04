@@ -151,6 +151,9 @@ kk_get_device_extensions(const struct kk_instance *instance,
       /* Optional extensions */
       .KHR_calibrated_timestamps = true,
       .KHR_deferred_host_operations = true,
+      .KHR_fragment_shader_barycentric =
+         mtl_device_supports_shader_barycentric_coordinates(
+            pdev->mtl_dev_handle),
       .KHR_maintenance7 = true,
       .KHR_maintenance8 = true,
       .KHR_maintenance9 = true,
@@ -388,6 +391,10 @@ kk_get_device_features(
 
       /* VK_EXT_mutable_descriptor_type */
       .mutableDescriptorType = true,
+
+      /* VK_KHR_fragment_shader_barycentric */
+      .fragmentShaderBarycentric =
+         supported_extensions->KHR_fragment_shader_barycentric,
 
       /* VK_KHR_maintenance7 */
       .maintenance7 = true,
