@@ -52,9 +52,9 @@ Feature table
      - Emulated: geometry and tessellation producers run once for each view.
      - None listed; emulated on all families.
      - ``multiview_geometry_tessellation``
-     - Off
-     - vkd3d-proton view-instancing tier 2 is unavailable when its
-       advanced-multiview check requires these features.
+     - On
+     - vkd3d-proton reports view instancing as not supported, because its
+       tier 2 check requires these features on KosmicKrisp.
    * - ``VK_EXT_mesh_shader``
      - Native with emulated cases: object and mesh shaders run natively.
        Task grids above the native bound run as compute batches, and

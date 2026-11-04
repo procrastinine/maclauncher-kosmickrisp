@@ -95,12 +95,12 @@
      - Off
      - Off Apple7-11: Dynamic vertex inputs load format, divisor and stride metadata for consumed attributes and perform format-dependent conversion; static pipelines retain constant attribute specialization. Unused inputs emit no fetch work.
    * - ``multiview_geometry_tessellation``
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off Apple7-11: Advanced multiview producers execute for each active view using the original view index; single-view and ordinary native vertex amplification remain separate paths. Emitted producer instructions are repeated by view count, with a per-draw view load when used.
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: only pipelines with a view mask and a geometry or tessellation stage replay the producer once per active view with a per-draw view load; other pipelines compile and run unchanged.
    * - ``quad_control``
      - On
      - On

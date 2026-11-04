@@ -125,9 +125,9 @@
        Controls: ``multiviewGeometryShader``, ``multiviewTessellationShader``.
      - per-view producer replay. Advanced multiview producers execute for each active view using the original view index; single-view and ordinary native vertex amplification remain separate paths. Emitted producer instructions are repeated by view count, with a per-draw view load when used.
      - No Apple family
-     - Off
-     - DXVK and vkd3d-proton retain their shader-model, feature-level and device-creation paths without these advanced multiview combinations; ordinary multiview remains available.
-     - Geometry and tessellation multiview producers are unavailable. vkd3d-proton ViewInstancingTier can fall from tier 2 to unsupported when its advanced-multiview predicate requires these features.
+     - On
+     - vkd3d-proton reports ViewInstancingTier 2 on KosmicKrisp only when both features are present, because its tier predicate accepts tiler suspend/resume only for drivers in its tiler list; only pipelines with a view mask and a geometry or tessellation stage replay the producer per view, which matches the per-view draws an application issues without view instancing.
+     - Geometry and tessellation multiview producers are unavailable, vkd3d-proton reports ViewInstancingTier as not supported, and vkd3d-proton rejects view-instanced pipeline states with geometry or tessellation stages.
      - ``performance,+multiview_geometry_tessellation``
    * - ``quad_control``
      - Full-quad helper invocation and quad derivative control around native quad operations.
