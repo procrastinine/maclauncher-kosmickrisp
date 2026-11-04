@@ -1343,7 +1343,7 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          params.prims_generated_counter[i] = gfx->primitives_query[i];
       if (gfx->xfb_query[i]) {
          params.xfb_prims_generated_counter[i] = gfx->xfb_query[i];
-         params.prims_generated_counter[i] = gfx->xfb_query[i] + sizeof(uint64_t);
+         params.prims_generated_counter_secondary[i] = gfx->xfb_query[i] + sizeof(uint64_t);
       }
       if (gfx->xfb_enabled) {
          params.xfb_base_original[i] = gfx->xfb[i].addr;
