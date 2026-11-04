@@ -14,6 +14,12 @@
 #include <errno.h>
 #include <signal.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 
 static NSDictionary *kk_constant_record(id object);
 static _Thread_local struct mtl_compile_trace kk_compile_trace;
@@ -294,10 +300,11 @@ kk_archive_now(void)
    return (uint64_t)value.tv_sec * 1000000000ull + value.tv_nsec;
 }
 
-/* Temporary archive files carry the owning process ID. A process that exits
- * without releasing its open archives leaves their files behind; the next
- * process with an archive removes files whose owner has exited, and unowned
- * names from earlier builds once they are a day old. */
+/* Temporary archive files carry the owning process ID. An opened archive's
+ * file is unlinked at once, so its storage ends with the process. A process
+ * interrupted while writing or snapshotting leaves a file behind; the next
+ * process with an archive removes names whose owner has exited, whatever
+ * follows the owner field, and names without an owner once a day old. */
 static NSString *
 kk_archive_temporary_path(void)
 {
@@ -317,40 +324,52 @@ kk_archive_temporary_path(void)
 static void
 kk_archive_remove_stale_temporaries(void)
 {
-   NSString *directory = NSTemporaryDirectory();
-   NSFileManager *files = [NSFileManager defaultManager];
-   NSDate *day = [NSDate dateWithTimeIntervalSinceNow:-86400];
-   for (NSString *name in [files contentsOfDirectoryAtPath:directory error:NULL]) {
-      if (![name hasPrefix:@"kk-metal-"]) continue;
-      NSArray *parts = [[name substringFromIndex:9] componentsSeparatedByString:@"-"];
-      NSString *path = [directory stringByAppendingPathComponent:name];
-      if (parts.count == 2) {
-         pid_t owner = (pid_t)[parts[0] intValue];
-         if (owner <= 0 || owner == getpid() || !kill(owner, 0) || errno != ESRCH)
-            continue;
-      } else if (parts.count == 1) {
-         NSDate *modified = [files attributesOfItemAtPath:path error:NULL].fileModificationDate;
-         if (!modified || [modified compare:day] != NSOrderedAscending) continue;
-      } else {
-         continue;
-      }
-      [files removeItemAtPath:path error:NULL];
+   /* readdir with a prefix test: listing a large temporary directory through
+    * NSFileManager took ten times as long. */
+   const char *directory = NSTemporaryDirectory().fileSystemRepresentation;
+   int directory_fd = directory ? open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC) : -1;
+   if (directory_fd < 0) return;
+   DIR *listing = fdopendir(directory_fd);
+   if (!listing) {
+      close(directory_fd);
+      return;
    }
+   const time_t day_ago = time(NULL) - 86400;
+   const pid_t self = getpid();
+   struct dirent *entry;
+   while ((entry = readdir(listing))) {
+      const char *name = entry->d_name;
+      if (strncmp(name, "kk-metal-", 9)) continue;
+      const char *field = name + 9, *end = field;
+      while (*end >= '0' && *end <= '9') end++;
+      if (end > field && end - field <= 10 && *end == '-') {
+         /* kk-metal-<pid>-<anything>, including an interrupted atomic write's
+          * <name>.sb-<hex>-<random>. */
+         long long owner = strtoll(field, NULL, 10);
+         if (owner <= 0 || owner > INT_MAX || owner == self ||
+             !kill((pid_t)owner, 0) || errno != ESRCH)
+            continue;
+      } else {
+         struct stat status;
+         if (fstatat(directory_fd, name, &status, AT_SYMLINK_NOFOLLOW) ||
+             status.st_mtime >= day_ago)
+            continue;
+      }
+      unlinkat(directory_fd, name, 0);
+   }
+   closedir(listing);
 }
 
 /* Readers own the archive and backing file across concurrent LRU eviction. */
 @interface KKLoadedArchive : NSObject {
 @public
    id<MTL4Archive> archive;
-   NSString *path;
 }
 @end
 @implementation KKLoadedArchive
 - (void)dealloc
 {
    [archive release];
-   if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
-   [path release];
    [super dealloc];
 }
 @end
@@ -519,7 +538,10 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
        * operation completion depend on, and a waiting draw stalled. */
       static dispatch_once_t stale_scan;
       dispatch_once(&stale_scan, ^{
-         dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+         /* Utility, not background: background I/O waits behind other
+          * processes' I/O, and a background scan of a large temporary
+          * directory was still listing it when short processes exited. */
+         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             @autoreleasepool { kk_archive_remove_stale_temporaries(); }
          });
       });
@@ -622,19 +644,21 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
          if (!opened) return nil;
          NSString *path = data ? kk_archive_temporary_path() : nil;
          NSError *error = nil;
-         if (path && [data writeToFile:path options:NSDataWritingAtomic error:&error]) {
+         /* The file is private to this process, so it is written in place:
+          * an atomic write would add a second temporary name. */
+         if (path && [data writeToFile:path options:0 error:&error]) {
             begin = kk_archive_now();
             opened->archive = [device newArchiveWithURL:[NSURL fileURLWithPath:path] error:&error];
             open_ns = kk_archive_now() - begin;
             archive_opened = true;
-            opened->path = [path copy];
          }
+         /* An open archive keeps its contents without the name. */
+         if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
          if (opened->archive) {
             piece->resident = opened;
             piece->bytes = data.length;
          } else {
             [opened release];
-            if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
             piece->unavailable = true; /* Disk eviction/corruption is a miss. */
          }
       }
