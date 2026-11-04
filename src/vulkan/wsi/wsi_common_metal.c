@@ -15,6 +15,7 @@
 #include "wsi_common_entrypoints.h"
 #include "wsi_common_private.h"
 #include "wsi_common_metal_layer.h"
+#include "wsi_metal_scaling.h"
 
 #include "vulkan/vulkan_core.h"
 
@@ -130,11 +131,15 @@ wsi_metal_surface_get_capabilities2(VkIcdSurfaceBase *surface,
       }
 
       case VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR: {
-         /* TODO: support scaling */
          VkSurfacePresentScalingCapabilitiesKHR *scaling = ext;
-         scaling->supportedPresentScaling = 0;
-         scaling->supportedPresentGravityX = 0;
-         scaling->supportedPresentGravityY = 0;
+         scaling->supportedPresentScaling = wsi_device->sw ? 0 :
+            VK_PRESENT_SCALING_ONE_TO_ONE_BIT_KHR |
+            VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_KHR |
+            VK_PRESENT_SCALING_STRETCH_BIT_KHR;
+         scaling->supportedPresentGravityX = wsi_device->sw ? 0 :
+            VK_PRESENT_GRAVITY_MIN_BIT_KHR | VK_PRESENT_GRAVITY_MAX_BIT_KHR |
+            VK_PRESENT_GRAVITY_CENTERED_BIT_KHR;
+         scaling->supportedPresentGravityY = scaling->supportedPresentGravityX;
          scaling->minScaledImageExtent = caps->surfaceCapabilities.minImageExtent;
          scaling->maxScaledImageExtent = caps->surfaceCapabilities.maxImageExtent;
          break;
@@ -337,6 +342,7 @@ wsi_metal_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
 struct wsi_metal_image {
    struct wsi_image base;
    CAMetalDrawable *drawable;
+   VkExtent2D drawable_extent;
 };
 
 struct wsi_metal_present_info {
@@ -354,6 +360,8 @@ struct wsi_metal_swapchain {
    struct wsi_swapchain base;
 
    VkExtent2D extent;
+   VkPresentScalingFlagsKHR scaling;
+   VkPresentGravityFlagsKHR gravity_x, gravity_y;
    VkFormat vk_format;
 
    VkIcdSurfaceMetal *surface;
@@ -435,6 +443,39 @@ wsi_metal_swapchain_get_wsi_image(struct wsi_swapchain *wsi_chain,
 }
 
 static VkResult
+wsi_metal_resize_blit_image(struct wsi_metal_swapchain *chain,
+                            struct wsi_metal_image *image, VkExtent2D extent)
+{
+   if (image->base.blit.image && image->drawable_extent.width == extent.width &&
+       image->drawable_extent.height == extent.height)
+      return VK_SUCCESS;
+   VkImageCreateInfo create = chain->base.image_info.create;
+   create.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+   /* This drawable wrapper inherits view formats, without source-memory metadata. */
+   VkImageUsageFlags2CreateInfoKHR usage = chain->base.image_info.usage2;
+   usage.usage |= VK_IMAGE_USAGE_2_COLOR_ATTACHMENT_BIT_KHR | VK_IMAGE_USAGE_2_TRANSFER_DST_BIT_KHR;
+   usage.pNext = NULL;
+   create.pNext = &usage;
+   VkImageFormatListCreateInfo formats = chain->base.image_info.format_list;
+   if (formats.viewFormatCount) {
+      formats.pNext = create.pNext;
+      create.pNext = &formats;
+   }
+   create.extent = (VkExtent3D){extent.width, extent.height, 1};
+   VkImage target;
+   VkResult result = chain->base.wsi->CreateImage(chain->base.device, &create,
+                                                &chain->base.alloc, &target);
+   if (result != VK_SUCCESS)
+      return result;
+   if (image->base.blit.image)
+      chain->base.wsi->DestroyImage(chain->base.device, image->base.blit.image,
+                                    &chain->base.alloc);
+   image->base.blit.image = target;
+   image->drawable_extent = extent;
+   return VK_SUCCESS;
+}
+
+static VkResult
 wsi_cmd_blit_image_to_image(const struct wsi_swapchain *chain,
                             const struct wsi_image_info *info,
                             struct wsi_image *image)
@@ -477,7 +518,9 @@ wsi_cmd_blit_image_to_image(const struct wsi_swapchain *chain,
       const VkCommandBufferBeginInfo begin_info = {
          .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
       };
-      wsi->BeginCommandBuffer(image->blit.cmd_buffers[i], &begin_info);
+      result = wsi->BeginCommandBuffer(image->blit.cmd_buffers[i], &begin_info);
+      if (result != VK_SUCCESS)
+         return result;
 
       VkImageMemoryBarrier img_mem_barriers[] = {
          {
@@ -526,25 +569,9 @@ wsi_cmd_blit_image_to_image(const struct wsi_swapchain *chain,
                               0, NULL,
                               img_mem_barrier_count, img_mem_barriers);
 
-      const VkImageSubresourceLayers subresource = {
-         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-         .mipLevel = 0,
-         .baseArrayLayer = 0,
-         .layerCount = 1,
-      };
-
-      const VkOffset3D extent = {
-         .x = info->create.extent.width,
-         .y = info->create.extent.height,
-         .z = 1,
-      };
-      const VkImageBlit2 image_blit = {
-         .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
-         .srcSubresource = subresource,
-         .srcOffsets = { { .x = 0, .y = 0, .z = 0 }, extent },
-         .dstSubresource = subresource,
-         .dstOffsets = { { .x = 0, .y = 0, .z = 0 }, extent },
-      };
+      const VkImageBlit2 image_blit = wsi_metal_present_region(
+         metal_chain->extent, metal_image->drawable_extent, metal_chain->scaling,
+         metal_chain->gravity_x, metal_chain->gravity_y);
       const VkBlitImageInfo2 blit_info = {
          .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
          .srcImage = image->image,
@@ -580,6 +607,8 @@ wsi_cmd_blit_image_to_image(const struct wsi_swapchain *chain,
                               img_mem_barrier_count, img_mem_barriers);
 
       result = wsi->EndCommandBuffer(image->blit.cmd_buffers[i]);
+      if (result != VK_SUCCESS)
+         return result;
 
       wsi->metal.encode_drawable_present(image->blit.cmd_buffers[i], metal_image->drawable);
    }
@@ -602,20 +631,53 @@ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
    clock_gettime(CLOCK_MONOTONIC, &start_time);
    timespec_add(&end_time, &rel_timeout, &start_time);
 
+   VkExtent2D target = chain->extent;
+   if (chain->scaling) {
+      wsi_metal_layer_size(chain->surface->pLayer, &target.width, &target.height);
+      if (!target.width || !target.height)
+         return info->timeout ? VK_TIMEOUT : VK_NOT_READY;
+      wsi_metal_layer_set_drawable_size(chain->surface->pLayer, target.width, target.height);
+   }
+   uint32_t next = chain->current_image_index;
+   while (chain->images[next].drawable) {
+      next = (next + 1) % chain->base.image_count;
+      if (next == chain->current_image_index)
+         return info->timeout ? VK_TIMEOUT : VK_NOT_READY;
+   }
+   /* The previous present fence protects the recorded blit and its image. */
+   if (chain->base.fences[next]) {
+      VkResult result = chain->base.wsi->WaitForFences(chain->base.device, 1,
+         &chain->base.fences[next], true, info->timeout);
+      if (result != VK_SUCCESS)
+         return result == VK_TIMEOUT && !info->timeout ? VK_NOT_READY : result;
+   }
    while (1) {
       /* Try to acquire an drawable. Unfortunately we might block for up to 1 second. */
       CAMetalDrawable *drawable = wsi_metal_layer_acquire_drawable(chain->surface->pLayer);
       if (drawable) {
-         uint32_t i = (chain->current_image_index++) % chain->base.image_count;
+         uint32_t i = next;
+         chain->current_image_index = (i + 1) % chain->base.image_count;
          struct wsi_metal_image *image = &chain->images[i];
          *image_index = i;
+         if (!wsi_chain->wsi->sw) {
+            VkResult result = wsi_metal_resize_blit_image(chain, image, target);
+            if (result != VK_SUCCESS) {
+               wsi_metal_release_drawable(drawable);
+               return result;
+            }
+         }
          image->drawable = drawable;
          if (!wsi_chain->wsi->sw) {
             chain->base.wsi->metal.bind_drawable_to_vkimage(image->base.blit.image,
                                                             image->drawable);
             /* Since present images will only be backed by MTLTextures after acquisition,
              * we need to re-record the command buffer so it uses the new drawable. */
-            wsi_cmd_blit_image_to_image(wsi_chain, &wsi_chain->image_info, &image->base);
+            VkResult result = wsi_cmd_blit_image_to_image(wsi_chain, &wsi_chain->image_info, &image->base);
+            if (result != VK_SUCCESS) {
+               wsi_metal_release_drawable(image->drawable);
+               image->drawable = NULL;
+               return result;
+            }
          }
          return VK_SUCCESS;
       }
@@ -624,7 +686,7 @@ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
       struct timespec current_time;
       clock_gettime(CLOCK_MONOTONIC, &current_time);
       if (timespec_after(&current_time, &end_time))
-         return VK_NOT_READY;
+         return info->timeout ? VK_TIMEOUT : VK_NOT_READY;
    }
 }
 
@@ -718,7 +780,7 @@ wsi_metal_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
 
    uint32_t width = 0u, height = 0u;
    wsi_metal_layer_size(chain->surface->pLayer, &width, &height);
-   bool is_optimal = (width == chain->extent.width && height == chain->extent.height);
+   bool is_optimal = chain->scaling || (width == chain->extent.width && height == chain->extent.height);
    return is_optimal ? VK_SUCCESS : VK_SUBOPTIMAL_KHR;
 }
 
@@ -826,12 +888,8 @@ wsi_metal_create_image(const struct wsi_metal_swapchain *metal_chain,
    if (wsi->sw || result != VK_SUCCESS)
       return result;
 
-   /* We perform blit through rendering */
-   VkImageCreateInfo blit_create = chain->image_info.create;
-   blit_create.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-   result = wsi->CreateImage(chain->device, &blit_create,
-                             &chain->alloc, &image->blit.image);
+   result = wsi_metal_resize_blit_image((struct wsi_metal_swapchain *)metal_chain,
+                                       metal_image, metal_chain->extent);
    if (result != VK_SUCCESS)
       wsi_metal_destroy_image(metal_chain, metal_image);
 
@@ -902,8 +960,17 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    const bool layer_opaque = opaque_composition && wsi_device->sw;
    const bool framebuffer_only = !wsi_device->sw;
 
+   const VkSwapchainPresentScalingCreateInfoKHR *scaling =
+      vk_find_struct_const(pCreateInfo->pNext, SWAPCHAIN_PRESENT_SCALING_CREATE_INFO_KHR);
+   const VkPresentScalingFlagsKHR behavior = !wsi_device->sw && scaling ? scaling->scalingBehavior : 0;
+   VkExtent2D target = pCreateInfo->imageExtent;
+   if (behavior) {
+      wsi_metal_layer_size(metal_surface->pLayer, &target.width, &target.height);
+      target.width = MAX2(target.width, 1);
+      target.height = MAX2(target.height, 1);
+   }
    VkResult result = wsi_metal_layer_configure(metal_surface->pLayer,
-      pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
+      target.width, target.height,
       num_images, pCreateInfo->imageFormat, pCreateInfo->imageColorSpace,
       layer_opaque, immediate_mode, framebuffer_only);
    if (result != VK_SUCCESS)
@@ -946,6 +1013,9 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    chain->base.present_mode = wsi_swapchain_get_present_mode(wsi_device, pCreateInfo);
    chain->base.image_count = num_images;
    chain->extent = pCreateInfo->imageExtent;
+   chain->scaling = behavior;
+   chain->gravity_x = scaling ? scaling->presentGravityX : 0;
+   chain->gravity_y = scaling ? scaling->presentGravityY : 0;
    chain->vk_format = pCreateInfo->imageFormat;
    chain->surface = metal_surface;
    chain->current_image_index = 0;

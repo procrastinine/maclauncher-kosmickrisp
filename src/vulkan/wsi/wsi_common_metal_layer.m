@@ -136,6 +136,15 @@ get_color_space_info(VkColorSpaceKHR color_space, CGColorSpaceRef *cg_color_spac
 }
 
 void
+wsi_metal_layer_set_drawable_size(const CAMetalLayer *metal_layer,
+                                 uint32_t width, uint32_t height)
+{
+   CGSize size = CGSizeMake(width, height);
+   if (!CGSizeEqualToSize(metal_layer.drawableSize, size))
+      metal_layer.drawableSize = size;
+}
+
+void
 wsi_metal_layer_set_immediate(const CAMetalLayer *metal_layer,
                               bool enable_immediate)
 {

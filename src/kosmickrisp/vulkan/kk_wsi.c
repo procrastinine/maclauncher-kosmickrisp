@@ -79,6 +79,34 @@ kk_wsi_cmd_blit_image(VkCommandBuffer vk_cmd, const VkBlitImageInfo2 *blit_info,
     * property of the swapchain, so it never changes for a given image. */
    src->wsi_opaque_alpha = opaque_alpha;
 
+   VK_FROM_HANDLE(kk_image, dst, blit_info->dstImage);
+   const VkImageBlit2 *region = blit_info->pRegions;
+   if (region->dstOffsets[0].x || region->dstOffsets[0].y ||
+       region->dstOffsets[1].x != dst->vk.extent.width ||
+       region->dstOffsets[1].y != dst->vk.extent.height) {
+      const VkClearColorValue black = {.float32 = {0, 0, 0, opaque_alpha ? 1 : 0}};
+      const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      kk_CmdClearColorImage(vk_cmd, blit_info->dstImage,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+      const VkImageMemoryBarrier2 barrier = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+         .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+         .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+         .dstStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT,
+         .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+         .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+         .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+         .image = blit_info->dstImage,
+         .subresourceRange = range,
+      };
+      const VkDependencyInfo dependency = {
+         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+         .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier,
+      };
+      kk_CmdPipelineBarrier2(vk_cmd, &dependency);
+   }
    kk_CmdBlitImage2(vk_cmd, blit_info);
 }
 

@@ -20,6 +20,10 @@ wsi_metal_layer_size(const CAMetalLayer *metal_layer,
    uint32_t *width, uint32_t *height);
 
 void
+wsi_metal_layer_set_drawable_size(const CAMetalLayer *metal_layer,
+                                 uint32_t width, uint32_t height);
+
+void
 wsi_metal_layer_set_immediate(const CAMetalLayer *metal_layer,
                               bool enable_immediate);
 
