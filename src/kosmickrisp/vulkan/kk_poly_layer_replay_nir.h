@@ -62,7 +62,18 @@ kk_poly_layer_lower_vs(nir_shader *nir)
          }
       }
    }
-   assert(position);
+   if (!position) {
+      /* Position is undefined when the producer writes none. A zero
+       * Position (w = 0) rasterizes nothing, as in ordinary draws, and gives
+       * the Layer selection below a store to order against. */
+      nir_builder zero = layer ? nir_builder_at(nir_after_instr(&layer->instr)) :
+         nir_builder_at(nir_after_impl(nir_shader_get_entrypoint(nir)));
+      nir_store_output(&zero, nir_imm_vec4(&zero, 0.0f, 0.0f, 0.0f, 0.0f), nir_imm_int(&zero, 0),
+         .src_type = nir_type_float32, .io_semantics.location = VARYING_SLOT_POS,
+         .io_semantics.num_slots = 1);
+      position = nir_instr_as_intrinsic(zero.cursor.instr);
+      nir->info.outputs_written |= VARYING_BIT_POS;
+   }
    if (!layer) {
       nir_builder zero = nir_builder_at(nir_after_instr(&position->instr));
       nir_store_output(&zero, nir_imm_int(&zero, 0), nir_imm_int(&zero, 0),
