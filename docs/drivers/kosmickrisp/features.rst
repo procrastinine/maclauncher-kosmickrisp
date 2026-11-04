@@ -334,9 +334,11 @@ Feature table
        each corner. Advertised when the device reports barycentric support.
      - Apple7 for coordinates, Apple10 for per-vertex values; coordinates
        native on all families, per-vertex inputs emulated on all families.
-     - —
-     - Always
-     - —
+     - ``fragment_barycentric``
+     - Off
+     - SV_Barycentrics shaders are unavailable. vkd3d-proton disables mesh
+       shaders, so D3D12 mesh shader tier 1 and feature level 12_2 are
+       unavailable.
    * - ``VK_KHR_shader_quad_control``
      - Native with emulated cases: quad operations are native. Full and
        coarse quad helper requirements add a triangle-merge guard.

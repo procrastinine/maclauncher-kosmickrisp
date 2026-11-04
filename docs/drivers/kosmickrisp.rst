@@ -99,8 +99,15 @@ Two modes set the starting selection:
 In performance mode, an entry is off only when turning it off lowers no
 Direct3D shader model or feature level reported by DXVK or vkd3d-proton and
 does not prevent either translator from creating its device. All other entries
-stay on. Ray tracing is the exception: its interfaces are reported only when
-selected explicitly, with ``+ray_tracing`` or ``conformance``.
+stay on, with two exceptions:
+
+- Ray tracing interfaces are reported only when selected explicitly, with
+  ``+ray_tracing`` or ``conformance``.
+- Fragment barycentrics are off, although vkd3d-proton reports mesh shaders,
+  and therefore feature level 12.2, only with ``+fragment_barycentric`` or
+  ``conformance``. Applications that use reported barycentric support for all
+  fragment interpolation move every fragment shader to per-corner transport,
+  which adds GPU time to all of their draws.
 
 For example, vkd3d-proton reports shader model 6.2 and later only when FP32
 flush-to-zero, FP32 denormal preservation and independent denormal controls

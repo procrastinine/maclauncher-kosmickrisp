@@ -213,11 +213,11 @@
    * - ``fragment_barycentric``
      - Fragment barycentric coordinates and per-vertex inputs.
        Controls: ``VK_KHR_fragment_shader_barycentric``, ``fragmentShaderBarycentric``, ``triStripVertexOrderIndependentOfProvokingVertex``.
-     - native interpolation / corner transport. Legal center-only coordinates use native barycentric_coord. Exact or reordered coordinates transport per-corner values from the producer and interpolate them in the fragment shader. Float4 corner interpolation reads four fragment inputs and performs component arithmetic.
+     - native interpolation / corner transport. Legal center-only coordinates use native barycentric_coord. Exact or reordered coordinates and per-vertex inputs transport per-corner values from the producer as flat outputs and interpolate them in the fragment shader. Float4 corner interpolation reads four fragment inputs and performs component arithmetic. AnyPS5 interpolates every pixel shader input exactly when the extension is reported, which places every pixel shader on corner transport; on an Apple8 GPU this measured about 10% more GPU time per present on a title screen.
      - No Apple family
-     - On
-     - Preserves SM 6.1 barycentric shader support and the barycentric requirement of vkd3d-proton mesh shaders, which are required for feature level 12.2.
-     - Without a translator fallback, SV_Barycentrics shaders are unavailable and vkd3d-proton normally disables mesh shaders; this prevents feature level 12.2 when its other requirements are met. The maximum reported shader model is not independently reduced by this entry.
+     - Off
+     - Applications that use reported barycentric support for all fragment interpolation move every pixel shader to corner transport; AnyPS5 does this and measured about 10% more GPU time per present on an Apple8 title screen.
+     - SV_Barycentrics shaders are unavailable without a translator fallback, and vkd3d-proton disables mesh shaders, so feature level 12.2 requires +fragment_barycentric in addition to its other requirements. The maximum reported shader model is not independently reduced by this entry.
      - ``performance,+fragment_barycentric``
    * - ``sampler_filter_minmax``
      - Minimum and maximum sampler filtering on Apple8 and Apple9 GPUs.
