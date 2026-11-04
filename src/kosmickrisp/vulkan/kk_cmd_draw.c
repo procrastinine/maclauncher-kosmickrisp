@@ -461,6 +461,20 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    render->force_attachment_store =
       !is_whole_framebuffer || (render->flags & VK_RENDERING_SUSPENDING_BIT);
 
+   /* vk_meta records one render pass per region with no dependency between
+    * them, and a pass end is unordered. A later meta pass that loads its
+    * attachments must see the earlier passes' stores: Metal orders untracked
+    * passes only through barriers. Applied when the render encoder starts. */
+   if (cmd->meta_passes) {
+      if (cmd->meta_passes > 1 && force_attachment_load) {
+         cmd->pending_barrier.src |= MTL_STAGE_FRAGMENT | MTL_STAGE_TILE;
+         cmd->pending_barrier.dst |= MTL_STAGE_FRAGMENT | MTL_STAGE_TILE;
+         cmd->pending_barrier.visibility =
+            MAX2(cmd->pending_barrier.visibility, MTL_VISIBILITY_DEVICE);
+      }
+      cmd->meta_passes = 2;
+   }
+
    kk_set_color_attachments(cmd, pass_descriptor, render, dyn, force_attachment_load,
                             is_whole_framebuffer, false);
 
