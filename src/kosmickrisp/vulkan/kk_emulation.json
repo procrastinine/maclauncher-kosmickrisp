@@ -444,5 +444,23 @@
     "performance": true,
     "performance_reason": "Preserves D3D12 counter-backed ExecuteIndirect and predication semantics; vkd3d-proton returns without executing these commands if drawIndirectCount is unavailable.",
     "off_consequence": "Counter-buffer and fallback-predicated ExecuteIndirect commands are skipped by vkd3d-proton. Its reported shader model and feature level can remain unchanged and no device-creation rejection is established; those reports do not provide the missing command semantics."
+  },
+  {
+    "name": "fragment_barycentric",
+    "description": "Fragment barycentric coordinates and per-vertex inputs.",
+    "cost_class": "native interpolation / corner transport",
+    "cost_note": "Legal center-only coordinates use native barycentric_coord. A representative float4 corner interpolation emits 4 fragment input reads and 20 scalar arithmetic assignments; its producer emits 155 temporary assignments versus 3 for the ordinary producer. Exact or reordered coordinates retain corner transport. These are emitted MSL counts; GPU timing is unmeasured.",
+    "extensions": [
+      "VK_KHR_fragment_shader_barycentric"
+    ],
+    "features": [
+      "fragmentShaderBarycentric"
+    ],
+    "properties": [
+      "triStripVertexOrderIndependentOfProvokingVertex"
+    ],
+    "performance": true,
+    "performance_reason": "Preserves SM 6.1 barycentric shader support and the barycentric requirement of vkd3d-proton mesh shaders, which are required for feature level 12.2.",
+    "off_consequence": "Without a translator fallback, SV_Barycentrics shaders are unavailable and vkd3d-proton normally disables mesh shaders; this prevents feature level 12.2 when its other requirements are met. The maximum reported shader model is not independently reduced by this entry."
   }
 ]
