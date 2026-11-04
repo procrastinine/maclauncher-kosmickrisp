@@ -13,22 +13,31 @@ mtl_end_encoding(void *encoder)
 }
 
 void
-mtl_barrier_after_stages(void *encoder, enum mtl_stages after_stages,
-                         enum mtl_stages before_queue_stages)
+mtl_barrier_after_stages_with_options(void *encoder,
+                                      enum mtl_stages after_stages,
+                                      enum mtl_stages before_queue_stages,
+                                      enum mtl_visibility_options visibility)
 {
 }
 
 void
-mtl_barrier_after_encoder_stages(void *encoder, enum mtl_stages after_stages,
-                                 enum mtl_stages before_queue_stages)
+mtl_barrier_after_encoder_stages_with_options(
+   void *encoder, enum mtl_stages after_stages,
+   enum mtl_stages before_queue_stages, enum mtl_visibility_options visibility)
 {
 }
 
 void
-mtl_barrier_after_queue_stages(void *encoder,
-                               enum mtl_stages after_queue_stages,
-                               enum mtl_stages before_stages)
+mtl_barrier_after_queue_stages_with_options(
+   void *encoder, enum mtl_stages after_queue_stages,
+   enum mtl_stages before_stages, enum mtl_visibility_options visibility)
 {
+}
+
+enum mtl_stages
+mtl_compute_encoder_stages(mtl_compute_encoder *encoder)
+{
+   return MTL_STAGE_DISPATCH | MTL_STAGE_BLIT;
 }
 
 void

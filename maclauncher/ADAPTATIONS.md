@@ -118,7 +118,7 @@ Implementation: [kk_cmd_buffer.h](../src/kosmickrisp/vulkan/kk_cmd_buffer.h), [k
 
 Vulkan contract: Apply synchronization2 event dependencies through pipeline barriers.
 
-Event waits use the shared pipeline-barrier path, preserving attachment stores, encoder splits and event status. Within a compute encoder, nonempty dependencies at one event-wait point share one full dispatch/blit barrier; an entirely empty wait emits none. Graphics dependencies retain their individual attachment and encoder decisions. SYNC_FD and ordinary synchronization remain unchanged.
+Event waits use the shared pipeline-barrier path, preserving attachment stores, encoder splits and event status. Within a compute encoder, dependencies at one event-wait point combine their execution and memory scopes; an entirely empty wait emits none. Graphics dependencies retain their individual attachment and encoder decisions. SYNC_FD and ordinary synchronization remain unchanged.
 
 Scope: synchronization2 event waits. Device support and operation restrictions are defined by the linked implementation.
 
@@ -329,6 +329,18 @@ Scope: Command recording and submission. Device support and operation restrictio
 Consumers: Vulkan applications.
 
 Implementation: [kk_cmd_buffer.c](../src/kosmickrisp/vulkan/kk_cmd_buffer.c).
+
+### Scope native encoder dependencies
+
+Vulkan contract: synchronization2 execution and memory dependencies.
+
+Logical render-pass and command-buffer ends close their encoders without an unconditional queue flush. Vulkan barriers preserve their source and destination stages across current, preceding and subsequent native encoders. Compute implementations of graphics and transfer commands participate in those scopes. Pure execution dependencies use execution-only visibility; explicit memory dependencies retain resource-alias visibility. Internal representation conversions, attachment restarts and deferred writes retain their encoder ordering. Occlusion results and timestamp counter resolves retain their query visibility requirements.
+
+Scope: command recording, encoder transitions, event waits and query completion. One native command-buffer boundary dependency retains ordering with preceding command buffers.
+
+Consumers: Vulkan applications.
+
+Implementation: [kk_barrier.h](../src/kosmickrisp/vulkan/kk_barrier.h), [kk_cmd_buffer.c](../src/kosmickrisp/vulkan/kk_cmd_buffer.c), [kk_cmd_draw.c](../src/kosmickrisp/vulkan/kk_cmd_draw.c), [mtl_encoder.h](../src/kosmickrisp/bridge/mtl_encoder.h), [mtl_encoder.m](../src/kosmickrisp/bridge/mtl_encoder.m).
 
 ### Preserve original views during cached Poly Layer replay
 

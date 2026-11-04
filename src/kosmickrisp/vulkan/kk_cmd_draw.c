@@ -671,8 +671,12 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
 
    kk_apply_attachment_store_ops(cmd, false);
 
-   /* Clean up previous encoder */
-   cs_end(cmd);
+   /* A logical pass end has no implicit dependency on the next pass.
+    * Internal resolves still consume these attachment writes. */
+   if (need_meta_resolve)
+      cs_end(cmd);
+   else
+      cs_end_unordered(cmd);
    mtl_release(cmd->state.gfx.render_pass_descriptor);
    cmd->state.gfx.render_pass_descriptor = NULL;
 
@@ -1820,6 +1824,8 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
    }
 
    if (gfx->dirty & KK_DIRTY_OCCLUSION) {
+      if (gfx->occlusion.mode != MTL_VISIBILITY_RESULT_MODE_DISABLED)
+         cmd->encoder_occlusion = true;
       mtl_set_visibility_result_mode(enc, gfx->occlusion.mode,
                                      gfx->occlusion.index * sizeof(uint64_t));
    }

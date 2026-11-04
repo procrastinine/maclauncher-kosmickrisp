@@ -252,7 +252,14 @@ enum mtl_barrier_scope {
    MTL_BARRIER_SCOPE_RENDER_TARGETS = 1 << 2,
 };
 
+enum mtl_visibility_options {
+   MTL_VISIBILITY_NONE = 0,
+   MTL_VISIBILITY_DEVICE = 1 << 0,
+   MTL_VISIBILITY_RESOURCE_ALIAS = 1 << 1,
+};
+
 enum mtl_stages {
+
    MTL_STAGE_VERTEX = 1 << 0,
    MTL_STAGE_FRAGMENT = 1 << 1,
    MTL_STAGE_TILE = 1 << 2,

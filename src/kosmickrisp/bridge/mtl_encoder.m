@@ -24,40 +24,49 @@ mtl_end_encoding(void *encoder)
 }
 
 void
-mtl_barrier_after_stages(void *encoder, enum mtl_stages after_stages,
-                         enum mtl_stages before_queue_stages)
+mtl_barrier_after_stages_with_options(void *encoder,
+                                      enum mtl_stages after_stages,
+                                      enum mtl_stages before_queue_stages,
+                                      enum mtl_visibility_options visibility)
 {
    KK_MTL_REPLAY_POOL({
       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
-      /* TODO_KOSMICKRISP Expose visibility option since resource alias should only be required
-       * if occlusion queries are used */
-      [enc barrierAfterStages:(MTLStages)after_stages beforeQueueStages:(MTLStages)before_queue_stages
-           visibilityOptions:MTL4VisibilityOptionResourceAlias];
+      [enc barrierAfterStages:(MTLStages)after_stages
+            beforeQueueStages:(MTLStages)before_queue_stages
+            visibilityOptions:(MTL4VisibilityOptions)visibility];
    });
 }
 
 void
-mtl_barrier_after_encoder_stages(void *encoder, enum mtl_stages after_stages,
-                                 enum mtl_stages before_queue_stages)
+mtl_barrier_after_encoder_stages_with_options(
+   void *encoder, enum mtl_stages after_stages,
+   enum mtl_stages before_queue_stages, enum mtl_visibility_options visibility)
 {
    KK_MTL_REPLAY_POOL({
       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
-      [enc barrierAfterEncoderStages:(MTLStages)after_stages beforeEncoderStages:(MTLStages)before_queue_stages
-           visibilityOptions:MTL4VisibilityOptionResourceAlias];
+      [enc barrierAfterEncoderStages:(MTLStages)after_stages
+                 beforeEncoderStages:(MTLStages)before_queue_stages
+                   visibilityOptions:(MTL4VisibilityOptions)visibility];
    });
 }
 
 void
-mtl_barrier_after_queue_stages(void *encoder,
-                               enum mtl_stages after_queue_stages,
-                               enum mtl_stages before_stages)
+mtl_barrier_after_queue_stages_with_options(
+   void *encoder, enum mtl_stages after_queue_stages,
+   enum mtl_stages before_stages, enum mtl_visibility_options visibility)
 {
    KK_MTL_REPLAY_POOL({
       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
       [enc barrierAfterQueueStages:(MTLStages)after_queue_stages
                       beforeStages:(MTLStages)before_stages
-                 visibilityOptions:MTL4VisibilityOptionResourceAlias];
+                 visibilityOptions:(MTL4VisibilityOptions)visibility];
    });
+}
+
+enum mtl_stages
+mtl_compute_encoder_stages(mtl_compute_encoder *encoder)
+{
+   return (enum mtl_stages)[(id<MTL4ComputeCommandEncoder>)encoder stages];
 }
 
 void

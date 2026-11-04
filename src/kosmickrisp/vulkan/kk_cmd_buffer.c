@@ -93,7 +93,7 @@ end_recording(struct kk_cmd_buffer *cmd)
        cmd->metal.cmd_buf == NULL)
       return;
 
-   cs_end(cmd);
+   cs_end_unordered(cmd);
    mtl_end_command_buffer(cmd->metal.cmd_buf);
 }
 
@@ -256,6 +256,9 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
    cmd->uses_heap = false;
    memset(&cmd->whole_pass, 0, sizeof(cmd->whole_pass));
    cmd->deferred_render_chain = false;
+   cmd->pending_barrier = (struct kk_barrier_scope){0};
+   cmd->closed_encoder_stages = 0;
+   cmd->encoder_occlusion = false;
 }
 
 static void
@@ -342,6 +345,13 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
          goto fail_allocator;
    }
    mtl_begin_command_buffer(cmd->metal.cmd_buf, cmd->metal.allocator);
+   /* One boundary dependency covers prior native command buffers. Its
+    * consumer scope also orders later encoders in this command buffer. */
+   cmd->pending_barrier = (struct kk_barrier_scope){
+      MTL_STAGE_ALL,
+      MTL_STAGE_ALL,
+      MTL_VISIBILITY_RESOURCE_ALIAS,
+   };
    if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY && pBeginInfo->pInheritanceInfo) {
       const VkCommandBufferInheritanceDescriptorHeapInfoEXT *heap = vk_find_struct_const(
          pBeginInfo->pInheritanceInfo->pNext, COMMAND_BUFFER_INHERITANCE_DESCRIPTOR_HEAP_INFO_EXT);
@@ -399,6 +409,19 @@ kk_encoder_update_debug(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
       mtl_encoder_push_debug_group(encoder, label->pLabelName);
 }
 
+static void
+apply_pending_barrier(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
+{
+   const struct kk_barrier_scope *b = &cmd->pending_barrier;
+   if (b->src && b->dst) {
+      /* A consumer covers this encoder and later encoders, while its source
+       * scope contains only passes closed before this encoder began. */
+      mtl_barrier_after_queue_stages_with_options(encoder, b->src, b->dst,
+                                                 b->visibility);
+   }
+   cmd->pending_barrier = (struct kk_barrier_scope){0};
+}
+
 void
 cs_start_render(struct kk_cmd_buffer *cmd)
 {
@@ -419,9 +442,9 @@ cs_start_render(struct kk_cmd_buffer *cmd)
    cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
       cmd->metal.cmd_buf, state->render_pass_descriptor);
 
+   apply_pending_barrier(cmd, cmd->metal.render);
    kk_encoder_update_debug(cmd, cmd->metal.render);
-   /* Starting a new render pass means we already flushed and no barrier is
-    * needed. */
+   /* A new physical pass starts a fresh attachment availability interval. */
    state->render.write_available = false;
    state->render.ds_write_available = false;
    state->render.storage_write_available = false;
@@ -473,6 +496,7 @@ cs_get_compute_internal(struct kk_cmd_buffer *cmd, bool preserve_pipeline)
    if (cmd->metal.compute == NULL) {
       cmd->state.cs.bound_pipeline = NULL;
       cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
+      apply_pending_barrier(cmd, cmd->metal.compute);
       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
       kk_encoder_update_debug(cmd, cmd->metal.compute);
    }
@@ -496,10 +520,26 @@ cs_get_compute_for_dispatch(struct kk_cmd_buffer *cmd)
 }
 
 static void
-end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
+end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
+            enum mtl_stages stages, bool ordered)
 {
-   /* TODO_KOSMICKRISP This is probably overkill */
-   mtl_barrier_after_stages(encoder, MTL_STAGE_ALL, MTL_STAGE_ALL);
+   const bool resolves =
+      util_dynarray_num_elements(&cmd->ts_resolves, struct kk_ts_resolve) > 0;
+   const bool occlusion =
+      encoder == cmd->metal.render && cmd->encoder_occlusion;
+   if (ordered || occlusion || resolves) {
+      /* Same-resource internal handoffs need device coherence. Queries
+       * retain alias visibility and counter resolves require BLIT ordering. */
+      enum mtl_stages dst =
+         ordered || occlusion ? MTL_STAGE_ALL : MTL_STAGE_BLIT;
+      enum mtl_visibility_options visibility =
+         occlusion || resolves ? MTL_VISIBILITY_RESOURCE_ALIAS
+                               : MTL_VISIBILITY_DEVICE;
+      if (stages)
+         mtl_barrier_after_stages_with_options(encoder, stages, dst,
+                                               visibility);
+   }
+   cmd->closed_encoder_stages |= stages;
    mtl_end_encoding(encoder);
    mtl_release(encoder);
 
@@ -509,6 +549,8 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
                                        1u, r->dst_addr);
    }
 
+   if (resolves)
+      cmd->closed_encoder_stages |= MTL_STAGE_BLIT;
    util_dynarray_clear(&cmd->ts_resolves);
 }
 
@@ -528,15 +570,22 @@ flush_post_render_writes(struct kk_cmd_buffer *cmd)
    util_dynarray_clear(&cmd->post_render_writes);
 }
 
-void
-cs_end(struct kk_cmd_buffer *cmd)
+static void
+cs_end_internal(struct kk_cmd_buffer *cmd, bool ordered)
 {
    assert(cmd);
    kk_whole_pass_flush_suspended(cmd);
 
    /* Render first as it may open a compute encoder for post render writes. */
+   bool ordered_compute = ordered;
    if (cmd->metal.render) {
-      end_encoder(cmd, cmd->metal.render);
+      const bool post_writes =
+         util_dynarray_num_elements(&cmd->post_render_writes,
+                                    struct libkk_imm_write) > 0;
+      ordered_compute |= post_writes;
+      end_encoder(cmd, cmd->metal.render, KK_RENDER_STAGES,
+                  ordered || post_writes || cmd->writable_msaa_render_writes);
+      cmd->encoder_occlusion = false;
       cmd->metal.render = NULL;
 
       /* The stage map is only valid for the current render encoder */
@@ -546,9 +595,25 @@ cs_end(struct kk_cmd_buffer *cmd)
    }
 
    if (cmd->metal.compute) {
-      end_encoder(cmd, cmd->metal.compute);
+      enum mtl_stages stages = mtl_compute_encoder_stages(cmd->metal.compute);
+      /* Counter samples are not dispatch/blit commands in the stages API. */
+      if (util_dynarray_num_elements(&cmd->ts_resolves, struct kk_ts_resolve))
+         stages |= MTL_STAGE_DISPATCH;
+      end_encoder(cmd, cmd->metal.compute, stages, ordered_compute);
       cmd->metal.compute = NULL;
    }
+}
+
+void
+cs_end(struct kk_cmd_buffer *cmd)
+{
+   cs_end_internal(cmd, true);
+}
+
+void
+cs_end_unordered(struct kk_cmd_buffer *cmd)
+{
+   cs_end_internal(cmd, false);
 }
 
 /* Keep long virtual mesh schedules in bounded native command buffers. All
@@ -672,47 +737,84 @@ kk_barrier_requires_encoder_split(struct kk_cmd_buffer *cmd,
           (dst & VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT);
 }
 
+static void
+emit_scoped_barrier(struct kk_cmd_buffer *cmd, struct kk_barrier_scope scope)
+{
+   if (!scope.src || !scope.dst)
+      return;
+   mtl_command_encoder *encoder =
+      cmd->metal.render ? cmd->metal.render : cmd->metal.compute;
+   if (!encoder) {
+      cmd->pending_barrier.src |= scope.src;
+      cmd->pending_barrier.dst |= scope.dst;
+      cmd->pending_barrier.visibility |= scope.visibility;
+      return;
+   }
+   const enum mtl_stages supported =
+      cmd->metal.render ? KK_RENDER_STAGES : KK_COMPUTE_STAGES;
+   const enum mtl_stages src = scope.src & supported;
+   const enum mtl_stages dst = scope.dst & supported;
+   /* A producer covers current-pass sources for later encoders. A consumer
+    * covers earlier passes for this and subsequent encoders. The intra-pass
+    * barrier below handles current-pass producers and consumers. */
+   if (src)
+      mtl_barrier_after_stages_with_options(encoder, src, scope.dst,
+                                           scope.visibility);
+   if (scope.src & cmd->closed_encoder_stages)
+      mtl_barrier_after_queue_stages_with_options(encoder, scope.src, scope.dst,
+                                                 scope.visibility);
+   if (src && dst)
+      mtl_barrier_after_encoder_stages_with_options(encoder, src, dst,
+                                                    scope.visibility);
+}
+
+static void
+cmd_pipeline_barrier(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
+{
+   if (kk_dependency_info_is_empty(dep))
+      return;
+
+   struct kk_barrier_scope scope = {0};
+   kk_barrier_scope_add_dependency(&scope, dep);
+   if (cmd->metal.render) {
+      const bool local = kk_whole_pass_local_barrier(dep);
+      if (kk_barrier_requires_encoder_split(cmd, dep) ||
+          (cmd->state.gfx.render.samples > 1 && !local)) {
+         kk_apply_attachment_store_ops(cmd, true);
+         cs_end_unordered(cmd);
+         emit_scoped_barrier(cmd, scope);
+         cs_start_render(cmd);
+         return;
+      }
+      if (kk_whole_pass_attachment_barrier(dep))
+         return;
+   }
+   emit_scoped_barrier(cmd, scope);
+}
+
+void
+kk_cmd_pipeline_barriers(struct kk_cmd_buffer *cmd, uint32_t count,
+                         const VkDependencyInfo *dependencies)
+{
+   if (cmd->metal.compute) {
+      /* All event waits precede this point. Union every dependency, since
+       * individual compute barriers no longer have identical scopes. */
+      struct kk_barrier_scope scope = {0};
+      for (uint32_t i = 0; i < count; ++i)
+         kk_barrier_scope_add_dependency(&scope, &dependencies[i]);
+      emit_scoped_barrier(cmd, scope);
+   } else {
+      for (uint32_t i = 0; i < count; ++i)
+         cmd_pipeline_barrier(cmd, &dependencies[i]);
+   }
+}
+
 VKAPI_ATTR void VKAPI_CALL
 kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
                        const VkDependencyInfo *pDependencyInfo)
 {
-   /* Synchronization2 carries execution scopes in the barrier elements. An
-    * entirely empty dependency needs neither an encoder barrier nor a render
-    * pass restart. Keep extension chains and dependency flags on the existing
-    * path, and preserve barriers with stage scopes but empty access masks. */
-   if (kk_dependency_info_is_empty(pDependencyInfo))
-      return;
-
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
-
-   /* TODO_KOSMICKRISP Lighten barriers according to the actual requested
-    * barrier. To take advantage of this we need to remove the chaining of
-    * encoders. */
-   if (cmd->metal.render) {
-      /* Framebuffer-local dependencies remain on tile. Texture visibility
-       * still uses the shared encoder-split decision. */
-      const bool local = kk_whole_pass_local_barrier(pDependencyInfo);
-      if (kk_barrier_requires_encoder_split(cmd, pDependencyInfo) ||
-          (cmd->state.gfx.render.samples > 1 && !local)) {
-         kk_apply_attachment_store_ops(cmd, true);
-         cs_end(cmd);
-         cs_start_render(cmd);
-      } else if (!kk_whole_pass_attachment_barrier(pDependencyInfo)) {
-         bool mesh = cmd->state.gfx.shader &&
-            cmd->state.gfx.shader->info.stage == MESA_SHADER_MESH;
-         enum mtl_stages before = local ? MTL_STAGE_FRAGMENT : mesh
-            ? MTL_STAGE_OBJECTS | MTL_STAGE_MESH | MTL_STAGE_FRAGMENT : MTL_STAGE_VERTEX;
-         enum mtl_stages after = mesh && !local ? before : MTL_STAGE_FRAGMENT;
-         mtl_barrier_after_encoder_stages(cmd->metal.render, before, after);
-      }
-   } else if (cmd->metal.compute) {
-      /* We chain encoders, so an intra-encoder barrier is enough here:
-       * no need to tear down and recreate the encoder.
-       */
-      mtl_barrier_after_encoder_stages(cmd->metal.compute,
-                                       MTL_STAGE_DISPATCH | MTL_STAGE_BLIT,
-                                       MTL_STAGE_DISPATCH | MTL_STAGE_BLIT);
-   }
+   kk_cmd_pipeline_barriers(cmd, 1, pDependencyInfo);
 }
 
 static void
