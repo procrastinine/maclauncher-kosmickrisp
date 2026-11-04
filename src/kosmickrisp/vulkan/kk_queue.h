@@ -31,6 +31,14 @@ struct kk_queue {
    uint32_t commits_in_flight;
    mtx_t mutex;
    cnd_t cond;
+
+   struct {
+      struct vk_sync *ready;
+      struct vk_queue_submit *submit;
+      VkResult (*resume)(struct kk_queue *, void *, bool);
+      void *data;
+      uint32_t next_command;
+   } deferred;
 };
 
 static inline struct kk_device *
@@ -44,5 +52,11 @@ VkResult kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
                        uint32_t index_in_family);
 
 void kk_queue_finish(struct kk_device *dev, struct kk_queue *queue);
+
+/* Register after CPU preflight, before capture. ready is a fresh timeline
+ * point, initially zero, completed at value 1. Success transfers one off-thread
+ * resume/cancel callback; failure none. All later failures use device loss. */
+VkResult kk_queue_defer(struct kk_queue *queue, struct vk_sync *ready,
+   VkResult (*resume)(struct kk_queue *, void *, bool), void *data);
 
 #endif

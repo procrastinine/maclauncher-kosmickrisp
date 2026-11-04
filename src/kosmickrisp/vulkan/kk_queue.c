@@ -19,6 +19,8 @@
 
 #include "vk_cmd_queue.h"
 
+#include "kk_queue_deferred.h"
+
 struct kk_commit_data {
    struct kk_queue *queue;
    struct kk_cmd_buffer *cmd;
@@ -247,6 +249,24 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
    if (vk_queue_is_lost(&queue->vk))
       return VK_ERROR_DEVICE_LOST;
 
+   /* An internally synchronized submit may already have selected the
+    * immediate path when another thread registered a continuation. Queue it
+    * behind that retained owner rather than resuming the owner's callback. */
+   if (queue->deferred.resume && queue->deferred.submit != submit)
+      return VK_NOT_READY;
+
+   const bool resuming = queue->deferred.resume != NULL;
+   uint32_t first_command = 0;
+   if (resuming) {
+      VkResult result = kk_queue_resume_deferred(queue, false);
+      if (result != VK_SUCCESS)
+         return result;
+      if (queue->deferred.resume)
+         return VK_NOT_READY;
+      first_command = queue->deferred.next_command;
+   }
+
+   if (!resuming) {
    for (struct vk_sync_wait *wait = submit->waits,
                             *end = submit->waits + submit->wait_count;
         wait != end; ++wait) {
@@ -264,7 +284,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
       VkResult result = kk_queue_bind_sparse(queue, submit);
       if (result != VK_SUCCESS) return result;
    }
-   for (uint32_t i = 0; i < submit->command_buffer_count; ++i) {
+   }
+   for (uint32_t i = first_command; i < submit->command_buffer_count; ++i) {
       struct kk_cmd_buffer *cmd_buffer =
          container_of(submit->command_buffers[i], struct kk_cmd_buffer, vk);
 
@@ -290,12 +311,20 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
             }
          }
          i += consumed - 1;
+         if (queue->deferred.resume) {
+            queue->deferred.next_command = i + 1;
+            return VK_NOT_READY;
+         }
          continue;
       } else if (kk_cmd_buffer_has_work(cmd_buffer)) {
          kk_sparse_commit_first(queue, cmd_buffer);
       }
 
       cmd_buffer->submitted = true;
+      if (queue->deferred.resume) {
+         queue->deferred.next_command = i + 1;
+         return VK_NOT_READY;
+      }
 
    }
 
@@ -303,8 +332,11 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
       struct vk_sync_signal *signal = &submit->signals[i];
       struct kk_sync_timeline *sync =
          container_of(signal->sync, struct kk_sync_timeline, base);
+      mtx_lock(&sync->publish_mutex);
       mtl_signal_event(queue->mtl_handle, sync->mtl_handle,
                        signal->signal_value);
+      kk_sync_mark_pending(sync, signal->signal_value);
+      mtx_unlock(&sync->publish_mutex);
    }
 
    return VK_SUCCESS;
@@ -382,6 +414,12 @@ kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
 void
 kk_queue_finish(struct kk_device *dev, struct kk_queue *queue)
 {
+   /* Join the Mesa worker before freeing its command pools or the
+    * caller's deferred payload. Lost waits terminate through vk_sync. */
+   vk_queue_finish(&queue->vk);
+   if (queue->deferred.resume)
+      (void)kk_queue_resume_deferred(queue, true);
+
    /* There may be in-flight command buffers, wait for them to finish. */
    kk_queue_wait_for_commits(queue);
 
@@ -394,6 +432,4 @@ kk_queue_finish(struct kk_device *dev, struct kk_queue *queue)
    util_dynarray_fini(&queue->free_cmd_buffers);
    cnd_destroy(&queue->cond);
    mtx_destroy(&queue->mutex);
-
-   vk_queue_finish(&queue->vk);
 }

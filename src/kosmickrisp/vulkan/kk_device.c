@@ -344,6 +344,10 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_alloc;
 
+   /* Metal cannot order a queue behind work that has not been encoded.
+    * Start Mesa's submit worker only when a pending dependency requires it. */
+   vk_device_enable_threaded_submit(&dev->vk);
+
    /* The original extension has no feature structure. Normalize its
     * request to the promoted feature used by the shader cache/lowering. */
    dev->vk.enabled_features.samplerFilterMinmax |=
@@ -506,6 +510,11 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    }
    simple_mtx_destroy(&dev->blit_queue_mutex);
 
+   /* Host continuations may still encode using shared meta resources.
+    * Join/cancel submit workers and drain their native callbacks first. */
+   while (dev->queue_count > 0)
+      kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
+
    /* Meta first since it may destroy Vulkan objects */
    kk_device_finish_meta(dev);
    kk_dgc_finish(dev);
@@ -521,9 +530,6 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    /* Geometry heap */
    if (dev->heap)
       kk_destroy_bo(dev, dev->heap);
-
-   while (dev->queue_count > 0)
-      kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
 
    kk_sparse_device_finish(dev);
 

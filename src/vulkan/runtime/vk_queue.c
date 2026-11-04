@@ -275,7 +275,10 @@ vk_queue_submit_add_semaphore_wait(struct vk_queue *queue,
       sync = submit->_wait_temps[submit->wait_count] = semaphore->temporary;
       semaphore->temporary = NULL;
    } else {
-      if (semaphore->type == VK_SEMAPHORE_TYPE_BINARY) {
+      struct vk_sync_binary *binary = vk_sync_as_binary(&semaphore->permanent);
+      const bool native_binary = binary &&
+         (binary->timeline.type->features & VK_SYNC_FEATURE_WAIT_BEFORE_SIGNAL);
+      if (semaphore->type == VK_SEMAPHORE_TYPE_BINARY && !native_binary) {
          if (vk_device_supports_threaded_submit(queue->base.device))
             assert(semaphore->permanent.type->move);
          submit->_has_binary_permanent_semaphore_wait = true;
@@ -286,6 +289,17 @@ vk_queue_submit_add_semaphore_wait(struct vk_queue *queue,
 
    uint64_t wait_value = semaphore->type == VK_SEMAPHORE_TYPE_TIMELINE ?
                          wait_info->value : 0;
+
+   /* Snapshot a native timeline-backed binary point at API submission.
+    * A queued producer may not have reached driver_submit yet. Keeping the
+    * native payload and reserved value avoids a blocking binary-payload move
+    * in vkQueueSubmit while that producer has a host continuation. */
+   struct vk_sync_binary *binary = vk_sync_as_binary(sync);
+   if (binary &&
+       (binary->timeline.type->features & VK_SYNC_FEATURE_WAIT_BEFORE_SIGNAL)) {
+      sync = &binary->timeline;
+      wait_value = binary->next_point;
+   }
 
    submit->waits[submit->wait_count] = (struct vk_sync_wait) {
       .sync = sync,
@@ -312,6 +326,13 @@ vk_queue_submit_add_semaphore_signal(struct vk_queue *queue,
       }
    } else {
       signal_value = 0;
+   }
+
+   struct vk_sync_binary *binary = vk_sync_as_binary(sync);
+   if (binary &&
+       (binary->timeline.type->features & VK_SYNC_FEATURE_WAIT_BEFORE_SIGNAL)) {
+      sync = &binary->timeline;
+      signal_value = ++binary->next_point;
    }
 
    submit->signals[submit->signal_count] = (struct vk_sync_signal) {
@@ -590,6 +611,7 @@ vk_queue_submit_final(struct vk_queue *queue,
     * from any vk_sync_timelines.  While we're here, also compact down the
     * list of waits to get rid of any trivial timeline waits.
     */
+   if (!submit->_driver_unwrapped) {
    uint32_t wait_count = 0;
    for (uint32_t i = 0; i < submit->wait_count; i++) {
       struct vk_sync_timeline_point *wait_point;
@@ -636,6 +658,9 @@ vk_queue_submit_final(struct vk_queue *queue,
          result = vk_queue_set_lost(queue, "Failed to unwrap sync signal");
    }
 
+   submit->_driver_unwrapped = true;
+   }
+
    /* For queues participating in emulation, redirect the submission to the
     * real underlying queue so that driver_submit always sees the queue with
     * actual hardware resources. The lock on the real queue unconditionally
@@ -645,11 +670,15 @@ vk_queue_submit_final(struct vk_queue *queue,
       struct vk_queue *real_queue = queue->real_queue;
 
       simple_mtx_lock(&real_queue->lock);
+      real_queue->driver_submit_active = submit;
       result = real_queue->driver_submit(real_queue, submit);
+      real_queue->driver_submit_active = NULL;
       simple_mtx_unlock(&real_queue->lock);
    } else {
       vk_queue_lock(queue);
+      queue->driver_submit_active = submit;
       result = queue->driver_submit(queue, submit);
+      queue->driver_submit_active = NULL;
       vk_queue_unlock(queue);
    }
 
@@ -744,7 +773,8 @@ vk_queue_submit_thread_func(void *_data)
    mtx_lock(&queue->submit.mutex);
 
    while (queue->submit.thread_run) {
-      if (list_is_empty(&queue->submit.submits)) {
+      if (queue->submit.driver_handoff ||
+          list_is_empty(&queue->submit.submits)) {
          int ret = cnd_wait(&queue->submit.push, &queue->submit.mutex);
          if (ret == thrd_error) {
             mtx_unlock(&queue->submit.mutex);
@@ -761,6 +791,18 @@ vk_queue_submit_thread_func(void *_data)
       /* Drop the lock while we wait */
       mtx_unlock(&queue->submit.mutex);
 
+      /* Encoding may take seconds. Keep the unresolved dependency on
+       * this CPU worker, rather than in an already committed GPU command. */
+      if (submit->driver_defer_sync) {
+         result = vk_sync_wait(queue->base.device, submit->driver_defer_sync,
+                               1, 0, UINT64_MAX);
+         if (unlikely(result != VK_SUCCESS)) {
+            vk_queue_set_lost(queue, "Host continuation wait failed");
+            return 1;
+         }
+         submit->driver_defer_sync = NULL;
+      }
+
       result = vk_sync_wait_many(queue->base.device,
                                  submit->wait_count, submit->waits,
                                  VK_SYNC_WAIT_PENDING, UINT64_MAX);
@@ -770,6 +812,10 @@ vk_queue_submit_thread_func(void *_data)
       }
 
       result = vk_queue_submit_final(queue, submit);
+      if (result == VK_NOT_READY && submit->driver_defer_sync) {
+         mtx_lock(&queue->submit.mutex);
+         continue;
+      }
       if (unlikely(result != VK_SUCCESS)) {
          vk_queue_set_lost(queue, "queue::driver_submit failed");
          return 1;
@@ -828,7 +874,8 @@ vk_queue_stop_submit_thread(struct vk_queue *queue)
 
    thrd_join(queue->submit.thread, NULL);
 
-   assert(list_is_empty(&queue->submit.submits));
+   assert(list_is_empty(&queue->submit.submits) ||
+          vk_device_is_lost_no_report(queue->base.device));
    queue->submit.mode = VK_QUEUE_SUBMIT_MODE_IMMEDIATE;
 }
 
@@ -1098,6 +1145,20 @@ vk_queue_submit(struct vk_queue *queue,
       }
 
       result = vk_queue_submit_final(queue, submit);
+      if (result == VK_NOT_READY &&
+          queue->submit.mode == VK_QUEUE_SUBMIT_MODE_THREADED) {
+         assert(queue->submit.mode == VK_QUEUE_SUBMIT_MODE_THREADED);
+         mtx_lock(&queue->submit.mutex);
+         if (queue->submit.driver_handoff == submit) {
+            list_add(&submit->link, &queue->submit.submits);
+            queue->submit.driver_handoff = NULL;
+         } else {
+            list_addtail(&submit->link, &queue->submit.submits);
+         }
+         cnd_signal(&queue->submit.push);
+         mtx_unlock(&queue->submit.mutex);
+         return VK_SUCCESS;
+      }
       if (unlikely(result != VK_SUCCESS))
          goto fail;
 

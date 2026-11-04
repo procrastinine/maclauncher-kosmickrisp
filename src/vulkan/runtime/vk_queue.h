@@ -71,6 +71,9 @@ struct vk_queue {
    VkResult (*driver_submit)(struct vk_queue *queue,
                              struct vk_queue_submit *submit);
 
+   /* Valid only while driver_submit is executing under queue locking. */
+   struct vk_queue_submit *driver_submit_active;
+
    struct {
       /** Current submit mode
        *
@@ -93,6 +96,9 @@ struct vk_queue {
       cnd_t pop;
 
       struct list_head submits;
+      /* Prevent a newly created worker from overtaking the immediate submit
+       * which owns a registered continuation but has not returned yet. */
+      struct vk_queue_submit *driver_handoff;
 
       bool thread_run;
       thrd_t thread;
@@ -294,6 +300,11 @@ struct vk_queue_submit {
    uint32_t _image_bind_entry_count;
    VkSparseMemoryBind *_bind_entries;
    VkSparseImageMemoryBind *_image_bind_entries;
+
+   /* A driver may retain this exact submit while a host continuation
+    * prepares its remaining work. Point 1 must become complete before retry. */
+   struct vk_sync *driver_defer_sync;
+   bool _driver_unwrapped;
 
    bool _has_binary_permanent_semaphore_wait;
    struct vk_sync **_wait_temps;
