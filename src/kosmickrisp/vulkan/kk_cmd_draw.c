@@ -3726,6 +3726,11 @@ kk_CmdDrawIndirectByteCount2EXT(VkCommandBuffer commandBuffer,
       .prim = vk_topology_to_mesa(dyn->ia.primitive_topology),
       .upload_mask = build_per_draw_upload_mask(cmd),
       .draw_count = 1, .indirect = true,
+      .predicate_count = cmd->state.cond_render.enabled ? 1u : 0u,
+      .predicate_op[0] = cmd->state.cond_render.inverted
+                            ? KK_PREDICATE_EQ_ZERO
+                            : KK_PREDICATE_NEQ_ZERO,
+      .predicate_addr[0] = cmd->state.cond_render.address,
       .indirect_command = { .addr = draw, .stride = sizeof(VkDrawIndirectCommand) },
    };
    kk_draw(cmd, &data);
