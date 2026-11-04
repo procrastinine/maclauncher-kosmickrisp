@@ -538,10 +538,13 @@ compile failure loses the device at first use. Destroying a pipeline does not wa
 When the last pipeline or pipeline cache reference to the shader is
 destroyed, a compile that has not started is cancelled, and a compile in
 progress is joined at user-initiated priority and its result discarded.
-Device destruction does the same for every remaining compile. Creation stays
-synchronous for multi-pipeline calls, creation feedback, compile-required and
-early-return failures, statistics and internal-representation capture,
-indirect-bindable pipelines and sparse variants selected at bind. Shaders with
+Device destruction does the same for every remaining compile. A cache-only
+creation (``VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT``)
+compiles nothing on a miss; a shader it restores from a cache defers its build
+and the creation does not wait for it. Creation stays synchronous for
+multi-pipeline calls, creation feedback, early-return failures, statistics and
+internal-representation capture, indirect-bindable pipelines and sparse
+variants selected at bind. Shaders with
 descriptor-heap embedded samplers are translated during creation, and their
 Metal compile is deferred unless they use 64-bit atomic locks. The first
 deferred compute pipeline of a device allocates the device's 64-bit atomic

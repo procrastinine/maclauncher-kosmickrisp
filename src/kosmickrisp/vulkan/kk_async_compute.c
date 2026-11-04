@@ -663,8 +663,10 @@ bool
 kk_async_compute_can_defer(uint32_t count, const VkComputePipelineCreateInfo *infos)
 {
    if (count != 1 || vk_validate_shader_binaries()) return false;
+   /* A cache-only creation (FAIL_ON_PIPELINE_COMPILE_REQUIRED) never compiles
+    * on a miss; a shader it restores from the cache defers its build like any
+    * other restore, and kk_async_compute_finish_creation does not wait for it. */
    const VkPipelineCreateFlags2KHR synchronous =
-      VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_KHR |
       VK_PIPELINE_CREATE_2_EARLY_RETURN_ON_FAILURE_BIT_KHR |
       VK_PIPELINE_CREATE_2_CAPTURE_STATISTICS_BIT_KHR |
       VK_PIPELINE_CREATE_2_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR |
