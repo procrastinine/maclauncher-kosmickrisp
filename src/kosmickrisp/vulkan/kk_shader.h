@@ -56,7 +56,7 @@ static_assert(KK_FEAT_COUNT <= sizeof(kk_feature_key) * CHAR_BIT,
               "shader feature bits fit the shader-cache key");
 
 /* MSL query specialization and its serialized application-use metadata. */
-#define KK_STATISTICS_SHADER_ABI 2u
+#define KK_STATISTICS_SHADER_ABI 3u
 
 #include "kosmickrisp/libkk/kk_mesh_types.h"
 #include "kk_mesh_pipeline_api.h"
@@ -440,6 +440,8 @@ VkResult kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
 VkResult kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader);
 VkResult kk_shader_ensure_geometry_reports(struct kk_device *dev,
    struct kk_shader *shader, unsigned mask);
+VkResult kk_shader_get_statistics_pre_gs(struct kk_device *dev,
+   struct kk_shader *shader, mtl_compute_pipeline_state **pipeline);
 
 mtl_render_pipeline_state *kk_attachment_pipeline(struct kk_cmd_buffer *cmd,
    struct kk_shader *shader, unsigned kind);

@@ -21,12 +21,9 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
       grid = kk_grid_indirect(gfx->polygon_capture + offsetof(struct poly_geometry_capture, dispatch_groups));
    kk_dispatch_compute(enc, grid, local);
 
-   bool queries = cmd->state.pipeline_statistics_flags &
-      (VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT |
-       VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
-       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
-       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT);
-   queries |= gfx->geometry_query_mask != 0;
+   bool statistics = vs->info.geometry_statistics &&
+      (cmd->state.pipeline_statistics_flags & KK_GEOMETRY_QUERY_BITS);
+   bool queries = statistics || gfx->geometry_query_mask != 0;
    if (gs->info.geometry.xfb || queries) {
       VkResult result = kk_shader_ensure_geometry_reports(kk_cmd_buffer_device(cmd), vs, 2);
       if (result != VK_SUCCESS) {
@@ -38,8 +35,11 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
             kk_grid_1d(1024 * gs->info.geometry.count_words), true, geometry_params);
       enc = cs_get_compute(cmd);
       if (vs->info.gs_aux_mask & BITFIELD_BIT(1)) {
+         mtl_compute_pipeline_state *pipeline = kk_pre_gs_pipeline(cmd, vs, statistics);
+         if (!pipeline)
+            return (struct kk_draw_data){.grid = kk_grid_1d(0u)};
          mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
-         mtl_compute_set_pipeline_state(enc, vs->pipeline.gfx.gs_aux[1]);
+         mtl_compute_set_pipeline_state(enc, pipeline);
          kk_dispatch_compute(enc, kk_grid_1d(1), (struct mtl_size){1, 1, 1});
       }
    }

@@ -142,7 +142,7 @@ Implementation: [kk_physical_device.c](../src/kosmickrisp/vulkan/kk_physical_dev
 
 Vulkan contract: Fragment helper semantics and inactive statistics storage.
 
-Fragment counters are compiled only for devices enabling pipelineStatisticsQuery, whose state participates in the graphics cache key. A default-false Metal function constant encloses the complete counter region; active fragment queries select a lazily cached counting specialization. Private query increments use Metal helper-write suppression after application lowering and existing logical-helper predicates in captured bodies. Null destinations disable Poly statistics writes, and inactive queries retain ordinary scratch sizes. Geometry addresses occupy an optional compact per-draw tail.
+Fragment counters are compiled only for devices enabling pipelineStatisticsQuery, whose state participates in the graphics cache key. A default-false Metal function constant encloses the complete counter region; active fragment queries select a lazily cached counting specialization. Private query increments use Metal helper-write suppression after application lowering and existing logical-helper predicates in captured bodies. The same constant gates pre-GS statistics address loads, with one lazy counting patch-up pipeline; main GS and count programs retain their ordinary pipelines. Query-free draws omit the compact geometry address tail and retain ordinary scratch sizes. XFB and generated-primitive reports keep their existing paths.
 
 Scope: fragment helper and demote lowering, inactive tessellation and geometry scratch. Device support and operation restrictions are defined by the linked implementation.
 

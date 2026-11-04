@@ -1262,8 +1262,13 @@ lower_poly(struct nir_builder *b, nir_intrinsic_instr *intrin, void *data)
       assert(index < KK_GEOMETRY_STAT_COUNT);
       unsigned offset = kk_per_draw_offset(geometry_statistics) +
                         index * sizeof(uint64_t);
-      nir_def_replace(&intrin->def, load_per_draw(b, 1, 64,
-                         nir_imm_int(b, offset), 8));
+      nir_def *zero = nir_imm_int64(b, 0);
+      nir_push_if(b, nir_load_pipeline_statistics_enabled_kk(b));
+      nir_def *address = load_per_draw(b, 1, 64, nir_imm_int(b, offset), 8);
+      nir_pop_if(b, NULL);
+      nir_def_replace(&intrin->def, nir_if_phi(b, address, zero));
+      /* Other intrinsics in this mandatory pass keep their original CFG. */
+      nir_progress(true, b->impl, nir_metadata_none);
       return true;
    }
    case nir_intrinsic_load_tess_param_buffer_poly:

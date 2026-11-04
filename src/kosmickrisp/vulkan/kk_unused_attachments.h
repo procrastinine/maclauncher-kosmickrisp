@@ -39,6 +39,47 @@ struct kk_attachment_pipelines {
    struct kk_attachment_variant *variants;
 };
 
+/* Present only after a compiled GS actually consumes statistics addresses.
+ * The ordinary shader and attachment-cache layouts gain no storage word. */
+struct kk_statistics_pre_gs {
+   mtl_function_descriptor *function;
+   mtl_compute_pipeline_state *pipeline;
+};
+
+static struct kk_statistics_pre_gs *
+kk_statistics_pre_gs(struct kk_shader *shader)
+{
+   assert(shader->info.geometry_statistics && shader->attachment_pipelines);
+   return (void *)(shader->attachment_pipelines + 1);
+}
+
+static bool
+kk_attachment_dynamic_variants(struct kk_device *device, struct kk_shader *shader)
+{
+   return device->vk.enabled_features.dynamicRenderingUnusedAttachments ||
+      shader->info.vs.dynamic_rasterization_samples ||
+      device->vk.enabled_features.deviceGeneratedCommands ||
+      device->vk.enabled_features.drawIndirectCount ||
+      shader->info.polygon_point || shader->info.poly_layer_replay;
+}
+
+static VkResult
+kk_attachment_pipelines_create(struct kk_device *device, struct kk_shader *shader)
+{
+   if (shader->attachment_pipelines)
+      return VK_SUCCESS;
+   size_t bytes = sizeof(*shader->attachment_pipelines);
+   if (shader->info.geometry_statistics)
+      bytes += sizeof(struct kk_statistics_pre_gs);
+   struct kk_attachment_pipelines *cache = calloc(1, bytes);
+   if (!cache)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   cache->dynamic_variants = kk_attachment_dynamic_variants(device, shader);
+   simple_mtx_init(&cache->mutex, mtx_plain);
+   shader->attachment_pipelines = cache;
+   return VK_SUCCESS;
+}
+
 static mtl_depth_stencil_state *
 kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info);
 
@@ -107,6 +148,11 @@ kk_attachment_pipelines_finish(struct kk_shader *shader)
       mtl_release(cache->descriptor[i]);
    for (unsigned i = 0; i < ARRAY_SIZE(cache->depth_stencil); ++i)
       mtl_release(cache->depth_stencil[i]);
+   if (shader->info.geometry_statistics) {
+      struct kk_statistics_pre_gs *statistics = kk_statistics_pre_gs(shader);
+      mtl_release(statistics->function);
+      mtl_release(statistics->pipeline);
+   }
    simple_mtx_destroy(&cache->mutex);
    free(cache);
 }

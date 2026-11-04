@@ -1756,7 +1756,6 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       }
 
       shader->info.has_geometry = true;
-      shader->info.geometry_statistics = opts->pipeline_statistics;
       shader->info.geometry = shader->info.gs;
       nir_shader *aux[] = {count, pre_gs};
       for (unsigned i = 0; i < ARRAY_SIZE(aux); ++i) {
@@ -1770,6 +1769,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          kk_compile_msl_options(dev, aux[i], state, &shader->gs_aux[i],
                                 opts, NULL, NULL);
       }
+      shader->info.geometry_statistics =
+         shader->gs_aux[1].uses_pipeline_statistics;
 
       nir->info.stage = MESA_SHADER_COMPUTE;
       memset(&nir->info.cs, 0, sizeof(nir->info.cs));
@@ -1934,7 +1935,8 @@ static VkResult
 kk_compile_compute_pipeline_mode(struct kk_device *device,
                             const struct msl_compile_data *data,
                             uint32_t local_size_threads,
-                            mtl_compute_pipeline_state **pipe, bool indirect)
+                            mtl_compute_pipeline_state **pipe, bool indirect,
+                            mtl_function_descriptor **retained_function)
 {
    struct kk_physical_device *pdev = kk_device_physical(device);
 
@@ -1957,6 +1959,8 @@ kk_compile_compute_pipeline_mode(struct kk_device *device,
                                            local_size_threads))
       : KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_compute_pipeline_state(device->mtl_compiler_handle, function,
                                         local_size_threads));
+   if (pipeline && retained_function)
+      *retained_function = mtl_retain(function);
    mtl_release(function);
    mtl_release(library);
 
@@ -1973,7 +1977,7 @@ kk_compile_compute_pipeline(struct kk_device *device,
                             const struct msl_compile_data *data,
                             uint32_t threads, mtl_compute_pipeline_state **pipe)
 {
-   return kk_compile_compute_pipeline_mode(device, data, threads, pipe, false);
+   return kk_compile_compute_pipeline_mode(device, data, threads, pipe, false, NULL);
 }
 
 VkResult
@@ -1981,7 +1985,39 @@ kk_compile_indirect_compute_pipeline(struct kk_device *device,
    const struct msl_compile_data *data, uint32_t threads,
    mtl_compute_pipeline_state **pipe)
 {
-   return kk_compile_compute_pipeline_mode(device, data, threads, pipe, true);
+   return kk_compile_compute_pipeline_mode(device, data, threads, pipe, true, NULL);
+}
+
+VkResult
+kk_shader_get_statistics_pre_gs(struct kk_device *device, struct kk_shader *shader,
+                               mtl_compute_pipeline_state **pipeline)
+{
+   struct kk_statistics_pre_gs *statistics = kk_statistics_pre_gs(shader);
+   *pipeline = p_atomic_read(&statistics->pipeline);
+   if (*pipeline)
+      return VK_SUCCESS;
+   struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
+   simple_mtx_lock(&cache->mutex);
+   mtl_compute_pipeline_state *compiled = statistics->pipeline;
+   VkResult result = VK_SUCCESS;
+   if (!compiled) {
+      mtl_function_descriptor *function =
+         mtl_specialize_pipeline_statistics(statistics->function);
+      if (!function) {
+         result = VK_ERROR_OUT_OF_HOST_MEMORY;
+      } else {
+         compiled = KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE,
+            mtl_new_compute_pipeline_state(device->mtl_compiler_handle, function, 1));
+         mtl_release(function);
+         if (compiled)
+            p_atomic_set(&statistics->pipeline, compiled);
+         else
+            result = VK_ERROR_INVALID_SHADER_NV;
+      }
+   }
+   *pipeline = compiled;
+   simple_mtx_unlock(&cache->mutex);
+   return result;
 }
 
 static mtl_depth_stencil_state *
@@ -2382,21 +2418,12 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
                              mtl_render_pipeline_descriptor *descriptor,
                              unsigned kind, bool statistics)
 {
-   const bool dynamic_variants =
-      device->vk.enabled_features.dynamicRenderingUnusedAttachments ||
-      shader->info.vs.dynamic_rasterization_samples ||
-      device->vk.enabled_features.deviceGeneratedCommands ||
-      device->vk.enabled_features.drawIndirectCount ||
-      shader->info.polygon_point || shader->info.poly_layer_replay;
-   if (!dynamic_variants && !statistics)
+   if (!statistics && !shader->info.geometry_statistics &&
+       !kk_attachment_dynamic_variants(device, shader))
       return VK_SUCCESS;
-   if (!shader->attachment_pipelines) {
-      shader->attachment_pipelines = calloc(1, sizeof(*shader->attachment_pipelines));
-      if (!shader->attachment_pipelines)
-         return VK_ERROR_OUT_OF_HOST_MEMORY;
-      shader->attachment_pipelines->dynamic_variants = dynamic_variants;
-      simple_mtx_init(&shader->attachment_pipelines->mutex, mtx_plain);
-   }
+   VkResult result = kk_attachment_pipelines_create(device, shader);
+   if (result != VK_SUCCESS)
+      return result;
    struct kk_attachment_pipelines *cache = shader->attachment_pipelines;
    simple_mtx_lock(&cache->mutex);
    if (!cache->descriptor[kind]) {

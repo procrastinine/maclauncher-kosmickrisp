@@ -1456,11 +1456,8 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
    params.count_buffer_stride = info->count_words * sizeof(uint32_t);
    struct kk_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
    params.flat_outputs = fs ? fs->info.fs.flat_outputs : 0;
-   bool statistics = cmd->state.pipeline_statistics_flags &
-      (VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT |
-       VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
-       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
-       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT);
+   bool statistics = gfx->shader->info.geometry_statistics &&
+      (cmd->state.pipeline_statistics_flags & KK_GEOMETRY_QUERY_BITS);
    /* Polygon capture writes dynamic counts even without queries. The
     * ordinary GS path only consumes them for XFB or actual reports. */
    bool count_storage = gfx->polygon_points || cmd->interlock_heap_active ||
@@ -1487,10 +1484,10 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          params.xfb_offs_ptrs[i] = gfx->xfb_offsets + i * sizeof(uint32_t);
       }
    }
-   if (gfx->shader->info.geometry_statistics) {
+   if (statistics) {
       for (unsigned i = 0; i < KK_GEOMETRY_STAT_COUNT; ++i)
-         gfx->per_draw_data.geometry_statistics[i] = statistics ?
-            scratch + i * sizeof(uint32_t) : 0;
+         gfx->per_draw_data.geometry_statistics[i] =
+            scratch + i * sizeof(uint32_t);
    }
    if (count_bytes)
       params.count_buffer = scratch + statistics_bytes;
@@ -2425,7 +2422,8 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
       (cmd->state.shaders[MESA_SHADER_TESS_EVAL] ||
        cmd->state.gfx.shader->info.api_geometry ||
        gfx->layer_replay.bind || gfx->polygon_points);
-   uint32_t per_draw_size = geom && gfx->shader->info.geometry_statistics ?
+   uint32_t per_draw_size = geom && gfx->shader->info.geometry_statistics &&
+      (cmd->state.pipeline_statistics_flags & KK_GEOMETRY_QUERY_BITS) ?
       sizeof(gfx->per_draw_data) :
       multiview ? offsetof(struct kk_per_draw_data, geometry_statistics) :
       per_vertex ? offsetof(struct kk_per_draw_data, multiview_index) :
@@ -2592,6 +2590,22 @@ kk_draw_without_restart(struct kk_cmd_buffer *cmd,
 }
 
 #include "kk_interlock_source_command.h"
+static mtl_compute_pipeline_state *
+kk_pre_gs_pipeline(struct kk_cmd_buffer *cmd, struct kk_shader *shader,
+                   bool statistics)
+{
+   mtl_compute_pipeline_state *pipeline = shader->pipeline.gfx.gs_aux[1];
+   if (statistics) {
+      VkResult result = kk_shader_get_statistics_pre_gs(
+         kk_cmd_buffer_device(cmd), shader, &pipeline);
+      if (result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&cmd->vk, result);
+         return NULL;
+      }
+   }
+   return pipeline;
+}
+
 #include "kk_polygon_command.h"
 
 /* Runs the stage feeding the GS and the GS compute pass, returning the draw
@@ -2666,12 +2680,9 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
    if (gfx->polygon_points || cmd->interlock_heap_active)
       return kk_launch_polygon_points(cmd, grid_gs, geometry_params);
 
-   bool queries = cmd->state.pipeline_statistics_flags &
-      (VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT |
-       VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
-       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
-       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT);
-   queries |= gfx->geometry_query_mask != 0;
+   bool statistics = vs->info.geometry_statistics &&
+      (cmd->state.pipeline_statistics_flags & KK_GEOMETRY_QUERY_BITS);
+   bool queries = statistics || gfx->geometry_query_mask != 0;
    if (gs->info.geometry.xfb || queries) {
       VkResult result = kk_shader_ensure_geometry_reports(kk_cmd_buffer_device(cmd), vs, 3);
       if (result != VK_SUCCESS) {
@@ -2687,8 +2698,11 @@ kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
          libkk_prefix_sum_geometry(cmd, kk_grid_1d(1024 * gs->info.geometry.count_words), true, geometry_params);
       enc = cs_get_compute(cmd);
       if (vs->info.gs_aux_mask & BITFIELD_BIT(1)) {
+         mtl_compute_pipeline_state *pipeline = kk_pre_gs_pipeline(cmd, vs, statistics);
+         if (!pipeline)
+            return (struct kk_draw_data){.grid = kk_grid_1d(0u)};
          mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH);
-         mtl_compute_set_pipeline_state(enc, vs->pipeline.gfx.gs_aux[1]);
+         mtl_compute_set_pipeline_state(enc, pipeline);
          kk_dispatch_compute(enc, kk_grid_1d(1), (struct mtl_size){1, 1, 1});
       }
    }
