@@ -513,5 +513,21 @@
     "performance": false,
     "performance_reason": "Pinned DXVK and vkd3d-proton retain conventional descriptor binding, device creation and D3D SM/FL without this optional interface; no relative speedup is claimed.",
     "off_consequence": "Pinned DXVK/vkd3d-proton device creation and D3D SM/FL are unchanged; the Vulkan heap interface and vkd3d experimental work graphs are unavailable, and byte-offset views require descriptor-buffer support."
+  },
+  {
+    "name": "zero_initialize_device_memory",
+    "description": "Explicit zero contents for requested device-memory allocations and ZERO_INITIALIZED images.",
+    "cost_class": "host clear / native Metal blit",
+    "cost_note": "Each flagged allocation clears the whole BO with CPU stores or a Metal buffer fill and completion wait. ZERO_INITIALIZED images use unoptimized storage to preserve zero bits. No shader instructions are added.",
+    "extensions": [
+      "VK_EXT_zero_initialize_device_memory"
+    ],
+    "features": [
+      "zeroInitializeDeviceMemory"
+    ],
+    "properties": [],
+    "performance": false,
+    "performance_reason": "DXVK 3.1.1 and vkd3d-proton 3.1 do not require this allocation extension for D3D shader models, feature levels or device creation; vkd3d-proton retains its resource-clearing path.",
+    "off_consequence": "D3D shader-model, feature-level and translator device-creation support remain; explicit Vulkan zero-initialized allocation requests and ZERO_INITIALIZED image layout are unavailable."
   }
 ]
