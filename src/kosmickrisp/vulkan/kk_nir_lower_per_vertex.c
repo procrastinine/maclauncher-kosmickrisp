@@ -9,6 +9,7 @@
 #include "kk_debug.h"
 
 #include "nir_builder.h"
+#include "kk_fragment_offset_planes.h"
 
 static bool
 is_per_vertex_input(nir_intrinsic_instr *intr)
@@ -517,6 +518,8 @@ kk_nir_lower_fs_per_vertex_inputs(nir_shader *fs, nir_shader *prev, bool force,
       }
    }
 
+   /* Run after per-vertex lowering has introduced its basis inputs. */
+   kk_nir_lower_fs_offset_planes(fs);
    map->active = true;
    gather_flat_locations(impl, map);
    nir_progress(true, impl, nir_metadata_control_flow);
