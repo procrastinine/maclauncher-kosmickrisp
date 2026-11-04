@@ -263,10 +263,10 @@ kk_get_device_features(
       .shaderUniformBufferArrayDynamicIndexing = true,
       .tessellationShader = true,
       .transformFeedback = true,
-      .geometryStreams = false,
+      .geometryStreams = true,
       .primitivesGeneratedQuery = true,
       .primitivesGeneratedQueryWithRasterizerDiscard = true,
-      .primitivesGeneratedQueryWithNonZeroStreams = false,
+      .primitivesGeneratedQueryWithNonZeroStreams = true,
       .textureCompressionASTC_LDR = true,
       .textureCompressionBC = true,
       .textureCompressionETC2 = true,
@@ -901,7 +901,7 @@ kk_get_device_properties(
       .maxTransformFeedbackBufferDataStride = 2048,
       .transformFeedbackQueries = true,
       .transformFeedbackStreamsLinesTriangles = false,
-      .transformFeedbackRasterizationStreamSelect = false,
+      .transformFeedbackRasterizationStreamSelect = true,
       .transformFeedbackDraw = true,
 
       /* VK_KHR_vertex_attribute_divisor */
