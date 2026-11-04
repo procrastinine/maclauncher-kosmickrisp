@@ -166,13 +166,13 @@
      - DXVK rejects content requesting non-seamless cube sampling when the interface is unavailable.
      - ``performance,+non_seamless_cube``
    * - ``sparse_translation``
-     - Sparse-buffer residency checks and standard-shaped 3D sparse image adaptation.
-       Controls: ``sparseResidencyBuffer``, ``sparseResidencyImage3D``, ``sparseResidencyStandard3DBlockShape``.
-     - native placement / software address and volume translation. Native placement and mapping remain native. The scalar buffer page-status helper emits three 64-bit metadata loads, two byte-status loads, bounds checks and a conditional branch, in addition to directory/range lookup and the resource access. Standard-shaped 3D accesses translate coordinates and select page storage, with copies or blits on relevant operations. Unused shader operations emit no translation.
+     - Sparse-buffer residency checks and standard-shaped sparse image adaptation for 3D images and for 2D images with storage usage or block-texel views.
+       Controls: ``sparseResidencyBuffer``, ``sparseResidencyImage3D``, ``sparseResidencyStandard2DBlockShape``, ``sparseResidencyStandard3DBlockShape``.
+     - native placement / software address and volume translation. Native placement and mapping remain native. The scalar buffer page-status helper emits three 64-bit metadata loads, two byte-status loads, bounds checks and a conditional branch, in addition to directory/range lookup and the resource access. Standard-shaped 3D accesses, and accesses to 2D residency images with storage usage or block-texel views, translate coordinates and select page storage, with copies or blits on relevant operations; filtered samples of those images combine fetched texels. 2D translation is compiled only into linked vertex and compute pipelines after such a 2D image exists. Unused shader operations emit no translation.
      - No Apple family
      - On
      - DXVK and vkd3d-proton require sparse buffer residency for every tiled-resources tier, and vkd3d-proton reports tiers 3 and 4 only with standard-shaped 3D sparse residency; removing it lowers the D3D feature-level ceiling (vkd3d-proton feature level 12_2 requires tier 3). Translation is selected by actual sparse resources and shader interfaces.
-     - Sparse buffer residency and sparse 3D image residency are unavailable, including standard-shaped 3D blocks; DXVK and vkd3d-proton report no tiled-resources tier, and feature levels requiring one are unavailable (vkd3d-proton reports at most 11_1). Native sparse binding, aliasing, 2D residency and native texture residency status remain available when supported.
+     - Sparse buffer residency and sparse 3D image residency are unavailable, including standard-shaped 3D blocks; DXVK and vkd3d-proton report no tiled-resources tier, and feature levels requiring one are unavailable (vkd3d-proton reports at most 11_1). Native sparse binding, aliasing, 2D residency and native texture residency status remain available when supported; 2D residency images then use native placement for every usage, without the standard 2D block shape, and 2D block-texel views of compressed sparse images are unavailable.
      - ``performance,+sparse_translation``
    * - ``robustness2``
      - Exact out-of-bounds buffer and image access behavior and null descriptors.

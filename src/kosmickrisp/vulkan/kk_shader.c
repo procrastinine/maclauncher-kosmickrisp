@@ -935,8 +935,10 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
 
    if (features & BITFIELD_BIT(KK_FEAT_LAYERED_BLOCK_VIEWS))
       NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts, descriptor_heap);
-   if (features & BITFIELD_BIT(KK_FEAT_STANDARD_3D))
-      NIR_PASS(_, nir, kk_nir_lower_standard_3d_samples, set_layout_count, set_layouts);
+   if (features & (BITFIELD_BIT(KK_FEAT_STANDARD_3D) | BITFIELD_BIT(KK_FEAT_STANDARD_2D)))
+      NIR_PASS(_, nir, kk_nir_lower_standard_3d_samples, set_layout_count, set_layouts,
+         features & BITFIELD_BIT(KK_FEAT_STANDARD_3D),
+         features & BITFIELD_BIT(KK_FEAT_STANDARD_2D));
 
    NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
       features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX),
@@ -3082,6 +3084,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       features |= BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER);
    if (sparse_modes & KK_SPARSE_STANDARD_3D)
       features |= BITFIELD_BIT(KK_FEAT_STANDARD_3D);
+   if (sparse_modes & KK_SPARSE_STANDARD_2D)
+      features |= BITFIELD_BIT(KK_FEAT_STANDARD_2D);
 
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */

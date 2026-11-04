@@ -30,7 +30,7 @@ struct lower_descriptors_ctx {
    const struct kk_descriptor_set_layout *set_layouts[KK_MAX_SETS];
 
    bool raw_texel;
-   bool standard_3d;
+   bool standard_3d, standard_2d;
    bool image_array_alias;
    bool array_storage_alias;
    bool sparse_image_query;
@@ -461,6 +461,7 @@ kk_lower_buffer64(nir_builder *b, nir_intrinsic_instr *intr,
 #include "kk-writable-msaa-nir.h"
 
 #include "kk_standard_sparse_3d_nir.h"
+#include "kk_standard_sparse_2d_nir.h"
 
 static bool
 lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
@@ -580,6 +581,7 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
    }
 
    if (kk_standard_3d_lower_image(b, intr, deref, type, resource_addr, ctx)) return true;
+   if (kk_standard_2d_lower_image(b, intr, deref, type, resource_addr, ctx)) return true;
 
    if (may_be_rgb32 && nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF &&
        ((intr->intrinsic == nir_intrinsic_bindless_image_load &&
@@ -922,6 +924,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
    }
 
    if (kk_standard_3d_lower_fetch(b, tex, texture, plane_offset_B, standard_resource_address, ctx)) return true;
+   if (kk_standard_2d_lower_fetch(b, tex, texture, plane_offset_B, standard_resource_address, ctx)) return true;
 
    if (tex->sampler_dim == GLSL_SAMPLER_DIM_BUF && tex->op == nir_texop_txf &&
        (tex->is_sparse || (nir_def_components_read(&tex->def) & ~1u))) {
@@ -1260,6 +1263,7 @@ kk_nir_lower_descriptors_for_binding_model(nir_shader *nir, kk_feature_key featu
    struct lower_descriptors_ctx ctx = kk_descriptor_context(rs, set_layout_count, set_layouts);
    ctx.raw_texel = raw_texel;
    ctx.standard_3d = features & BITFIELD_BIT(KK_FEAT_STANDARD_3D);
+   ctx.standard_2d = features & BITFIELD_BIT(KK_FEAT_STANDARD_2D);
    ctx.image_array_alias = features & BITFIELD_BIT(KK_FEAT_IMAGE_ARRAY_ALIAS);
    ctx.sparse_image_query = features & BITFIELD_BIT(KK_FEAT_SPARSE_IMAGE_QUERY);
    ctx.array_storage_alias = ctx.image_array_alias ||

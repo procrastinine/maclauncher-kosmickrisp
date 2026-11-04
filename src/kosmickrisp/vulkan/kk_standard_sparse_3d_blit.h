@@ -6,6 +6,7 @@
 struct kk_standard_3d_blit_lower {
    enum pipe_format format,raw;
    nir_variable *output;
+   bool two_d;
 };
 
 static nir_def *
@@ -35,21 +36,21 @@ kk_standard_3d_blit_lower(nir_builder *b,nir_intrinsic_instr *intr,void *data)
    packed=nir_pad_vector(b,nir_u2u32(b,packed),4);
    nir_image_deref_store(b,&nir_build_deref_var(b,ctx->output)->def,
       nir_pad_vector(b,kk_standard_3d_blit_coord(b),4),nir_imm_int(b,0),packed,nir_imm_int(b,0),
-      .image_dim=GLSL_SAMPLER_DIM_3D,.image_array=false,.format=ctx->raw,
+      .image_dim=ctx->two_d?GLSL_SAMPLER_DIM_2D:GLSL_SAMPLER_DIM_3D,.image_array=ctx->two_d,.format=ctx->raw,
       .src_type=nir_type_uint32,.access=ACCESS_NON_READABLE);
    nir_instr_remove(&intr->instr);return true;
 }
 
 static nir_shader *
-kk_standard_3d_blit_shader(VkImageType source,VkFormat format,VkFormat raw)
+kk_standard_3d_blit_shader(VkImageType source,VkFormat format,VkFormat raw,bool two_d)
 {
    nir_shader *nir=vk_meta_build_color_blit_shader(source,format);
    nir->info.stage=MESA_SHADER_COMPUTE;
    nir->info.workgroup_size[0]=8;nir->info.workgroup_size[1]=8;nir->info.workgroup_size[2]=1;
    nir_variable *output=nir_variable_create(nir,nir_var_uniform,
-      glsl_image_type(GLSL_SAMPLER_DIM_3D,false,GLSL_TYPE_UINT),"canonical_destination");
+      glsl_image_type(two_d?GLSL_SAMPLER_DIM_2D:GLSL_SAMPLER_DIM_3D,two_d,GLSL_TYPE_UINT),"canonical_destination");
    output->data.descriptor_set=0;output->data.binding=4;
-   struct kk_standard_3d_blit_lower ctx={vk_format_to_pipe_format(format),vk_format_to_pipe_format(raw),output};
+   struct kk_standard_3d_blit_lower ctx={vk_format_to_pipe_format(format),vk_format_to_pipe_format(raw),output,two_d};
    nir_shader_intrinsics_pass(nir,kk_standard_3d_blit_lower,nir_metadata_none,&ctx);
    nir_builder b=nir_builder_at(nir_before_impl(nir_shader_get_entrypoint(nir)));
    nir_def *extent=nir_load_push_constant(&b,3,32,nir_imm_int(&b,48),.base=0,.range=64);
@@ -61,10 +62,11 @@ kk_standard_3d_blit_shader(VkImageType source,VkFormat format,VkFormat raw)
 
 static VkResult
 kk_standard_3d_blit_pipeline(struct kk_device *dev,VkImageType source,VkFormat format,
-   VkFormat raw,VkPipelineLayout *layout,VkPipeline *pipeline)
+   VkFormat raw,bool two_d,VkPipelineLayout *layout,VkPipeline *pipeline)
 {
-   const struct {uint32_t type;char name[24];VkImageType source;VkFormat format;} key={
+   struct {uint32_t type;char name[24];VkImageType source;VkFormat format;} key={
       .type=VK_META_OBJECT_KEY_DRIVER_OFFSET,.name="kk-standard-volume-blit",.source=source,.format=format};
+   if(two_d)memcpy(key.name,"kk-standard-2d-blit",sizeof("kk-standard-2d-blit"));
    const VkDescriptorSetLayoutBinding binding[]={
       {.binding=0,.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLER,.descriptorCount=1,.stageFlags=VK_SHADER_STAGE_COMPUTE_BIT},
       {.binding=1,.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,.descriptorCount=1,.stageFlags=VK_SHADER_STAGE_COMPUTE_BIT},
@@ -76,7 +78,7 @@ kk_standard_3d_blit_pipeline(struct kk_device *dev,VkImageType source,VkFormat f
    if(result!=VK_SUCCESS)return result;
    *pipeline=vk_meta_lookup_pipeline(&dev->meta,&key,sizeof(key));if(*pipeline)return VK_SUCCESS;
    const VkPipelineShaderStageNirCreateInfoMESA shader={.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_NIR_CREATE_INFO_MESA,
-      .nir=kk_standard_3d_blit_shader(source,format,raw)};
+      .nir=kk_standard_3d_blit_shader(source,format,raw,two_d)};
    const VkComputePipelineCreateInfo info={.sType=VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
       .stage={.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.pNext=&shader,.stage=VK_SHADER_STAGE_COMPUTE_BIT,.pName="main"},.layout=*layout};
    result=vk_meta_create_compute_pipeline(&dev->vk,&dev->meta,&info,&key,sizeof(key),pipeline);
@@ -92,7 +94,8 @@ kk_standard_3d_blit(struct kk_cmd_buffer *cmd,const VkBlitImageInfo2 *info)
    struct kk_device *dev=kk_cmd_buffer_device(cmd);
    VkPipelineLayout layout;VkPipeline pipeline;VkSampler sampler;
    VkFormat raw=kk_standard_3d_copy_properties(dst).color.view_format;
-   VkResult result=kk_standard_3d_blit_pipeline(dev,src->vk.image_type,dst->vk.format,raw,&layout,&pipeline);
+   const bool two_d=dst->vk.image_type!=VK_IMAGE_TYPE_3D;
+   VkResult result=kk_standard_3d_blit_pipeline(dev,src->vk.image_type,dst->vk.format,raw,two_d,&layout,&pipeline);
    if(result!=VK_SUCCESS){vk_command_buffer_set_error(&cmd->vk,result);return;}
    result=vk_meta_get_color_blit_sampler(&dev->vk,&dev->meta,info->filter,&sampler);
    if(result!=VK_SUCCESS){vk_command_buffer_set_error(&cmd->vk,result);return;}
@@ -139,6 +142,8 @@ kk_standard_3d_blit(struct kk_cmd_buffer *cmd,const VkBlitImageInfo2 *info)
          push.transform[a<2?a:4]=off;push.transform[a<2?a+2:5]=scale;
          push.origin[a]=MIN2(d0,d1);push.extent[a]=abs(d1-d0);
       }
+      /* A 2D destination view spans the region's layers; Z is the layer. */
+      if(two_d){push.origin[2]=0;push.extent[2]=vk_image_subresource_layer_count(&dst->vk,&region->dstSubresource);}
       disp->CmdPushConstants(handle,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(push),&push);
       disp->CmdDispatch(handle,DIV_ROUND_UP(push.extent[0],8),DIV_ROUND_UP(push.extent[1],8),push.extent[2]);
    }

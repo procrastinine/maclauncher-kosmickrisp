@@ -18,7 +18,7 @@ Compared with upstream KosmicKrisp at the same Mesa commit, this build adds the 
 - Depth bias control, cull distances and pipeline statistics queries
 
 **Resources and memory**
-- Sparse binding and sparse residency for buffers and 2D and 3D images, on Metal devices with placement sparse resources
+- Sparse binding and sparse residency for buffers and 2D and 3D images, on Metal devices with placement sparse resources (vkd3d-proton tiled resources tier 4)
 - Descriptor heaps, device-generated commands and device address commands
 - Multisampled storage images, and multisampled rendering to single-sampled images
 - Dynamic rendering with unused attachments, sliced views of 3D images and non-seamless cube maps

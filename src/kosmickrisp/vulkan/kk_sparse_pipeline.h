@@ -159,7 +159,8 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                          const struct vk_features *features, uint32_t *always_modes)
 {
    uint32_t enabled = (features->sparseResidencyBuffer ? KK_SPARSE_BUFFER : 0) |
-      (features->sparseResidencyImage3D ? KK_SPARSE_STANDARD_3D : 0);
+      (features->sparseResidencyImage3D ? KK_SPARSE_STANDARD_3D : 0) |
+      (features->sparseResidencyImage2D ? KK_SPARSE_STANDARD_2D : 0);
    uint32_t modes = 0;
    *always_modes = 0;
    if (!enabled) return 0;
@@ -176,6 +177,9 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                   if (tex->sampler_dim == GLSL_SAMPLER_DIM_3D &&
                       (sampled || tex->op == nir_texop_txf))
                      stage_modes |= KK_SPARSE_STANDARD_3D;
+                  if (tex->sampler_dim == GLSL_SAMPLER_DIM_2D &&
+                      (sampled || tex->op == nir_texop_txf || tex->op == nir_texop_tg4))
+                     stage_modes |= KK_SPARSE_STANDARD_2D;
                } else if (instr->type == nir_instr_type_intrinsic) {
                   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
                   switch (intr->intrinsic) {
@@ -196,6 +200,8 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                   case nir_intrinsic_bindless_image_atomic_swap:
                      if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_3D)
                         stage_modes |= KK_SPARSE_STANDARD_3D;
+                     if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_2D)
+                        stage_modes |= KK_SPARSE_STANDARD_2D;
                      break;
                   /* Explicit IO may already have been applied by a caller. */
                   case nir_intrinsic_load_ubo:
@@ -233,13 +239,18 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
       *always_modes |= physical_modes;
       if (infos[i].flags & (VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT |
                             VK_SHADER_CREATE_DESCRIPTOR_BUFFER_BIT_MESA))
-         *always_modes |= stage_modes;
+         *always_modes |= stage_modes & ~KK_SPARSE_STANDARD_2D;
    }
    /* The lazy native object represents a linked VS/CS pipeline. Standalone
-    * stages and task/mesh groups retain their own native ownership. */
+    * stages and task/mesh groups retain their own native ownership. Standard
+    * 2D translation is selected only lazily: 2D image access is in almost
+    * every shader, which must not change until a standard 2D image exists,
+    * so standalone stages access those images natively. */
    if (count && infos[0].stage != MESA_SHADER_VERTEX &&
-       infos[0].stage != MESA_SHADER_COMPUTE)
+       infos[0].stage != MESA_SHADER_COMPUTE) {
+      modes &= ~KK_SPARSE_STANDARD_2D;
       *always_modes |= modes;
+   }
    *always_modes &= enabled;
    return modes & enabled;
 }

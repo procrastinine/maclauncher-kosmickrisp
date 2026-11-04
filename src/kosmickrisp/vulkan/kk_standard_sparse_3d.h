@@ -36,6 +36,9 @@ struct kk_standard_3d_view_state {
 };
 struct kk_standard_3d_image {
    int references;
+   /* Storage-usage 2D images: logical tiles per layer, no native backing. */
+   bool two_d;
+   uint32_t layers;
    mtl_buffer *table;
    struct kk_standard_3d_tile *tiles;
    VkDeviceMemory *memory;
@@ -48,6 +51,8 @@ struct kk_standard_3d_image {
    mtl_heap *native_tail_heap;
    uint32_t native_tail_references;
    uint64_t tile_count;
+   /* Tiles changed by the binds of the current submission, published once. */
+   uint64_t dirty_first, dirty_last;
    simple_mtx_t mutex;
    struct kk_standard_3d_page **pages;
    struct kk_standard_3d_view_state *views;

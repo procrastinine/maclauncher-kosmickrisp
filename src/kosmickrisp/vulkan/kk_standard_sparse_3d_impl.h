@@ -28,15 +28,20 @@ kk_standard_3d_image_initialize(struct kk_device *dev,struct kk_image *image)
    state->references=1;
    simple_mtx_init(&state->mutex,mtx_plain);
    s->standard_3d = state;
+   state->two_d = image->vk.image_type != VK_IMAGE_TYPE_3D;
+   state->layers = state->two_d ? image->vk.array_layers : 1;
    struct mtl_size native = mtl_sparse_granularity(dev->mtl_handle,
       plane->layout.format.mtl,MTL_TEXTURE_TYPE_3D);
+   /* Native tier 1 2D storage is never accessed: tails, partial tiles and
+    * non-square residency are wrong there. Data lives in canonical pages. */
+   if (state->two_d) native = (struct mtl_size){0};
    state->native_granularity = (VkExtent3D){native.x,native.y,native.z};
-   state->native_first_tail = MIN2(image->vk.mip_levels,
+   state->native_first_tail = state->two_d ? image->vk.mip_levels : MIN2(image->vk.mip_levels,
       mtl_texture_first_mipmap_in_tail(plane->mtl_handle));
    state->native_tail_pages = state->native_first_tail < image->vk.mip_levels ?
       DIV_ROUND_UP(mtl_sparse_tail_size(plane->mtl_handle),KK_SPARSE_PAGE_SIZE) : 0;
    uint64_t native_pages = 0;
-   for (unsigned l=0;l<state->native_first_tail;l++) {
+   for (unsigned l=0;!state->two_d&&l<state->native_first_tail;l++) {
       state->native_level_page[l] = native_pages;
       native_pages += (uint64_t)DIV_ROUND_UP(u_minify(image->vk.extent.width,l),native.x) *
          DIV_ROUND_UP(u_minify(image->vk.extent.height,l),native.y) *
@@ -45,8 +50,17 @@ kk_standard_3d_image_initialize(struct kk_device *dev,struct kk_image *image)
    state->native_pages = native_pages;
    state->native = calloc(MAX2(native_pages,1),sizeof(*state->native));
    if (!state->native) return vk_error(dev,VK_ERROR_OUT_OF_HOST_MEMORY);
-   s->granularity = kk_standard_3d_shape(vk_format_to_pipe_format(image->vk.format));
+   if (!state->two_d)
+      s->granularity = kk_standard_3d_shape(vk_format_to_pipe_format(image->vk.format));
    s->tail_first_lod = image->vk.mip_levels;
+   /* A 2D image reports the tail of a sampled-only sparse image of the same
+    * shape, so images aliasing one memory range agree on tail start and size
+    * whatever their usage. */
+   uint32_t shader_read_first = UINT32_MAX;
+   uint64_t shader_read_tail = 0;
+   if (state->two_d)
+      mtl_sparse_shader_read_tail(dev->mtl_handle, &plane->layout,
+                                  &shader_read_first, &shader_read_tail);
    uint64_t pages = 0;
    for (unsigned l=0;l<image->vk.mip_levels;l++) {
       VkExtent3D size = {u_minify(image->vk.extent.width,l),
@@ -55,7 +69,10 @@ kk_standard_3d_image_initialize(struct kk_device *dev,struct kk_image *image)
          util_format_get_nblocksy(plane->layout.format.pipe,size.height) *
          util_format_get_nblocksz(plane->layout.format.pipe,size.depth) *
          util_format_get_blocksize(plane->layout.format.pipe);
-      if (bytes < KK_SPARSE_PAGE_SIZE) {s->tail_first_lod=l;break;}
+      if (state->two_d ? l >= shader_read_first : bytes < KK_SPARSE_PAGE_SIZE) {
+         s->tail_first_lod=l;
+         break;
+      }
       s->level_page[l] = pages;
       VkExtent3D t = kk_sparse_level_tiles(image,l);
       pages += (uint64_t)t.width*t.height*t.depth;
@@ -68,8 +85,11 @@ kk_standard_3d_image_initialize(struct kk_device *dev,struct kk_image *image)
          util_format_get_nblocksy(plane->layout.format.pipe,u_minify(image->vk.extent.height,l)) *
          util_format_get_nblocksz(plane->layout.format.pipe,u_minify(image->vk.extent.depth,l)) * element;
    s->tail_pages = DIV_ROUND_UP(tail_bytes,KK_SPARSE_PAGE_SIZE);
+   if (state->two_d && s->tail_first_lod < image->vk.mip_levels)
+      s->tail_pages = MAX2(s->tail_pages,DIV_ROUND_UP(shader_read_tail,KK_SPARSE_PAGE_SIZE));
    s->layer_pages = pages+s->tail_pages;
-   state->tile_count = s->layer_pages;
+   state->tile_count = s->layer_pages*state->layers;
+   state->dirty_first = UINT64_MAX;
    uint64_t entries_offset = align64(sizeof(struct kk_standard_3d_table),32);
    state->table = mtl_sparse_new_residency_buffer(dev->mtl_handle,
       entries_offset+state->tile_count*sizeof(struct kk_standard_3d_tile),false);
@@ -89,6 +109,7 @@ kk_standard_3d_image_initialize(struct kk_device *dev,struct kk_image *image)
          util_format_get_blockheight(plane->layout.format.pipe),
          util_format_get_blockdepth(plane->layout.format.pipe)},
       .entries=mtl_buffer_get_gpu_address(state->table)+entries_offset,
+      .layer_pages=s->layer_pages,.layers=state->layers,
    };
    for (unsigned l=0;l<=s->tail_first_lod;l++)table->level_page[l]=s->level_page[l];
    uint64_t byte_offset=0;
@@ -98,7 +119,7 @@ kk_standard_3d_image_initialize(struct kk_device *dev,struct kk_image *image)
          util_format_get_nblocksy(plane->layout.format.pipe,u_minify(image->vk.extent.height,l))*
          util_format_get_nblocksz(plane->layout.format.pipe,u_minify(image->vk.extent.depth,l))*element;
    }
-   plane->layout.size_B=s->layer_pages*KK_SPARSE_PAGE_SIZE;
+   plane->layout.size_B=state->tile_count*KK_SPARSE_PAGE_SIZE;
    plane->layout.align_B=KK_SPARSE_PAGE_SIZE;
    kk_sparse_residency(dev,state->table,true);
    return VK_SUCCESS;
@@ -146,6 +167,33 @@ kk_standard_3d_query_bytes(const struct kk_image *image)
       2*sizeof(struct kk_sparse_query_record);
 }
 
+/* A 2D page target carries the plain 2D handle and, in the array slot, a
+ * one-layer 2D array handle, as ordinary 2D storage descriptors do. */
+static bool
+kk_standard_3d_target_entry(struct kk_device *dev,struct kk_standard_3d_image *s,
+   struct kk_standard_3d_page *page,const struct kk_view_layout *layout,
+   const struct kk_image_layout *source,struct kk_storage_image_descriptor *entry)
+{
+   const bool raw=util_format_is_compressed(source->format.pipe)&&!util_format_is_compressed(layout->format.pipe);
+   if(s->two_d){
+      struct kk_view_layout plain=*layout,array=*layout;
+      plain.view_type=VK_IMAGE_VIEW_TYPE_2D;array.view_type=VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+      mtl_texture *p=kk_standard_3d_physical_target(dev,page,&plain,source);
+      mtl_texture *a=p?kk_standard_3d_physical_target(dev,page,&array,source):NULL;
+      if(!a)return false;
+      *entry=(struct kk_storage_image_descriptor){.image_gpu_resource_id=mtl_texture_get_gpu_resource_id(p)};
+      entry->image_array_gpu_resource_id=mtl_texture_get_gpu_resource_id(a);
+      return true;
+   }
+   mtl_texture *target=kk_standard_3d_physical_target(dev,page,layout,source);
+   if(!target)return false;
+   *entry=(struct kk_storage_image_descriptor){
+      .image_gpu_resource_id=mtl_texture_get_gpu_resource_id(target),
+      .texel_count=raw?util_format_get_nblocksz(source->format.pipe,page->shape.depth):page->shape.depth,
+   };
+   return true;
+}
+
 static VkResult
 kk_standard_3d_query_initialize(struct kk_image_view *view,bool storage,
                                  const struct kk_view_layout *layout)
@@ -174,12 +222,8 @@ kk_standard_3d_query_initialize(struct kk_image_view *view,bool storage,
    for(uint64_t i=0;i<s->tile_count;i++) {
       struct kk_standard_3d_page *page=s->pages[i];
       if(!page)continue;
-      mtl_texture *target=kk_standard_3d_physical_target(dev,page,layout,&image->planes[0].layout);
-      if(!target){simple_mtx_unlock(&s->mutex);return vk_error(dev,VK_ERROR_OUT_OF_DEVICE_MEMORY);}
-      targets[i]=(struct kk_storage_image_descriptor){
-         .image_gpu_resource_id=mtl_texture_get_gpu_resource_id(target),
-         .texel_count=raw?util_format_get_nblocksz(parent_format,page->shape.depth):page->shape.depth,
-      };
+      if(!kk_standard_3d_target_entry(dev,s,page,layout,&image->planes[0].layout,&targets[i])){
+         simple_mtx_unlock(&s->mutex);return vk_error(dev,VK_ERROR_OUT_OF_DEVICE_MEMORY);}
    }
    char *cpu=mtl_get_contents(view->sparse->records);
    struct kk_standard_3d_query *query=(void *)(cpu+storage*sizeof(*query));
@@ -197,7 +241,8 @@ kk_standard_3d_query_initialize(struct kk_image_view *view,bool storage,
          (swizzle<4 && format->swizzle[swizzle]==PIPE_SWIZZLE_1))
          logical->zero_one_mask|=1u<<i;
    }
-   query->prefix.kind=KK_QUERY_RECORD_KIND_STANDARD_3D;
+   logical->base_layer=s->two_d?view->vk.base_array_layer:0;
+   query->prefix.kind=s->two_d?KK_QUERY_RECORD_KIND_STANDARD_2D:KK_QUERY_RECORD_KIND_STANDARD_3D;
    query->logical_view=mtl_buffer_get_gpu_address(view->sparse->records)+extra;
    simple_mtx_unlock(&s->mutex);
    return VK_SUCCESS;
@@ -316,17 +361,12 @@ kk_standard_3d_publish_targets(struct kk_device *dev,struct util_dynarray *copie
          if(!values)return false;
          struct kk_storage_image_descriptor *targets=mtl_get_contents(values);
          struct kk_image *image=container_of(view->view->vk.image,struct kk_image,vk);
-         enum pipe_format format=image->planes[0].layout.format.pipe;
-         bool raw=util_format_is_compressed(format)&&!util_format_is_compressed(view->layout[storage].format.pipe);
          for(uint64_t n=0;n<count;n++) {
             uint64_t index=first+n;
             struct kk_standard_3d_page *page=s->pages[index];
             if(!page)continue;
-            mtl_texture *target=kk_standard_3d_physical_target(dev,page,&view->layout[storage],&image->planes[0].layout);
-            if(!target){mtl_release(values);return false;}
-            targets[n]=(struct kk_storage_image_descriptor){
-               .image_gpu_resource_id=mtl_texture_get_gpu_resource_id(target),
-               .texel_count=raw?util_format_get_nblocksz(format,page->shape.depth):page->shape.depth};
+            if(!kk_standard_3d_target_entry(dev,s,page,&view->layout[storage],&image->planes[0].layout,&targets[n])){
+               mtl_release(values);return false;}
          }
          struct mtl_sparse_residency_copy *copy=util_dynarray_grow(copies,struct mtl_sparse_residency_copy,1);
          if(!copy){mtl_release(values);return false;}
@@ -354,6 +394,27 @@ kk_standard_3d_publish(struct kk_device *dev,struct util_dynarray *copies,
    return kk_standard_3d_publish_targets(dev,copies,s,first,count);
 }
 
+/* One submission publishes each image once, from its final tile state. The
+ * GPU copies of one submission are unordered, so separate publishes of
+ * overlapping ranges (a 2D array interleaves each layer's tail between the
+ * regular tiles of consecutive layers) could leave an earlier snapshot. */
+static void
+kk_standard_3d_mark_dirty(struct kk_standard_3d_image *s,uint64_t first,uint64_t last)
+{
+   if(first>=last)return;
+   s->dirty_first=MIN2(s->dirty_first,first);s->dirty_last=MAX2(s->dirty_last,last);
+}
+
+static bool
+kk_standard_3d_publish_dirty(struct kk_device *dev,struct util_dynarray *copies,
+   struct kk_standard_3d_image *s)
+{
+   if(s->dirty_last<=s->dirty_first)return true;
+   bool ok=kk_standard_3d_publish(dev,copies,s,s->dirty_first,s->dirty_last-s->dirty_first);
+   s->dirty_first=UINT64_MAX;s->dirty_last=0;
+   return ok;
+}
+
 static bool
 kk_standard_3d_bind_tile(struct kk_queue *queue,struct kk_image *image,
    uint64_t tile,uint32_t level,const uint32_t origin[3],VkDeviceMemory memory,uint64_t offset)
@@ -366,7 +427,7 @@ kk_standard_3d_bind_tile(struct kk_queue *queue,struct kk_image *image,
       kk_standard_3d_physical_page(kk_queue_device(queue),memory,offset,
          image->sparse->granularity,&image->planes[0].layout):NULL;
    if(add&&!page)return false;
-   if((s->tiles[tile].resident!=0)!=add){
+   if(!s->two_d&&(s->tiles[tile].resident!=0)!=add){
       bool ok=regular?kk_standard_3d_native_reference(queue,image,level,origin,add):
          kk_standard_3d_logical_tail_reference(queue,image,add);
       if(!ok)return false;
@@ -396,7 +457,8 @@ kk_standard_3d_bind_images(struct kk_queue *queue,struct kk_sparse_texture_batch
       uint64_t physical=0;
       for(uint32_t z=0;z<dims[2];z++)for(uint32_t y=0;y<dims[1];y++)for(uint32_t x=0;x<dims[0];x++,physical++){
          uint32_t origin[3]={(begin[0]+x)*g->width,(begin[1]+y)*g->height,(begin[2]+z)*g->depth};
-         uint64_t tile=image->sparse->level_page[level]+begin[0]+x+
+         uint64_t tile=image->sparse->layer_pages*b->subresource.arrayLayer+
+            image->sparse->level_page[level]+begin[0]+x+
             (uint64_t)t.width*(begin[1]+y+(uint64_t)t.height*(begin[2]+z));
          assert(tile<s->tile_count);
          if(!kk_standard_3d_bind_tile(queue,image,tile,level,origin,b->memory,
@@ -404,7 +466,8 @@ kk_standard_3d_bind_images(struct kk_queue *queue,struct kk_sparse_texture_batch
          first=MIN2(first,tile);last=MAX2(last,tile+1);
       }
    }
-   return first==s->tile_count||kk_standard_3d_publish(kk_queue_device(queue),copies,s,first,last-first);
+   kk_standard_3d_mark_dirty(s,first,last);
+   return true;
 }
 
 static bool
@@ -420,14 +483,14 @@ kk_standard_3d_bind_opaque(struct kk_queue *queue,struct kk_sparse_texture_batch
       uint64_t start=b->resourceOffset/KK_SPARSE_PAGE_SIZE,n=DIV_ROUND_UP(b->size,KK_SPARSE_PAGE_SIZE);
       assert(start+n<=s->tile_count);
       for(uint64_t j=0;j<n;j++){
-         uint64_t tile=start+j;
+         uint64_t tile=start+j,page=tile%image->sparse->layer_pages;
          uint32_t level=image->sparse->tail_first_lod,origin[3]={0};
-         if(tile<image->sparse->level_page[level]){
+         if(page<image->sparse->level_page[level]){
             level=0;
             while(level+1<image->sparse->tail_first_lod&&
-               image->sparse->level_page[level+1]<=tile)level++;
+               image->sparse->level_page[level+1]<=page)level++;
             VkExtent3D t=kk_sparse_level_tiles(image,level),g=image->sparse->granularity;
-            uint64_t local=tile-image->sparse->level_page[level];
+            uint64_t local=page-image->sparse->level_page[level];
             origin[0]=(local%t.width)*g.width;
             origin[1]=((local/t.width)%t.height)*g.height;
             origin[2]=(local/((uint64_t)t.width*t.height))*g.depth;
@@ -437,5 +500,6 @@ kk_standard_3d_bind_opaque(struct kk_queue *queue,struct kk_sparse_texture_batch
          first=MIN2(first,tile);last=MAX2(last,tile+1);
       }
    }
-   return first==s->tile_count||kk_standard_3d_publish(kk_queue_device(queue),copies,s,first,last-first);
+   kk_standard_3d_mark_dirty(s,first,last);
+   return true;
 }

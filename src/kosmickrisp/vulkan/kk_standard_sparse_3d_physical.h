@@ -13,7 +13,7 @@ kk_standard_3d_page_new(struct kk_device *dev,VkExtent3D shape,
    simple_mtx_init(&page->mutex,mtx_plain);page->shape=shape;
    const VkImageCreateInfo create={.sType=VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
       .flags=VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT|VK_IMAGE_CREATE_ALIAS_BIT,
-      .imageType=VK_IMAGE_TYPE_3D,.format=vk_format_from_pipe_format(source->format.pipe),
+      .imageType=shape.depth==1?VK_IMAGE_TYPE_2D:VK_IMAGE_TYPE_3D,.format=vk_format_from_pipe_format(source->format.pipe),
       .extent=shape,.mipLevels=1,.arrayLayers=1,.samples=VK_SAMPLE_COUNT_1_BIT,
       .tiling=VK_IMAGE_TILING_OPTIMAL,
       .usage=VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -77,6 +77,7 @@ kk_standard_3d_physical_target(struct kk_device *dev,
    simple_mtx_lock(&page->mutex);
    struct kk_standard_3d_target *target=page->targets;
    while(target&&(target->layout.format.pipe!=view->format.pipe||
+      target->layout.view_type!=view->view_type||
       memcmp(&target->layout.swizzle,&view->swizzle,sizeof(view->swizzle))))target=target->next;
    if(!target) {
       target=calloc(1,sizeof(*target));

@@ -14,6 +14,8 @@ struct kk_standard_3d_view {
    uint64_t targets;
    uint32_t zero_one_mask;
    uint32_t coord_scale[3];
+   /* 2D views: first image layer of the view. */
+   uint32_t base_layer, reserved;
 };
 /* Each tile has one logical binding, independently of native backing overlap.
  * A zero target ID keeps the existing native view; a target supplies the
@@ -32,10 +34,13 @@ struct kk_standard_3d_table {
    uint64_t entries;
    uint64_t level_page[KK_STANDARD_3D_MIP_LEVELS];
    uint64_t tail_offset_B[KK_STANDARD_3D_MIP_LEVELS];
+   /* 2D images: pages per array layer and the layer count. */
+   uint64_t layer_pages;
+   uint32_t layers, reserved;
 };
 _Static_assert(sizeof(struct kk_sparse_query_record) == 96, "shared query prefix");
 _Static_assert(offsetof(struct kk_standard_3d_query, logical_view) == sizeof(struct kk_sparse_query_record), "3D extension follows actual prefix");
 _Static_assert(sizeof(struct kk_standard_3d_query) == 104, "3D query stride");
 _Static_assert(sizeof(struct kk_standard_3d_tile) == 32, "3D tile entry");
-_Static_assert(sizeof(struct kk_standard_3d_view) == 32, "3D view extension");
+_Static_assert(sizeof(struct kk_standard_3d_view) == 40, "3D view extension");
 #endif

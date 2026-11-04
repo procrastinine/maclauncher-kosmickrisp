@@ -49,6 +49,7 @@ enum kk_feature_bit {
    KK_FEAT_WRITABLE_MSAA,
    KK_FEAT_GEOMETRY_REPORTS,
    KK_FEAT_DEPTH_BOUNDS,
+   KK_FEAT_STANDARD_2D,
    KK_FEAT_COUNT,
 };
 
@@ -447,7 +448,7 @@ bool kk_nir_add_device_barrier_workaround(nir_shader *nir);
 bool kk_nir_lower_poly(struct nir_shader *nir, bool statistics);
 bool kk_nir_lower_null_images(nir_shader *nir);
 bool kk_nir_lower_sparse(nir_shader *nir);
-bool kk_nir_lower_standard_3d_samples(nir_shader *,uint32_t,struct vk_descriptor_set_layout *const *);
+bool kk_nir_lower_standard_3d_samples(nir_shader *,uint32_t,struct vk_descriptor_set_layout *const *,bool,bool);
 bool kk_nir_lower_sparse_instruction(nir_builder *b, nir_instr *instr,
    nir_def *logical_resident, nir_def *zero_one_mask);
 bool kk_nir_lower_sparse_border(nir_shader *nir);

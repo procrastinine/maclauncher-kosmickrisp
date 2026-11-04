@@ -224,7 +224,8 @@ uint32_t
 kk_sparse_enabled_modes(struct kk_device *dev)
 {
    return (dev->vk.enabled_features.sparseResidencyBuffer ? KK_SPARSE_BUFFER : 0) |
-      (dev->vk.enabled_features.sparseResidencyImage3D ? KK_SPARSE_STANDARD_3D : 0);
+      (dev->vk.enabled_features.sparseResidencyImage3D ? KK_SPARSE_STANDARD_3D : 0) |
+      (dev->vk.enabled_features.sparseResidencyImage2D ? KK_SPARSE_STANDARD_2D : 0);
 }
 
 uint32_t
@@ -426,7 +427,8 @@ kk_sparse_image_format_properties(struct kk_physical_device *pdev, VkFormat form
 {
    const VkImageCreateFlags block_flags = VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
       VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT;
-   const bool block_view = type == VK_IMAGE_TYPE_3D &&
+   const bool block_view = (type == VK_IMAGE_TYPE_3D ||
+       (type == VK_IMAGE_TYPE_2D && pdev->vk.properties.sparseResidencyStandard2DBlockShape)) &&
       (flags & block_flags) == block_flags &&
       util_format_is_compressed(vk_format_to_pipe_format(format));
    if ((flags & VK_IMAGE_CREATE_2D_VIEW_COMPATIBLE_BIT_EXT) ||
@@ -443,7 +445,8 @@ kk_sparse_image_format_properties(struct kk_physical_device *pdev, VkFormat form
        kk_sparse_binding_image_type(type, flags), samples, usage, tiling, props,
        flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))
       return false;
-   /* Only the standard-shaped 3D backend supplies block-texel aliases. */
+   /* Only the standard-shaped canonical-page backend supplies block-texel
+    * aliases. */
    return !block_view ||
       !(props->flags & VK_SPARSE_IMAGE_FORMAT_NONSTANDARD_BLOCK_SIZE_BIT);
 }
@@ -646,7 +649,21 @@ kk_sparse_image_init(struct kk_device *dev, struct kk_image *image,
    }
    image->sparse->aspect_mask = props.aspectMask;
    image->sparse->format_flags = props.flags;
-   if (image->vk.image_type == VK_IMAGE_TYPE_3D &&
+   /* Storage-usage 2D residency images are Metal sparse tier 1, whose shader
+    * residency and partial-tile/tail reads are wrong, and block-texel views
+    * of compressed images need canonical-page aliases. Both use the standard
+    * canonical-page path; render attachments keep native placement. */
+   const bool standard_2d = image->vk.image_type == VK_IMAGE_TYPE_2D &&
+      kk_device_physical(dev)->vk.properties.sparseResidencyStandard2DBlockShape &&
+      (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) &&
+      ((declared_usage & VK_IMAGE_USAGE_STORAGE_BIT) ||
+       ((image->vk.create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) &&
+        vk_format_is_compressed(image->vk.format))) &&
+      !(declared_usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
+      !(props.flags & VK_SPARSE_IMAGE_FORMAT_NONSTANDARD_BLOCK_SIZE_BIT);
+   if (standard_2d) image->sparse->granularity = props.imageGranularity;
+   if ((image->vk.image_type == VK_IMAGE_TYPE_3D || standard_2d) &&
        (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)) {
       VkResult result = kk_standard_3d_image_initialize(dev, image);
       if (result != VK_SUCCESS) {
@@ -656,7 +673,8 @@ kk_sparse_image_init(struct kk_device *dev, struct kk_image *image,
          return result;
       }
       kk_sparse_residency(dev, plane->mtl_handle, true);
-      __atomic_fetch_or(&dev->sparse_residency_used, KK_SPARSE_STANDARD_3D, __ATOMIC_RELEASE);
+      __atomic_fetch_or(&dev->sparse_residency_used,
+         standard_2d ? KK_SPARSE_STANDARD_2D : KK_SPARSE_STANDARD_3D, __ATOMIC_RELEASE);
       return VK_SUCCESS;
    }
    /* Opaque binding-only images retain their native granularity. */
@@ -1170,6 +1188,21 @@ kk_queue_bind_sparse(struct kk_queue *queue, struct vk_queue_submit *submit)
             .layer = b->subresource.arrayLayer, .offset = b->memoryOffset / KK_SPARSE_PAGE_SIZE};
          if (!kk_sparse_append_texture(&batch, image->planes[0].mtl_handle, kk_sparse_heap(b->memory), op)) {
             result = vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY); goto finish;
+         }
+      }
+   }
+   for (unsigned pass = 0; pass < 2; ++pass) {
+      const unsigned count = pass ? submit->image_bind_count : submit->image_opaque_bind_count;
+      for (unsigned i = 0; i < count; ++i) {
+         VK_FROM_HANDLE(kk_image, image, pass ? submit->image_binds[i].image :
+                                                submit->image_opaque_binds[i].image);
+         struct kk_standard_3d_image *s = image->sparse->standard_3d;
+         if (!s) continue;
+         simple_mtx_lock(&s->mutex);
+         bool ok = kk_standard_3d_publish_dirty(dev, &copies, s);
+         simple_mtx_unlock(&s->mutex);
+         if (!ok) {
+            result = vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY); goto finish;
          }
       }
    }

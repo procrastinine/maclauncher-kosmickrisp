@@ -111,6 +111,25 @@ mtl_sparse_tail_size(mtl_texture *texture)
    return [(id<MTLTexture>)texture tailSizeInBytes];
 }
 
+/* The mip tail of the same texture without shader writes (sparse tier 2), as
+ * a sampled-only sparse image of this shape has it. Placement sparse
+ * textures have no backing, so the probe texture costs no memory. */
+void
+mtl_sparse_shader_read_tail(mtl_device *device, const struct kk_image_layout *layout,
+                            uint32_t *first_tail, uint64_t *tail_size)
+{
+   @autoreleasepool {
+      MTLTextureDescriptor *desc = [mtl_new_texture_descriptor(layout) autorelease];
+      desc.resourceOptions = MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked;
+      desc.placementSparsePageSize = MTLSparsePageSize64;
+      desc.usage &= ~(MTLTextureUsageShaderWrite | MTLTextureUsageShaderAtomic);
+      id<MTLTexture> texture = [(id<MTLDevice>)device newTextureWithDescriptor:desc];
+      *first_tail = texture ? (uint32_t)[texture firstMipmapInTail] : UINT32_MAX;
+      *tail_size = texture ? [texture tailSizeInBytes] : 0;
+      [texture release];
+   }
+}
+
 void *
 mtl_new_sparse_buffer_view(mtl_buffer *buffer, const struct kk_image_layout *layout,
                            uint64_t offset, uint64_t *resource_id)

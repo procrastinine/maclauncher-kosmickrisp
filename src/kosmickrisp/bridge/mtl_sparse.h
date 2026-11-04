@@ -30,6 +30,8 @@ struct mtl_size mtl_sparse_granularity(mtl_device *device, uint32_t format,
 mtl_buffer *mtl_new_sparse_buffer(mtl_device *device, uint64_t size);
 mtl_texture *mtl_new_sparse_texture(mtl_device *device, const struct kk_image_layout *layout);
 uint64_t mtl_sparse_tail_size(mtl_texture *texture);
+void mtl_sparse_shader_read_tail(mtl_device *device, const struct kk_image_layout *layout,
+                                 uint32_t *first_tail, uint64_t *tail_size);
 void *mtl_new_sparse_buffer_view(mtl_buffer *buffer, const struct kk_image_layout *layout,
                                 uint64_t offset, uint64_t *resource_id);
 void mtl_sparse_map_buffer_batch(mtl_command_queue *queue, mtl_buffer *buffer,

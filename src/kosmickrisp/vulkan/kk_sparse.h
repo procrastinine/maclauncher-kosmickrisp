@@ -124,7 +124,8 @@ VkResult kk_sparse_buffer_init(struct kk_device *dev, struct kk_buffer *buffer);
 enum kk_sparse_mode {
    KK_SPARSE_BUFFER = 1u << 0,
    KK_SPARSE_STANDARD_3D = 1u << 1,
-   KK_SPARSE_MODES = KK_SPARSE_BUFFER | KK_SPARSE_STANDARD_3D,
+   KK_SPARSE_STANDARD_2D = 1u << 2,
+   KK_SPARSE_MODES = KK_SPARSE_BUFFER | KK_SPARSE_STANDARD_3D | KK_SPARSE_STANDARD_2D,
 };
 uint32_t kk_sparse_enabled_modes(struct kk_device *dev);
 uint32_t kk_sparse_residency_used(struct kk_device *dev);

@@ -29,6 +29,7 @@ enum kk_query_record_kind {
    KK_QUERY_RECORD_KIND_NATIVE = 0,
    KK_QUERY_RECORD_KIND_LAYERED_BC = 1,
    KK_QUERY_RECORD_KIND_STANDARD_3D = 2,
+   KK_QUERY_RECORD_KIND_STANDARD_2D = 3,
 };
 
 /* Sampled records start with ID/base LOD/level count. Storage records start
