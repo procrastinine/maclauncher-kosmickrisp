@@ -1313,6 +1313,9 @@ lower_subgroups_instr(nir_builder *b, nir_instr *instr, void *_options)
    case nir_intrinsic_quad_vote_any:
    case nir_intrinsic_quad_vote_all:
       if (options->lower_quad_vote) {
+         if (options->preserve_quad_helpers &&
+             b->shader->info.stage == MESA_SHADER_FRAGMENT)
+            b->shader->info.fs.require_full_quads = true;
          return build_vote(b, intrin->src[0].ssa, options, 4,
                            intrin->intrinsic == nir_intrinsic_quad_vote_all);
       }

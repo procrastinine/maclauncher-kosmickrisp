@@ -2178,3 +2178,17 @@ opcode("e4m3fn_e5m2_dot4_fadd", 1, tfloat32, [1, 1, 1], [tuint32, tuint32, tfloa
 
    dst.x = acc;
 """)
+
+# Late KosmicKrisp emitter forms for explicit FP32 gradual underflow.
+# Selected after optimization; operation types and math controls stay intact.
+for _name in (
+   'fadd', 'fsub', 'fmul', 'ffma', 'flrp', 'fdiv', 'fsqrt', 'frsq',
+   'fmin', 'fmax', 'fsat', 'feq', 'fneu', 'flt', 'fge', 'ldexp',
+   'ffloor', 'fceil', 'fsign', 'fsin', 'flog2', 'fexp2', 'fpow',
+   'ffract', 'frem', 'frcp',
+):
+   _op = opcodes[_name]
+   opcode(_name + "_preserve_kk", _op.output_size, _op.output_type,
+          _op.input_sizes, _op.input_types, _op.is_conversion, "",
+          _op.const_expr, "FP32 gradual-underflow form of " + _name,
+          _op.needs_dest_type, _op.valid_fp_math_ctrl)

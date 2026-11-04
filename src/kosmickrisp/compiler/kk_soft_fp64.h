@@ -2,10 +2,8 @@
 #ifndef KK_SOFT_FP64_LOWER_H
 #define KK_SOFT_FP64_LOWER_H
 
-#include "compiler/spirv/nir_spirv.h"
-#include "compiler/spirv/spirv_info.h"
 #include "compiler/nir/nir_softfloat.h"
-#include "kk_soft_fp64_spv.h"
+#include "kk_soft_fp64_library.h"
 
 static bool
 kk_soft_fp64_scalarize(const nir_instr *instr, UNUSED const void *data)
@@ -139,7 +137,7 @@ kk_soft_fp64_exact(nir_builder *b, nir_instr *instr, void *data)
    default:
       return false;
    }
-   nir_shader *library = data;
+   const nir_shader *library = data;
    nir_function *function = nir_shader_get_function_for_name(library, name);
    if (!function)
       function = nir_shader_get_function_for_name(library, mangled);
@@ -181,64 +179,29 @@ kk_soft_fp64_subgroup(const nir_intrinsic_instr *intrin, UNUSED const void *data
 static void
 kk_soft_fp64_lower(nir_shader *nir)
 {
-   bool fp64_alu = nir->info.bit_sizes_float & 64;
-   if (!fp64_alu && !nir->info.uses_wide_subgroup_intrinsics)
+   if (!(nir->info.bit_sizes_float & 64))
       return;
 
    /* Keep the scan/reduce control flow shared across vector components.
     * Scalarize its arithmetic below, after lowering the collective once.
-    * The ALU-size summary does not include floating subgroup intrinsics. */
+    * The float-size summary includes floating subgroup intrinsics. */
    const nir_lower_subgroups_options subgroups = {
       .filter = kk_soft_fp64_subgroup,
       .subgroup_size = 32, .ballot_bit_size = 32, .ballot_components = 1,
       .lower_reduce = true, .lower_vote_feq = true,
    };
-   bool fp64_subgroup = false;
-   NIR_PASS(fp64_subgroup, nir, nir_lower_subgroups, &subgroups);
-   if (!fp64_alu && !fp64_subgroup)
-      return;
+   if (nir->info.uses_wide_subgroup_intrinsics)
+      NIR_PASS(_, nir, nir_lower_subgroups, &subgroups);
 
-   const struct spirv_capabilities capabilities = {
-      .Addresses = true,
-      .Float64 = true,
-      .Int8 = true,
-      .Int16 = true,
-      .Int64 = true,
-      .Shader = true,
-   };
-   const struct spirv_to_nir_options options = {
-      .capabilities = &capabilities,
-      .environment = NIR_SPIRV_VULKAN,
-      .create_library = true,
-   };
-   nir_shader *library = spirv_to_nir(kk_soft_fp64_spv,
-      sizeof(kk_soft_fp64_spv) / sizeof(kk_soft_fp64_spv[0]), NULL,
-      MESA_SHADER_VERTEX, "main", &options, nir->options);
+   const nir_shader *library = kk_soft_fp64_library(nir->options);
    assert(library);
-   NIR_PASS(_, library, nir_lower_variable_initializers, nir_var_function_temp);
-   NIR_PASS(_, library, nir_lower_returns);
-   NIR_PASS(_, library, nir_inline_functions);
-   NIR_PASS(_, library, nir_lower_continue_constructs);
-
-   /* Match glsl_float64_funcs_to_nir's cleanup before copying a function
-    * into each operation. It reduces repeated work and basic blocks. */
-   NIR_PASS(_, library, nir_opt_deref);
-   NIR_PASS(_, library, nir_lower_vars_to_ssa);
-   NIR_PASS(_, library, nir_remove_dead_variables, nir_var_function_temp, NULL);
-   NIR_PASS(_, library, nir_opt_copy_prop);
-   NIR_PASS(_, library, nir_opt_dce);
-   NIR_PASS(_, library, nir_opt_cse);
-   NIR_PASS(_, library, nir_opt_gcm, true);
-   const nir_opt_peephole_select_options select = {.limit = 1};
-   NIR_PASS(_, library, nir_opt_peephole_select, &select);
-   NIR_PASS(_, library, nir_opt_dce);
 
    NIR_PASS(_, nir, nir_lower_alu_to_scalar, kk_soft_fp64_scalarize, NULL);
    bool progress;
    do {
       progress = false;
       NIR_PASS(progress, nir, nir_shader_instructions_pass, kk_soft_fp64_exact,
-               nir_metadata_none, library);
+               nir_metadata_none, (void *)library);
       /* Inlining copies library SSA indices. The generic lowering repairs
        * them only when it also changes an instruction. Conversion-only
        * shaders need the same repair before index-based optimizations. */
@@ -254,6 +217,5 @@ kk_soft_fp64_lower(nir_shader *nir)
       NIR_PASS(_, nir, nir_opt_dce);
    } while (progress);
    NIR_PASS(_, nir, nir_lower_continue_constructs);
-   ralloc_free(library);
 }
 #endif

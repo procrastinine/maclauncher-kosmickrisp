@@ -14,7 +14,7 @@ kk_msl_wrap_source(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr, unsigned sr
       P(ctx, ")");
 }
 
-static bool
+static void
 kk_msl_integer_wrap(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
 {
    const char *op;
@@ -23,7 +23,7 @@ kk_msl_integer_wrap(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    case nir_op_isub: op = " - "; break;
    case nir_op_imul: case nir_op_imad: op = " * "; break;
    case nir_op_ineg: op = NULL; break;
-   default: return false;
+   default: UNREACHABLE("not a wrapping integer operation");
    }
    unsigned bits = instr->def.bit_size;
    assert(bits == 8 || bits == 16 || bits == 32 || bits == 64);
@@ -47,5 +47,4 @@ kk_msl_integer_wrap(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    if (bits < 32)
       P(ctx, ")");
    P(ctx, ")");
-   return true;
 }

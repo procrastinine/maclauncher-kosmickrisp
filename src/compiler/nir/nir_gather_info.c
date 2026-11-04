@@ -928,7 +928,21 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
       shader->info.uses_abort = true;
       break;
 
+   /* Floating collectives may be the only floating operations in a shader.
+    * Record their widths during the existing intrinsic dispatch. */
+   case nir_intrinsic_vote_feq:
+      shader->info.bit_sizes_float |= nir_src_bit_size(instr->src[0]);
+      goto generic_intrinsic;
+   case nir_intrinsic_reduce:
+   case nir_intrinsic_inclusive_scan:
+   case nir_intrinsic_exclusive_scan:
+      if (nir_alu_type_get_base_type(
+             nir_op_infos[nir_intrinsic_reduction_op(instr)].output_type) ==
+          nir_type_float)
+         shader->info.bit_sizes_float |= instr->def.bit_size;
+      FALLTHROUGH;
    default:
+   generic_intrinsic:
       shader->info.uses_bindless |= intrinsic_is_bindless(instr);
       if (nir_intrinsic_writes_external_memory(instr))
          shader->info.writes_memory = true;

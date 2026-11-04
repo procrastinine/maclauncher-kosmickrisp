@@ -301,6 +301,9 @@ alu_fcmp_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,
    ALU_BINOP(op);
 }
 
+static const char *alu_fp_math_mode_pragma(struct nir_to_msl_ctx *ctx,
+                                           const nir_alu_instr *alu);
+
 #include "kk_fp32_preserve.h"
 #include "kk_integer_wrap.h"
 
@@ -311,9 +314,87 @@ static void
 alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
 {
    if (kk_emit_float8_alu(ctx, instr)) return;
-   if (kk_msl_integer_wrap(ctx, instr)) return;
-   if (kk_fp32_preserve_alu(ctx, instr)) return;
    switch (instr->op) {
+   case nir_op_fadd_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_add");
+      break;
+   case nir_op_fsub_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_subtract");
+      break;
+   case nir_op_fmul_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_mul");
+      break;
+   case nir_op_ffma_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_fma");
+      break;
+   case nir_op_flrp_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_lrp");
+      break;
+   case nir_op_fdiv_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_div");
+      break;
+   case nir_op_fsqrt_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_sqrt");
+      break;
+   case nir_op_frsq_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_rsqrt");
+      break;
+   case nir_op_fmin_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_min");
+      break;
+   case nir_op_fmax_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_max");
+      break;
+   case nir_op_fsat_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_sat");
+      break;
+   case nir_op_feq_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_eq");
+      break;
+   case nir_op_fneu_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_ne");
+      break;
+   case nir_op_flt_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_lt");
+      break;
+   case nir_op_fge_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_ge");
+      break;
+   case nir_op_ldexp_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_ldexp");
+      break;
+   case nir_op_ffloor_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_floor");
+      break;
+   case nir_op_fceil_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_ceil");
+      break;
+   case nir_op_fsign_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_sign");
+      break;
+   case nir_op_fsin_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_sin");
+      break;
+   case nir_op_flog2_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_log2");
+      break;
+   case nir_op_fexp2_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_exp2");
+      break;
+   case nir_op_fpow_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_pow");
+      break;
+   case nir_op_ffract_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_fract");
+      break;
+   case nir_op_frem_preserve_kk:
+      alu_funclike(ctx, instr, "kk_dp_fmod");
+      break;
+   case nir_op_frcp_preserve_kk:
+      P(ctx, "kk_dp_div(1.0f, ");
+      alu_src_to_msl(ctx, instr, 0);
+      P(ctx, ")");
+      break;
    case nir_op_isign:
       alu_src_to_msl(ctx, instr, 0);
       P(ctx, " == 0 ? 0.0 : ((");
@@ -321,6 +402,13 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
       P(ctx, " < 0) ? -1 : 1)");
       break;
    case nir_op_iadd:
+   case nir_op_isub:
+   case nir_op_imul:
+   case nir_op_ineg:
+   case nir_op_imad:
+   case nir_op_iadd3:
+      kk_msl_integer_wrap(ctx, instr);
+      break;
    case nir_op_fadd:
       ALU_BINOP("+");
       break;
@@ -328,11 +416,9 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    case nir_op_iadd_sat:
       alu_funclike(ctx, instr, "addsat");
       break;
-   case nir_op_isub:
    case nir_op_fsub:
       ALU_BINOP("-");
       break;
-   case nir_op_imul:
    case nir_op_fmul:
       if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&
           (nir_alu_instr_is_inf_preserve(instr) ||
@@ -651,7 +737,6 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
       }
       alu_src_to_msl(ctx, instr, 0);
       break;
-   case nir_op_ineg:
    case nir_op_fneg:
       P(ctx, "-");
       alu_src_to_msl(ctx, instr, 0);
@@ -2170,9 +2255,6 @@ jump_instr_to_msl(struct nir_to_msl_ctx *ctx, nir_jump_instr *jump)
 static const char *
 alu_fp_math_mode_pragma(struct nir_to_msl_ctx *ctx, const nir_alu_instr *alu)
 {
-   if (kk_float_control_flush_result(ctx, alu))
-      return "safe";
-
    unsigned fp_math_ctrl = alu->fp_math_ctrl;
 
    /* TODO_KOSMICKRISP Investigate why bcsel do not have inf nan preserve */
@@ -2221,8 +2303,6 @@ instr_to_msl(struct nir_to_msl_ctx *ctx, nir_instr *instr)
       P_IND(ctx, "t%d = ", alu->def.index);
       alu_to_msl(ctx, alu);
       P(ctx, ";\n");
-      if (kk_float_control_flush_result(ctx, alu))
-         kk_float_control_flush_msl(ctx, alu);
       if (math_mode)
          P_IND(ctx, "}\n");
       break;
@@ -2675,6 +2755,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
     * don't go through the preprocess step since we are the ones creating them.
     */
    rename_main_entrypoint(shader);
+   kk_float_controls_lower(shader);
 
    struct nir_to_msl_ctx ctx = {
       .shader = shader,
@@ -2691,6 +2772,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    };
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    msl_interlock_prepare(shader);
+   bool fp32_preserve_helpers = kk_fp32_preserve_lower(&ctx);
    msl_gather_info(&ctx, options);
 
    P(&ctx, "// Generated by Mesa compiler\n");
@@ -2705,7 +2787,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    if (kk_uses_atomic64(shader) || kk_uses_image_atomic64(shader))
       P(&ctx, "%s", kk_atomic64_msl);
    if (kk_uses_image_atomic64(shader)) P(&ctx, "%s", kk_image_atomic64_msl);
-   if (kk_fp32_preserve(shader)) P(&ctx, "%s", kk_fp32_preserve_msl);
+   if (fp32_preserve_helpers) P(&ctx, "%s", kk_fp32_preserve_msl);
 
    if (shader->info.stage == MESA_SHADER_TASK || shader->info.stage == MESA_SHADER_MESH)
       P(&ctx, "%s", kk_mesh_runtime_msl);

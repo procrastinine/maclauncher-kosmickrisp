@@ -7,99 +7,62 @@ static bool kk_fp32_preserve(const nir_shader *shader)
    return nir_is_denorm_preserve(shader->info.float_controls_execution_mode,
                                  32);
 }
-static bool kk_fp32_preserve_alu(struct nir_to_msl_ctx *ctx, nir_alu_instr *alu)
+/* Select an emitter form once, after all optimization. Its ordinary NIR ALU
+ * source types, swizzles and math-control flags remain intact. Unaffected
+ * shaders enter the original ALU dispatch without a feature probe. */
+static bool
+kk_fp32_preserve_instr(UNUSED nir_builder *b, nir_instr *instr, void *data)
+{
+   if (instr->type != nir_instr_type_alu)
+      return false;
+   nir_alu_instr *alu = nir_instr_as_alu(instr);
+   if (alu->src[0].src.ssa->bit_size != 32)
+      return false;
+
+   const char *mode = alu_fp_math_mode_pragma(data, alu);
+   switch (alu->op) {
+   case nir_op_fadd: alu->op = nir_op_fadd_preserve_kk; break;
+   case nir_op_fsub: alu->op = nir_op_fsub_preserve_kk; break;
+   case nir_op_fmul: alu->op = nir_op_fmul_preserve_kk; break;
+   case nir_op_ffma: alu->op = nir_op_ffma_preserve_kk; break;
+   case nir_op_flrp: alu->op = nir_op_flrp_preserve_kk; break;
+   case nir_op_fdiv: alu->op = nir_op_fdiv_preserve_kk; break;
+   case nir_op_fsqrt: alu->op = nir_op_fsqrt_preserve_kk; break;
+   case nir_op_frsq: alu->op = nir_op_frsq_preserve_kk; break;
+   case nir_op_fmin: alu->op = nir_op_fmin_preserve_kk; break;
+   case nir_op_fmax: alu->op = nir_op_fmax_preserve_kk; break;
+   case nir_op_fsat: alu->op = nir_op_fsat_preserve_kk; break;
+   case nir_op_feq: alu->op = nir_op_feq_preserve_kk; break;
+   case nir_op_fneu: alu->op = nir_op_fneu_preserve_kk; break;
+   case nir_op_flt: alu->op = nir_op_flt_preserve_kk; break;
+   case nir_op_fge: alu->op = nir_op_fge_preserve_kk; break;
+   case nir_op_ldexp: alu->op = nir_op_ldexp_preserve_kk; break;
+   case nir_op_ffloor: alu->op = nir_op_ffloor_preserve_kk; break;
+   case nir_op_fceil: alu->op = nir_op_fceil_preserve_kk; break;
+   case nir_op_fsign: alu->op = nir_op_fsign_preserve_kk; break;
+   case nir_op_fsin: alu->op = nir_op_fsin_preserve_kk; break;
+   case nir_op_flog2: alu->op = nir_op_flog2_preserve_kk; break;
+   case nir_op_fexp2: alu->op = nir_op_fexp2_preserve_kk; break;
+   case nir_op_fpow: alu->op = nir_op_fpow_preserve_kk; break;
+   case nir_op_ffract: alu->op = nir_op_ffract_preserve_kk; break;
+   case nir_op_frem: alu->op = nir_op_frem_preserve_kk; break;
+   case nir_op_frcp: alu->op = nir_op_frcp_preserve_kk; break;
+   default: return false;
+   }
+   /* Comparison/minmax workaround classification uses the original opcode.
+    * Preserve its safe call-site mode after selecting the emitter opcode. */
+   if (mode && !strcmp(mode, "safe"))
+      alu->fp_math_ctrl |= nir_fp_no_contract;
+   return true;
+}
+
+static bool
+kk_fp32_preserve_lower(struct nir_to_msl_ctx *ctx)
 {
    if (!kk_fp32_preserve(ctx->shader))
       return false;
-   const char *helper = NULL;
-   if (alu->src[0].src.ssa->bit_size != 32)
-      return false;
-   switch (alu->op) {
-   case nir_op_fadd:
-      helper = "kk_dp_add";
-      break;
-   case nir_op_fsub:
-      helper = "kk_dp_subtract";
-      break;
-   case nir_op_fmul:
-      helper = "kk_dp_mul";
-      break;
-   case nir_op_ffma:
-      helper = "kk_dp_fma";
-      break;
-   case nir_op_flrp:
-      helper = "kk_dp_lrp";
-      break;
-   case nir_op_fdiv:
-      helper = "kk_dp_div";
-      break;
-   case nir_op_frcp:
-      P(ctx, "kk_dp_div(1.0f, ");
-      alu_src_to_msl(ctx, alu, 0);
-      P(ctx, ")");
-      return true;
-   case nir_op_fsqrt:
-      helper = "kk_dp_sqrt";
-      break;
-   case nir_op_frsq:
-      helper = "kk_dp_rsqrt";
-      break;
-   case nir_op_fmin:
-      helper = "kk_dp_min";
-      break;
-   case nir_op_fmax:
-      helper = "kk_dp_max";
-      break;
-   case nir_op_fsat:
-      helper = "kk_dp_sat";
-      break;
-   case nir_op_feq:
-      helper = "kk_dp_eq";
-      break;
-   case nir_op_fneu:
-      helper = "kk_dp_ne";
-      break;
-   case nir_op_flt:
-      helper = "kk_dp_lt";
-      break;
-   case nir_op_fge:
-      helper = "kk_dp_ge";
-      break;
-   case nir_op_ldexp:
-      helper = "kk_dp_ldexp";
-      break;
-   case nir_op_ffloor:
-      helper = "kk_dp_floor";
-      break;
-   case nir_op_fceil:
-      helper = "kk_dp_ceil";
-      break;
-   case nir_op_fsign:
-      helper = "kk_dp_sign";
-      break;
-   case nir_op_fsin:
-      helper = "kk_dp_sin";
-      break;
-   case nir_op_flog2:
-      helper = "kk_dp_log2";
-      break;
-   case nir_op_fexp2:
-      helper = "kk_dp_exp2";
-      break;
-   case nir_op_fpow:
-      helper = "kk_dp_pow";
-      break;
-   case nir_op_ffract:
-      helper = "kk_dp_fract";
-      break;
-   case nir_op_frem:
-      helper = "kk_dp_fmod";
-      break;
-   default:
-      return false;
-   }
-   alu_funclike(ctx, alu, helper);
-   return true;
+   return nir_shader_instructions_pass(ctx->shader, kk_fp32_preserve_instr,
+                                        nir_metadata_control_flow, ctx);
 }
 /* Generic nir_lower_frexp assumes normalized significands. Normalize FP32
  * subnormals with integer bits before that pass; FP16 follows its native path.
@@ -107,7 +70,7 @@ static bool kk_fp32_preserve_alu(struct nir_to_msl_ctx *ctx, nir_alu_instr *alu)
 static bool kk_fp32_preserve_prepare(nir_builder *b, nir_instr *instr,
                                    UNUSED void *data)
 {
-   if (instr->type != nir_instr_type_alu || !kk_fp32_preserve(b->shader))
+   if (instr->type != nir_instr_type_alu)
       return false;
    nir_alu_instr *alu = nir_instr_as_alu(instr);
    /* Choose GLSL Fma's permitted fused implementation before NIR can split
