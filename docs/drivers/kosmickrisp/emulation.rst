@@ -249,10 +249,10 @@
    * - ``fragment_barycentric``
      - Fragment barycentric coordinates and per-vertex inputs.
        Controls: ``VK_KHR_fragment_shader_barycentric``, ``fragmentShaderBarycentric``, ``triStripVertexOrderIndependentOfProvokingVertex``.
-     - native interpolation / corner transport. Legal center-only coordinates use native barycentric_coord. Exact or reordered coordinates and per-vertex inputs transport per-corner values from the producer as flat outputs and interpolate them in the fragment shader. Float4 corner interpolation reads four fragment inputs and performs component arithmetic. AnyPS5 interpolates every pixel shader input exactly when the extension is reported, which places every pixel shader on corner transport; on an Apple8 GPU this measured about 10% more GPU time per present on a title screen.
+     - native interpolation / corner transport. Legal center-only coordinates use native barycentric_coord. Exact or reordered coordinates and per-vertex inputs select corner transport only for shaders that request them. Apple10 and later use native pre-raster vertex values for eligible pipelines. Shaders without barycentric or per-vertex reads retain ordinary interpolation. AnyPS5 host-first interpolation uses ordinary fragment inputs unless its shader requires exact guest interpolation.
      - No Apple family
-     - Off
-     - Applications that use reported barycentric support for all fragment interpolation move every pixel shader to corner transport; AnyPS5 does this and measured about 10% more GPU time per present on an Apple8 title screen.
+     - On
+     - Ordinary shaders retain native interpolation; only requested barycentric, exact or per-vertex operations select their native or corner-transport paths.
      - SV_Barycentrics shaders are unavailable without a translator fallback, and vkd3d-proton disables mesh shaders, so feature level 12.2 requires +fragment_barycentric in addition to its other requirements. The maximum reported shader model is not independently reduced by this entry.
      - ``performance,+fragment_barycentric``
    * - ``fragment_shading_rate``

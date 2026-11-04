@@ -193,12 +193,12 @@
      - On
      - On Apple7-11: Large native batches expand active draw records and encode ICB commands in one dispatch per native ICB slice. Other selected routes filter indirect arguments on the GPU and retain their own stage work. Counts remain GPU-resident. No count command adds application-shader MSL. The shared maxDrawIndirectCount limit also serves native fixed-count draws and is retained.
    * - ``fragment_barycentric``
-     - Off
-     - Off
-     - Off
      - On
      - On
-     - Off Apple7-9: exact per-vertex transport adds fragment inputs and interpolation. On Apple10-11: native pre-raster per-vertex values serve eligible pipelines; exceptional topology and replay paths retain corner transport.
+     - On
+     - On
+     - On
+     - On Apple7-11: native center coordinates and shader-local corner fallback. Apple10-11 additionally use native pre-raster vertex values for eligible pipelines. AnyPS5 host-first interpolation avoids a device-wide exact-interpolation policy.
    * - ``fragment_shading_rate``
      - Off
      - Off

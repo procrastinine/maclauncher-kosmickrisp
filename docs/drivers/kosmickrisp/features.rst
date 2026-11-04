@@ -339,13 +339,13 @@ Feature table
      - Always
      - —
    * - ``VK_KHR_fragment_shader_barycentric``
-     - Native with emulated cases: barycentric coordinates are native.
-       Per-vertex fragment inputs are emulated with flat inputs that carry
-       each corner. Advertised when the device reports barycentric support.
-     - Apple7 for coordinates, Apple10 for per-vertex values; coordinates
-       native on all families, per-vertex inputs emulated on all families.
+     - Native coordinates with shader-local corner transport for exact or
+       reordered coordinates and per-vertex inputs. Ordinary interpolation
+       is unchanged when the shader does not request barycentric inputs.
+     - Apple7 for coordinates; Apple10 for eligible native pre-raster
+       per-vertex values. Other per-vertex reads use corner transport.
      - ``fragment_barycentric``
-     - Off
+     - On Apple7-11
      - SV_Barycentrics shaders are unavailable. vkd3d-proton disables mesh
        shaders, so D3D12 mesh shader tier 1 and feature level 12_2 are
        unavailable.
