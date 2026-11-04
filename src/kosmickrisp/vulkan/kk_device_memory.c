@@ -6,6 +6,7 @@
  */
 
 #include "kk_device_memory.h"
+#include "kk_sparse.h"
 #include "kk_buffer.h"
 #include "kk_image.h"
 #include <errno.h>
@@ -511,6 +512,7 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
    if (mem->map)
       kk_bo_unmap(dev, mem->bo, mem->map, false);
 
+   kk_standard_3d_memory_finish(dev, mem);
    kk_device_memory_set_priority(dev, mem, 0.0f);
    if (mem->bo)
       kk_destroy_bo(dev, mem->bo);

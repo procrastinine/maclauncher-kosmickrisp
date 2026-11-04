@@ -169,7 +169,9 @@ kk_minmax_tap(nir_builder *b, nir_tex_instr *tex, nir_def *coord, nir_def *level
 
 static nir_def *
 kk_minmax_level(nir_builder *b, nir_tex_instr *tex, nir_def *level,
-                nir_def *linear, nir_def *mode, nir_def *unnormalized)
+                nir_def *linear, nir_def *mode, nir_def *unnormalized,
+                bool weighted, nir_def *(*tap_cb)(nir_builder *,nir_tex_instr *,
+                   nir_def *,nir_def *,void *), void *tap_data)
 {
    bool cube = tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE;
    unsigned dims = tex->sampler_dim == GLSL_SAMPLER_DIM_3D ? 3 : 2;
@@ -198,6 +200,17 @@ kk_minmax_level(nir_builder *b, nir_tex_instr *tex, nir_def *level,
          if (hi)
             weight = nir_iand(b, weight, nir_fgt_imm(b, nir_channel(b, fraction, axis), 0));
       }
+      nir_def *factor = NULL;
+      if (weighted) {
+         factor = nir_imm_float(b, 1);
+         for (unsigned axis = 0; axis < dims; axis++) {
+            nir_def *f = nir_channel(b, fraction, axis);
+            if (!(corner & (1u << axis))) f = nir_fsub(b, nir_imm_float(b, 1), f);
+            factor = nir_fmul(b, factor, f);
+         }
+         factor = nir_bcsel(b, linear, factor,
+            nir_imm_float(b, corner == 0 ? 1 : 0));
+      }
       nir_def *center = nir_vec(b, components, dims);
       center = nir_bcsel(b, unnormalized, center, nir_fdiv(b, center, size));
       if (cube)
@@ -206,11 +219,28 @@ kk_minmax_level(nir_builder *b, nir_tex_instr *tex, nir_def *level,
          center = nir_vector_insert_imm(b, nir_pad_vector(b, center, center->num_components + 1),
             nir_channel(b, coord, coord->num_components - 1), center->num_components);
       if (corner == 0) {
-         result = kk_minmax_tap(b, tex, center, level);
+         result = tap_cb ? tap_cb(b, tex, center, level, tap_data) :
+                           kk_minmax_tap(b, tex, center, level);
+         if (weighted && nir_alu_type_get_base_type(tex->dest_type) == nir_type_float) {
+            nir_def *color = tex->is_sparse ? nir_trim_vector(b, result, 4) : result;
+            nir_def *scaled = nir_fmul(b, color, nir_f2fN(b, factor, color->bit_size));
+            color = nir_bcsel(b, nir_ieq_imm(b, mode, 0), scaled, color);
+            result = tex->is_sparse ? nir_vector_insert_imm(b,
+               nir_pad_vector(b, color, 5), nir_channel(b, result, 4), 4) : color;
+         }
       } else {
          nir_push_if(b, weight);
-         nir_def *tap = kk_minmax_tap(b, tex, center, level);
+         nir_def *tap = tap_cb ? tap_cb(b, tex, center, level, tap_data) :
+                              kk_minmax_tap(b, tex, center, level);
          nir_def *combined = kk_minmax_combine(b, result, tap, mode, tex->is_sparse, tex->dest_type);
+         if (weighted && nir_alu_type_get_base_type(tex->dest_type) == nir_type_float) {
+            nir_def *a = tex->is_sparse ? nir_trim_vector(b, result, 4) : result;
+            nir_def *c = tex->is_sparse ? nir_trim_vector(b, tap, 4) : tap;
+            nir_def *sum = nir_fadd(b, a, nir_fmul(b, c, nir_f2fN(b, factor, c->bit_size)));
+            if (tex->is_sparse) sum = nir_vector_insert_imm(b, nir_pad_vector(b, sum, 5),
+               nir_channel(b, combined, 4), 4);
+            combined = nir_bcsel(b, nir_ieq_imm(b, mode, 0), sum, combined);
+         }
          nir_pop_if(b, NULL);
          result = nir_if_phi(b, combined, result);
       }
@@ -307,11 +337,11 @@ kk_lower_minmax_sample(nir_builder *b, nir_tex_instr *tex, void *data)
    nir_def *address = kk_minmax_metadata(b, tex, sampler,
       offsetof(struct kk_sampled_image_descriptor, sampler_address_modes), ctx);
    nir_def *unnormalized = nir_test_mask(b, address, 1u << 9);
-   nir_def *result = kk_minmax_level(b, tex, low, linear, mode, unnormalized);
+   nir_def *result = kk_minmax_level(b, tex, low, linear, mode, unnormalized, false, NULL, NULL);
    nir_def *next = nir_iadd_imm(b, low, 1);
    nir_push_if(b, nir_iand(b, mip_linear, nir_iand(b,
       nir_flt(b, nir_u2f32(b, low), lod), nir_ult(b, next, levels))));
-   nir_def *upper = kk_minmax_level(b, tex, next, linear, mode, unnormalized);
+   nir_def *upper = kk_minmax_level(b, tex, next, linear, mode, unnormalized, false, NULL, NULL);
    nir_def *combined = kk_minmax_combine(b, result, upper, mode, tex->is_sparse, tex->dest_type);
    nir_pop_if(b, NULL);
    result = nir_if_phi(b, combined, result);

@@ -843,7 +843,7 @@ kk_get_device_properties(
       .sparseResidencyAlignedMipSize = false,
       .sparseResidencyStandard2DBlockShape = pdev->info.placement_sparse,
       .sparseResidencyStandard2DMultisampleBlockShape = false,
-      .sparseResidencyStandard3DBlockShape = false,
+      .sparseResidencyStandard3DBlockShape = pdev->info.placement_sparse,
 
       /* Vulkan 1.1 properties */
       .subgroupSize = 32,

@@ -265,6 +265,7 @@ kk_CmdBlitImage2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
 
+   if (kk_standard_3d_blit(cmd,pBlitImageInfo))return;
    struct kk_meta_save save;
    kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS,
                  "meta:vkCmdBlitImage2");
@@ -384,3 +385,4 @@ kk_meta_expand_msrtss(struct kk_cmd_buffer *cmd, struct kk_image_view *src,
 }
 
 #include "kk-writable-msaa-meta.h"
+#include "kk_standard_sparse_3d_meta.h"

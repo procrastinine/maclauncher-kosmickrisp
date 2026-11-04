@@ -166,6 +166,13 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
        * having to create a texture for every possible subresource up-front */
       if (util_format_is_compressed(plane->layout.format.pipe) &&
           !util_format_is_compressed(view_layout.format.pipe)) {
+         if (image->sparse && image->sparse->standard_3d) {
+            VkResult result=kk_standard_3d_raw_view(dev,view,&view_layout,&mtl_handle);
+            if(result!=VK_SUCCESS){kk_image_view_finish(dev,view);return result;}
+            view->planes[view_plane].mtl_handle_subres=mtl_handle;
+            view_layout.base_level=view_layout.base_array_layer=0;
+            view_layout.num_levels=view_layout.array_len=1;
+         } else {
          uint64_t subres_offset_B =
             kk_get_layer_level_B(&plane->layout, view_layout.base_array_layer,
                                  view_layout.base_level);
@@ -200,6 +207,7 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
          view_layout.num_levels = subres_layout.levels;
          view_layout.base_array_layer = 0u;
          view_layout.array_len = subres_layout.layers;
+         }
       } else if (image->vk.image_type == VK_IMAGE_TYPE_3D &&
                  view->vk.view_type != VK_IMAGE_VIEW_TYPE_3D) {
          mtl_handle = image->planes[image_plane].mtl_handle_array;

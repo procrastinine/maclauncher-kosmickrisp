@@ -41,6 +41,10 @@ struct vk_command_buffer;
 struct vk_buffer;
 struct vk_device;
 struct vk_image;
+struct nir_shader;
+struct vk_meta_device;
+struct nir_shader *vk_meta_build_color_blit_shader(VkImageType,VkFormat);
+VkResult vk_meta_get_color_blit_sampler(struct vk_device *,struct vk_meta_device *,VkFilter,VkSampler *);
 
 struct vk_meta_rect {
    uint32_t x0, y0, x1, y1;

@@ -11,6 +11,7 @@
 #include "kk_device.h"
 #include "kk_entrypoints.h"
 #include "kk_image.h"
+#include "kk_sparse.h"
 #include "kk_image_view.h"
 #include "kk_physical_device.h"
 
@@ -139,6 +140,8 @@ kk_CmdClearColorImage(VkCommandBuffer commandBuffer, VkImage _image,
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_image, image, _image);
+
+   if (kk_standard_3d_clear(cmd, image, imageLayout, pColor, rangeCount, pRanges)) return;
 
    VkClearValue clear_value = {
       .color = *pColor,

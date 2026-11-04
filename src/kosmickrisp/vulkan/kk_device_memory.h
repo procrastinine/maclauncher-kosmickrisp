@@ -20,6 +20,7 @@
 struct kk_device_memory {
    struct vk_device_memory vk;
    struct kk_bo *bo;
+   struct kk_standard_3d_page *standard_3d;
    void *map;
    bool lazy;
    uint32_t image_bind_count;

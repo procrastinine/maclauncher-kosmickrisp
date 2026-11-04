@@ -317,7 +317,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t count,
    const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
    struct kk_sparse_shader_state *state = NULL;
-   if (features->sparseResidencyBuffer) {
+   if (features->sparseResidencyBuffer || features->sparseResidencyImage3D) {
       state = kk_sparse_capture_pipeline(count, infos, graphics, features);
       if (!state) {
          for (unsigned i = 0; i < count; ++i) ralloc_free(infos[i].nir);

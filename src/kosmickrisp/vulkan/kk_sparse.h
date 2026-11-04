@@ -58,7 +58,9 @@ kk_sparse_binding_image_type(VkImageType type, VkImageCreateFlags flags)
    return type == VK_IMAGE_TYPE_1D && !(flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)
       ? VK_IMAGE_TYPE_2D : type;
 }
+struct kk_device_memory;
 struct kk_device;
+void kk_standard_3d_memory_finish(struct kk_device *,struct kk_device_memory *);
 struct kk_physical_device;
 struct kk_image;
 struct kk_buffer;
@@ -67,7 +69,16 @@ struct kk_image_view;
 struct kk_view_layout;
 struct kk_sparse_view_state;
 struct kk_sparse_device_state;
+struct kk_image_view;
+struct kk_view_layout;
+VkResult kk_standard_3d_raw_view(struct kk_device *,struct kk_image_view *,const struct kk_view_layout *,mtl_texture **);
 struct kk_queue;
+struct kk_cmd_buffer;
+bool kk_standard_3d_blit(struct kk_cmd_buffer *,const VkBlitImageInfo2 *);
+bool kk_standard_3d_clear(struct kk_cmd_buffer *,struct kk_image *,VkImageLayout,const VkClearColorValue *,uint32_t,const VkImageSubresourceRange *);
+bool kk_standard_3d_copy_buffer_to_image(struct kk_cmd_buffer *,const VkCopyBufferToImageInfo2 *);
+bool kk_standard_3d_copy_image_to_buffer(struct kk_cmd_buffer *,const VkCopyImageToBufferInfo2 *);
+bool kk_standard_3d_copy_image(struct kk_cmd_buffer *,const VkCopyImageInfo2 *);
 struct kk_rc_sampler;
 struct vk_queue_submit;
 /* Appended to the existing texel-buffer descriptor. Ordinary image
@@ -76,7 +87,9 @@ struct kk_sparse_view_descriptor {
    uint64_t residency_address;
    uint32_t byte_offset, texel_size;
 };
+struct kk_standard_3d_image;
 struct kk_sparse_image {
+   struct kk_standard_3d_image *standard_3d;
    VkExtent3D granularity;
    VkImageAspectFlags aspect_mask;
    VkSparseImageFormatFlags format_flags;

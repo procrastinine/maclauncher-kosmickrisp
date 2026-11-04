@@ -111,8 +111,9 @@ kk_nir_sparse_buffer_resident(nir_builder *b, nir_def *metadata, nir_def *coord)
    return nir_if_phi(b, resident, valid);
 }
 
-static bool
-lower_sparse(nir_builder *b, nir_instr *instr, UNUSED void *data)
+bool
+kk_nir_lower_sparse_instruction(nir_builder *b, nir_instr *instr,
+   nir_def *logical_resident, nir_def *zero_one_mask)
 {
    nir_def *def = NULL;
    nir_def *resident = NULL;
@@ -158,13 +159,33 @@ lower_sparse(nir_builder *b, nir_instr *instr, UNUSED void *data)
     * native sparse result live without a five-component MSL vector. */
    unsigned colors = --def->num_components;
    nir_def *parts[5];
-   for (unsigned i = 0; i < colors; ++i)
+   nir_alu_type type = instr->type == nir_instr_type_tex ?
+      nir_instr_as_tex(instr)->dest_type :
+      nir_intrinsic_dest_type(nir_instr_as_intrinsic(instr));
+   for (unsigned i = 0; i < colors; ++i) {
       parts[i] = nir_channel(b, def, i);
+      if (logical_resident) {
+         nir_def *one = nir_alu_type_get_base_type(type) == nir_type_float ?
+            nir_imm_floatN_t(b, 1, def->bit_size) :
+            nir_imm_intN_t(b, 1, def->bit_size);
+         nir_def *zero = nir_imm_intN_t(b, 0, def->bit_size);
+         nir_def *unmapped = nir_bcsel(b,
+            nir_test_mask(b, zero_one_mask, 1u << i), one, zero);
+         parts[i] = nir_bcsel(b, logical_resident, parts[i], unmapped);
+      }
+   }
    if (!resident) resident = nir_is_sparse_resident_zink(b, def);
+   if (logical_resident) resident = nir_iand(b, resident, logical_resident);
    parts[colors] = nir_b2i32(b, nir_inot(b, resident));
    nir_def *result = nir_vec(b, parts, colors + 1);
    nir_def_rewrite_uses_after(def, result);
    return true;
+}
+
+static bool
+lower_sparse(nir_builder *b, nir_instr *instr, UNUSED void *data)
+{
+   return kk_nir_lower_sparse_instruction(b, instr, NULL, NULL);
 }
 
 bool

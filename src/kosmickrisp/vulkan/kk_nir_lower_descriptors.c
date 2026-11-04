@@ -27,6 +27,7 @@
 struct lower_descriptors_ctx {
    const struct kk_descriptor_set_layout *set_layouts[KK_MAX_SETS];
 
+   bool standard_3d;
    bool robust_msaa_defaults;
    bool clamp_desc_array_bounds;
    nir_address_format ubo_addr_format;
@@ -439,6 +440,8 @@ kk_lower_buffer64(nir_builder *b, nir_intrinsic_instr *intr,
 
 #include "kk-writable-msaa-nir.h"
 
+#include "kk_standard_sparse_3d_nir.h"
+
 static bool
 lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
                    const struct lower_descriptors_ctx *ctx)
@@ -538,6 +541,8 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
                                   msl_convert_access_flag(access)))
       return true;
    }
+
+   if (kk_standard_3d_lower_image(b, intr, deref, type, resource_addr, ctx)) return true;
 
    if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF &&
        (intr->intrinsic == nir_intrinsic_bindless_image_load ||
@@ -680,6 +685,7 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
 
 #include "kk_sampler_minmax.h"
 #include "kk_sparse_sample_nir.h"
+#include "kk_standard_sparse_3d_sample.h"
 #include "kk_non_seamless_cube.h"
 #include "kk-sampler-helpers-nir.h"
 
@@ -798,6 +804,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       return true;
    }
 
+   nir_def *standard_resource_address = NULL;
    {
       unsigned offs = (cube_face)
          ? offsetof(struct kk_sampled_image_descriptor, aux_resource_id)
@@ -838,7 +845,10 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
             .image_dim = tex->sampler_dim, .image_array = tex->is_array);
       }
       nir_tex_instr_add_src(tex, nir_tex_src_texture_handle, handle);
+      standard_resource_address = resource_addr;
    }
+
+   if (kk_standard_3d_lower_fetch(b, tex, texture, plane_offset_B, standard_resource_address, ctx)) return true;
 
    if (tex->sampler_dim == GLSL_SAMPLER_DIM_BUF && tex->op == nir_texop_txf) {
       nir_def *metadata = load_resource_deref_desc(
@@ -1158,12 +1168,13 @@ kk_nir_prepare_layered_bc(nir_shader *nir,
 }
 
 bool
-kk_nir_lower_descriptors(nir_shader *nir,
+kk_nir_lower_descriptors(nir_shader *nir, bool standard_3d,
                          const struct vk_pipeline_robustness_state *rs,
                          uint32_t set_layout_count,
                          struct vk_descriptor_set_layout *const *set_layouts)
 {
    struct lower_descriptors_ctx ctx = kk_descriptor_context(rs, set_layout_count, set_layouts);
+   ctx.standard_3d = standard_3d;
 
    /* First lower everything but complex SSBOs, then lower complex SSBOs.
     *

@@ -221,7 +221,7 @@ kk_make_feature_key(const struct vk_features *feats)
    /* Cache entries with a replay input cannot alias entries without it.
     * This bit changes serialization only; the guard bit is selected on use. */
    if (feats->shaderOutputLayer) key |= BITFIELD_BIT(KK_FEAT_POLY_LAYER_REPLAY);
-   if (feats->sparseResidencyBuffer) key |= BITFIELD_BIT(KK_FEAT_SPARSE_REPLAY);
+   if (feats->sparseResidencyBuffer || feats->sparseResidencyImage3D) key |= BITFIELD_BIT(KK_FEAT_SPARSE_REPLAY);
    if (feats->nullDescriptor)
       key |= BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR);
    if (feats->nonSeamlessCubeMap)
@@ -787,6 +787,9 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
       NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
 
    NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts);
+   if (features & BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER))
+      NIR_PASS(_, nir, kk_nir_lower_standard_3d_samples, set_layout_count, set_layouts);
+
    NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
       (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10,
       features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER));
@@ -798,7 +801,7 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
     * generate a nir_intrinsic_load_blend_const_color_rgba which gets lowered by
     * the lower descriptor pass
     */
-   NIR_PASS(_, nir, kk_nir_lower_descriptors, rs, set_layout_count,
+   NIR_PASS(_, nir, kk_nir_lower_descriptors, (features & BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER)) != 0, rs, set_layout_count,
             set_layouts);
 
    NIR_PASS(_, nir, kk_nir_lower_sliced_3d);
@@ -1308,7 +1311,7 @@ kk_vrs_finish_captured_fragment(nir_shader *point_fs,
                                  nir_metadata_control_flow, point_line_effects ? (void *)1 : NULL);
       kk_line_fragment(point_fs, true, state);
       if (opts->poly_layer_replay) kk_poly_layer_lower_fs(point_fs);
-      NIR_PASS(_, point_fs, kk_nir_lower_descriptors, robustness, 0, NULL);
+      NIR_PASS(_, point_fs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
 }
 
 static VkResult
@@ -1534,7 +1537,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          if (opts->poly_layer_replay) kk_poly_layer_lower_vs(point_vs);
          NIR_PASS(_, point_vs, kk_nir_lower_polygon_scalar_outputs);
          NIR_PASS(_, point_vs, msl_nir_vs_io_types);
-         NIR_PASS(_, point_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
+         NIR_PASS(_, point_vs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
          if (kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay)
             kk_compile_msl(pdev, point_vs, state, &shader->polygon[2]);
          else
@@ -1543,7 +1546,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             nir_shader *conservative_vs = kk_conservative_vertex_shader(nir->options);
             if (opts->poly_layer_replay) kk_poly_layer_lower_vs(conservative_vs);
             NIR_PASS(_, conservative_vs, msl_nir_vs_io_types);
-            NIR_PASS(_, conservative_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
+            NIR_PASS(_, conservative_vs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
             kk_compile_msl(pdev, conservative_vs, state, &shader->polygon[4]);
          }
          nir_shader *programs[] = {capture, capture_xfb};
@@ -1586,7 +1589,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          kk_poly_layer_lower_vs(layer_vs);
          kk_lower_hw_vs(layer_vs, state, shader->info.gs.mode == MESA_PRIM_POINTS);
          msl_nir_lower_clip_cull_distance(layer_vs, 0);
-         NIR_PASS(_, layer_vs, kk_nir_lower_descriptors, robustness, 0, NULL);
+         NIR_PASS(_, layer_vs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
          kk_compile_msl(pdev, layer_vs, state, &shader->polygon[2]);
       }
 
@@ -1604,7 +1607,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          shader->info.uses_per_draw_data = true;
       /* Descriptors were lowered with the GS, this lowers the system values
        * the hardware vertex lowering added */
-      NIR_PASS(_, nir, kk_nir_lower_descriptors, robustness, 0, NULL);
+      NIR_PASS(_, nir, kk_nir_lower_descriptors, false, robustness, 0, NULL);
    }
 
    struct kk_compile_options mesh_options = *opts;
@@ -2394,7 +2397,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       /* The first descriptor pass rewrites uses but keeps dead resource
        * descriptors until DCE. Remove those before lowering only new sysvals. */
       NIR_PASS(_, native_pair[0], nir_opt_dce);
-      NIR_PASS(_, native_pair[0], kk_nir_lower_descriptors, vertex_robustness, 0, NULL);
+      NIR_PASS(_, native_pair[0], kk_nir_lower_descriptors, false, vertex_robustness, 0, NULL);
       nir_opt_varyings_bulk(native_pair, 2, true, UINT32_MAX, UINT32_MAX, nir_opts, NULL);
       nir_opt_varyings_bulk(native_pair, 2, true, UINT32_MAX, UINT32_MAX, nir_opts, NULL);
    }

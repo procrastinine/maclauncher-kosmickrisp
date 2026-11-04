@@ -325,7 +325,7 @@ bool kk_nir_prepare_layered_bc(nir_shader *nir,
    struct vk_descriptor_set_layout *const *set_layouts);
 
 bool
-kk_nir_lower_descriptors(nir_shader *nir,
+kk_nir_lower_descriptors(nir_shader *nir, bool standard_3d,
                          const struct vk_pipeline_robustness_state *rs,
                          uint32_t set_layout_count,
                          struct vk_descriptor_set_layout *const *set_layouts);
@@ -336,6 +336,9 @@ bool kk_nir_add_device_barrier_workaround(nir_shader *nir);
 bool kk_nir_lower_poly(struct nir_shader *nir);
 bool kk_nir_lower_null_images(nir_shader *nir);
 bool kk_nir_lower_sparse(nir_shader *nir);
+bool kk_nir_lower_standard_3d_samples(nir_shader *,uint32_t,struct vk_descriptor_set_layout *const *);
+bool kk_nir_lower_sparse_instruction(nir_builder *b, nir_instr *instr,
+   nir_def *logical_resident, nir_def *zero_one_mask);
 bool kk_nir_lower_sparse_border(nir_shader *nir);
 bool kk_nir_lower_sparse_sample_views(nir_shader *nir, uint32_t count, struct vk_descriptor_set_layout *const *layouts, bool minmax);
 bool kk_nir_lower_sparse_buffer_io(nir_shader *nir,

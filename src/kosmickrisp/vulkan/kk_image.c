@@ -651,7 +651,8 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
              vk_format_to_pipe_format(image->vk.format))) {
          image->vk.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
          image->vk.stencil_usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-      } else {
+      } else if (!(image->vk.image_type == VK_IMAGE_TYPE_3D &&
+                   (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))) {
          image->vk.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
       }
    }
@@ -680,6 +681,10 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
          &image->planes[plane].layout, pCreateInfo->initialLayout);
    }
 
+   if (image->vk.image_type == VK_IMAGE_TYPE_3D &&
+       (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) &&
+       !(image->application_usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+      image->planes[0].layout.usage &= ~MTL_TEXTURE_USAGE_RENDER_TARGET;
    if (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
       return kk_sparse_image_init(dev, image, vk_image_usage_flags(pCreateInfo));
    VkResult result = kk_writable_msaa_image_init(dev, image,

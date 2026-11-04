@@ -342,6 +342,14 @@ build_blit_shader(const struct vk_meta_blit_key *key)
    return b->shader;
 }
 
+nir_shader *
+vk_meta_build_color_blit_shader(VkImageType type,VkFormat format)
+{
+   const struct vk_meta_blit_key key={.dim=type==VK_IMAGE_TYPE_3D?GLSL_SAMPLER_DIM_3D:type==VK_IMAGE_TYPE_1D?GLSL_SAMPLER_DIM_1D:GLSL_SAMPLER_DIM_2D,
+      .src_samples=VK_SAMPLE_COUNT_1_BIT,.dst_format=format,.aspects=VK_IMAGE_ASPECT_COLOR_BIT};
+   return build_blit_shader(&key);
+}
+
 static VkResult
 get_blit_pipeline_layout(struct vk_device *device,
                          struct vk_meta_device *meta,
@@ -503,6 +511,12 @@ get_blit_sampler(struct vk_device *device,
 
    return vk_meta_create_sampler(device, meta, &info,
                                  &key, sizeof(key), sampler_out);
+}
+
+VkResult
+vk_meta_get_color_blit_sampler(struct vk_device *device,struct vk_meta_device *meta,VkFilter filter,VkSampler *sampler)
+{
+   return get_blit_sampler(device,meta,filter,sampler);
 }
 
 static void

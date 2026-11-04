@@ -18,6 +18,7 @@
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "vk_format.h"
 #include "util/u_memory.h"
+#include "kk_standard_sparse_3d.h"
 
 uint32_t
 kk_sparse_memory_type_bits(struct kk_physical_device *pdev)
@@ -167,7 +168,8 @@ kk_sparse_device_init(struct kk_device *dev)
 bool
 kk_sparse_residency_used(struct kk_device *dev)
 {
-   return dev->vk.enabled_features.sparseResidencyBuffer &&
+   return (dev->vk.enabled_features.sparseResidencyBuffer ||
+           dev->vk.enabled_features.sparseResidencyImage3D) &&
           p_atomic_read(&dev->sparse_residency_used);
 }
 
@@ -290,6 +292,15 @@ kk_sparse_format_properties(struct kk_physical_device *pdev, VkFormat format,
    struct mtl_size tile = mtl_sparse_granularity(pdev->mtl_dev_handle, va->mtl_pixel_format,
       type == VK_IMAGE_TYPE_3D ? MTL_TEXTURE_TYPE_3D : MTL_TEXTURE_TYPE_2D);
    if (!tile.x || !tile.y || !tile.z) return false;
+   if (type == VK_IMAGE_TYPE_3D) {
+      VkExtent3D shape = kk_standard_3d_shape(pipe);
+      if (shape.width) {
+         *props = (VkSparseImageFormatProperties){
+            .aspectMask = vk_format_aspects(format), .imageGranularity = shape,
+         };
+         return true;
+      }
+   }
    unsigned bytes = util_format_get_blocksize(pipe);
    unsigned width = 0, height = 0;
    switch (bytes) {
@@ -451,9 +462,28 @@ kk_sparse_image_init(struct kk_device *dev, struct kk_image *image,
       free(image->sparse); image->sparse = NULL;
       return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
    }
-   image->sparse->granularity = props.imageGranularity;
    image->sparse->aspect_mask = props.aspectMask;
    image->sparse->format_flags = props.flags;
+   if (image->vk.image_type == VK_IMAGE_TYPE_3D &&
+       (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)) {
+      VkResult result = kk_standard_3d_image_initialize(dev, image);
+      if (result != VK_SUCCESS) {
+         kk_standard_3d_image_finish(dev, image);
+         mtl_release(plane->mtl_handle); plane->mtl_handle = NULL;
+         free(image->sparse); image->sparse = NULL;
+         return result;
+      }
+      kk_sparse_residency(dev, plane->mtl_handle, true);
+      p_atomic_set(&dev->sparse_residency_used, 1);
+      return VK_SUCCESS;
+   }
+   /* Opaque binding-only images retain their native granularity. */
+   if (image->vk.image_type == VK_IMAGE_TYPE_3D) {
+      struct mtl_size native = mtl_sparse_granularity(dev->mtl_handle,
+         plane->layout.format.mtl, MTL_TEXTURE_TYPE_3D);
+      props.imageGranularity = (VkExtent3D){native.x, native.y, native.z};
+   }
+   image->sparse->granularity = props.imageGranularity;
    image->sparse->tail_first_lod = MIN2(image->vk.mip_levels,
       mtl_texture_first_mipmap_in_tail(plane->mtl_handle));
    image->sparse->tail_pages = image->sparse->tail_first_lod < image->vk.mip_levels ?
@@ -488,12 +518,14 @@ kk_sparse_image_finish(struct kk_device *dev, struct kk_image *image)
    if ((image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&
        image->planes[0].mtl_handle)
       kk_sparse_residency(dev, image->planes[0].mtl_handle, false);
+   kk_standard_3d_image_finish(dev, image);
    free(image->sparse); image->sparse = NULL;
 }
 
 #include "kk_sparse_samplers.h"
 
 struct kk_sparse_view_state {
+   struct kk_standard_3d_view_state *standard_3d;
    mtl_texture *query[2];
    mtl_texture *alias_query[2];
    mtl_texture *face_query;
@@ -506,53 +538,57 @@ kk_sparse_image_view_query(struct kk_device *dev, struct kk_image_view *view,
 {
    struct kk_image *image = container_of(view->vk.image, struct kk_image, vk);
    if (!(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) ||
-       (storage && !view->vk.base_mip_level))
+       (storage && !view->vk.base_mip_level && !image->sparse->standard_3d))
       return VK_SUCCESS;
    if (!view->sparse) {
       view->sparse = vk_zalloc(&dev->vk.alloc, sizeof(*view->sparse), 8,
                                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
       if (!view->sparse) return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
       view->sparse->records = mtl_sparse_new_residency_buffer(dev->mtl_handle,
-         2 * sizeof(struct kk_sparse_query_record), false);
+         kk_standard_3d_query_bytes(image), false);
       if (!view->sparse->records) return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
       kk_sparse_residency(dev, view->sparse->records, true);
    }
    struct kk_view_layout query_layout = *layout;
    query_layout.base_level = 0;
-   query_layout.num_levels = image->vk.mip_levels;
+   bool logical_raw=image->sparse->standard_3d && util_format_is_compressed(image->planes[0].layout.format.pipe) && !util_format_is_compressed(layout->format.pipe);
+   query_layout.num_levels = logical_raw ? view->vk.level_count : image->vk.mip_levels;
    query_layout.min_lod_clamp = 0;
    view->sparse->query[storage] = mtl_new_texture_view_with(parent, &query_layout);
    if (!view->sparse->query[storage]) return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
-   struct kk_sparse_query_record *records = mtl_get_contents(view->sparse->records);
-   records[storage] = (struct kk_sparse_query_record){
+   struct kk_sparse_query_record *record = (void *)((char *)
+      mtl_get_contents(view->sparse->records) + storage * kk_standard_3d_query_stride(view));
+   (*record) = (struct kk_sparse_query_record){
       .resource_id = mtl_texture_get_gpu_resource_id(view->sparse->query[storage]),
       .array_query_resource_id = mtl_texture_get_gpu_resource_id(view->sparse->query[storage]),
       .base_lod = view->vk.base_mip_level, .level_count = view->vk.level_count,
       .view_type = view->vk.view_type,
    };
+   VkResult logical = kk_standard_3d_query_initialize(view, storage, layout);
+   if (logical != VK_SUCCESS) return logical;
    if (storage) {
       /* The sliced-3D lowering reads the same descriptor prefix after the
        * sparse load has selected this parent view. Keep its range at +8. */
-      records[storage].storage_slices.offset = view->vk.storage.z_slice_offset;
-      records[storage].storage_slices.count = view->vk.storage.z_slice_count;
-      records[storage].storage_base_lod = view->vk.base_mip_level;
-      records[storage].storage_level_count = view->vk.level_count;
+      (*record).storage_slices.offset = view->vk.storage.z_slice_offset;
+      (*record).storage_slices.count = view->vk.storage.z_slice_count;
+      (*record).storage_base_lod = view->vk.base_mip_level;
+      (*record).storage_level_count = view->vk.level_count;
    }
    if (!storage) {
       VkResult result = kk_sparse_sample_row(dev, view->vk.base_mip_level,
-         view->vk.level_count, &records[storage].sampler_table);
+         view->vk.level_count, &(*record).sampler_table);
       if (result != VK_SUCCESS) return result;
       for (unsigned i = 0; i < 3; ++i) {
          unsigned extent = i == 0 ? image->vk.extent.width : i == 1 ? image->vk.extent.height : image->vk.extent.depth;
-         unsigned view_size = MAX2(extent >> view->vk.base_mip_level, 1);
-         records[storage].view_size[i] = view_size;
-         records[storage].gradient_scale[i] = (float)((uint64_t)view_size << view->vk.base_mip_level) / extent;
+         unsigned view_size = logical_raw ? (i==0?view->vk.extent.width:i==1?view->vk.extent.height:view->vk.extent.depth) : MAX2(extent >> view->vk.base_mip_level, 1);
+         (*record).view_size[i] = view_size;
+         (*record).gradient_scale[i] = (float)((uint64_t)view_size << view->vk.base_mip_level) / extent;
       }
       if (view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE || view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
          query_layout.view_type = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
          view->sparse->face_query = mtl_new_texture_view_with(parent, &query_layout);
          if (!view->sparse->face_query) return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
-         records[storage].face_resource_id = mtl_texture_get_gpu_resource_id(view->sparse->face_query);
+         (*record).face_resource_id = mtl_texture_get_gpu_resource_id(view->sparse->face_query);
       }
    }
    return VK_SUCCESS;
@@ -582,7 +618,7 @@ kk_sparse_image_view_query_aliases(struct kk_device *dev,
    if (!alternate) return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
    view->sparse->alias_query[storage] = alternate;
    struct kk_sparse_query_record *record =
-      (struct kk_sparse_query_record *)mtl_get_contents(view->sparse->records) + storage;
+      (void *)((char *)mtl_get_contents(view->sparse->records) + storage * kk_standard_3d_query_stride(view));
    uint64_t alternate_id = mtl_texture_get_gpu_resource_id(alternate);
    if (view_is_array) {
       record->array_query_resource_id = record->resource_id;
@@ -599,7 +635,7 @@ kk_sparse_storage_descriptor_aliases(const struct kk_image_view *view,
 {
    if (!view->sparse || !view->sparse->query[true]) return;
    struct kk_sparse_query_record *record =
-      (struct kk_sparse_query_record *)mtl_get_contents(view->sparse->records) + 1;
+      (void *)((char *)mtl_get_contents(view->sparse->records) + kk_standard_3d_query_stride(view));
    /* All descriptor writers for an immutable view publish the same IDs. */
    __atomic_store_n(&record->plain_resource_id, plain_id, __ATOMIC_RELAXED);
    __atomic_store_n(&record->array_resource_id, array_id, __ATOMIC_RELAXED);
@@ -610,7 +646,7 @@ kk_sparse_image_view_query_address(struct kk_image_view *view, bool storage)
 {
    return view->sparse && view->sparse->query[storage] ?
       mtl_buffer_get_gpu_address(view->sparse->records) +
-      storage * sizeof(struct kk_sparse_query_record) : 0;
+      storage * kk_standard_3d_query_stride(view) : 0;
 }
 
 void
@@ -620,7 +656,7 @@ kk_sparse_storage_descriptor(struct kk_storage_image_descriptor *desc,
    uint64_t query = kk_sparse_image_view_query_address(view, true);
    if (!query) return;
    struct kk_sparse_query_record *record = (void *)(
-      (char *)mtl_get_contents(view->sparse->records) + sizeof(*record));
+      (char *)mtl_get_contents(view->sparse->records) + kk_standard_3d_query_stride(view));
    /* Writers may run concurrently for the same immutable view. */
    __atomic_store_n(&record->storage_slices.offset,
                     view->vk.storage.z_slice_offset, __ATOMIC_RELAXED);
@@ -648,6 +684,7 @@ void
 kk_sparse_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
 {
    if (!view->sparse) return;
+   kk_standard_3d_query_finish(dev, view);
    for (unsigned i = 0; i < 2; ++i) {
       mtl_release(view->sparse->query[i]);
       mtl_release(view->sparse->alias_query[i]);
@@ -799,6 +836,8 @@ kk_sparse_append_texture(struct kk_sparse_texture_batch *batch, mtl_texture *tex
    return true;
 }
 
+#include "kk_standard_sparse_3d_impl.h"
+
 static bool
 kk_sparse_opaque_bind(struct kk_sparse_texture_batch *batch, struct kk_image *image, const VkSparseMemoryBind *bind)
 {
@@ -905,6 +944,15 @@ kk_queue_bind_sparse(struct kk_queue *queue, struct vk_queue_submit *submit)
    for (unsigned i = 0; i < submit->image_opaque_bind_count; ++i) {
       const VkSparseImageOpaqueMemoryBindInfo *info = &submit->image_opaque_binds[i];
       VK_FROM_HANDLE(kk_image, image, info->image);
+      if (image->sparse->standard_3d) {
+         simple_mtx_lock(&image->sparse->standard_3d->mutex);
+         bool ok = kk_standard_3d_bind_opaque(queue, &batch, &copies, image, info->bindCount, info->pBinds);
+         simple_mtx_unlock(&image->sparse->standard_3d->mutex);
+         if (!ok) {
+            result = vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY); goto finish;
+         }
+         continue;
+      }
       for (unsigned j = 0; j < info->bindCount; ++j)
          if (!kk_sparse_opaque_bind(&batch, image, &info->pBinds[j])) {
             result = vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY); goto finish;
@@ -913,6 +961,15 @@ kk_queue_bind_sparse(struct kk_queue *queue, struct vk_queue_submit *submit)
    for (unsigned i = 0; i < submit->image_bind_count; ++i) {
       const VkSparseImageMemoryBindInfo *info = &submit->image_binds[i];
       VK_FROM_HANDLE(kk_image, image, info->image);
+      if (image->sparse->standard_3d) {
+         simple_mtx_lock(&image->sparse->standard_3d->mutex);
+         bool ok = kk_standard_3d_bind_images(queue, &batch, &copies, image, info->bindCount, info->pBinds);
+         simple_mtx_unlock(&image->sparse->standard_3d->mutex);
+         if (!ok) {
+            result = vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY); goto finish;
+         }
+         continue;
+      }
       const VkExtent3D *g = &image->sparse->granularity;
       for (unsigned j = 0; j < info->bindCount; ++j) {
          const VkSparseImageMemoryBind *b = &info->pBinds[j];
