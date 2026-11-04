@@ -452,7 +452,7 @@ mtl_library_descriptor(const char *src, enum mtl_language_version msl_version,
    if (KK_DEBUG(MSL)) {
       blake3_hash hash; char hex[BLAKE3_HEX_LEN];
       _mesa_blake3_compute(src, strlen(src), hash); _mesa_blake3_format(hex, hash);
-      mesa_logi("// KK_MSL blake3=%s stage=native_library bytes=%zu\n%s\n", hex, strlen(src), src);
+      mesa_logi("// KK_MSL_LIBRARY blake3=%s stage=native_library bytes=%zu\n%s\n", hex, strlen(src), src);
    }
    MTLCompileOptions *opts = [[MTLCompileOptions new] autorelease];
    opts.languageVersion = (MTLLanguageVersion)msl_version;
