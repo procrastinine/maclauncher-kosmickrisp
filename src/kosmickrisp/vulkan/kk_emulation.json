@@ -155,5 +155,20 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires both meshShader and taskShader for D3D12 MeshTier1; disabling them removes feature-level 12.2 eligibility.",
     "off_consequence": "D3D12 MeshTier1 and feature-level 12.2 are unavailable; mesh/task Vulkan shaders and mesh queries are unavailable. Lower feature levels remain subject to their other requirements; this entry does not remove a shader-model requirement or a translator device-creation prerequisite."
+  },
+  {
+    "name": "polygon_points",
+    "description": "Polygon POINT rasterization through captured primitive expansion.",
+    "cost_class": "primitive capture / triangle expansion",
+    "cost_note": "POINT emits two triangles per point after capture; FILL and eligible thin LINE draws retain native alternatives. Availability alone adds no shader code.",
+    "extensions": [],
+    "features": [
+      "fillModeNonSolid",
+      "extendedDynamicState3PolygonMode"
+    ],
+    "properties": [],
+    "performance": true,
+    "performance_reason": "Preserve the non-solid fill feature selected by D3D translators; POINT cost is selected by actual polygon state.",
+    "off_consequence": "Hides fillModeNonSolid and dynamic polygon mode, including native wireframe because Vulkan shares its feature bit with POINT; translator non-solid fill support is lost; SM and FL effects are not independently established."
   }
 ]
