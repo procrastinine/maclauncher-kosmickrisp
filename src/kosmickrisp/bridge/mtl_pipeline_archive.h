@@ -20,10 +20,22 @@ static _Thread_local struct mtl_compile_trace kk_compile_trace;
 static void
 kk_archive_trace(const char *event, NSData *key, id descriptor)
 {
-   if (kk_compile_trace.event)
-      kk_compile_trace.event(kk_compile_trace.data, event,
-         key.length == 32 ? key.bytes : NULL,
-         descriptor && kk_constant_record(descriptor).count != 0);
+   if (!kk_compile_trace.event) return;
+   NSDictionary *constants = descriptor ? kk_constant_record(descriptor) : nil;
+   if (constants.count) {
+      NSMutableArray *entries = [NSMutableArray arrayWithCapacity:constants.count];
+      for (NSString *name in [constants.allKeys sortedArrayUsingSelector:@selector(compare:)])
+         [entries addObject:@[name, constants[name]]];
+      NSData *bytes = [NSPropertyListSerialization dataWithPropertyList:entries
+         format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+      if (bytes) {
+         blake3_hash digest;
+         _mesa_blake3_compute(bytes.bytes, bytes.length, digest);
+         kk_compile_trace.event(kk_compile_trace.data, "specialization-values", digest, true);
+      }
+   }
+   kk_compile_trace.event(kk_compile_trace.data, event,
+      key.length == 32 ? key.bytes : NULL, constants.count != 0);
 }
 
 static char kk_archive_association, kk_library_hint_association;
