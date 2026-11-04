@@ -468,7 +468,7 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
 #define FSR_SLOT_DATA 12
 #define FSR_SLOT_PROBES 16
 #define FSR_SLOT_AGE 8
-#define FSR_SLOT_TRIES (1u << 18)
+#define FSR_SLOT_TRIES (1u << 12)
 
 static unsigned
 fsr_output_words(nir_function_impl *impl)
