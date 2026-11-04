@@ -3,11 +3,13 @@
 #define KK_RT_COMMANDS_H
 #include "kk_cmd_buffer.h"
 #define KK_RT_STAGES (VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_INTERSECTION_BIT_KHR | VK_SHADER_STAGE_CALLABLE_BIT_KHR)
+struct kk_rt_report;
 struct kk_rt_command_state {
    struct kk_descriptor_state descriptors;
    uint64_t scratch_size;
    uint64_t stack_size;
    uint32_t ray_queries;
+   struct kk_rt_report *reports;
 };
 struct kk_descriptor_state *kk_rt_descriptors(struct kk_cmd_buffer *cmd);
 void kk_rt_descriptor_dispatch_init(struct kk_device *dev);

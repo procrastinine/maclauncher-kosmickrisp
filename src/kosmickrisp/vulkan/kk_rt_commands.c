@@ -7,6 +7,13 @@
 #include "kk_cmd_pool.h"
 #include "vk_alloc.h"
 #include "vk_pipeline_layout.h"
+#include <stdio.h>
+#include <inttypes.h>
+
+struct kk_rt_report {
+   struct kk_rt_report *next;
+   const struct kk_rt_error_report *gpu;
+};
 
 struct kk_descriptor_state *
 kk_rt_descriptors(struct kk_cmd_buffer *cmd)
@@ -29,6 +36,17 @@ kk_rt_descriptors(struct kk_cmd_buffer *cmd)
 void
 kk_rt_command_finish(struct kk_cmd_buffer *cmd)
 {
+   struct kk_rt_report *record = cmd->state.rt->reports;
+   while (record) {
+      const struct kk_rt_error_report *r = record->gpu;
+      if (r->claimed)
+         fprintf(stderr, "KosmicKrisp: RT launch %" PRIu64 " failed: error=%u action=%u shader=%u hit_group=%u stack=%" PRIu64 "/%" PRIu64 "\n",
+                 r->launch, r->error, r->action, r->shader, r->hit_group,
+                 r->stack_used, r->stack_size);
+      struct kk_rt_report *next = record->next;
+      vk_free(&kk_cmd_buffer_pool(cmd)->vk.alloc, record);
+      record = next;
+   }
    vk_free(&kk_cmd_buffer_pool(cmd)->vk.alloc, cmd->state.rt);
    cmd->state.rt = NULL;
 }
@@ -106,7 +124,19 @@ kk_rt_trace(struct kk_cmd_buffer *cmd,const VkStridedDeviceAddressRegionKHR *ray
    }
    struct kk_ptr stack = kk_rt_arena(cmd, bytes), lanes = kk_rt_arena(cmd, lane_bytes);
    if(!stack.gpu||!lanes.gpu)return;
+   struct kk_ptr error = kk_pool_alloc(cmd, sizeof(struct kk_rt_error_report), 16);
+   if (!error.gpu) return;
+   struct kk_rt_report *report = vk_alloc(&kk_cmd_buffer_pool(cmd)->vk.alloc,
+      sizeof(*report), 8, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+   if (!report) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return;
+   }
+   memset(error.cpu, 0, sizeof(struct kk_rt_error_report));
+   *report = (struct kk_rt_report){cmd->state.rt->reports, error.cpu};
+   cmd->state.rt->reports = report;
    struct kk_rt_dispatch_root root={0};root.functions=pipeline->native.function_table_id;
+   root.error_report = error.gpu;
    root.root=desc->root.addr;root.sampler_table=kk_cmd_buffer_device(cmd)->samplers.table.bo->gpu;
    root.stack_base=stack.gpu;root.stack_stride=stride;root.lanes=lanes.gpu;root.physical_count=physical;
    root.indirect_dimensions=indirect;root.indirect2=indirect2;root.dimensions[0]=width;root.dimensions[1]=height;root.dimensions[2]=depth;

@@ -102,6 +102,17 @@ kk_rt_u64_mul(KK_RT_U64 a, KK_RT_U64 b, KK_RT_THREAD KK_RT_U64 *out)
    return true;
 }
 
+/* Launch progress is independent of the completed launch's error state. */
+static inline bool
+kk_rt_advance_launch(KK_RT_THREAD KK_RT_U64 *launch, KK_RT_U64 count,
+                      KK_RT_U32 physical)
+{
+   if (!physical || *launch >= count || count - *launch <= physical)
+      return false;
+   *launch += physical;
+   return true;
+}
+
 static inline bool
 kk_rt_stack_fail(KK_RT_DEVICE struct kk_rt_lane_state *lane, KK_RT_U32 error)
 {

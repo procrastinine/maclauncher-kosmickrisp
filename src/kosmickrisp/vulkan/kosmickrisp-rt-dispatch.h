@@ -31,10 +31,17 @@ struct kk_rt_indirect2 {
    KK_RT_U64 callable_address,callable_size,callable_stride;
    KK_RT_U32 width,height,depth,pad;
 };
+/* First failed logical launch, retained until command-buffer retirement. */
+struct kk_rt_error_report {
+   KK_RT_U32 claimed,error,action,shader,hit_group,pad;
+   KK_RT_U64 launch,stack_used,stack_size;
+};
+KK_RT_ASSERT(sizeof(struct kk_rt_error_report)==48,"RT error report scalar ABI");
 struct kk_rt_dispatch_root {
    KK_RT_TABLE functions;
    KK_RT_U64 function_info,program_info,groups;
    KK_RT_U64 root,sampler_table,lanes,stack_base,stack_stride,indirect_dimensions,indirect2;
+   KK_RT_U64 error_report;
    struct kk_rt_sbt_region raygen,miss,hit,callable;
    KK_RT_U32 dimensions[3],physical_count;
    KK_RT_U32 function_count,program_count,group_count,control_pc;
@@ -45,7 +52,7 @@ KK_RT_ASSERT(sizeof(struct kk_rt_function_info)==8,"VFT metadata ABI");
 KK_RT_ASSERT(sizeof(struct kk_rt_program_info)==32,"program scalar ABI");
 KK_RT_ASSERT(sizeof(struct kk_rt_indirect2)==104,"Vulkan indirect2 ABI");
 KK_RT_ASSERT(__builtin_offsetof(struct kk_rt_indirect2,width)==88,"indirect2 dimension offset");
-KK_RT_ASSERT(sizeof(struct kk_rt_dispatch_root)==232,"RT root scalar ABI");
+KK_RT_ASSERT(sizeof(struct kk_rt_dispatch_root)==240,"RT root scalar ABI");
 #ifndef __METAL_VERSION__
 char *kk_rt_dispatcher_source(void *mem_ctx);
 char *kk_rt_control_source(void *mem_ctx);
