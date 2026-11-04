@@ -2485,8 +2485,14 @@ kk_compile_graphics_prerender(struct kk_device *device, struct kk_shader *vs,
    return VK_SUCCESS;
 }
 
+struct kk_graphics_library_compile {
+   struct mtl_library_pair *pair;
+   uint64_t start;
+};
+
 static VkResult
-kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs, unsigned polygon)
+kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *vs,
+   unsigned polygon, struct kk_graphics_library_compile *early)
 {
    struct kk_physical_device *pdev = kk_device_physical(device);
    VkResult result = VK_SUCCESS;
@@ -2507,11 +2513,19 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
       {fs_data->code, kk_msl_language_version(fs_data, pdev->info.msl_version)},
    };
    mtl_library *libraries[2];
-   if (!KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY_PAIR,
-                    mtl_new_library_pair(device->mtl_compiler_handle, sources,
-                       MTL_MATH_MODE_FAST,
-                       MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST, libraries)))
-      return VK_ERROR_INVALID_SHADER_NV;
+   bool compiled;
+   if (early && early->pair) {
+      compiled = mtl_library_pair_finish(early->pair, &sources[1], libraries);
+      early->pair = NULL;
+      if (unlikely(device->perf))
+         kk_perf_add(device->perf, KK_PERF_METAL_LIBRARY_PAIR,
+                     kk_perf_now() - early->start);
+   } else {
+      compiled = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY_PAIR,
+         mtl_new_library_pair(device->mtl_compiler_handle, sources,
+            MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST, libraries));
+   }
+   if (!compiled) return VK_ERROR_INVALID_SHADER_NV;
    mtl_library *vertex_library = libraries[0];
    mtl_library *fragment_library = libraries[1];
    mtl_function_descriptor *vertex_function = NULL;
@@ -2588,9 +2602,9 @@ kk_compile_polygon_siblings(struct kk_device *device, struct kk_shader *vs)
    }
    }
    if (vs->polygon[2].code)
-      result = kk_compile_graphics_pipeline_native(device, vs, true);
+      result = kk_compile_graphics_pipeline_native(device, vs, true, NULL);
    if (result == VK_SUCCESS && vs->info.conservative)
-      result = kk_compile_graphics_pipeline_native(device, vs, 2);
+      result = kk_compile_graphics_pipeline_native(device, vs, 2, NULL);
    if (result == VK_SUCCESS && vs->interlock)
       result = kk_interlock_pipeline_compile(device, vs);
    return result;
@@ -2615,7 +2629,8 @@ kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader)
 }
 
 static VkResult
-kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
+kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+   struct kk_graphics_library_compile *early)
 {
    u_foreach_bit(i, vs->info.gs_aux_mask)
       vs->pipeline.gfx.gs_aux_once[i] = (util_once_flag)UTIL_ONCE_FLAG_INIT;
@@ -2640,7 +2655,7 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
       vs->lazy_polygon->device = device;
       vs->lazy_polygon->shader = vs;
    }
-   VkResult result = kk_compile_graphics_pipeline_native(device, vs, false);
+   VkResult result = kk_compile_graphics_pipeline_native(device, vs, false, early);
    if (result != VK_SUCCESS)
       return result;
    if (siblings && !vs->lazy_polygon) {
@@ -3101,6 +3116,14 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       .geometry_reports = features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS),
       .conservative_fs = conservative_fs,
    };
+   struct kk_graphics_library_compile early = {0};
+   /* IO linking, late metadata and producer selection are already final.
+    * Only this selected plain pair can start before FS finishing. */
+   const bool early_pair = state && total_shaders == 2 &&
+      nir_shaders[0]->info.stage == MESA_SHADER_VERTEX &&
+      nir_shaders[1]->info.stage == MESA_SHADER_FRAGMENT &&
+      !native_pair[0] && !polygon_capture && !poly_layer_replay &&
+      !pixel_envelope && !conservative_fs;
    for (uint32_t i = 0; i < total_shaders; i++) {
       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
       struct kk_compile_options stage_options = compile_options;
@@ -3125,6 +3148,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       }
 
       if (result != VK_SUCCESS) {
+         mtl_library_pair_discard(early.pair);
          /* Clean up all the shaders before this point */
          for (uint32_t j = 0; j < i; j++)
             kk_shader_destroy(&dev->vk, shaders[j], pAllocator);
@@ -3141,6 +3165,15 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
 
          return result;
+      }
+      if (early_pair && i == 0) {
+         const struct msl_compile_data *data = &shaders[0]->msl_data[MESA_SHADER_VERTEX];
+         const struct mtl_library_source source = {
+            data->code, kk_msl_language_version(data, pdev->info.msl_version),
+         };
+         if (unlikely(dev->perf)) early.start = kk_perf_now();
+         early.pair = mtl_library_pair_begin(dev->mtl_compiler_handle, &source,
+            MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
       }
    }
 
@@ -3209,7 +3242,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          shaders[0]->info.polygon_native = true;
       }
       shaders[0]->info.api_geometry = explicit_geometry;
-      result = kk_compile_graphics_pipeline(dev, shaders[shaders[0]->info.stage == MESA_SHADER_TASK ? 1 : 0]);
+      result = kk_compile_graphics_pipeline(dev, shaders[shaders[0]->info.stage == MESA_SHADER_TASK ? 1 : 0], &early);
+      mtl_library_pair_discard(early.pair);
 
       /* Generated Poly and empty-fragment leaves are already copied into the
        * original vertex pipeline and share its normal lifetime. */
@@ -3432,7 +3466,7 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
           !kk_dgc_get_compute_pipeline(dev, shader))
          result = VK_ERROR_INVALID_SHADER_NV;
    } else if (info.stage == MESA_SHADER_VERTEX || info.stage == MESA_SHADER_MESH) {
-      result = kk_compile_graphics_pipeline(dev, shader);
+      result = kk_compile_graphics_pipeline(dev, shader, NULL);
    }
 
    if (result != VK_SUCCESS)

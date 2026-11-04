@@ -120,6 +120,100 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
    }
 }
 
+struct mtl_library_pair {
+   bool heap_owned;
+   id<MTL4Compiler> compiler;
+   dispatch_group_t completion;
+   id<MTL4CompilerTask> tasks[2];
+   mtl_library *libraries[2];
+   enum mtl_math_mode math_mode;
+   enum mtl_math_floating_point_functions math_fp_fns;
+};
+
+static void
+mtl_library_pair_submit(struct mtl_library_pair *pair, unsigned index,
+                        const struct mtl_library_source *source)
+{
+   MTL4LibraryDescriptor *desc = mtl_library_descriptor(
+      source->code, source->language_version, pair->math_mode, pair->math_fp_fns);
+   KKPipelineArchive *cache = index == 0
+      ? kk_compiler_archive((mtl_compiler *)pair->compiler) : nil;
+   id<MTLLibrary> cached = kk_cached_vertex_library(cache, desc);
+   if (cached) {
+      pair->libraries[index] = (mtl_library *)cached;
+      return;
+   }
+   dispatch_group_enter(pair->completion);
+   pair->tasks[index] = [pair->compiler newLibraryWithDescriptor:desc
+      completionHandler:^(id<MTLLibrary> library, NSError *error) {
+         @autoreleasepool {
+            pair->libraries[index] = (mtl_library *)[library retain];
+            if (library) kk_remember_vertex_library(cache, desc, library);
+            if (!library)
+               fprintf(stderr, "Failed to create MTLLibrary: %s\n",
+                  error.localizedDescription.UTF8String ?: "Unknown Metal error");
+         }
+         dispatch_group_leave(pair->completion);
+      }];
+}
+
+struct mtl_library_pair *
+mtl_library_pair_begin(mtl_compiler *compiler,
+   const struct mtl_library_source *vertex, enum mtl_math_mode math_mode,
+   enum mtl_math_floating_point_functions math_fp_fns)
+{
+   @autoreleasepool {
+      struct mtl_library_pair *pair = calloc(1, sizeof(*pair));
+      if (!pair) return NULL;
+      pair->completion = dispatch_group_create();
+      if (!pair->completion) { free(pair); return NULL; }
+      pair->heap_owned = true;
+      pair->compiler = [(id<MTL4Compiler>)compiler retain];
+      pair->math_mode = math_mode;
+      pair->math_fp_fns = math_fp_fns;
+      mtl_library_pair_submit(pair, 0, vertex);
+      return pair;
+   }
+}
+
+void
+mtl_library_pair_discard(struct mtl_library_pair *pair)
+{
+   if (!pair) return;
+   dispatch_group_wait(pair->completion, DISPATCH_TIME_FOREVER);
+   for (unsigned i = 0; i < 2; ++i) {
+      [(id)pair->libraries[i] release];
+      [pair->tasks[i] release];
+   }
+   dispatch_release(pair->completion);
+   if (pair->heap_owned) {
+      [pair->compiler release];
+      free(pair);
+   }
+}
+
+bool
+mtl_library_pair_finish(struct mtl_library_pair *pair,
+   const struct mtl_library_source *fragment, mtl_library *libraries[2])
+{
+   @autoreleasepool {
+      libraries[0] = libraries[1] = NULL;
+      if (!pair) return false;
+      /* Submit FS before waiting even if VS has not finished. */
+      mtl_library_pair_submit(pair, 1, fragment);
+      dispatch_group_wait(pair->completion, DISPATCH_TIME_FOREVER);
+      bool success = pair->libraries[0] && pair->libraries[1];
+      if (success) {
+         for (unsigned i = 0; i < 2; ++i) {
+            libraries[i] = pair->libraries[i];
+            pair->libraries[i] = NULL;
+         }
+      }
+      mtl_library_pair_discard(pair);
+      return success;
+   }
+}
+
 bool
 mtl_new_library_pair(mtl_compiler *compiler,
                      const struct mtl_library_source sources[2],
@@ -128,40 +222,19 @@ mtl_new_library_pair(mtl_compiler *compiler,
                      mtl_library *libraries[2])
 {
    @autoreleasepool {
-      id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
-      id<MTL4CompilerTask> tasks[2];
-      dispatch_group_t completion = dispatch_group_create();
-      libraries[0] = libraries[1] = NULL;
-
-      /* Metal owns scheduling on the existing device compiler. Queue both
-       * independent front ends before waiting for their completion callbacks. */
-      for (unsigned i = 0; i < 2; ++i) {
-         MTL4LibraryDescriptor *desc = mtl_library_descriptor(
-            sources[i].code, sources[i].language_version, math_mode, math_fp_fns);
-         dispatch_group_enter(completion);
-         tasks[i] = [comp newLibraryWithDescriptor:desc
-            completionHandler:^(id<MTLLibrary> library, NSError *error) {
-               @autoreleasepool {
-                  libraries[i] = (mtl_library *)[library retain];
-                  if (library == nil)
-                     fprintf(stderr, "Failed to create MTLLibrary: %s\n",
-                        error.localizedDescription.UTF8String ?: "Unknown Metal error");
-               }
-               dispatch_group_leave(completion);
-            }];
+      /* Keep the existing immediate pair stack-owned: cache restore and
+       * optional siblings gain no heap allocation or compiler retain. */
+      struct mtl_library_pair pair = {
+         .compiler = (id<MTL4Compiler>)compiler,
+         .completion = dispatch_group_create(),
+         .math_mode = math_mode, .math_fp_fns = math_fp_fns,
+      };
+      if (!pair.completion) {
+         libraries[0] = libraries[1] = NULL;
+         return false;
       }
-      dispatch_group_wait(completion, DISPATCH_TIME_FOREVER);
-      dispatch_release(completion);
-      for (unsigned i = 0; i < 2; ++i)
-         [tasks[i] release];
-
-      if (libraries[0] && libraries[1])
-         return true;
-      for (unsigned i = 0; i < 2; ++i) {
-         [(id)libraries[i] release];
-         libraries[i] = NULL;
-      }
-      return false;
+      mtl_library_pair_submit(&pair, 0, &sources[0]);
+      return mtl_library_pair_finish(&pair, &sources[1], libraries);
    }
 }
 

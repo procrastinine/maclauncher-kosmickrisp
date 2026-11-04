@@ -148,10 +148,12 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
          "\"compiler\":\"%p\",\"archive_loaded\":%s,\"requests\":%"PRIu64",\"lookups\":%"PRIu64
          ",\"hits\":%"PRIu64",\"native_pipeline_successes\":%"PRIu64
          ",\"checkpoints\":%"PRIu64",\"store_requested_bytes\":%"PRIu64
-         ",\"snapshot_ms\":%.6f,\"capture_wait_ms\":%.6f}",
+         ",\"snapshot_ms\":%.6f,\"capture_wait_ms\":%.6f"
+         ",\"vertex_library_requests\":%"PRIu64",\"vertex_library_hits\":%"PRIu64"}",
          p->metal_compiler, archive.archive_loaded ? "true" : "false", archive.requests,
          archive.lookups, archive.hits, archive.native_compiles, archive.checkpoints,
-         archive.stored_bytes, archive.snapshot_ns / 1e6, archive.capture_wait_ns / 1e6);
+         archive.stored_bytes, archive.snapshot_ns / 1e6, archive.capture_wait_ns / 1e6,
+         archive.vertex_library_requests, archive.vertex_library_hits);
    fprintf(p->log, ",\"submit_pending\":%"PRId64",\"submit_peak\":%"PRIu64
            ",\"submit_scope\":\"common_submit_list_including_worker_head\","
            "\"compiler_scope\":\"in_progress_calls_not_queued_jobs\","

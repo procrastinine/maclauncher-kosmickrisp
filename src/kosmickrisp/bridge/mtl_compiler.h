@@ -41,6 +41,7 @@ mtl_compiler *mtl_new_cached_compiler(mtl_device *device,
 struct mtl_compiler_cache_stats {
    uint64_t lookups, hits, native_compiles, stored_bytes;
    uint64_t checkpoints, snapshot_ns, capture_wait_ns, requests;
+   uint64_t vertex_library_requests, vertex_library_hits;
    bool archive_loaded;
 };
 /* Lifetime totals for this shared native compiler, not one Vulkan device. */
@@ -79,6 +80,16 @@ struct mtl_library_source {
    const char *code;
    enum mtl_language_version language_version;
 };
+
+/* Begin one selected VS before FS code generation; finish queues FS before
+ * waiting. Discard drains callbacks. No pipeline may publish before finish. */
+struct mtl_library_pair;
+struct mtl_library_pair *mtl_library_pair_begin(mtl_compiler *compiler,
+   const struct mtl_library_source *vertex, enum mtl_math_mode math_mode,
+   enum mtl_math_floating_point_functions math_fp_fns);
+bool mtl_library_pair_finish(struct mtl_library_pair *pair,
+   const struct mtl_library_source *fragment, mtl_library *libraries[2]);
+void mtl_library_pair_discard(struct mtl_library_pair *pair);
 
 bool mtl_new_library_pair(mtl_compiler *compiler,
                          const struct mtl_library_source sources[2],
