@@ -26,6 +26,10 @@ query_min_lod(nir_builder *b, nir_tex_instr *tex, bool int_min_lod)
                                   false, false);
 }
 
+/* The view's minimum LOD applies under the sampler-emulation function
+ * constant, which a device selects once it has an image view with a minimum
+ * LOD (or a descriptor heap). Its false specialization drops the descriptor
+ * load and keeps the application's operands. */
 static bool
 lower_min_lod(nir_builder *b, nir_tex_instr *tex, UNUSED void *data)
 {
@@ -40,6 +44,7 @@ lower_min_lod(nir_builder *b, nir_tex_instr *tex, UNUSED void *data)
                    tex->op == nir_texop_tg4;
 
    b->cursor = nir_before_instr(&tex->instr);
+   nir_def *active = nir_load_sampler_emulation_enabled_kk(b);
    nir_def *min_lod = query_min_lod(b, tex, oob_zero);
 
    if (oob_zero) {
@@ -60,16 +65,21 @@ lower_min_lod(nir_builder *b, nir_tex_instr *tex, UNUSED void *data)
 
       nir_def *old = &tex->def;
       nir_def *zero = nir_imm_zero(b, old->num_components, old->bit_size);
-      nir_def *new_ = nir_bcsel(b, oob, zero, old);
+      nir_def *new_ = nir_bcsel(b, nir_iand(b, active, oob), zero, old);
       nir_def_rewrite_uses_after(old, new_);
    } else {
       /* Clamp min LOD value, or clamp LOD value if explicit LOD */
       nir_tex_src_type other_src =
          tex->op == nir_texop_txl ? nir_tex_src_lod : nir_tex_src_min_lod;
       nir_def *other = nir_steal_tex_src(tex, other_src);
-      if (other)
-         min_lod = nir_fmax(b, nir_f2fN(b, other, min_lod->bit_size), min_lod);
-      nir_tex_instr_add_src(tex, other_src, min_lod);
+      nir_def *value;
+      if (other) {
+         nir_def *clamped = nir_fmax(b, nir_f2fN(b, other, min_lod->bit_size), min_lod);
+         value = nir_bcsel(b, active, nir_f2fN(b, clamped, other->bit_size), other);
+      } else {
+         value = nir_bcsel(b, active, min_lod, nir_imm_floatN_t(b, 0.0, min_lod->bit_size));
+      }
+      nir_tex_instr_add_src(tex, other_src, value);
    }
 
    return true;

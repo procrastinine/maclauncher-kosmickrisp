@@ -6,6 +6,8 @@
  */
 
 #include "kk_image_view.h"
+
+#include "util/u_atomic.h"
 #include "kk_layered_bc.h"
 #include "kk-writable-msaa.h"
 
@@ -150,6 +152,10 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
    memset(view, 0, sizeof(*view));
 
    vk_image_view_init(&dev->vk, &view->vk, pCreateInfo);
+   /* Shaders apply a minimum LOD only in their sampler-emulation
+    * specialization, which draws select once the device has such a view. */
+   if (view->vk.min_lod > view->vk.base_mip_level)
+      p_atomic_set(&dev->sampler_emulation, 1);
    if (image->planes[0].memoryless &&
        !(pCreateInfo->flags & VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA) &&
        !vk_find_struct_const(pCreateInfo->pNext, IMAGE_VIEW_USAGE_CREATE_INFO))
