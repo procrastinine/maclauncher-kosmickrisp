@@ -30,6 +30,8 @@
 #include "vk_drm_syncobj.h"
 #include "vk_shader_module.h"
 
+#include "kk_attachment_device.h"
+
 static uint32_t
 kk_get_vk_version()
 {
@@ -1186,6 +1188,7 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
 
    struct vk_features supported_features;
    kk_get_device_features(pdev, &supported_extensions, &supported_features);
+   kk_attachment_device_features(pdev, &supported_extensions, &supported_features);
    kk_zero_init_features(&supported_extensions, &supported_features);
 
    struct vk_properties properties;

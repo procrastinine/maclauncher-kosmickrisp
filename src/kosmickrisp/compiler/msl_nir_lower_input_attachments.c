@@ -13,58 +13,16 @@
 struct lower_ia_state {
    const struct vk_input_attachment_location_state *ial;
    const struct vk_color_attachment_location_state *cal;
+   const struct vk_render_pass_state *rp;
 };
+
+#include "msl_attachment_samples.h"
 
 static bool
 lower_ia(nir_builder *b, nir_intrinsic_instr *intrin,
          const struct lower_ia_state *state)
 {
-   const struct vk_input_attachment_location_state *ial = state->ial;
-
-   /* Framebuffer fetches are moved to output loads if they are not
-    * depth/stencil nor multisample. */
-   if (nir_intrinsic_image_dim(intrin) == GLSL_SAMPLER_DIM_SUBPASS &&
-       nir_src_is_const(intrin->src[3])) {
-      b->cursor = nir_before_instr(&intrin->instr);
-      uint32_t ia_index =
-         nir_intrinsic_base(intrin) + nir_src_as_uint(intrin->src[3]);
-
-      /* Metal does not allow depth/stencil loads from the framebuffer */
-      if (ial->depth_att != ia_index && ial->stencil_att != ia_index) {
-         uint32_t location = FRAG_RESULT_DATA0;
-         bool found = false;
-         for (uint32_t i = 0u; i < ial->color_attachment_count; ++i) {
-            if (ial->color_map[i] == ia_index) {
-               uint8_t slot = state->cal ? state->cal->color_map[i] : i;
-               if (slot != MESA_VK_ATTACHMENT_UNUSED) {
-                  location += slot;
-                  found = true;
-               }
-               break;
-            }
-         }
-
-         /* If an input is used but it doesn't map to any of the outputs, we'll
-          * read it as a texture. Mainly because the common pipeline will be
-          * created without an attachment for that location. */
-         if (!found)
-            return false;
-
-         nir_io_semantics sem = {
-            .location = location,
-         };
-         nir_def *input = nir_load_output(
-            b, intrin->def.num_components, intrin->def.bit_size,
-            nir_imm_int(b, 0), .dest_type = nir_intrinsic_dest_type(intrin),
-            .io_semantics = sem);
-
-         nir_def_rewrite_uses(&intrin->def, input);
-         nir_instr_remove(&intrin->instr);
-         return true;
-      }
-   }
-
-   return false;
+   return msl_attachment_sample_fetch(b, intrin, state);
 }
 
 static bool
@@ -88,7 +46,8 @@ msl_nir_lower_frag_input_attachments(nir_shader *nir,
 void
 msl_nir_lower_input_attachments(
    nir_shader *nir, const struct vk_input_attachment_location_state *ial,
-   const struct vk_color_attachment_location_state *cal)
+   const struct vk_color_attachment_location_state *cal,
+   const struct vk_render_pass_state *rp)
 {
    assert(nir->info.stage == MESA_SHADER_FRAGMENT);
 
@@ -96,12 +55,13 @@ msl_nir_lower_input_attachments(
       struct lower_ia_state state = {
          .ial = ial,
          .cal = cal,
+         .rp = rp,
       };
       NIR_PASS(_, nir, msl_nir_lower_frag_input_attachments, &state);
    }
 
-   /* Lower depth/stencil and multisample as texture reads due to Metal
-    * limitations. */
+   /* Lower the remaining depth/stencil, unmapped and other-sample
+    * reads through texture descriptors. */
    nir_input_attachment_options input_attachment_options = {};
    NIR_PASS(_, nir, nir_lower_input_attachments, &input_attachment_options);
 }

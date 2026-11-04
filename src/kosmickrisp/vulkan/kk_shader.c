@@ -724,7 +724,8 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
       if (kk_fs_needs_forced_depth_write(nir, state))
          NIR_PASS(_, nir, msl_ensure_depth_write);
 
-      msl_nir_lower_input_attachments(nir, state->ial, state->cal);
+      msl_nir_lower_input_attachments(nir, state->ial, state->cal,
+                                      state->rp);
    }
 
    const struct lower_ycbcr_state ycbcr_state = {
