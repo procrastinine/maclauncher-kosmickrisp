@@ -103,18 +103,20 @@ Two modes set the starting selection:
 ``conformance``
    Every entry is enabled.
 
-In performance mode, an entry is off only when turning it off lowers no
-Direct3D shader model or feature level reported by DXVK or vkd3d-proton and
-does not prevent either translator from creating its device. All other entries
-stay on, with two exceptions:
+Performance defaults are selected for the running Apple GPU family. Native
+paths and bounded compatibility work remain available; software ray traversal,
+FP64, virtual mesh dispatch and coarse fragment shading require explicit
+selection. Buffer atomic64, denormal controls, raster ordering and conservative
+rasterization retain their selected emulation costs to supply the FL12_1 and
+SM6.8 compatibility floor.
 
-- Ray tracing interfaces are reported only when selected explicitly, with
-  ``+ray_tracing`` or ``conformance``.
-- Fragment barycentrics are off, although vkd3d-proton reports mesh shaders,
-  and therefore feature level 12.2, only with ``+fragment_barycentric`` or
-  ``conformance``. Applications that use reported barycentric support for all
-  fragment interpolation move every fragment shader to per-corner transport,
-  which adds GPU time to all of their draws.
+Apple10 and Apple11 select fragment barycentrics because eligible pipelines use
+native pre-raster per-vertex inputs. Topology and replay combinations outside
+that path retain corner transport. Hardware availability alone does not select
+a feature: the ray-tracing implementation uses software traversal even on GPUs
+with hardware ray tracing.
+
+.. include:: kosmickrisp/emulation-performance-families.rst
 
 For example, vkd3d-proton reports shader model 6.2 and later only when FP32
 flush-to-zero, FP32 denormal preservation and independent denormal controls
@@ -187,8 +189,7 @@ path can keep driver work around the Metal feature it relies on: from Apple8,
 native 64-bit texture minimum or maximum.
 
 On a device at or above an entry's threshold, that entry remains advertised in
-every ``KK_EMULATION`` mode, including with a named disable token. Its native
-path has no emulation overhead. The performance default and named overrides
+every ``KK_EMULATION`` mode, including with a named disable token. The implemented native path may retain the driver work described in the registry. The performance default and named overrides
 select emulation on earlier devices. A diagnostic ``-VK_extension_name`` can
 still hide the extension and dependent interfaces. Thresholds never create
 support that the physical-device builder does not provide.

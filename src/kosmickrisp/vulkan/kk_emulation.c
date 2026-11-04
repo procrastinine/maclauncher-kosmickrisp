@@ -25,7 +25,9 @@ kk_emulation_apply(const char *value, unsigned apple_family,
 {
    const struct vk_device_extension_table before = *extensions;
    bool enabled[KK_EMULATION_COUNT];
-   memcpy(enabled, kk_emulation_performance, sizeof(enabled));
+   for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i)
+      enabled[i] = apple_family < 32 &&
+         (kk_emulation_performance_families[i] & (1u << apple_family));
    bool hidden[VK_DEVICE_EXTENSION_COUNT] = {false};
    const char *cursor = value ? value : "";
    unsigned token_index = 0;
@@ -54,7 +56,8 @@ kk_emulation_apply(const char *value, unsigned apple_family,
            kk_emulation_token(begin, length, "conformance"))) {
          bool all = kk_emulation_token(begin, length, "conformance");
          for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i)
-            enabled[i] = all || kk_emulation_performance[i];
+            enabled[i] = all || (apple_family < 32 &&
+               (kk_emulation_performance_families[i] & (1u << apple_family)));
          known = true;
       } else if (preset) {
          for (unsigned i = 0; i < KK_EMULATION_COUNT; ++i) {

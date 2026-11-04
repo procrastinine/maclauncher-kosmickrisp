@@ -14,7 +14,15 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.",
     "off_consequence": "Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11 to retain SM6.8: requested FP32 preservation retains guarded arithmetic/cold repair. Apple11 native denorm hardware is listed by Apple, but this compiler still retains the repair path."
   },
   {
     "name": "denorm_flush",
@@ -31,7 +39,15 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.",
     "off_consequence": "Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11 to retain SM6.8: requested flush modes use native arithmetic plus guarded cold repair; no family-specific removal of the repair path."
   },
   {
     "name": "ray_tracing",
@@ -82,7 +98,9 @@
     "performance": false,
     "performance_reason": "Ray-tracing interfaces require explicit selection.",
     "off_consequence": "Vulkan acceleration-structure, ray-query and ray-tracing pipeline interfaces and D3D12 DXR are unavailable; the RTXPT DXR path cannot run.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: the driver uses software traversal on every family; Apple9 hardware ray tracing is not consumed."
   },
   {
     "name": "opacity_micromap",
@@ -104,7 +122,9 @@
     "performance": false,
     "performance_reason": "Opacity micromaps require ray tracing, which requires explicit selection.",
     "off_consequence": "VK_KHR_opacity_micromap is unavailable; vkd3d-proton reports at most ray tracing tier 1.1 and shader model 6.8.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: software micromap build and lookup depend on software ray tracing."
   },
   {
     "name": "invocation_reorder",
@@ -124,7 +144,9 @@
     "performance": false,
     "performance_reason": "Hit objects require ray tracing, which requires explicit selection.",
     "off_consequence": "VK_EXT_ray_tracing_invocation_reorder is unavailable; vkd3d-proton reports at most shader model 6.8.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: software hit-object frame traffic; no native reordering path."
   },
   {
     "name": "pixel_interlock",
@@ -139,7 +161,15 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires pixel and sample interlock for ROV support and D3D FL12_1; the multisample envelope is selected only for shaders using pixel interlock with multisampling.",
     "off_consequence": "Pixel interlock is unavailable, including its native single-sample route; vkd3d-proton loses ROV support and D3D FL12_1. Native sample interlock and ordered color attachment access remain available.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11 to retain FL12_1: native raster order groups for single-sample and sample interlock; multisample pixel interlock still uses the selected replay envelope."
   },
   {
     "name": "pipeline_statistics",
@@ -154,7 +184,15 @@
     "performance": true,
     "performance_reason": "Wine vkd3d requires pipelineStatisticsQuery for feature level 11_1 and above. Inactive queries specialize away the counter operations.",
     "off_consequence": "Disabling pipelineStatisticsQuery limits Wine vkd3d to feature level 11_0 and removes pipeline-statistics queries; DXVK treats the feature as optional.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: An active fragment query adds a counter-address load and one 32-bit atomic increment, plus a carry atomic when the low word wraps. Other stages use draw data or instrumented execution. Inactive queries specialize the counter region away."
   },
   {
     "name": "mesh_shader",
@@ -201,13 +239,15 @@
       "prefersCompactVertexOutput",
       "prefersCompactPrimitiveOutput"
     ],
-    "performance": true,
-    "performance_reason": "vkd3d-proton requires both meshShader and taskShader for D3D12 MeshTier1; disabling them removes feature-level 12.2 eligibility.",
+    "performance": false,
+    "performance_reason": "Virtual task grids, output slicing and retained replay remain selected software paths on all supported families.",
     "off_consequence": "D3D12 MeshTier1 and feature-level 12.2 are unavailable; mesh/task Vulkan shaders and mesh queries are unavailable. Lower feature levels remain subject to their other requirements; this entry does not remove a shader-model requirement or a translator device-creation prerequisite.",
     "native_from": null,
     "property_bits": {
       "supportedIndirectCommandsShaderStages": "VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT"
-    }
+    },
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: native direct mesh exists from Apple7, but virtual task grids, slicing and retained output remain software on all families. Apple9 indirect mesh hardware is not a family-selected replacement for these paths."
   },
   {
     "name": "polygon_points",
@@ -223,7 +263,15 @@
     "performance": true,
     "performance_reason": "Preserve the non-solid fill feature selected by D3D translators; POINT cost is selected by actual polygon state.",
     "off_consequence": "Non-solid fill and dynamic polygon mode are unavailable, including native wireframe because Vulkan shares its feature bit with POINT. Translators lose non-solid fill support.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: POINT emits two triangles per point after capture; FILL and eligible thin LINE draws retain native alternatives. Availability alone adds no shader code."
   },
   {
     "name": "line_expansion",
@@ -243,7 +291,15 @@
     "performance": true,
     "performance_reason": "Keeps translator-selected line features available; only line state that requires expansion selects the capture and expansion work.",
     "off_consequence": "Wide, rectangular, smooth and stippled Bresenham line features and their dynamic selectors are unavailable. Native thin Bresenham lines remain available.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Selected wide/smooth/stipple lines capture vertices and emit expanded primitives; smooth lines add fragment alpha coverage and stipple adds dash generation. Thin default solid lines remain native."
   },
   {
     "name": "dynamic_coverage",
@@ -259,7 +315,15 @@
     "performance": true,
     "performance_reason": "Keeps translator-selected dynamic coverage state available; coverage work is selected by the shader and pipeline state.",
     "off_consequence": "Dynamic sample-mask and alpha-to-coverage selectors are unavailable. Static coverage and native dynamic rasterization sample count remain available.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Dynamic sample mask loads root state and filters coverage; nonconstant alpha-to-coverage computes a dither mask and demotes samples. Constant opaque alpha omits alpha coverage lowering. Rasterization sample count uses native attachment variants."
   },
   {
     "name": "dynamic_vertex_input",
@@ -276,7 +340,9 @@
     "performance": false,
     "performance_reason": "DXVK and vkd3d-proton retain static pipeline vertex input without requiring this interface.",
     "off_consequence": "Dynamic vertex-input pipelines must use static vertex layouts instead. D3D shader-model, feature-level and translator device-creation support remain available through static input.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: Dynamic vertex inputs load format, divisor and stride metadata for consumed attributes and perform format-dependent conversion; static pipelines retain constant attribute specialization. Unused inputs emit no fetch work."
   },
   {
     "name": "multiview_geometry_tessellation",
@@ -292,7 +358,9 @@
     "performance": false,
     "performance_reason": "DXVK and vkd3d-proton retain their shader-model, feature-level and device-creation paths without these advanced multiview combinations; ordinary multiview remains available.",
     "off_consequence": "Geometry and tessellation multiview producers are unavailable. vkd3d-proton ViewInstancingTier can fall from tier 2 to unsupported when its advanced-multiview predicate requires these features.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: Advanced multiview producers execute for each active view using the original view index; single-view and ordinary native vertex amplification remain separate paths. Emitted producer instructions are repeated by view count, with a per-draw view load when used."
   },
   {
     "name": "quad_control",
@@ -309,7 +377,15 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires shaderQuadControl together with maximal reconvergence to advance from SM 6.6 to SM 6.7 and later; only affected fragment requirements select the helper guard.",
     "off_consequence": "vkd3d-proton cannot expose SM 6.7 or later through its ordinary quad-control and reconvergence path when the earlier SM 6.6 requirements are satisfied.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Native quad and subgroup instructions are retained. A shader requiring full or coarse quad helper invocations can add the existing barycentric triangle-merge guard, or a sample-mask output when no color store exists; unused helper requirements emit neither guard."
   },
   {
     "name": "texel_buffer_alignment",
@@ -329,7 +405,15 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires both single-texel alignment promises for D3D12 device creation at the supported 16-byte native alignment; only shaders accessing texel-buffer views pay the adjustment cost.",
     "off_consequence": "vkd3d-proton v3.1 rejects D3D12 device creation when either single-texel alignment promise is absent at 16-byte alignment, making all D3D12 feature levels unavailable.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Typed native buffer access adds logical range comparison, prefix addition and invalid-coordinate selection; dynamic RGB32 views also select stride and fetch consumed components. Raw/R64 and sparse accesses retain required range and residency work. Unused shaders emit no texel-view code."
   },
   {
     "name": "cull_distance",
@@ -346,7 +430,15 @@
     "performance": true,
     "performance_reason": "DXVK requires shaderCullDistance for translator device creation; capture is selected only by actual final-producer cull output.",
     "off_consequence": "DXVK cannot create its D3D device without shaderCullDistance; Vulkan cull-distance shader support is unavailable.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Mesh shaders use native primitive rejection. Ordinary producers writing cull distances use capture and an all-vertex negative test per plane before clipping; each tested vertex loads one scalar distance, and testing stops at the first nonnegative or NaN value. No cull output selects no cull capture."
   },
   {
     "name": "non_seamless_cube",
@@ -363,7 +455,9 @@
     "performance": false,
     "performance_reason": "Legacy non-seamless cube sampling requires explicit selection.",
     "off_consequence": "DXVK rejects content requesting non-seamless cube sampling when the interface is unavailable.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: Dynamic cube samples use the shared sampler-emulation function constant; the false specialization retains native cube sampling. Actual non-seamless use projects to a 2D-array face sample with quotient-rule gradients."
   },
   {
     "name": "sparse_translation",
@@ -382,7 +476,15 @@
     "performance": true,
     "performance_reason": "DXVK and vkd3d-proton require sparse buffer residency for every tiled-resources tier, and vkd3d-proton reports tiers 3 and 4 only with standard-shaped 3D sparse residency; removing it lowers the D3D feature-level ceiling (vkd3d-proton feature level 12_2 requires tier 3). Translation is selected by actual sparse resources and shader interfaces.",
     "off_consequence": "Sparse buffer residency and sparse 3D image residency are unavailable, including standard-shaped 3D blocks; DXVK and vkd3d-proton report no tiled-resources tier, and feature levels requiring one are unavailable (vkd3d-proton reports at most 11_1). Native sparse binding, aliasing, 2D residency and native texture residency status remain available when supported; 2D residency images then use native placement for every usage, without the standard 2D block shape, and 2D block-texel views of compressed sparse images are unavailable.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Native placement and mapping remain native. The scalar buffer page-status helper emits three 64-bit metadata loads, two byte-status loads, bounds checks and a conditional branch, in addition to directory/range lookup and the resource access. Standard-shaped 3D accesses, and accesses to 2D residency images with storage usage or block-texel views, translate coordinates and select page storage, with copies or blits on relevant operations; filtered samples of those images combine fetched texels. 2D translation is compiled only into linked vertex and compute pipelines after such a 2D image exists. Unused shader operations emit no translation."
   },
   {
     "name": "robustness2",
@@ -405,7 +507,15 @@
     "performance": true,
     "performance_reason": "DXVK 2.x/3.x requires VK_EXT_robustness2 and nullDescriptor for device creation and uses robustBufferAccess2/robustImageAccess2; vkd3d-proton also requires nullDescriptor. Required buffer bounds and null semantics remain enabled.",
     "off_consequence": "DXVK 2.x/3.x and vkd3d-proton device creation fails when required nullDescriptor/robustness2 support is hidden. Both extension aliases and their three features are hidden; core robustness and pipeline robustness remain available.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Selected bounded buffer loads use bounds predicates and zero/default selection; selected image and null accesses use guards. Unused operations emit no checks."
   },
   {
     "name": "workgroup_zero",
@@ -422,7 +532,15 @@
     "performance": true,
     "performance_reason": "Workgroup initialization is required by translator shader semantics; retain it for DXVK/vkd3d device creation and shader translation. Shaders without requested shared initialization emit no zeroing stores or barriers.",
     "off_consequence": "DXVK/vkd3d device creation fails when required workgroup-zero support is unavailable; the extension and promoted shaderZeroInitializeWorkgroupMemory feature are hidden. Allocation zero initialization and robustness are unchanged.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: A requested nonempty shared allocation is rounded to 16 bytes and cooperatively cleared with native stores followed by a workgroup barrier. No clear or barrier is emitted without the shader zero-init flag and nonzero shared size."
   },
   {
     "name": "depth_bias_control",
@@ -442,7 +560,9 @@
     "performance": false,
     "performance_reason": "DXVK and vkd3d-proton retain their default bias paths without the optional exact and alternate-representation controls.",
     "off_consequence": "Exact and alternate-representation Vulkan bias control is unavailable. Native default-format bias and depthBiasClamp remain available; D3D shader-model, feature-level and translator device-creation requirements are unchanged.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: Exact or alternate-format bias captures producer output and runs polygon clipping, bias expansion and raster replay. Default-format constant, slope and clamp bias uses native Metal state. Dynamic factor pipelines retain capture and native alternatives."
   },
   {
     "name": "float64",
@@ -464,7 +584,9 @@
     "performance": false,
     "performance_reason": "Double precision is optional in DXVK and vkd3d-proton; their shader-model, feature-level and device-creation requirements do not require it. FP64 operations use software binary64.",
     "off_consequence": "D3D11/D3D12 double-precision capabilities and FP64 shader creation are unavailable. Translator shader-model, feature-level and ordinary device-creation requirements are unchanged. Integer64 support is independent.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: integer/FP32 software binary64 on every family; Apple tables provide no FP64 arithmetic."
   },
   {
     "name": "device_generated_commands",
@@ -495,7 +617,15 @@
     "performance": true,
     "performance_reason": "Keeps state-changing D3D12 ExecuteIndirect signatures working where vkd3d-proton has no complete fallback; unused DGC adds no application-shader MSL or GPU preprocessing.",
     "off_consequence": "ExecuteIndirect tier 1.1 is unavailable; vkd3d-proton can skip state-changing indirect signatures without a DGC template.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Used sequences snapshot token bytes and expand root, draw and vertex-input data on the GPU before native ICB execution. Native expansion and command encoding share one dispatch per native ICB slice; graphics crosses from compute to render. Poly stages retain their own expansion. The shared runtime library is compiled only for generated-command or indirect-count execution; application shaders gain no DGC MSL."
   },
   {
     "name": "draw_indirect_count",
@@ -513,7 +643,15 @@
     "performance": true,
     "performance_reason": "Preserves D3D12 counter-backed ExecuteIndirect and predication semantics; vkd3d-proton returns without executing these commands if drawIndirectCount is unavailable.",
     "off_consequence": "Counter-buffer and fallback-predicated ExecuteIndirect commands are skipped by vkd3d-proton. Reported shader model, feature level and device creation do not provide the missing command semantics.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Large native batches expand active draw records and encode ICB commands in one dispatch per native ICB slice. Other selected routes filter indirect arguments on the GPU and retain their own stage work. Counts remain GPU-resident. No count command adds application-shader MSL. The shared maxDrawIndirectCount limit also serves native fixed-count draws and is retained."
   },
   {
     "name": "fragment_barycentric",
@@ -532,7 +670,12 @@
     "performance": false,
     "performance_reason": "Applications that use reported barycentric support for all fragment interpolation move every pixel shader to corner transport; AnyPS5 does this and measured about 10% more GPU time per present on an Apple8 title screen.",
     "off_consequence": "SV_Barycentrics shaders are unavailable without a translator fallback, and vkd3d-proton disables mesh shaders, so feature level 12.2 requires +fragment_barycentric in addition to its other requirements. The maximum reported shader model is not independently reduced by this entry.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      10,
+      11
+    ],
+    "family_cost_note": "Off Apple7-9: exact per-vertex transport adds fragment inputs and interpolation. On Apple10-11: native pre-raster per-vertex values serve eligible pipelines; exceptional topology and replay paths retain corner transport."
   },
   {
     "name": "fragment_shading_rate",
@@ -570,7 +713,9 @@
     "performance": false,
     "performance_reason": "vkd3d-proton enables the dynamic rate on every graphics pipeline with render targets when the extension is reported, which would place every pixel shader on the quad-group path.",
     "off_consequence": "vkd3d-proton reports variable shading rate tier 0, which keeps Direct3D 12 at feature level 12_1. Multisampled fragment shaders that use device atomics run once per covered sample, as Metal runs them; Vulkan permits these additional invocations outside fragment shading rates.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: Metal variable rasterization rate is a separable map, not Vulkan per-draw primitive/attachment coarse shading. The driver uses quad reconstruction and sample publication on all families."
   },
   {
     "name": "sampler_filter_minmax",
@@ -591,7 +736,15 @@
     "performance": true,
     "performance_reason": "DXVK uses min/max filtering for tiled-resource tier 2, which is required for D3D feature level 12_0; only samplers selecting reduction perform software taps.",
     "off_consequence": "Disabling min/max filtering can lower DXVK tiled-resource support below tier 2 and remove D3D feature level 12_0.",
-    "native_from": 10
+    "native_from": 10,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-9: selected reduction samplers use multiple native taps to retain tiled tier4. On Apple10-11: native sampler reduction."
   },
   {
     "name": "descriptor_heap",
@@ -623,7 +776,9 @@
     "performance": false,
     "performance_reason": "DXVK and vkd3d-proton retain conventional descriptor binding, device creation and D3D shader-model and feature-level support without this optional interface.",
     "off_consequence": "The Vulkan heap interface and vkd3d-proton experimental work graphs are unavailable, and byte-offset views require descriptor-buffer support. Conventional descriptor bindings remain available.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: A non-sparse buffer access without robustness checks loads an 8-byte heap root and a 16-byte descriptor packet. A sampled texture and sampler pair loads two 8-byte heap roots and an 8-byte sampler-metadata pointer before shared decoding. Shaders using descriptor sets emit no heap access."
   },
   {
     "name": "zero_initialize_device_memory",
@@ -640,7 +795,9 @@
     "performance": false,
     "performance_reason": "DXVK 3.1.1 and vkd3d-proton 3.1 do not require this allocation extension for D3D shader models, feature levels or device creation; vkd3d-proton retains its resource-clearing path.",
     "off_consequence": "D3D shader-model, feature-level and translator device-creation support remain; explicit Vulkan zero-initialized allocation requests and ZERO_INITIALIZED image layout are unavailable.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: Each flagged allocation clears the whole BO with CPU stores or a Metal buffer fill and completion wait. ZERO_INITIALIZED images use unoptimized storage to preserve zero bits. No shader instructions are added."
   },
   {
     "name": "sliced_3d_views",
@@ -657,7 +814,15 @@
     "performance": true,
     "performance_reason": "Keeps restricted-depth D3D Texture3D UAV semantics; the full-depth vkd3d-proton fallback does not preserve FirstWSlice and WSize.",
     "off_consequence": "D3D Texture3D FirstWSlice/WSize UAV semantics are lost; vkd3d-proton reports an unhandled depth view and uses the full depth while its reported SM/FL and device creation remain unchanged.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Selected 3D storage operations load slice bounds and adjust or reject Z coordinates; image-size queries replace the depth result. The native texture operation is retained. Sparse descriptors can add query-record loads."
   },
   {
     "name": "maintenance11_views",
@@ -674,7 +839,15 @@
     "performance": true,
     "performance_reason": "Keeps the D3D single-layer dimension reinterpretation guarantee and typed Metal descriptor selection; the legacy vkd3d-proton natural-view path lacks that guarantee.",
     "off_consequence": "D3D single-layer 2D/2D-array descriptor reinterpretation loses its maintenance11 guarantee even though reported SM/FL and device creation are unchanged; DXVK uploads fall back to the graphics queue.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Native Metal plain and array views share the existing backing. Shader accesses select a typed descriptor address for the view dimension."
   },
   {
     "name": "layered_block_views",
@@ -689,7 +862,9 @@
     "performance": false,
     "performance_reason": "DXVK has a per-layer compressed-upload fallback and does not use this optional maintenance6 property to choose D3D SM/FL or require device creation.",
     "off_consequence": "Reported D3D SM/FL and translator device creation are unchanged; public multi-layer raw block views are unavailable and DXVK uses per-layer uploads. Other maintenance6 guarantees and internal copy paths remain available.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: Native per-layer views share backing, and shader accesses select a layer descriptor. Cube filtering can add taps; layered attachments can use retained raster readers."
   },
   {
     "name": "transform_feedback",
@@ -723,7 +898,15 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires transform-feedback queries for device creation, and D3D11 stream output requires the implemented output path.",
     "off_consequence": "vkd3d-proton rejects devices without transformFeedbackQueries; D3D11 stream output and dependent generated-primitive queries are unavailable.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Active feedback captures producer output, checks buffer capacity and writes enabled components and counters. Raster replay and counter-report dispatches run when the draw uses them."
   },
   {
     "name": "primitives_generated_query",
@@ -744,7 +927,15 @@
     "performance": true,
     "performance_reason": "The shared report path supplies transformFeedbackQueries, which vkd3d-proton requires for device creation.",
     "off_consequence": "Generated-primitive queries and shared XFB stream-query reports are unavailable; clearing transformFeedbackQueries prevents vkd3d-proton device creation.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: Active queries execute counter and report work without per-draw CPU readback. Query-capable geometry pipelines retain report code; native report compilation and dispatch occur when needed."
   },
   {
     "name": "conservative_rasterization",
@@ -772,7 +963,15 @@
     "performance": true,
     "performance_reason": "Conservative rasterization tier 1 is required for D3D12 feature level 12_1; the implementation also supplies higher-tier coverage behavior.",
     "off_consequence": "D3D12 conservative rasterization is unavailable, preventing feature levels 12_1 and 12_2; DXVK reports no D3D11 conservative-rasterization tier.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11 to retain FL12_1: selected conservative draws use capture/expansion; ordinary draws stay native. No family-native conservative path."
   },
   {
     "name": "msrtss",
@@ -789,7 +988,9 @@
     "performance": false,
     "performance_reason": "This optional extension has translator fallbacks; LOAD expansion can add a full attachment pass without raising a D3D shader model or feature level.",
     "off_consequence": "The extension and its feature are hidden; ANGLE uses its multisample fallback. D3D shader-model and feature-level reporting are unchanged.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: Eligible whole-frame color passes use tile storage and native resolve with no expansion shader. LOAD, suspended or split passes retain private multisample backing and expand single-sample contents; unsupported native resolve modes use the shared meta path."
   },
   {
     "name": "writable_msaa",
@@ -807,7 +1008,9 @@
     "performance": false,
     "performance_reason": "Writable multisample textures are optional in vkd3d-proton and do not raise its base shader model or feature level; disabling them retains native MSAA sampling without sample-plane selection.",
     "off_consequence": "D3D12 WriteableMSAATexturesSupported becomes false; vkd3d-proton base shader-model, feature-level and device-creation requirements are unchanged. Ordinary MSAA and multisampled local reads remain available.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: Storage operations select a single-sample plane. Attachment and input-attachment consumers convert exact samples to or from the native multisample image. Sampled multisample shaders retain a table-or-native selection when the feature is enabled; single-sampled shaders are unchanged."
   },
   {
     "name": "atomic64",
@@ -825,7 +1028,15 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires buffer int64 atomics for SM 6.6 and higher; workgroup int64 atomics provide its optional shared-memory atomic capability. Only actual atomic64 instructions select this implementation.",
     "off_consequence": "Buffer and workgroup int64 atomics are unavailable; vkd3d-proton cannot advance from SM 6.5 to SM 6.6 and loses AtomicInt64OnGroupSharedSupported. Ordinary shaderInt64 remains independent.",
-    "native_from": null
+    "native_from": null,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11 to retain SM6.8: buffer/workgroup operations still use hashed locks and fences; Apple9 limited native atomics do not replace the full API. This is a compatibility-floor cost, not a native-path claim."
   },
   {
     "name": "depth_bounds",
@@ -840,7 +1051,12 @@
     "performance": false,
     "performance_reason": "vkd3d-proton enables depthBounds whenever it is reported, which gives every attachment image shader-read usage and runs each pipeline state object that enables the bounds test through the software transaction.",
     "off_consequence": "On Apple7, Apple8 and Apple9, depthBounds is unavailable; vkd3d-proton reports DepthBoundsTestSupported as false, which limits Direct3D 12 to feature level 12_1, and fails creation of pipeline states that enable the depth bounds test.",
-    "native_from": 10
+    "native_from": 10,
+    "performance_families": [
+      10,
+      11
+    ],
+    "family_cost_note": "Off Apple7-9: per-sample depth/stencil replay. On Apple10-11: native Metal depth bounds."
   },
   {
     "name": "image_atomic64",
@@ -857,6 +1073,13 @@
     "performance": false,
     "performance_reason": "On Apple7 the entry raises only vkd3d-proton sampler feedback to tier 0.9 and typed-resource 64-bit atomics; performance mode reports feature level 12_1 with or without it.",
     "off_consequence": "On Apple7, VK_EXT_shader_image_atomic_int64 and the R64_UINT and R64_SINT storage image and storage texel buffer formats are unavailable; vkd3d-proton reports sampler feedback tier 0 and no typed-resource 64-bit atomics, so feature level 12_2 is unavailable.",
-    "native_from": 8
+    "native_from": 8,
+    "performance_families": [
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "Off Apple7: split-word image transactions. On Apple8-11: native texture min/max publishes under the existing mixed-operation lock; sampler feedback tier0.9. The lock remains real work."
   }
 ]

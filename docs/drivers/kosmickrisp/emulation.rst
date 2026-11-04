@@ -80,8 +80,8 @@
        Controls: ``VK_EXT_mesh_shader``, ``taskShader``, ``meshShader``, ``multiviewMeshShader``, ``primitiveFragmentShadingRateMeshShader``, ``meshShaderQueries``, ``maxTaskWorkGroupTotalCount``, ``maxTaskWorkGroupCount``, ``maxTaskWorkGroupInvocations``, ``maxTaskWorkGroupSize``, ``maxTaskPayloadSize``, ``maxTaskSharedMemorySize``, ``maxTaskPayloadAndSharedMemorySize``, ``maxMeshWorkGroupTotalCount``, ``maxMeshWorkGroupCount``, ``maxMeshWorkGroupInvocations``, ``maxMeshWorkGroupSize``, ``maxMeshSharedMemorySize``, ``maxMeshPayloadAndSharedMemorySize``, ``maxMeshOutputMemorySize``, ``maxMeshPayloadAndOutputMemorySize``, ``maxMeshOutputComponents``, ``maxMeshOutputVertices``, ``maxMeshOutputPrimitives``, ``maxMeshOutputLayers``, ``maxMeshMultiviewViewCount``, ``meshOutputPerVertexGranularity``, ``meshOutputPerPrimitiveGranularity``, ``maxPreferredTaskWorkGroupInvocations``, ``maxPreferredMeshWorkGroupInvocations``, ``prefersLocalInvocationVertexOutput``, ``prefersLocalInvocationPrimitiveOutput``, ``prefersCompactVertexOutput``, ``prefersCompactPrimitiveOutput``, ``supportedIndirectCommandsShaderStages``.
      - mixed native / virtualized. Unsliced direct mesh uses one native mesh render call. Virtual task batches add prepare, task and prefix compute followed by mesh rendering; output slicing and retained replay add selected captures and mesh draws. Queries add counters only when used.
      - No Apple family
-     - On
-     - vkd3d-proton requires both meshShader and taskShader for D3D12 MeshTier1; disabling them removes feature-level 12.2 eligibility.
+     - Off
+     - Virtual task grids, output slicing and retained replay remain selected software paths on all supported families.
      - D3D12 MeshTier1 and feature-level 12.2 are unavailable; mesh/task Vulkan shaders and mesh queries are unavailable. Lower feature levels remain subject to their other requirements; this entry does not remove a shader-model requirement or a translator device-creation prerequisite.
      - ``performance,+mesh_shader``
    * - ``polygon_points``
