@@ -96,6 +96,10 @@ kk_standard_3d_physical_target(struct kk_device *dev,
                   layout.depth_px=util_format_get_nblocksz(source->format.pipe,page->shape.depth);
                }
                if(!util_format_is_compressed(view->format.pipe))layout.usage|=MTL_TEXTURE_USAGE_SHADER_WRITE;
+               /* A typed alias keeps texture atomics only for a format that
+                * supports them; Metal rejects the usage for other formats. */
+               const struct kk_va_format *va=kk_get_va_format(view->format.pipe);
+               if(!va||!va->atomic)layout.usage&=~MTL_TEXTURE_USAGE_SHADER_ATOMIC;
                mtl_texture *canonical=view->format.mtl==plane->layout.format.mtl?plane->mtl_handle:NULL;
                VkResult result=kk_layered_bc_native_alias_init(dev,plane,&layout,0,canonical,NULL,NULL,&format->native);
                if(result!=VK_SUCCESS){free(format);format=NULL;}
