@@ -18,6 +18,9 @@ enum kk_vrs_fragment_kind {
    KK_VRS_FINE_REPLAY,
    KK_VRS_TRANSACTION,
    KK_VRS_CAPTURE,
+   KK_VRS_SHADOW_LOAD,
+   KK_VRS_SHADOW_REPLAY,
+   KK_VRS_TILE_VERTEX,
    KK_VRS_FRAGMENT_KIND_COUNT,
 };
 struct msl_compile_data;
@@ -94,6 +97,15 @@ VkResult kk_vrs_transaction_get(struct kk_device *, struct kk_vrs_source *,
  * color writes, A2C and query counting must be bypassed by its phase owner. */
 VkResult kk_vrs_capture_get(struct kk_device *, struct kk_vrs_source *,
    const struct kk_vrs_transaction_options *, struct kk_vrs_artifact **);
+/* Support keys bind only actual state/ABI/options, not application NIR. */
+VkResult kk_vrs_shadow_get(struct kk_device *, struct kk_vrs_source *,
+   const struct kk_vrs_transaction_options *, enum kk_vrs_fragment_kind,
+   struct kk_vrs_artifact **);
+/* Borrowed while the caller holds its artifact reference. Compute PSOs are
+ * created once on first use, with an additional counting PSO only for an
+ * actual application program and active query. Both use its one library. */
+VkResult kk_vrs_artifact_compute(struct kk_device *, struct kk_vrs_artifact *,
+   bool statistics, mtl_compute_pipeline_state **out);
 /* Producer and fragment are the actual bound pair. The command/attachment
  * owner holds their normal lifetime and owns the resulting native PSOs. */
 VkResult kk_vrs_native_pipelines_create(struct kk_device *dev,
