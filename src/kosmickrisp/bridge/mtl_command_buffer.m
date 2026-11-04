@@ -9,6 +9,9 @@
 #include <Metal/MTL4BufferRange.h>
 #include <Metal/MTL4CommandAllocator.h>
 #include <Metal/MTL4CommandBuffer.h>
+#include <objc/runtime.h>
+
+static char kk_command_buffer_allocator_key;
 #include <Metal/MTL4Counters.h>
 
 void
@@ -27,7 +30,12 @@ mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
    @autoreleasepool {
       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)command_buffer;
       id<MTL4CommandAllocator> alloc = (id<MTL4CommandAllocator>)allocator;
+      /* The previous allocator must survive the native begin call that
+       * returns its old-generation storage. Keep the new allocator alive
+       * through native buffer deallocation, including after pool reset. */
       [cmd_buf beginCommandBufferWithAllocator:alloc];
+      objc_setAssociatedObject(cmd_buf, &kk_command_buffer_allocator_key,
+                               alloc, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
    }
 }
 

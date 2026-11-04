@@ -157,17 +157,18 @@ kk_CreateCommandPool(VkDevice _device,
 static void
 kk_cmd_pool_release_mtl_objects(struct kk_cmd_pool *pool)
 {
-   util_dynarray_foreach(&pool->metal.free_allocators, mtl_command_allocator *,
-                         allocator) {
-      mtl_release(*allocator);
-   }
-   util_dynarray_clear(&pool->metal.free_allocators);
-
+   /* Native buffer deallocation returns storage to its allocator. */
    util_dynarray_foreach(&pool->metal.free_cmd_bufs, mtl_command_buffer *,
                          cmd_buf) {
       mtl_release(*cmd_buf);
    }
    util_dynarray_clear(&pool->metal.free_cmd_bufs);
+
+   util_dynarray_foreach(&pool->metal.free_allocators, mtl_command_allocator *,
+                         allocator) {
+      mtl_release(*allocator);
+   }
+   util_dynarray_clear(&pool->metal.free_allocators);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -212,6 +213,7 @@ kk_TrimCommandPool(VkDevice device, VkCommandPool commandPool,
    VK_FROM_HANDLE(kk_cmd_pool, pool, commandPool);
 
    vk_command_pool_trim(&pool->vk, flags);
+   kk_cmd_pool_release_mtl_objects(pool);
    kk_cmd_pool_destroy_bos(pool);
 }
 

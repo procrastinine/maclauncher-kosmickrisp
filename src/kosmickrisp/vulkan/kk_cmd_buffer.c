@@ -66,9 +66,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
       kk_destroy_bo(dev, *bo);
    }
    util_dynarray_clear(&cmd->large_bos);
-   util_dynarray_foreach(&cmd->mesh_command_buffers, mtl_command_buffer *, part)
-      kk_cmd_pool_return_cmd_buf(pool, *part);
-   util_dynarray_clear(&cmd->mesh_command_buffers);
+   /* Native parts retire with their allocator in kk_release_command_allocators. */
    cmd->mesh_batches_in_part = cmd->mesh_draws_in_part = 0;
    util_dynarray_clear(&cmd->post_render_writes);
    util_dynarray_clear(&cmd->ts_resolves);
@@ -78,19 +76,46 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
    util_dynarray_clear(&cmd->submit_drawables);
 }
 
-/* Ends Metal command buffer recording and returns allocator to pool for reuse */
+/* Ending recording preserves the allocator backing executable commands. */
 static void
 end_recording(struct kk_cmd_buffer *cmd)
 {
-   if (cmd->vk.state != MESA_VK_COMMAND_BUFFER_STATE_RECORDING)
+   if (cmd->vk.state != MESA_VK_COMMAND_BUFFER_STATE_RECORDING ||
+       cmd->metal.cmd_buf == NULL)
       return;
 
    cs_end(cmd);
    mtl_end_command_buffer(cmd->metal.cmd_buf);
-   kk_cmd_pool_return_allocator(kk_cmd_buffer_pool(cmd), cmd->metal.allocator);
-   cmd->metal.allocator = NULL;
-   util_dynarray_foreach(&cmd->mesh_allocators, mtl_command_allocator *, allocator)
-      kk_cmd_pool_return_allocator(kk_cmd_buffer_pool(cmd), *allocator);
+}
+
+static void
+kk_release_command_allocators(struct kk_cmd_buffer *cmd)
+{
+   struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+
+   /* Native buffers must return their recorded storage before reset
+    * makes the allocator heaps reusable. Do not cache recorded buffers
+    * across that boundary with an outstanding native storage reference. */
+   if (cmd->metal.cmd_buf) {
+      mtl_release(cmd->metal.cmd_buf);
+      cmd->metal.cmd_buf = NULL;
+   }
+   util_dynarray_foreach(&cmd->mesh_command_buffers, mtl_command_buffer *, part)
+      mtl_release(*part);
+   util_dynarray_clear(&cmd->mesh_command_buffers);
+
+   /* Reset/destroy may discard the recording only after it is no longer
+    * pending. Each allocator belongs exclusively to this Vulkan command
+    * buffer, including every native part of a split mesh recording. */
+   if (cmd->metal.allocator) {
+      mtl_command_allocator_reset(cmd->metal.allocator);
+      kk_cmd_pool_return_allocator(pool, cmd->metal.allocator);
+      cmd->metal.allocator = NULL;
+   }
+   util_dynarray_foreach(&cmd->mesh_allocators, mtl_command_allocator *, allocator) {
+      mtl_command_allocator_reset(*allocator);
+      kk_cmd_pool_return_allocator(pool, *allocator);
+   }
    util_dynarray_clear(&cmd->mesh_allocators);
 }
 
@@ -106,9 +131,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
 
    /* Ensure closed command buffer for safe returns to pool */
    end_recording(cmd);
-   if (cmd->metal.cmd_buf)
-      kk_cmd_pool_return_cmd_buf(pool, cmd->metal.cmd_buf);
-   cmd->metal.cmd_buf = NULL;
+   kk_release_command_allocators(cmd);
 
    mtl_release(cmd->argument_table);
    mtl_release(cmd->mesh_table);
@@ -205,6 +228,7 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
 
    /* Ensure closed command buffer so we can start it again */
    end_recording(cmd);
+   kk_release_command_allocators(cmd);
    kk_cmd_release_resources(dev, cmd);
 
    cmd->uploader.bo = NULL;
@@ -243,6 +267,10 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
 
+   /* Implicit reset must discard old native storage before acquiring the
+    * next recording, as explicit reset and destruction already do. */
+   vk_command_buffer_begin(&cmd->vk, pBeginInfo);
+
    /* If this is the first time starting the command buffer allocate Metal
     * resources */
    if (cmd->metal.cmd_buf == NULL) {
@@ -256,7 +284,6 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
                                       cmd->vk.base.object_name);
    }
 
-   vk_command_buffer_begin(&cmd->vk, pBeginInfo);
    for (unsigned i = 0; i < 64; i++)
       cmd->state.cs.descriptors.root.cs.matrix_coordinates[i] = _mesa_float_to_half((float)i);
    cmd->enqueue_commands = cmd->vk.level != VK_COMMAND_BUFFER_LEVEL_PRIMARY ||
@@ -290,7 +317,7 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    return VK_SUCCESS;
 
 fail_allocator:
-   kk_cmd_pool_return_cmd_buf(kk_cmd_buffer_pool(cmd), cmd->metal.cmd_buf);
+   mtl_release(cmd->metal.cmd_buf);
    cmd->metal.cmd_buf = NULL;
 fail_cmd:
    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -466,8 +493,8 @@ cs_end(struct kk_cmd_buffer *cmd)
 /* Keep long virtual mesh schedules in bounded native command buffers. All
  * parts retain the same Vulkan resources. Separate native allocators bound
  * Metal's command-storage resource index even when most slices execute zero
- * workgroups. Allocators return to the pool only after recording ends;
- * submission order and final query availability are preserved. */
+ * workgroups. Allocators remain with the executable recording until reset
+ * or destruction; submission order and query availability are preserved. */
 bool
 kk_mesh_split_command_buffer(struct kk_cmd_buffer *cmd)
 {
