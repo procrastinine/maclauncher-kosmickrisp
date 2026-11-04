@@ -15,16 +15,18 @@ enum kk_depth_bias_control {
 /* Compute eligibility once for the complete graphics pipeline. Only fields
  * the pipeline declares dynamic need to be read again during a draw. */
 static inline uint8_t
-kk_depth_bias_control_flags(bool enabled,
+kk_depth_bias_control_flags(bool enabled, bool alternate,
    const struct vk_graphics_pipeline_state *state)
 {
-   if (!enabled || !state || !state->rs)
+   /* FORMAT bias is native on the supported D16 and D32 formats, with
+    * a unit factor passed to Metal. Only alternate representations need
+    * a captured sibling. Devices without those features never build one. */
+   if (!enabled || !alternate || !state || !state->rs)
       return 0;
    bool enable = BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_ENABLE);
    bool factors = BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_FACTORS);
    if ((!enable && !state->rs->depth_bias.enable) ||
-       (!factors && !state->rs->depth_bias.exact &&
-        state->rs->depth_bias.representation ==
+       (!factors && state->rs->depth_bias.representation ==
            VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT))
       return 0;
    return KK_DEPTH_BIAS_CONTROLLED |
@@ -38,7 +40,7 @@ kk_depth_bias_control_active(uint8_t flags,
 {
    return flags &&
       (!(flags & KK_DEPTH_BIAS_DYNAMIC_ENABLE) || rs->depth_bias.enable) &&
-      (!(flags & KK_DEPTH_BIAS_DYNAMIC_FACTORS) || rs->depth_bias.exact ||
+      (!(flags & KK_DEPTH_BIAS_DYNAMIC_FACTORS) ||
        rs->depth_bias.representation !=
           VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
 }

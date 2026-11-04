@@ -151,12 +151,26 @@
      - On
      - On Apple7-11: A requested nonempty shared allocation is rounded to 16 bytes and cooperatively cleared with native stores followed by a workgroup barrier. No clear or barrier is emitted without the shader zero-init flag and nonzero shared size.
    * - ``depth_bias_control``
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: FORMAT depth bias uses native Metal state. FORCE_UNORM and FLOAT representations have separate conformance-only entries.
+   * - ``depth_bias_force_unorm``
      - Off
      - Off
      - Off
      - Off
      - Off
-     - Off Apple7-11: Exact or alternate-format bias captures producer output and runs polygon clipping, bias expansion and raster replay. Default-format constant, slope and clamp bias uses native Metal state. Dynamic factor pipelines retain capture and native alternatives.
+     - Off Apple7-11: floating-depth FORCE_UNORM bias requires geometry replay.
+   * - ``depth_bias_float``
+     - Off
+     - Off
+     - Off
+     - Off
+     - Off
+     - Off Apple7-11: FLOAT depth bias requires geometry replay.
    * - ``float64``
      - Off
      - Off

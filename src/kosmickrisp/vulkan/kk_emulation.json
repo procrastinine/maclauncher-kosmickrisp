@@ -554,25 +554,63 @@
   },
   {
     "name": "depth_bias_control",
-    "description": "Exact and alternate-representation depth bias after primitive clipping.",
-    "cost_class": "native default / geometry capture and replay",
-    "cost_note": "Exact or alternate-format bias captures producer output and runs polygon clipping, bias expansion and raster replay. Default-format constant, slope and clamp bias uses native Metal state. Dynamic factor pipelines retain capture and native alternatives.",
+    "description": "Depth bias controls and exact FORMAT depth bias after primitive clipping.",
+    "cost_class": "native Metal state",
+    "cost_note": "FORMAT depth bias, including exact bias, uses native Metal state on D16 and D32 depth attachments with a unit constant factor. Without alternate-representation features, pipelines retain no depth-bias capture or replay alternative.",
     "extensions": [
       "VK_EXT_depth_bias_control"
     ],
     "features": [
       "depthBiasControl",
-      "leastRepresentableValueForceUnormRepresentation",
-      "floatRepresentation",
       "depthBiasExact"
     ],
     "properties": [],
+    "performance": true,
+    "performance_reason": "Native FORMAT bias supplies the optional exact bias units without geometry capture or replay.",
+    "off_consequence": "The depth-bias control extension and exact bias are unavailable. Native default-format bias and depthBiasClamp remain available.",
+    "native_from": 7,
+    "performance_families": [
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "family_cost_note": "On Apple7-11: FORMAT depth bias uses native Metal state. FORCE_UNORM and FLOAT representations have separate conformance-only entries."
+  },
+  {
+    "name": "depth_bias_force_unorm",
+    "description": "Depth bias with a fixed UNORM unit on floating-point depth attachments.",
+    "cost_class": "geometry capture and replay",
+    "cost_note": "FORCE_UNORM bias captures producer output and applies constant depth units after clipping. Metal floating-depth bias uses the primitive depth exponent and cannot implement this representation with a per-format constant pre-scale.",
+    "extensions": [],
+    "features": [
+      "leastRepresentableValueForceUnormRepresentation"
+    ],
+    "properties": [],
     "performance": false,
-    "performance_reason": "DXVK and vkd3d-proton retain their default bias paths without the optional exact and alternate-representation controls.",
-    "off_consequence": "Exact and alternate-representation Vulkan bias control is unavailable. Native default-format bias and depthBiasClamp remain available; D3D shader-model, feature-level and translator device-creation requirements are unchanged.",
+    "performance_reason": "FORCE_UNORM bias requires geometry replay on floating-point depth attachments.",
+    "off_consequence": "The FORCE_UNORM representation is unavailable; default FORMAT bias is unchanged.",
     "native_from": null,
     "performance_families": [],
-    "family_cost_note": "Off Apple7-11: Exact or alternate-format bias captures producer output and runs polygon clipping, bias expansion and raster replay. Default-format constant, slope and clamp bias uses native Metal state. Dynamic factor pipelines retain capture and native alternatives."
+    "family_cost_note": "Off Apple7-11: floating-depth FORCE_UNORM bias requires geometry replay."
+  },
+  {
+    "name": "depth_bias_float",
+    "description": "Depth bias with a constant unit of one.",
+    "cost_class": "geometry capture and replay",
+    "cost_note": "FLOAT representation captures producer output and applies its depth offset after clipping. Other depth-bias representations do not select this entry.",
+    "extensions": [],
+    "features": [
+      "floatRepresentation"
+    ],
+    "properties": [],
+    "performance": false,
+    "performance_reason": "FLOAT depth-bias units require geometry capture and replay.",
+    "off_consequence": "The FLOAT representation is unavailable; default FORMAT bias is unchanged.",
+    "native_from": null,
+    "performance_families": [],
+    "family_cost_note": "Off Apple7-11: FLOAT depth bias requires geometry replay."
   },
   {
     "name": "float64",

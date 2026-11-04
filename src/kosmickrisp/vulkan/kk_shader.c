@@ -436,7 +436,9 @@ kk_hash_graphics_state(struct vk_physical_device *device,
    /* Representation changes whether a Poly raster pipeline is required.
     * Keep ordinary pipeline cache keys while separating controlled pipelines. */
    uint8_t depth_bias_control = kk_depth_bias_control_flags(
-      enabled_features->depthBiasControl, state);
+      enabled_features->depthBiasControl,
+      enabled_features->leastRepresentableValueForceUnormRepresentation ||
+         enabled_features->floatRepresentation, state);
    if (depth_bias_control) {
       const uint32_t representation_key[] = {0x44424332, depth_bias_control};
       _mesa_blake3_update(&blake3_ctx, representation_key, sizeof(representation_key));
@@ -3432,7 +3434,9 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
     * producer owns primitive rejection; earlier-stage distances are inputs
     * for that producer. Native mesh output performs its own cull test. */
    const uint8_t depth_bias_control = kk_depth_bias_control_flags(
-      enabled_features->depthBiasControl, state);
+      enabled_features->depthBiasControl,
+      enabled_features->leastRepresentableValueForceUnormRepresentation ||
+         enabled_features->floatRepresentation, state);
    const bool polygon_regular = cull_distance ||
       kk_polygon_regular_possible(state, depth_bias_control);
    const bool polygon_capture = polygon_regular || kk_conservative_possible(state);

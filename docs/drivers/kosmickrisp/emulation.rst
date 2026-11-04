@@ -193,14 +193,32 @@
      - DXVK/vkd3d device creation fails when required workgroup-zero support is unavailable; the extension and promoted shaderZeroInitializeWorkgroupMemory feature are hidden. Allocation zero initialization and robustness are unchanged.
      - ``performance,+workgroup_zero``
    * - ``depth_bias_control``
-     - Exact and alternate-representation depth bias after primitive clipping.
-       Controls: ``VK_EXT_depth_bias_control``, ``depthBiasControl``, ``leastRepresentableValueForceUnormRepresentation``, ``floatRepresentation``, ``depthBiasExact``.
-     - native default / geometry capture and replay. Exact or alternate-format bias captures producer output and runs polygon clipping, bias expansion and raster replay. Default-format constant, slope and clamp bias uses native Metal state. Dynamic factor pipelines retain capture and native alternatives.
+     - Depth bias controls and exact FORMAT depth bias after primitive clipping.
+       Controls: ``VK_EXT_depth_bias_control``, ``depthBiasControl``, ``depthBiasExact``.
+     - native Metal state. FORMAT depth bias, including exact bias, uses native Metal state on D16 and D32 depth attachments with a unit constant factor. Without alternate-representation features, pipelines retain no depth-bias capture or replay alternative.
+     - Apple7 and later; emulated on earlier supported families
+     - On
+     - Native FORMAT bias supplies the optional exact bias units without geometry capture or replay.
+     - The depth-bias control extension and exact bias are unavailable. Native default-format bias and depthBiasClamp remain available.
+     - ``performance,+depth_bias_control``
+   * - ``depth_bias_force_unorm``
+     - Depth bias with a fixed UNORM unit on floating-point depth attachments.
+       Controls: ``leastRepresentableValueForceUnormRepresentation``.
+     - geometry capture and replay. FORCE_UNORM bias captures producer output and applies constant depth units after clipping. Metal floating-depth bias uses the primitive depth exponent and cannot implement this representation with a per-format constant pre-scale.
      - No Apple family
      - Off
-     - DXVK and vkd3d-proton retain their default bias paths without the optional exact and alternate-representation controls.
-     - Exact and alternate-representation Vulkan bias control is unavailable. Native default-format bias and depthBiasClamp remain available; D3D shader-model, feature-level and translator device-creation requirements are unchanged.
-     - ``performance,+depth_bias_control``
+     - FORCE_UNORM bias requires geometry replay on floating-point depth attachments.
+     - The FORCE_UNORM representation is unavailable; default FORMAT bias is unchanged.
+     - ``performance,+depth_bias_force_unorm``
+   * - ``depth_bias_float``
+     - Depth bias with a constant unit of one.
+       Controls: ``floatRepresentation``.
+     - geometry capture and replay. FLOAT representation captures producer output and applies its depth offset after clipping. Other depth-bias representations do not select this entry.
+     - No Apple family
+     - Off
+     - FLOAT depth-bias units require geometry capture and replay.
+     - The FLOAT representation is unavailable; default FORMAT bias is unchanged.
+     - ``performance,+depth_bias_float``
    * - ``float64``
      - Binary64 floating-point arithmetic and comparisons.
        Controls: ``shaderFloat64``, ``shaderFmaFloat64``, ``shaderSignedZeroInfNanPreserveFloat64``, ``shaderDenormPreserveFloat64``, ``shaderDenormFlushToZeroFloat64``, ``shaderRoundingModeRTEFloat64``, ``shaderRoundingModeRTZFloat64``.

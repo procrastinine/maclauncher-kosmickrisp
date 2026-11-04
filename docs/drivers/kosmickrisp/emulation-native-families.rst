@@ -6,12 +6,12 @@
    * - Running device family
      - Entries using their native path
    * - Apple7
-     - No declared thresholds
+     - ``depth_bias_control``
    * - Apple8
-     - ``image_atomic64``
+     - ``depth_bias_control``, ``image_atomic64``
    * - Apple9
-     - ``image_atomic64``
+     - ``depth_bias_control``, ``image_atomic64``
    * - Apple10
-     - ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
+     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
    * - Apple11
-     - ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
+     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``

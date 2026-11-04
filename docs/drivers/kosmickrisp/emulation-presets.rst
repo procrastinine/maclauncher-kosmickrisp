@@ -8,16 +8,16 @@
      - Entries selected by the family threshold
    * - ``apple7``
      - Apple7
-     - No declared thresholds
+     - ``depth_bias_control``
    * - ``apple8``
      - Apple8
-     - ``image_atomic64``
+     - ``depth_bias_control``, ``image_atomic64``
    * - ``apple9``
      - Apple9
-     - ``image_atomic64``
+     - ``depth_bias_control``, ``image_atomic64``
    * - ``apple10``
      - Apple10
-     - ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
+     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
    * - ``apple11``
      - Apple11
-     - ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``
+     - ``depth_bias_control``, ``sampler_filter_minmax``, ``depth_bounds``, ``image_atomic64``

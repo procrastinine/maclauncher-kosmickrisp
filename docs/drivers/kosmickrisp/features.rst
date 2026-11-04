@@ -159,13 +159,14 @@ Feature table
      - Always
      - —
    * - ``VK_EXT_depth_bias_control``
-     - Native with emulated cases: the default bias uses Metal state. Exact
-       and alternate representations capture geometry and apply the bias
-       after clipping.
-     - None listed; default bias native on all families.
-     - ``depth_bias_control``
-     - Off
-     - None; DXVK and vkd3d-proton keep their default depth-bias path.
+     - Native FORMAT bias, including exact bias, uses Metal state on D16 and
+       D32 attachments. FORCE_UNORM and FLOAT representations capture geometry
+       and apply the bias after clipping.
+     - Apple7 and later for FORMAT bias.
+     - ``depth_bias_control``, ``depth_bias_force_unorm``, ``depth_bias_float``
+     - FORMAT On; FORCE_UNORM and FLOAT Off
+     - Exact FORMAT controls have no geometry replay cost. Alternate
+       representations require their individual emulation entries.
    * - ``depthBounds``
      - Native with emulated cases: the Metal depth bounds test on Apple10 and
        later, in every mode. On earlier families, each draw of a pipeline
