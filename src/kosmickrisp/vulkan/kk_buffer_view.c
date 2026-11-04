@@ -6,6 +6,7 @@
  */
 
 #include "kk_buffer_view.h"
+#include "kk_descriptor_types.h"
 
 #include "kk_buffer.h"
 #include "kk_device.h"
@@ -20,6 +21,17 @@
 
 #include "vk_format.h"
 
+static enum pipe_format
+kk_texel_buffer_native_format(enum pipe_format format)
+{
+   switch (format) {
+   case PIPE_FORMAT_R32G32B32_FLOAT: return PIPE_FORMAT_R32_FLOAT;
+   case PIPE_FORMAT_R32G32B32_UINT: return PIPE_FORMAT_R32_UINT;
+   case PIPE_FORMAT_R32G32B32_SINT: return PIPE_FORMAT_R32_SINT;
+   default: return format;
+   }
+}
+
 VkFormatFeatureFlags2
 kk_get_buffer_format_features(struct kk_physical_device *pdev,
                               VkFormat vk_format)
@@ -29,6 +41,9 @@ kk_get_buffer_format_features(struct kk_physical_device *pdev,
 
    if (p_format == PIPE_FORMAT_NONE)
       return 0;
+
+   if (kk_texel_buffer_native_format(p_format) != p_format)
+      features |= VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT;
 
    const struct kk_va_format *format = kk_get_va_format(p_format);
    if (format) {
@@ -71,6 +86,9 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
    }
 
    enum pipe_format p_format = vk_format_to_pipe_format(view->vk.format);
+   enum pipe_format native_format = kk_texel_buffer_native_format(p_format);
+   bool rgb32 = native_format != p_format;
+   p_format = native_format;
    const struct kk_va_format *supported_format = kk_get_va_format(p_format);
 
    /* If we reached here, we support reading at least */
@@ -94,7 +112,7 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
    view->texel_offset = prefix / texel_size;
 
    struct kk_image_layout layout = {
-      .width_px = view->vk.elements + view->texel_offset,
+      .width_px = view->vk.elements * (rgb32 ? 3u : 1u) + view->texel_offset,
       .height_px = 1u,
       .depth_px = 1u,
       .layers = 1u,
@@ -125,6 +143,9 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
    }
    view->texel_buffer_gpu_id =
       mtl_texture_get_gpu_resource_id(view->mtl_texel_buffer_handle);
+
+   if (rgb32)
+      view->texel_offset |= KK_TEXEL_BUFFER_RGB32;
 
    *pBufferView = kk_buffer_view_to_handle(view);
 
