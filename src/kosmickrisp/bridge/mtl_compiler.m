@@ -112,6 +112,14 @@ mtl_compiler_finish_cache(mtl_compiler *compiler)
 
 static char kk_compile_queue_association, kk_task_queue_association;
 static unsigned kk_background_pending;
+/* Last start or end of a demand (non-background) Metal compile, from
+ * kk_archive_now(). Deferred builds start only after this much quiet:
+ * a background-QoS compile in flight slowed the same foreground compile
+ * load by about a third while finishing almost nothing itself. */
+static uint64_t kk_foreground_mark;
+#ifndef KK_BACKGROUND_QUIET_NS
+#define KK_BACKGROUND_QUIET_NS 500000000ull
+#endif
 static _Thread_local bool kk_background_thread;
 static _Thread_local NSOperation *kk_current_operation;
 static pthread_mutex_t kk_compile_queue_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -253,8 +261,21 @@ kk_pin_worker_image(void)
 {
    @autoreleasepool {
       pthread_mutex_lock(&kk_compile_queue_lock);
-      while (!frontend && ownerQueue->foreground && !ownerQueue->urgent && !self.cancelled)
-         pthread_cond_wait(&kk_compile_queue_changed, &kk_compile_queue_lock);
+      /* A deferred build waits while demand compiles run and until they have
+       * been quiet for KK_BACKGROUND_QUIET_NS. A waiter needing a build runs
+       * it itself or marks the queue urgent; cancellation also wakes it. */
+      while (!frontend && !ownerQueue->urgent && !self.cancelled) {
+         if (ownerQueue->foreground) {
+            pthread_cond_wait(&kk_compile_queue_changed, &kk_compile_queue_lock);
+            continue;
+         }
+         uint64_t mark = __atomic_load_n(&kk_foreground_mark, __ATOMIC_ACQUIRE);
+         uint64_t now = kk_archive_now();
+         if (!mark || now < mark || now - mark >= KK_BACKGROUND_QUIET_NS) break;
+         uint64_t left = KK_BACKGROUND_QUIET_NS - (now - mark);
+         struct timespec wait = { (time_t)(left / 1000000000ull), (long)(left % 1000000000ull) };
+         pthread_cond_timedwait_relative_np(&kk_compile_queue_changed, &kk_compile_queue_lock, &wait);
+      }
       pthread_mutex_unlock(&kk_compile_queue_lock);
       pthread_mutex_lock(&state);
       bool skip = payload_claimed || callback_entered;
@@ -280,7 +301,9 @@ kk_pin_worker_image(void)
 void *
 mtl_compiler_foreground_begin(mtl_compiler *compiler)
 {
-   if (kk_background_thread || !__atomic_load_n(&kk_background_pending, __ATOMIC_ACQUIRE))
+   if (kk_background_thread) return NULL;
+   __atomic_store_n(&kk_foreground_mark, kk_archive_now(), __ATOMIC_RELEASE);
+   if (!__atomic_load_n(&kk_background_pending, __ATOMIC_ACQUIRE))
       return NULL;
    pthread_mutex_lock(&kk_compile_queue_lock);
    KKCompileQueue *queue = objc_getAssociatedObject((id)compiler, &kk_compile_queue_association);
@@ -295,6 +318,8 @@ mtl_compiler_foreground_begin(mtl_compiler *compiler)
 void
 mtl_compiler_foreground_end(void *token)
 {
+   if (!kk_background_thread)
+      __atomic_store_n(&kk_foreground_mark, kk_archive_now(), __ATOMIC_RELEASE);
    if (!token) return;
    KKCompileQueue *queue = (KKCompileQueue *)token;
    pthread_mutex_lock(&kk_compile_queue_lock);
