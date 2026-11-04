@@ -258,6 +258,11 @@ kk_reset_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer,
    struct kk_cmd_buffer *cmd =
       container_of(vk_cmd_buffer, struct kk_cmd_buffer, vk);
 
+   /* Retirement already resets each replay buffer before returning it. */
+   if (flags == 0 &&
+       cmd->vk.state == MESA_VK_COMMAND_BUFFER_STATE_INITIAL)
+      return;
+
    kk_reset_cmd_buffer_internal(cmd);
    vk_command_buffer_reset(&cmd->vk);
    cmd->submitted = false;
