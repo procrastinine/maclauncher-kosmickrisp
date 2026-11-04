@@ -111,7 +111,7 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
       struct kk_view_layout view_layout = {
          .view_type = remove_1d_view_types(view->vk.view_type),
          .sample_count_sa = plane->layout.sample_count_sa,
-         .format = {.pipe = p_format,
+         .format = {.pipe = kk_format_backing(p_format),
                     .mtl = supported_format->mtl_pixel_format},
          .base_level = view->vk.base_mip_level,
          .num_levels = view->vk.level_count,

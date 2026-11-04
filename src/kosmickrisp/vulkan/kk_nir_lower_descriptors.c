@@ -430,6 +430,63 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
 
    nir_rewrite_image_intrinsic(intr, handle, nir_image_intrinsic_type_bindless);
 
+   if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF &&
+       (intr->intrinsic == nir_intrinsic_bindless_image_load ||
+        intr->intrinsic == nir_intrinsic_bindless_image_store)) {
+      nir_def *metadata = load_resource_deref_desc(
+         b, 2, 32, deref,
+         offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
+      nir_def *rgb32 = nir_ine_imm(b, nir_iand_imm(b, nir_channel(b, metadata, 0),
+                                                 KK_TEXEL_BUFFER_RGB32), 0);
+      nir_def *coord = intr->src[1].ssa;
+      nir_def *base = nir_channel(b, coord, 0);
+      nir_def *valid = nir_ine_imm(b, base, -1);
+      if (intr->intrinsic == nir_intrinsic_bindless_image_load) {
+         b->cursor = nir_after_instr(&intr->instr);
+         nir_intrinsic_instr *first = nir_instr_as_intrinsic(
+            nir_instr_clone(b->shader, &intr->instr));
+         nir_builder_instr_insert(b, &first->instr);
+         nir_push_if(b, rgb32);
+         nir_def *rgb[4] = {nir_channel(b, &first->def, 0)};
+         for (unsigned c = 1; c < 3; ++c) {
+            nir_def *at = nir_vector_insert_imm(b, coord,
+               nir_bcsel(b, valid, nir_iadd_imm(b, base, c), base), 0);
+            nir_intrinsic_instr *component = nir_instr_as_intrinsic(
+               nir_instr_clone(b->shader, &intr->instr));
+            nir_builder_instr_insert(b, &component->instr);
+            nir_src_rewrite(&component->src[1], at);
+            rgb[c] = nir_channel(b, &component->def, 0);
+         }
+         nir_def *one = nir_alu_type_get_base_type(type) == nir_type_float ?
+            nir_imm_floatN_t(b, 1, intr->def.bit_size) :
+            nir_imm_intN_t(b, 1, intr->def.bit_size);
+         rgb[3] = nir_bcsel(b, valid, one, nir_imm_intN_t(b, 0, intr->def.bit_size));
+         nir_def *assembled = nir_vec(b, rgb, intr->def.num_components);
+         nir_pop_if(b, NULL);
+         nir_def *result = nir_if_phi(b, assembled, &first->def);
+         nir_def_replace(&intr->def, result);
+      } else {
+         nir_def *value = intr->src[3].ssa;
+         nir_push_if(b, rgb32);
+         for (unsigned c = 0; c < 3; ++c) {
+            nir_def *at = nir_vector_insert_imm(b, coord,
+               nir_bcsel(b, valid, nir_iadd_imm(b, base, c), base), 0);
+            nir_def *scalar = nir_replicate(b, nir_channel(b, value, c),
+                                            value->num_components);
+            nir_intrinsic_instr *component = nir_instr_as_intrinsic(
+               nir_instr_clone(b->shader, &intr->instr));
+            nir_builder_instr_insert(b, &component->instr);
+            nir_src_rewrite(&component->src[1], at);
+            nir_src_rewrite(&component->src[3], scalar);
+         }
+         nir_push_else(b, NULL);
+         nir_builder_instr_insert(b, nir_instr_clone(b->shader, &intr->instr));
+         nir_pop_if(b, NULL);
+         nir_instr_remove(&intr->instr);
+      }
+   }
+
+
    return true;
 }
 

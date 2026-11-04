@@ -50,6 +50,9 @@
    .bit_widths = width, .filter = 0u, .write = 1u, .color = 1u, .blend = 0u, \
    .msaa = 1u, .resolve = 0u, .sparse = 1u, .atomic = 1u
 
+#define MTL_FMT_RGB32_FLOAT .bit_widths = 96, .filter = 1, .write = 1
+#define MTL_FMT_RGB32_INT .bit_widths = 96, .write = 1
+
 // Write, Color, Sparse, Atomic
 #define MTL_FMT_WCSA(width)                                                    \
    .bit_widths = width, .filter = 0u, .write = 1u, .color = 1u, .blend = 0u,   \
@@ -222,6 +225,15 @@ static const struct kk_va_format kk_vf_formats[] = {
    MTL_FMT_NATIVE(R16G16B16A16_SINT, MTL_FMT_WCMS(64), MTL_FMT_TB_ALL),
    MTL_FMT_NATIVE(R16G16B16A16_FLOAT, MTL_FMT_ALL_NO_ATOMIC(64),
                   MTL_FMT_TB_ALL),
+
+   // RGB32 images retain Vulkan's 12-byte transfer layout. Native images
+   // have a fourth, hidden component; sampled and storage reads supply one.
+   MTL_FMT(R32G32B32_FLOAT, R32G32B32A32_FLOAT, MTL_SWIZZLE_RGB1,
+           MTL_FMT_RGB32_FLOAT, MTL_FMT_TB_NONE, true),
+   MTL_FMT(R32G32B32_UINT, R32G32B32A32_UINT, MTL_SWIZZLE_RGB1,
+           MTL_FMT_RGB32_INT, MTL_FMT_TB_NONE, true),
+   MTL_FMT(R32G32B32_SINT, R32G32B32A32_SINT, MTL_SWIZZLE_RGB1,
+           MTL_FMT_RGB32_INT, MTL_FMT_TB_NONE, true),
 
    // 128-bit formats
    MTL_FMT_NATIVE(R32G32B32A32_UINT, MTL_FMT_WCMS(128), MTL_FMT_TB_ALL),

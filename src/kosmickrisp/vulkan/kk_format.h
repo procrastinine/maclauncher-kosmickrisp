@@ -49,6 +49,25 @@ struct kk_va_format {
    uint8_t is_native : 1;
 };
 
+static inline bool
+kk_format_is_rgb32(enum pipe_format format)
+{
+   return format == PIPE_FORMAT_R32G32B32_FLOAT ||
+          format == PIPE_FORMAT_R32G32B32_UINT ||
+          format == PIPE_FORMAT_R32G32B32_SINT;
+}
+
+static inline enum pipe_format
+kk_format_backing(enum pipe_format format)
+{
+   switch (format) {
+   case PIPE_FORMAT_R32G32B32_FLOAT: return PIPE_FORMAT_R32G32B32A32_FLOAT;
+   case PIPE_FORMAT_R32G32B32_UINT: return PIPE_FORMAT_R32G32B32A32_UINT;
+   case PIPE_FORMAT_R32G32B32_SINT: return PIPE_FORMAT_R32G32B32A32_SINT;
+   default: return format;
+   }
+}
+
 const struct kk_va_format *kk_get_va_format(enum pipe_format format);
 
 enum mtl_pixel_format vk_format_to_mtl_pixel_format(enum VkFormat vkformat);

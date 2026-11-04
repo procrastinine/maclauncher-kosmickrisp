@@ -281,7 +281,7 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(
       usage, image->create_flags, supported_format->atomic);
    layout->create_flags = image->create_flags;
-   layout->format.pipe = format;
+   layout->format.pipe = kk_format_backing(format);
    layout->format.mtl = supported_format->mtl_pixel_format;
    layout->swizzle.red = supported_format->unswizzle.red;
    layout->swizzle.green = supported_format->unswizzle.green;

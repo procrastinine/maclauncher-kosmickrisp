@@ -193,10 +193,13 @@ vk_clear_color_value_to_mtl_clear_color(union VkClearColorValue color,
     * textures, but we need to support that for formats like
     * VK_FORMAT_B4G4R4A4_UNORM_PACK16 */
    const struct kk_va_format *supported_format = kk_get_va_format(format);
-   struct mtl_clear_color swizzled_color;
-   for (uint32_t i = 0u; i < 4; ++i)
-      swizzled_color.channel[supported_format->unswizzle.channels[i]] =
-         value.channel[i];
+   struct mtl_clear_color swizzled_color = value;
+   for (uint32_t i = 0u; i < 4; ++i) {
+      unsigned channel = supported_format->unswizzle.channels[i];
+      /* Constant view channels have no physical destination. */
+      if (channel < 4)
+         swizzled_color.channel[channel] = value.channel[i];
+   }
 
    return swizzled_color;
 }

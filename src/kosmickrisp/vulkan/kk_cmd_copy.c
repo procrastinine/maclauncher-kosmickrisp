@@ -11,6 +11,8 @@
 #include "kk_buffer.h"
 #include "kk_device.h"
 #include "kk_entrypoints.h"
+#include "kk_format.h"
+#include "vk_format.h"
 #include "kk_physical_device.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -83,6 +85,8 @@ vk_buffer_image_copy_to_mtl_buffer_image_copy(
    return copy;
 }
 
+#include "kk_rgb32_copy.h"
+
 VKAPI_ATTR void VKAPI_CALL
 kk_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
                          const VkCopyBufferToImageInfo2 *pCopyBufferToImageInfo)
@@ -91,6 +95,12 @@ kk_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_buffer, buffer, pCopyBufferToImageInfo->srcBuffer);
    VK_FROM_HANDLE(kk_image, image, pCopyBufferToImageInfo->dstImage);
 
+   if (kk_format_is_rgb32(vk_format_to_pipe_format(image->vk.format))) {
+      for (uint32_t r = 0; r < pCopyBufferToImageInfo->regionCount; ++r)
+         kk_copy_rgb32_buffer_image(cmd, buffer, image,
+                                   &pCopyBufferToImageInfo->pRegions[r], true);
+      return;
+   }
    mtl_compute_encoder *encoder = cs_get_compute(cmd);
    for (int r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
       const VkBufferImageCopy2 *region = &pCopyBufferToImageInfo->pRegions[r];
@@ -121,6 +131,12 @@ kk_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_image, image, pCopyImageToBufferInfo->srcImage);
    VK_FROM_HANDLE(kk_buffer, buffer, pCopyImageToBufferInfo->dstBuffer);
 
+   if (kk_format_is_rgb32(vk_format_to_pipe_format(image->vk.format))) {
+      for (uint32_t r = 0; r < pCopyImageToBufferInfo->regionCount; ++r)
+         kk_copy_rgb32_buffer_image(cmd, buffer, image,
+                                   &pCopyImageToBufferInfo->pRegions[r], false);
+      return;
+   }
    mtl_compute_encoder *encoder = cs_get_compute(cmd);
    for (unsigned r = 0; r < pCopyImageToBufferInfo->regionCount; r++) {
       const VkBufferImageCopy2 *region = &pCopyImageToBufferInfo->pRegions[r];
@@ -222,24 +238,22 @@ copy_through_buffer(struct kk_cmd_buffer *cmd, struct kk_image *src,
    struct mtl_origin dst_origin =
       vk_offset_3d_to_mtl_origin(&region->dstOffset);
 
+   bool src_3d = src->vk.image_type == VK_IMAGE_TYPE_3D;
+   bool dst_3d = dst->vk.image_type == VK_IMAGE_TYPE_3D;
+   uint32_t layers = MAX2(
+      vk_image_subresource_layer_count(&src->vk, &region->srcSubresource),
+      vk_image_subresource_layer_count(&dst->vk, &region->dstSubresource));
+   if (src_3d != dst_3d)
+      src_size.z = dst_size.z = 1;
+
    /* Texture->Buffer->Texture */
-   /* TODO_KOSMICKRISP:
-    *
-    * 1. We don't handle 3D to 2D array nor vice-versa in this path. Unsure if
-    * it's even needed, can compressed textures be 3D?
-    *
-    * 2. Split into texture to buffer then buffers to texture to reduce
-    * dependencies.
-    */
-   for (uint32_t slice_idx = 0;
-        slice_idx <
-        vk_image_subresource_layer_count(&src->vk, &region->srcSubresource);
-        ++slice_idx) {
+   for (uint32_t slice_idx = 0; slice_idx < layers; ++slice_idx) {
       info.mtl_data.image = src_plane->mtl_handle;
       info.mtl_data.image_size = src_size;
       info.mtl_data.image_origin = src_origin;
       info.mtl_data.image_slice =
-         region->srcSubresource.baseArrayLayer + slice_idx;
+         src_3d ? 0 : region->srcSubresource.baseArrayLayer + slice_idx;
+      info.mtl_data.buffer_2d_image_size_B = src_3d ? buffer_size_2d_B : 0;
       info.mtl_data.image_level = region->srcSubresource.mipLevel;
       info.mtl_data.buffer_offset_B = buffer_offset;
       info.mtl_data.options = src_options;
@@ -251,12 +265,17 @@ copy_through_buffer(struct kk_cmd_buffer *cmd, struct kk_image *src,
       info.mtl_data.image_size = dst_size;
       info.mtl_data.image_origin = dst_origin;
       info.mtl_data.image_slice =
-         region->dstSubresource.baseArrayLayer + slice_idx;
+         dst_3d ? 0 : region->dstSubresource.baseArrayLayer + slice_idx;
+      info.mtl_data.buffer_2d_image_size_B = dst_3d ? buffer_size_2d_B : 0;
       info.mtl_data.image_level = region->dstSubresource.mipLevel;
       info.mtl_data.options = dst_options;
       mtl_copy_from_buffer_to_texture(encoder, &info.mtl_data);
 
-      buffer_offset += info.buffer_slice_size_B;
+      buffer_offset += (size_t)buffer_size_2d_B * src_size.z;
+      if (src_3d != dst_3d) {
+         if (src_3d) src_origin.z++;
+         if (dst_3d) dst_origin.z++;
+      }
    }
 
    return buffer_offset;
@@ -379,7 +398,8 @@ kk_CmdCopyImage2(VkCommandBuffer commandBuffer,
             src_format, buffer_stride_B, region->extent.height);
          const uint32_t layer_count =
             vk_image_subresource_layer_count(&src->vk, &region->srcSubresource);
-         buffer_size += buffer_size_2d_B * layer_count;
+         buffer_size += (size_t)buffer_size_2d_B *
+                        MAX2(layer_count, region->extent.depth);
       }
    }
 

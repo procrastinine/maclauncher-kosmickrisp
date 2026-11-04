@@ -234,3 +234,21 @@ libkk_accumulate_tess_statistics(constant struct poly_tess_params *p,
    uint prims = p->points_mode ? total : p->isolines ? total / 2 : total / 3;
    kk_increment_counters(ci, cp, NULL, (uint64_t)prims * views);
 }
+
+/* Bit-preserving packed RGB32 <-> native RGBA32 transfer conversion. */
+KERNEL2D(8, 8)
+libkk_rgb32_copy(global uint8_t *packed, global uint32_t *rgba,
+                 uint64_t row_B, uint32_t width, uint32_t height,
+                 uint32_t expand, uint32_t alpha)
+{
+   uint x = cl_global_id.x, y = cl_global_id.y;
+   if (x >= width || y >= height)
+      return;
+   global uint32_t *rgb = (global uint32_t *)(packed + y * row_B + x * 12u);
+   global uint32_t *dst = rgba + ((uint64_t)y * width + x) * 4u;
+   if (expand) {
+      dst[0] = rgb[0]; dst[1] = rgb[1]; dst[2] = rgb[2]; dst[3] = alpha;
+   } else {
+      rgb[0] = dst[0]; rgb[1] = dst[1]; rgb[2] = dst[2];
+   }
+}

@@ -43,7 +43,10 @@ kk_get_buffer_format_features(struct kk_physical_device *pdev,
       return 0;
 
    if (kk_texel_buffer_native_format(p_format) != p_format)
-      features |= VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT;
+      features |= VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT |
+                  VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT |
+                  VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+                  VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
 
    const struct kk_va_format *format = kk_get_va_format(p_format);
    if (format) {

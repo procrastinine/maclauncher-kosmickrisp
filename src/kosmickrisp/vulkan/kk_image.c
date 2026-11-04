@@ -36,8 +36,14 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
    if (p_format == PIPE_FORMAT_NONE)
       return 0;
 
+   /* Optimal RGB32 images use RGBA32 backing. Linear host memory must
+    * retain Vulkan's packed RGB layout and cannot alias that representation. */
+   if (kk_format_is_rgb32(p_format) && tiling == VK_IMAGE_TILING_LINEAR)
+      return 0;
+
    /* You can't tile a non-power-of-two */
-   if (!util_is_power_of_two_nonzero(util_format_get_blocksize(p_format)))
+   if (!kk_format_is_rgb32(p_format) &&
+       !util_is_power_of_two_nonzero(util_format_get_blocksize(p_format)))
       return 0;
 
    const struct kk_va_format *va_format = kk_get_va_format(p_format);
@@ -97,7 +103,7 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
       features |= VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
 
       /* Metal does not allow CPU access to combined depth-stencil */
-      if (!util_format_is_depth_and_stencil(p_format))
+      if (!util_format_is_depth_and_stencil(p_format) && !kk_format_is_rgb32(p_format))
          features |= VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT;
    }
 
