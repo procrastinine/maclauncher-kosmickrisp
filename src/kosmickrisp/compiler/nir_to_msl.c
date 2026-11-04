@@ -2333,6 +2333,8 @@ msl_preprocess_nir(struct nir_shader *nir)
    msl_nir_lower_subgroups(nir);
 }
 
+#include "kk_helper_side_effects.h"
+
 bool
 msl_optimize_nir(struct nir_shader *nir)
 {
@@ -2372,6 +2374,7 @@ msl_optimize_nir(struct nir_shader *nir)
     * (undef,undef,undef,undef). After nir_opt_remove_phis this gets optimized
     * to a single store for x, and nir_opt_shrink_stores will correctly reduce
     * the store. */
+   NIR_PASS(_, nir, kk_nir_lower_helper_side_effects);
    NIR_PASS(_, nir, nir_opt_shrink_stores, false);
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
    NIR_PASS(_, nir, msl_nir_lower_algebraic_late);

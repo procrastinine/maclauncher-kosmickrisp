@@ -641,7 +641,6 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
    /* KK_WORKAROUND_4 */
    if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(4))) {
       NIR_PASS(_, nir, nir_lower_helper_writes, true);
-      NIR_PASS(_, nir, nir_lower_is_helper_invocation);
    }
 }
 
