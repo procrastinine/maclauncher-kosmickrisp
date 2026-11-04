@@ -378,6 +378,25 @@ kk_sample_border(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex, const char *typ
    }
 }
 
+/* Read the related LOD fields from one packet decoding. Native records keep
+ * half precision; virtual records retain their original full precision. */
+static void
+kk_sample_emit_lod_values(struct nir_to_msl_ctx *ctx, const char *low,
+                         const char *high, const char *mip, bool declare)
+{
+   if (declare)
+      P(ctx, "    float %s, %s; bool %s;\n", low, high, mip);
+   P(ctx, "    if ((metadata[22] & (KK_SAMPLER_FILTER_PARAMS_POINTER | KK_SAMPLER_FILTER_VIRTUAL)) != 0) {\n");
+   P(ctx, "        constant kk_sampler_params &params = kk_sampler_params_from_meta(metadata);\n");
+   P(ctx, "        %s = virtual_sampler ? params.min_lod : float(half(params.min_lod));\n", low);
+   P(ctx, "        %s = virtual_sampler ? params.max_lod : float(half(params.max_lod));\n", high);
+   P(ctx, "        %s = (params.flags & KK_SAMPLER_PARAMS_MIPMAP_LINEAR) != 0;\n", mip);
+   P(ctx, "    } else {\n");
+   P(ctx, "        %s = float(as_type<half>(metadata[7]));\n", low);
+   P(ctx, "        %s = float(as_type<half>(metadata[8]));\n", high);
+   P(ctx, "        %s = metadata[11] == 1u;\n    }\n", mip);
+}
+
 /* One footprint serves native reduction and virtual weighted/PCF sampling.
  * Every tap is compared before interpolation; min/max ignores zero weights. */
 static void
@@ -411,26 +430,26 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
          P(ctx, "    float native_unclamped = image.calculate_unclamped_lod(native_sampler, coord.%.*s);\n", cube ? 3 : dims, "xyz");
          P(ctx, "    float native_clamped = image.calculate_clamped_lod(native_sampler, coord.%.*s);\n", cube ? 3 : dims, "xyz");
       }
+      P(ctx, "    bool virtual_sampler = (kk_sampler_emulation_active && (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0);\n");
       if (tex->backend_flags & KK_SAMPLE_VIRTUAL) {
-         P(ctx, "    if ((kk_sampler_emulation_active && (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0)) {\n");
+         P(ctx, "    if (virtual_sampler) {\n");
          P(ctx, "        constant kk_sampler_params &params = kk_sampler_params_from_meta(metadata);\n");
          P(ctx, "        float lod = clamp(reduction_lod, params.min_lod, params.max_lod);\n");
          P(ctx, "        lod = clamp(lod, 0.0f, float(image.get_num_mip_levels() - 1u));\n");
          P(ctx, "        if ((params.flags & KK_SAMPLER_PARAMS_MIPMAP_LINEAR) == 0) lod = fmax(ceil(lod + 0.5f) - 1.0f, 0.0f);\n");
          P(ctx, "        return float2(lod, reduction_lod);\n    }\n");
       }
+      kk_sample_emit_lod_values(ctx, "low", "high", "mip_linear", true);
       if (ctx->shader->info.stage == MESA_SHADER_COMPUTE) {
-         P(ctx, "    float low = kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MIN_LOD, false), high = kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MAX_LOD, false);\n");
          P(ctx, "    float lod = clamp(clamp(reduction_lod, low, high), 0.0f, float(image.get_num_mip_levels() - 1u));\n");
-         P(ctx, "    if (kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MIPMAP, false) == 0.0f) lod = fmax(ceil(lod + 0.5f) - 1.0f, 0.0f);\n");
+         P(ctx, "    if (!mip_linear) lod = fmax(ceil(lod + 0.5f) - 1.0f, 0.0f);\n");
          P(ctx, "    return float2(lod, reduction_lod);\n}\n");
       } else {
-         P(ctx, "    float low = kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MIN_LOD, false), high = kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MAX_LOD, false);\n");
          P(ctx, "    float unclamped = native_unclamped, lod = native_clamped;\n");
          if (nir_tex_get_src(tex, nir_tex_src_bias)) P(ctx, "    lod += bias_value;\n");
          P(ctx, "    lod = clamp(lod, low, high);\n");
          if (reduction) {
-            P(ctx, "    if (metadata[21] != 0u) {\n        lod = clamp(clamp(unclamped, low, high), 0.0f, float(image.get_num_mip_levels() - 1u));\n        if (kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MIPMAP, false) == 0.0f) lod = fmax(ceil(lod + 0.5f) - 1.0f, 0.0f);\n    }\n");
+            P(ctx, "    if (metadata[21] != 0u) {\n        lod = clamp(clamp(unclamped, low, high), 0.0f, float(image.get_num_mip_levels() - 1u));\n        if (!mip_linear) lod = fmax(ceil(lod + 0.5f) - 1.0f, 0.0f);\n    }\n");
          }
          P(ctx, "    return float2(lod, unclamped);\n}\n");
       }
@@ -534,11 +553,12 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, ") {\n");
       P(ctx, "    bool virtual_sampler = (kk_sampler_emulation_active && (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0);\n");
       if (tex->backend_flags & KK_SAMPLE_SPARSE) {
-         P(ctx, "    float low_lod, high_lod; bool mip_linear;\n    if (sparse.query_address != 0ul && (virtual_sampler || metadata[21] == 0u)) {\n        low_lod = sparse.params.min_lod; high_lod = sparse.params.max_lod; mip_linear = (sparse.params.flags & KK_SAMPLER_PARAMS_MIPMAP_LINEAR) != 0;\n    } else if (virtual_sampler) {\n");
+         P(ctx, "    float low_lod, high_lod; bool mip_linear;\n    if (sparse.query_address != 0ul && (virtual_sampler || metadata[21] == 0u)) {\n        low_lod = sparse.params.min_lod; high_lod = sparse.params.max_lod; mip_linear = (sparse.params.flags & KK_SAMPLER_PARAMS_MIPMAP_LINEAR) != 0;\n    } else {\n");
+         kk_sample_emit_lod_values(ctx, "low_lod", "high_lod", "mip_linear", false);
+         P(ctx, "    }\n");
       } else {
-         P(ctx, "    float low_lod, high_lod; bool mip_linear;\n    if (virtual_sampler) {\n");
+         kk_sample_emit_lod_values(ctx, "low_lod", "high_lod", "mip_linear", true);
       }
-      P(ctx, "        constant kk_sampler_params &params = kk_sampler_params_from_meta(metadata);\n        low_lod = params.min_lod; high_lod = params.max_lod; mip_linear = (params.flags & KK_SAMPLER_PARAMS_MIPMAP_LINEAR) != 0;\n    } else {\n        low_lod = kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MIN_LOD, false); high_lod = kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MAX_LOD, false); mip_linear = kk_sampler_metadata_value(ulong(metadata), KK_SAMPLER_META_MIPMAP, false) == 1.0f;\n    }\n");
       P(ctx, "    float lod = clamp(reduction_lod, low_lod, high_lod);\n");
       if (nir_tex_get_src(tex, nir_tex_src_min_lod)) P(ctx, "    lod = fmax(lod, min_lod_value);\n");
       P(ctx, "    bool linear_filter = (metadata[22] & (lod <= 0.0f ? 2u : 1u)) != 0;\n");
@@ -771,7 +791,8 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
 }
 
 static void
-kk_sample_emit_metadata(struct nir_to_msl_ctx *ctx, bool sparse, bool compare)
+kk_sample_emit_metadata(struct nir_to_msl_ctx *ctx, bool sparse, bool compare,
+                        unsigned fields)
 {
    P(ctx, "%s", kk_sampler_params_msl_declaration());
    if (sparse) {
@@ -785,40 +806,55 @@ kk_sample_emit_metadata(struct nir_to_msl_ctx *ctx, bool sparse, bool compare)
       P(ctx, "static bool kk_sampler_compare(uint op, float reference, float depth) {\n");
       P(ctx, "    #pragma METAL fp math_mode(safe)\n    switch (op) {\n    case 0u: return false;\n    case 1u: return reference < depth;\n    case 2u: return reference == depth;\n    case 3u: return reference <= depth;\n    case 4u: return reference > depth;\n    case 5u: return reference != depth;\n    case 6u: return reference >= depth;\n    case 7u: return true;\n    }\n    return false;\n}\n");
    }
-   /* One selector declaration supplies helper calls and the public query. */
-#define KK_METADATA_CONSTANT(name) P(ctx, "constant uint " #name " = %uu;\n", name)
-   KK_METADATA_CONSTANT(KK_SAMPLER_META_MIN_LOD);
-   KK_METADATA_CONSTANT(KK_SAMPLER_META_MAX_LOD);
-   KK_METADATA_CONSTANT(KK_SAMPLER_META_MIPMAP);
-#undef KK_METADATA_CONSTANT
+   if (!fields)
+      return;
    P(ctx, "static float kk_sampler_metadata_value(ulong address, uint field, bool lower_native_bias) {\n");
    P(ctx, "    constant ushort *metadata = (constant ushort *)address;\n");
    P(ctx, "    bool virtual_sampler = (kk_sampler_emulation_active && (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0);\n");
-   P(ctx, "    if (field == %uu) return virtual_sampler ? 1.0f : 0.0f;\n", KK_SAMPLER_META_VIRTUAL);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_VIRTUAL))
+      P(ctx, "    if (field == %uu) return virtual_sampler ? 1.0f : 0.0f;\n", KK_SAMPLER_META_VIRTUAL);
    /* Query bias remains numeric at byte40 on both descriptor encodings.
     * Native bias queries need no original-record pointer reconstruction. */
-   P(ctx, "    if (!virtual_sampler && field == %uu) {\n", KK_SAMPLER_META_BIAS);
-   P(ctx, "        if ((metadata[22] & KK_SAMPLER_FILTER_PARAMS_POINTER) != 0) return lower_native_bias && %s ? float(as_type<half>(metadata[20])) : 0.0f;\n", ctx->native_sampler_lod_bias ? "false" : "true");
-   P(ctx, "        return lower_native_bias ? float(as_type<half>(metadata[6])) : 0.0f;\n    }\n");
-   P(ctx, "    if (!virtual_sampler && field == %uu) return float(as_type<half>(metadata[20]));\n", KK_SAMPLER_META_QUERY_BIAS);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_BIAS)) {
+      P(ctx, "    if (!virtual_sampler && field == %uu) {\n", KK_SAMPLER_META_BIAS);
+      P(ctx, "        if ((metadata[22] & KK_SAMPLER_FILTER_PARAMS_POINTER) != 0) return lower_native_bias && %s ? float(as_type<half>(metadata[20])) : 0.0f;\n", ctx->native_sampler_lod_bias ? "false" : "true");
+      P(ctx, "        return lower_native_bias ? float(as_type<half>(metadata[6])) : 0.0f;\n    }\n");
+   }
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_QUERY_BIAS))
+      P(ctx, "    if (!virtual_sampler && field == %uu) return float(as_type<half>(metadata[20]));\n", KK_SAMPLER_META_QUERY_BIAS);
    P(ctx, "    if ((metadata[22] & (KK_SAMPLER_FILTER_PARAMS_POINTER | KK_SAMPLER_FILTER_VIRTUAL)) != 0) {\n        constant kk_sampler_params &params = kk_sampler_params_from_meta(metadata);\n        switch (field) {\n");
-   P(ctx, "        case %uu: return virtual_sampler ? params.lod_bias : (lower_native_bias && %s ? float(half(params.lod_bias)) : 0.0f);\n", KK_SAMPLER_META_BIAS, ctx->native_sampler_lod_bias ? "false" : "true");
-   P(ctx, "        case %uu: return virtual_sampler ? params.lod_bias : float(half(params.lod_bias));\n", KK_SAMPLER_META_QUERY_BIAS);
-   P(ctx, "        case %uu: return virtual_sampler ? params.min_lod : float(half(params.min_lod));\n", KK_SAMPLER_META_MIN_LOD);
-   P(ctx, "        case %uu: return virtual_sampler ? params.max_lod : float(half(params.max_lod));\n", KK_SAMPLER_META_MAX_LOD);
-   P(ctx, "        case %uu: return (params.flags & KK_SAMPLER_PARAMS_MIPMAP_LINEAR) != 0 ? 1.0f : 0.0f;\n", KK_SAMPLER_META_MIPMAP);
-   P(ctx, "        case %uu: return (params.flags & KK_SAMPLER_PARAMS_ANISOTROPY_ENABLE) != 0 ? params.max_anisotropy : 1.0f;\n", KK_SAMPLER_META_MAX_ANISOTROPY);
-   P(ctx, "        case %uu: return float(params.reduction_mode);\n", KK_SAMPLER_META_REDUCTION_MODE);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_BIAS))
+      P(ctx, "        case %uu: return virtual_sampler ? params.lod_bias : (lower_native_bias && %s ? float(half(params.lod_bias)) : 0.0f);\n", KK_SAMPLER_META_BIAS, ctx->native_sampler_lod_bias ? "false" : "true");
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_QUERY_BIAS))
+      P(ctx, "        case %uu: return virtual_sampler ? params.lod_bias : float(half(params.lod_bias));\n", KK_SAMPLER_META_QUERY_BIAS);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_MIN_LOD))
+      P(ctx, "        case %uu: return virtual_sampler ? params.min_lod : float(half(params.min_lod));\n", KK_SAMPLER_META_MIN_LOD);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_MAX_LOD))
+      P(ctx, "        case %uu: return virtual_sampler ? params.max_lod : float(half(params.max_lod));\n", KK_SAMPLER_META_MAX_LOD);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_MIPMAP))
+      P(ctx, "        case %uu: return (params.flags & KK_SAMPLER_PARAMS_MIPMAP_LINEAR) != 0 ? 1.0f : 0.0f;\n", KK_SAMPLER_META_MIPMAP);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_MAX_ANISOTROPY))
+      P(ctx, "        case %uu: return (params.flags & KK_SAMPLER_PARAMS_ANISOTROPY_ENABLE) != 0 ? params.max_anisotropy : 1.0f;\n", KK_SAMPLER_META_MAX_ANISOTROPY);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_REDUCTION_MODE))
+      P(ctx, "        case %uu: return float(params.reduction_mode);\n", KK_SAMPLER_META_REDUCTION_MODE);
    P(ctx, "        }\n    } else {\n        switch (field) {\n");
-   P(ctx, "        case %uu: return lower_native_bias ? float(as_type<half>(metadata[6])) : 0.0f;\n", KK_SAMPLER_META_BIAS);
-   P(ctx, "        case %uu: return float(as_type<half>(metadata[20]));\n", KK_SAMPLER_META_QUERY_BIAS);
-   P(ctx, "        case %uu: return float(as_type<half>(metadata[7]));\n", KK_SAMPLER_META_MIN_LOD);
-   P(ctx, "        case %uu: return float(as_type<half>(metadata[8]));\n", KK_SAMPLER_META_MAX_LOD);
-   P(ctx, "        case %uu: return float(metadata[11]);\n", KK_SAMPLER_META_MIPMAP);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_BIAS))
+      P(ctx, "        case %uu: return lower_native_bias ? float(as_type<half>(metadata[6])) : 0.0f;\n", KK_SAMPLER_META_BIAS);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_QUERY_BIAS))
+      P(ctx, "        case %uu: return float(as_type<half>(metadata[20]));\n", KK_SAMPLER_META_QUERY_BIAS);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_MIN_LOD))
+      P(ctx, "        case %uu: return float(as_type<half>(metadata[7]));\n", KK_SAMPLER_META_MIN_LOD);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_MAX_LOD))
+      P(ctx, "        case %uu: return float(as_type<half>(metadata[8]));\n", KK_SAMPLER_META_MAX_LOD);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_MIPMAP))
+      P(ctx, "        case %uu: return float(metadata[11]);\n", KK_SAMPLER_META_MIPMAP);
    /* The legacy numeric packet has no original identity for these queries.
     * Current producers always publish the pointer. Never invent a physical
     * default if an obsolete packet is supplied to a new selector. */
-   P(ctx, "        case %uu:\n        case %uu: return as_type<float>(0x7fc00000u);\n", KK_SAMPLER_META_MAX_ANISOTROPY, KK_SAMPLER_META_REDUCTION_MODE);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_MAX_ANISOTROPY))
+      P(ctx, "        case %uu: return as_type<float>(0x7fc00000u);\n", KK_SAMPLER_META_MAX_ANISOTROPY);
+   if (fields & BITFIELD_BIT(KK_SAMPLER_META_REDUCTION_MODE))
+      P(ctx, "        case %uu: return as_type<float>(0x7fc00000u);\n", KK_SAMPLER_META_REDUCTION_MODE);
    P(ctx, "        }\n    }\n    return 0.0f;\n}\n");
 }
 
@@ -826,6 +862,7 @@ static void
 kk_sample_emit_helpers(struct nir_to_msl_ctx *ctx)
 {
    bool metadata = false, sparse = false, compare = false;
+   unsigned metadata_fields = 0;
    struct kk_msl_sample_helper *first = NULL, **tail = &first;
    nir_foreach_function_impl(impl, ctx->shader) nir_foreach_block(block, impl) nir_foreach_instr(instr, block) {
       if (instr->type != nir_instr_type_tex) continue;
@@ -835,7 +872,13 @@ kk_sample_emit_helpers(struct nir_to_msl_ctx *ctx)
                   kk_sample_has_footprint(tex) || tex->op == nir_texop_lod ||
                   (tex->is_shadow && tex->op == nir_texop_tg4 &&
                    (tex->backend_flags & KK_SAMPLE_BORDER));
-      if (tex->backend_flags & KK_SAMPLE_METADATA) continue;
+      if (tex->backend_flags & KK_SAMPLE_METADATA) {
+         metadata_fields |= BITFIELD_BIT((tex->backend_flags & KK_SAMPLE_METADATA_MASK) >>
+                                        KK_SAMPLE_METADATA_SHIFT);
+         continue;
+      }
+      if (tex->backend_flags & KK_SAMPLE_PREPARE_2D)
+         metadata_fields |= BITFIELD_BIT(KK_SAMPLER_META_BIAS);
       sparse |= tex->backend_flags & KK_SAMPLE_SPARSE;
       compare |= tex->is_shadow;
       if (!ctx->sampler_helpers)
@@ -850,7 +893,7 @@ kk_sample_emit_helpers(struct nir_to_msl_ctx *ctx)
       *tail = helper;
       tail = &helper->next;
    }
-   if (metadata) kk_sample_emit_metadata(ctx, sparse, compare);
+   if (metadata) kk_sample_emit_metadata(ctx, sparse, compare, metadata_fields);
    for (struct kk_msl_sample_helper *helper = first; helper; helper = helper->next)
       kk_sample_emit_one(ctx, helper);
 }
