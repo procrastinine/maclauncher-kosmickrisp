@@ -138,6 +138,17 @@ kk_clear_common_attachment_description(
 }
 
 static enum mtl_load_action
+kk_attachment_load_action(const struct kk_attachment *info, bool force_load)
+{
+   /* NONE with no writes must preserve the attachment just like LOAD. */
+   if (force_load || info->load_op == VK_ATTACHMENT_LOAD_OP_LOAD ||
+       (info->load_op == VK_ATTACHMENT_LOAD_OP_NONE &&
+        info->store_op == VK_ATTACHMENT_STORE_OP_NONE))
+      return MTL_LOAD_ACTION_LOAD;
+   return vk_attachment_load_op_to_mtl_load_action(info->load_op);
+}
+
+static enum mtl_load_action
 kk_fill_common_attachment_description(
    mtl_render_pass_attachment_descriptor *descriptor,
    const struct kk_attachment *info, const struct kk_rendering_state *render,
@@ -147,17 +158,8 @@ kk_fill_common_attachment_description(
    const struct kk_image_view *iview = info->iview;
    assert(iview->plane_count ==
           1); /* TODO_KOSMICKRISP Handle multiplanar images? */
-   /* STORE_OP_NONE behaves like DONT_CARE if there are writes
-    * (CLEAR or DONT_CARE are writes).
-    * If there are no writes, we need to preserve the contents. */
-   force_attachment_load |= (info->load_op == VK_ATTACHMENT_LOAD_OP_LOAD ||
-                             info->load_op == VK_ATTACHMENT_LOAD_OP_NONE) &&
-                            info->store_op == VK_ATTACHMENT_STORE_OP_NONE;
-
    enum mtl_load_action load_action =
-      force_attachment_load
-         ? MTL_LOAD_ACTION_LOAD
-         : vk_attachment_load_op_to_mtl_load_action(info->load_op);
+      kk_attachment_load_action(info, force_attachment_load);
 
    /* A render view already selects its source subresource. Keep all base
     * writes in one bridge entry and preserve view/resolve override rules. */
@@ -511,18 +513,28 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
       const struct kk_image_view *iview = render->color_att[i].iview;
       if (!iview)
          continue;
+      /* Setup already emitted LOAD at this native slot. Other mappings keep
+       * their existing restart writes instead of guessing a slot's contents. */
+      if (render->color_map[i] == i &&
+          kk_attachment_load_action(&render->color_att[i],
+                                    force_attachment_load) == MTL_LOAD_ACTION_LOAD)
+         continue;
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
          mtl_render_pass_descriptor_get_color_attachment(pass_descriptor, i);
       mtl_render_pass_attachment_descriptor_set_load_action(
          attachment_descriptor, MTL_LOAD_ACTION_LOAD);
    }
-   if (render->depth_att.iview) {
+   if (render->depth_att.iview &&
+       kk_attachment_load_action(&render->depth_att, force_attachment_load) !=
+          MTL_LOAD_ACTION_LOAD) {
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
          mtl_render_pass_descriptor_get_depth_attachment(pass_descriptor);
       mtl_render_pass_attachment_descriptor_set_load_action(
          attachment_descriptor, MTL_LOAD_ACTION_LOAD);
    }
-   if (render->stencil_att.iview) {
+   if (render->stencil_att.iview &&
+       kk_attachment_load_action(&render->stencil_att, force_attachment_load) !=
+          MTL_LOAD_ACTION_LOAD) {
       mtl_render_pass_attachment_descriptor *attachment_descriptor =
          mtl_render_pass_descriptor_get_stencil_attachment(pass_descriptor);
       mtl_render_pass_attachment_descriptor_set_load_action(
