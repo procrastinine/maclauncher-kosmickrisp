@@ -54,7 +54,7 @@ struct kk_perf_compile_scope {
    uint64_t ns[KK_PERF_METRIC_COUNT];
    uint64_t count[KK_PERF_METRIC_COUNT];
 };
-uint64_t kk_perf_build_queued(struct kk_perf *, const char *source);
+uint64_t kk_perf_build_queued(struct kk_perf *, const void *source, size_t size);
 void kk_perf_build_event(struct kk_perf *, uint64_t build_id, const char *event,
                          const void *key, size_t key_size);
 void kk_perf_compile_begin(struct kk_perf *, struct kk_perf_compile_scope *);

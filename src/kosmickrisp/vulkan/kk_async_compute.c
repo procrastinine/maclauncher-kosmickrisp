@@ -18,7 +18,8 @@
 _Thread_local bool kk_defer_compute;
 
 /* Deferred builds an application binds are remembered per application in the
- * Metal archive's disk namespace, by a digest of their MSL. In a later run
+ * Metal archive's disk namespace, by a digest of their source: the compiler
+ * input of a lazily translated shader, otherwise its MSL. In a later run
  * those builds are predicted: they start at once on the predicted-build queue
  * and are usually ready before their first bind, instead of compiling on the
  * binding thread. A device thread loads the set and stores new first binds;
@@ -208,13 +209,29 @@ bound_id_compare(const void *a, const void *b)
    return memcmp(a, b, sizeof(struct kk_bound_id));
 }
 
+/* The source of a build: a lazily translated shader's recipe, otherwise its
+ * MSL. Both are immutable while the build exists. */
+static const void *
+job_source(const struct kk_async_compute *job, size_t *size)
+{
+   const struct kk_lazy_compute *lazy = job->shader->lazy;
+   if (lazy) {
+      *size = lazy->recipe_size;
+      return lazy->recipe;
+   }
+   const char *code = job->shader->msl_data[MESA_SHADER_COMPUTE].code;
+   *size = code ? strlen(code) : 0;
+   return code;
+}
+
 static void
 job_identify(struct kk_async_compute *job)
 {
    if (job->has_id) return;
-   const char *code = job->shader->msl_data[MESA_SHADER_COMPUTE].code;
-   if (!code) return;
-   XXH128_hash_t hash = XXH3_128bits(code, strlen(code));
+   size_t size;
+   const void *source = job_source(job, &size);
+   if (!source) return;
+   XXH128_hash_t hash = XXH3_128bits(source, size);
    memcpy(job->id.bytes, &hash.low64, 8);
    memcpy(job->id.bytes + 8, &hash.high64, 8);
    job->has_id = true;
@@ -377,6 +394,8 @@ owner_get(struct kk_device *dev)
 void
 kk_async_compute_device_init(struct kk_device *dev)
 {
+   const char *eager = getenv("KK_DEBUG_EAGER_COMPUTE_TRANSLATION");
+   dev->eager_compute_translation = eager && *eager && strcmp(eager, "0");
    owner_get(dev);
 }
 
@@ -396,8 +415,9 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
    job_identify(job);
    if (dev->perf) {
       kk_perf_compile_parent(dev->perf, &job->request_id, &job->parent_id);
-      job->build_id = kk_perf_build_queued(dev->perf,
-         shader->msl_data[MESA_SHADER_COMPUTE].code);
+      size_t size;
+      const void *source = job_source(job, &size);
+      job->build_id = source ? kk_perf_build_queued(dev->perf, source, size) : 0;
    }
    pthread_mutex_lock(&owner->mutex);
    assert(!owner->stopping);

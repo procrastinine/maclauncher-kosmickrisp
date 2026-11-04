@@ -327,8 +327,19 @@ struct kk_mesh_shader_state {
    struct kk_mesh_shader_runtime *runtime;
 };
 
+/* Compiler input of a compute shader whose translation runs in its deferred
+ * build (kk_lazy_compute.h). The recipe bytes are immutable; they are owned
+ * here unless the shader's sparse state holds the same recipe. */
+struct kk_lazy_compute {
+   const uint8_t *recipe;
+   size_t recipe_size;
+   void *own;
+   uint32_t required_modes, modes;
+};
+
 struct kk_shader {
    struct vk_shader vk;
+   struct kk_lazy_compute *lazy;
    struct kk_interlock_shader *interlock;
    struct kk_interlock_pipeline *interlock_pipeline;
    struct kk_gpl_shader_state *gpl;

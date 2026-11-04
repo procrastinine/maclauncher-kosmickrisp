@@ -364,6 +364,9 @@ Diagnostics
   the Metal compiler with a comment containing the base64-encoded value, and
   adds the value's hash to the shader cache identity. It is read once, at the
   first device creation.
+- ``KK_DEBUG_EAGER_COMPUTE_TRANSLATION``: a value other than ``0`` translates
+  every compute shader during pipeline creation; only the Metal library and
+  pipeline compile in the deferred build. It is read at device creation.
 - ``MESA_SHADER_CACHE_SHOW_STATS``: in addition to Mesa's shader cache
   statistics, prints one ``KK_SHADER_CACHE_BINDINGS`` line per shader written
   to the cache, with its source hash, embedded sampler count and whether its
@@ -485,21 +488,42 @@ failures propagate to command recording; a failed kernel is not dispatched.
 Compute pipeline creation
 =========================
 
-A single compute pipeline created without a native archive hit returns once
-its MSL is generated, including any sparse residency guards. The Metal
-library and pipeline compile on the bounded compiler queue at background
-priority. Binding the pipeline compiles it on the binding thread when its
+A single compute pipeline created without a native archive hit keeps its
+compiler input and returns without translating it: the preprocessed NIR, the
+descriptor set layouts and immutable sampler parameters by value, push
+constant ranges, robustness, enabled features and sparse residency classes.
+Its build, on the bounded compiler queue at background priority, translates
+that input to MSL, including any sparse residency guards, then compiles the
+Metal library and pipeline. Translation in the build uses the default
+allocator; the application's allocation callbacks are used only during API
+calls. A pipeline restored from a pipeline cache defers its build the same
+way; one stored with its MSL compiles only the Metal library and pipeline.
+
+The build stores the translated MSL and shader metadata in the Mesa disk cache
+under a digest of the compiler input. A later build of the same input, in
+this or a later process, restores them and compiles only the Metal library and
+pipeline. In a pipeline cache, such a pipeline is serialized as its compiler
+input whether or not its build has run, so ``vkGetPipelineCacheData`` reports
+the same size before and after the build. A pipeline restored from that data
+in a creation that cannot defer, such as one with creation feedback, restores
+the stored translation or translates during creation.
+
+Binding the pipeline compiles it on the binding thread when its
 compile has not started, or waits for the compile in progress and raises the
-compiling thread to user-initiated priority for the wait; a native compile
-failure loses the device at first use. Destroying a pipeline does not wait.
+compiling thread to user-initiated priority for the wait; a translation or native
+compile failure loses the device at first use. Destroying a pipeline does not wait.
 When the last pipeline or pipeline cache reference to the shader is
 destroyed, a compile that has not started is cancelled, and a compile in
 progress is joined at user-initiated priority and its result discarded.
 Device destruction does the same for every remaining compile. Creation stays
 synchronous for multi-pipeline calls, creation feedback, compile-required and
 early-return failures, statistics and internal-representation capture,
-indirect-bindable pipelines, shaders that use 64-bit atomic locks and sparse
-variants selected at bind.
+indirect-bindable pipelines and sparse variants selected at bind. Shaders with
+descriptor-heap embedded samplers are translated during creation, and their
+Metal compile is deferred unless they use 64-bit atomic locks. The first
+deferred compute pipeline of a device allocates the device's 64-bit atomic
+lock table, which builds of translated shaders that use 64-bit atomic locks
+share.
 
 Library reuse
 =============

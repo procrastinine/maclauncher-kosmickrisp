@@ -12,6 +12,7 @@
 struct kk_atomic64_state {
    simple_mtx_t mutex;
    struct kk_bo *bo;
+   bool ready; /* bo is allocated */
 };
 
 static VkResult
@@ -47,6 +48,22 @@ kk_atomic64_address(struct kk_device *dev, uint64_t *address)
    if (result == VK_SUCCESS)
       *address = state->bo->gpu;
    simple_mtx_unlock(&state->mutex);
+   return result;
+}
+
+/* Lazily translated compute shaders build natively on compiler workers,
+ * which must not call the device allocator. Their creation on an API thread
+ * allocates the lock table once; later calls read one flag. */
+VkResult
+kk_atomic64_prepare(struct kk_device *dev)
+{
+   struct kk_atomic64_state *state = p_atomic_read(&dev->atomic64_locks);
+   if (state && p_atomic_read(&state->ready))
+      return VK_SUCCESS;
+   uint64_t address;
+   VkResult result = kk_atomic64_address(dev, &address);
+   if (result == VK_SUCCESS)
+      p_atomic_set(&dev->atomic64_locks->ready, true);
    return result;
 }
 

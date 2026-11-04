@@ -25,6 +25,14 @@ static VkResult kk_compile_shaders_native(struct vk_device *, uint32_t,
 static bool kk_shader_serialize_native(struct vk_device *, const struct vk_shader *, struct blob *);
 static VkResult kk_deserialize_shader_native(struct vk_device *, struct blob_reader *, uint32_t,
    const VkAllocationCallbacks *, struct vk_shader **);
+static VkResult kk_lazy_compute_create(struct kk_device *, uint32_t,
+   const struct vk_shader_compile_info *, const struct vk_graphics_pipeline_state *,
+   const struct vk_features *, uint32_t, uint32_t, const struct kk_sparse_shader_state *,
+   const VkAllocationCallbacks *, struct vk_shader **);
+static bool kk_lazy_compute_serialize(const struct kk_shader *, struct blob *);
+static bool kk_lazy_compute_binary(const struct blob_reader *);
+static VkResult kk_lazy_compute_deserialize(struct kk_device *, struct blob_reader *,
+   const VkAllocationCallbacks *, struct vk_shader **);
 
 /* These are the existing shared graphics-state structures, with their one
  * nested pointer (sample locations) encoded separately. No Vulkan object or
@@ -88,7 +96,12 @@ kk_sparse_write_layout(struct blob *blob, const struct vk_descriptor_set_layout 
    const struct kk_descriptor_set_layout *layout =
       vk_to_kk_descriptor_set_layout((struct vk_descriptor_set_layout *)vk_layout);
    struct kk_descriptor_set_layout header = *layout;
+   /* Descriptor lowering reads the dynamic descriptor count, so only the
+    * object header, reference count and destructor are cleared. */
    memset(&header.vk, 0, sizeof(header.vk));
+   header.vk.flags = layout->vk.flags;
+   header.vk.dynamic_descriptor_count = layout->vk.dynamic_descriptor_count;
+   memcpy(header.vk.blake3, layout->vk.blake3, sizeof(header.vk.blake3));
    header.embedded_samplers_addr = 0;
    blob_write_bytes(blob, &header, sizeof(header));
    for (unsigned i = 0; i < layout->binding_count; ++i) {
@@ -106,7 +119,14 @@ kk_sparse_write_layout(struct blob *blob, const struct vk_descriptor_set_layout 
          memset(&copy.vk.base, 0, sizeof(copy.vk.base));
          memset(copy.planes, 0, sizeof(copy.planes));
          copy.vk.ycbcr_conversion = NULL;
+         /* Sampler lowering reads the parameter record; it is written by
+          * value because a recipe can be replayed in another process. */
+         copy.params_cpu = NULL;
+         copy.params_gpu_address = 0;
          blob_write_bytes(blob, &copy, sizeof(copy));
+         blob_write_uint8(blob, sampler->params_cpu != NULL);
+         if (sampler->params_cpu)
+            blob_write_bytes(blob, sampler->params_cpu, sizeof(*sampler->params_cpu));
          blob_write_uint8(blob, sampler->vk.ycbcr_conversion != NULL);
          if (sampler->vk.ycbcr_conversion)
             blob_write_bytes(blob, &sampler->vk.ycbcr_conversion->state,
@@ -140,6 +160,13 @@ kk_sparse_read_layout(void *ctx, struct blob_reader *blob)
          if (!sampler) { blob->overrun = true; return NULL; }
          blob_copy_bytes(blob, sampler, sizeof(*sampler));
          sampler->vk.ycbcr_conversion = NULL;
+         sampler->params_cpu = NULL;
+         if (blob_read_uint8(blob)) {
+            struct kk_sampler_params *params = rzalloc(ctx, struct kk_sampler_params);
+            if (!params) { blob->overrun = true; return NULL; }
+            blob_copy_bytes(blob, params, sizeof(*params));
+            sampler->params_cpu = params;
+         }
          if (blob_read_uint8(blob)) {
             sampler->vk.ycbcr_conversion = rzalloc(ctx, struct vk_ycbcr_conversion);
             if (!sampler->vk.ycbcr_conversion) { blob->overrun = true; return NULL; }
@@ -255,18 +282,14 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
    return modes & enabled;
 }
 
-static struct kk_sparse_shader_state *
-kk_sparse_capture_pipeline(uint32_t count, const struct vk_shader_compile_info *infos,
+/* A recipe is the complete compiler input of one compile call: features,
+ * graphics state, layouts by value and serialized NIR. Sparse variants and
+ * lazily translated compute shaders replay it with kk_recipe_compile. */
+static void
+kk_recipe_write(struct blob *blob, uint32_t count, const struct vk_shader_compile_info *infos,
    const struct vk_graphics_pipeline_state *graphics, const struct vk_features *features,
    uint32_t modes, uint32_t always_modes)
 {
-   struct kk_sparse_shader_state *state = calloc(1, sizeof(*state));
-   if (!state) return NULL;
-   simple_mtx_init(&state->mutex, mtx_plain);
-   blob_init(&state->recipe); blob_init(&state->binary);
-   struct blob *blob = &state->recipe;
-   state->required_modes = modes;
-   state->always_modes = always_modes;
    blob_write_uint32(blob, count);
    blob_write_uint32(blob, modes);
    blob_write_uint32(blob, always_modes);
@@ -290,6 +313,21 @@ kk_sparse_capture_pipeline(uint32_t count, const struct vk_shader_compile_info *
                        info->push_constant_range_count * sizeof(*info->push_constant_ranges));
       nir_serialize(blob, info->nir, false);
    }
+}
+
+static struct kk_sparse_shader_state *
+kk_sparse_capture_pipeline(uint32_t count, const struct vk_shader_compile_info *infos,
+   const struct vk_graphics_pipeline_state *graphics, const struct vk_features *features,
+   uint32_t modes, uint32_t always_modes)
+{
+   struct kk_sparse_shader_state *state = calloc(1, sizeof(*state));
+   if (!state) return NULL;
+   simple_mtx_init(&state->mutex, mtx_plain);
+   blob_init(&state->recipe); blob_init(&state->binary);
+   struct blob *blob = &state->recipe;
+   state->required_modes = modes;
+   state->always_modes = always_modes;
+   kk_recipe_write(blob, count, infos, graphics, features, modes, always_modes);
    if (blob->out_of_memory) {
       blob_finish(blob); blob_finish(&state->binary);
       simple_mtx_destroy(&state->mutex); free(state); return NULL;
@@ -315,48 +353,20 @@ kk_sparse_shader_finish(struct kk_shader *shader)
    simple_mtx_destroy(&state->mutex); free(state); shader->sparse = NULL;
 }
 
+/* Replays a recipe through the native compiler with the given residency
+ * classes. Returns the shader of the first recorded stage. */
 static VkResult
-kk_sparse_compile_variant(struct kk_device *dev, struct kk_sparse_shader_state *state,
-                          uint32_t modes, struct kk_shader **out)
+kk_recipe_compile(struct kk_device *dev, const void *data, size_t size,
+                  uint32_t required_modes, uint32_t always_modes, uint32_t modes,
+                  const VkAllocationCallbacks *alloc, struct kk_shader **out)
 {
-   assert(modes && !(modes & ~state->required_modes));
-   blake3_hash key;
-   struct mesa_blake3 hash;
-   _mesa_blake3_init(&hash);
-   _mesa_blake3_update(&hash, state->guarded_key, sizeof(state->guarded_key));
-   _mesa_blake3_update(&hash, &modes, sizeof(modes));
-   _mesa_blake3_final(&hash, key);
-   if (modes == state->required_modes && state->binary.size) {
-      struct blob_reader binary;
-      blob_reader_init(&binary, state->binary.data, state->binary.size);
-      struct vk_shader *shader;
-      VkResult result = kk_deserialize_shader_native(&dev->vk, &binary,
-         kk_device_physical(dev)->vk.properties.shaderBinaryVersion, NULL, &shader);
-      if (result == VK_SUCCESS) *out = container_of(shader, struct kk_shader, vk);
-      return result;
-   }
-   if (dev->vk.mem_cache) {
-      struct vk_pipeline_cache_object *cached = vk_pipeline_cache_lookup_object(
-         dev->vk.mem_cache, key, sizeof(key), &vk_raw_data_cache_object_ops, NULL);
-      if (cached) {
-         struct vk_raw_data_cache_object *raw = container_of(cached, struct vk_raw_data_cache_object, base);
-         struct blob_reader binary;
-         blob_reader_init(&binary, raw->data, raw->data_size);
-         struct vk_shader *shader;
-         VkResult result = kk_deserialize_shader_native(&dev->vk, &binary,
-            kk_device_physical(dev)->vk.properties.shaderBinaryVersion, NULL, &shader);
-         vk_pipeline_cache_object_unref(&dev->vk, cached);
-         if (result == VK_SUCCESS) *out = container_of(shader, struct kk_shader, vk);
-         return result;
-      }
-   }
    void *ctx = ralloc_context(NULL);
    if (!ctx) return VK_ERROR_OUT_OF_HOST_MEMORY;
    struct blob_reader blob;
-   blob_reader_init(&blob, state->recipe.data, state->recipe.size);
+   blob_reader_init(&blob, data, size);
    unsigned count = blob_read_uint32(&blob);
-   if (blob_read_uint32(&blob) != state->required_modes ||
-       blob_read_uint32(&blob) != state->always_modes) {
+   if (blob_read_uint32(&blob) != required_modes ||
+       blob_read_uint32(&blob) != always_modes) {
       ralloc_free(ctx); return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    }
    struct vk_features features;
@@ -399,16 +409,61 @@ kk_sparse_compile_variant(struct kk_device *dev, struct kk_sparse_shader_state *
    }
    if (blob.overrun) { ralloc_free(ctx); return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT; }
    VkResult result = kk_compile_shaders_native(&dev->vk, count, infos, graphics, &features,
-                                               NULL, compiled, modes);
+                                               alloc, compiled, modes);
    if (result == VK_SUCCESS) {
       *out = container_of(compiled[0], struct kk_shader, vk);
-      (*out)->info.sparse_modes = modes;
       for (unsigned i = 1; i < count; ++i)
-         kk_shader_destroy(&dev->vk, container_of(compiled[i], struct kk_shader, vk), NULL);
+         kk_shader_destroy(&dev->vk, container_of(compiled[i], struct kk_shader, vk), alloc);
+   }
+   ralloc_free(ctx);
+   return result;
+}
+
+static VkResult
+kk_sparse_compile_variant(struct kk_device *dev, struct kk_sparse_shader_state *state,
+                          uint32_t modes, struct kk_shader **out)
+{
+   assert(modes && !(modes & ~state->required_modes));
+   blake3_hash key;
+   struct mesa_blake3 hash;
+   _mesa_blake3_init(&hash);
+   _mesa_blake3_update(&hash, state->guarded_key, sizeof(state->guarded_key));
+   _mesa_blake3_update(&hash, &modes, sizeof(modes));
+   _mesa_blake3_final(&hash, key);
+   if (modes == state->required_modes && state->binary.size) {
+      struct blob_reader binary;
+      blob_reader_init(&binary, state->binary.data, state->binary.size);
+      struct vk_shader *shader;
+      VkResult result = kk_deserialize_shader_native(&dev->vk, &binary,
+         kk_device_physical(dev)->vk.properties.shaderBinaryVersion, NULL, &shader);
+      if (result == VK_SUCCESS) *out = container_of(shader, struct kk_shader, vk);
+      return result;
+   }
+   if (dev->vk.mem_cache) {
+      struct vk_pipeline_cache_object *cached = vk_pipeline_cache_lookup_object(
+         dev->vk.mem_cache, key, sizeof(key), &vk_raw_data_cache_object_ops, NULL);
+      if (cached) {
+         struct vk_raw_data_cache_object *raw = container_of(cached, struct vk_raw_data_cache_object, base);
+         struct blob_reader binary;
+         blob_reader_init(&binary, raw->data, raw->data_size);
+         struct vk_shader *shader;
+         VkResult result = kk_deserialize_shader_native(&dev->vk, &binary,
+            kk_device_physical(dev)->vk.properties.shaderBinaryVersion, NULL, &shader);
+         vk_pipeline_cache_object_unref(&dev->vk, cached);
+         if (result == VK_SUCCESS) *out = container_of(shader, struct kk_shader, vk);
+         return result;
+      }
+   }
+   struct kk_shader *compiled0 = NULL;
+   VkResult result = kk_recipe_compile(dev, state->recipe.data, state->recipe.size,
+      state->required_modes, state->always_modes, modes, NULL, &compiled0);
+   if (result == VK_SUCCESS) {
+      *out = compiled0;
+      (*out)->info.sparse_modes = modes;
       if (dev->vk.mem_cache) {
          struct blob binary;
          blob_init(&binary);
-         if (kk_shader_serialize_native(&dev->vk, compiled[0], &binary)) {
+         if (kk_shader_serialize_native(&dev->vk, &compiled0->vk, &binary)) {
             struct vk_raw_data_cache_object *raw = vk_raw_data_cache_object_create(
                &dev->vk, key, sizeof(key), binary.data, binary.size);
             if (raw) {
@@ -419,7 +474,6 @@ kk_sparse_compile_variant(struct kk_device *dev, struct kk_sparse_shader_state *
          blob_finish(&binary);
       }
    }
-   ralloc_free(ctx);
    return result;
 }
 
@@ -475,8 +529,13 @@ kk_compile_shaders_sparse(struct vk_device *device, uint32_t count,
          return VK_ERROR_OUT_OF_HOST_MEMORY;
       }
    }
-   result = kk_compile_shaders_native(device, count, infos, graphics,
-                                      features, alloc, out, always_modes);
+   /* A compute shader created for a deferred build keeps this input and is
+    * translated in that build (kk_lazy_compute.h). */
+   result = kk_lazy_compute_create(dev, count, infos, graphics, features, modes,
+                                   always_modes, state, alloc, out);
+   if (result == VK_INCOMPLETE)
+      result = kk_compile_shaders_native(device, count, infos, graphics,
+                                         features, alloc, out, always_modes);
    if (result == VK_SUCCESS)
       for (unsigned i = 0; i < count; ++i)
          container_of(out[i], struct kk_shader, vk)->info.sparse_modes = always_modes;
@@ -630,8 +689,10 @@ kk_shader_serialize_sparse(struct vk_device *dev, const struct vk_shader *vk_sha
 static bool
 kk_shader_serialize(struct vk_device *dev, const struct vk_shader *vk_shader, struct blob *blob)
 {
-   if (!kk_shader_serialize_sparse(dev, vk_shader, blob)) return false;
    const struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
+   /* Before any other field: its deferred build may be writing them. */
+   if (shader->lazy) return kk_lazy_compute_serialize(shader, blob);
+   if (!kk_shader_serialize_sparse(dev, vk_shader, blob)) return false;
    const bool route = shader->info.depth_bounds_emulation && shader->bounds_route;
    blob_write_uint8(blob, route);
    if (!route) return !blob->out_of_memory;
@@ -684,6 +745,8 @@ kk_deserialize_shader_untracked(struct vk_device *dev, struct blob_reader *blob,
    const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
    if (kk_rt_shader_binary(blob)) return kk_rt_shader_deserialize(dev,blob,alloc,out);
+   if (kk_lazy_compute_binary(blob))
+      return kk_lazy_compute_deserialize(container_of(dev, struct kk_device, vk), blob, alloc, out);
    VkResult result = kk_deserialize_shader_sparse(dev, blob, version, alloc, out);
    if (result != VK_SUCCESS) return result;
    struct kk_shader *transaction = container_of(*out, struct kk_shader, vk);
@@ -741,5 +804,6 @@ kk_deserialize_shader(struct vk_device *dev, struct blob_reader *blob, uint32_t 
       return kk_deserialize_shader_tracked(dev, blob, version, alloc, out);
    return kk_deserialize_shader_untracked(dev, blob, version, alloc, out);
 }
+#include "kk_lazy_compute.h"
 #undef KK_SPARSE_GRAPHICS_STATES
 #endif

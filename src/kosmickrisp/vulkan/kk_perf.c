@@ -658,10 +658,10 @@ kk_perf_build_event(struct kk_perf *p, uint64_t id, const char *event,
 }
 
 uint64_t
-kk_perf_build_queued(struct kk_perf *p, const char *source)
+kk_perf_build_queued(struct kk_perf *p, const void *source, size_t size)
 {
    if (!p || !p->build_reasons) return 0;
-   blake3_hash key; _mesa_blake3_compute(source, strlen(source), key);
+   blake3_hash key; _mesa_blake3_compute(source, size, key);
    pthread_mutex_lock(&p->mutex);
    uint64_t id = ++p->build_sequence;
    pthread_mutex_unlock(&p->mutex);

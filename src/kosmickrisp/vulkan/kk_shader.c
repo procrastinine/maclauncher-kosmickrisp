@@ -1540,6 +1540,11 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
 
 static const struct vk_shader_ops kk_shader_ops;
 
+/* Set while a lazily translated compute shader's deferred build translates
+ * it: compilation and restoration produce MSL and metadata only, and the
+ * build then compiles the native pipeline itself. */
+static _Thread_local bool kk_translate_only;
+
 static void kk_gpl_shader_finish(struct kk_device *dev, struct kk_shader *shader,
                                  const VkAllocationCallbacks *alloc);
 static bool kk_gpl_shader_serialize(const struct kk_shader *shader, struct blob *blob);
@@ -1596,6 +1601,11 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
       kk_shader_destroy(vk_dev, shader->bounds_route, pAllocator);
    kk_shader_embedded_samplers_finish(dev, shader);
    const bool mesh_stage = kk_shader_stage_has_mesh_info(shader->vk.stage);
+   if (shader->lazy) {
+      free(shader->lazy->own);
+      free(shader->lazy);
+      shader->lazy = NULL;
+   }
    kk_sparse_shader_finish(shader);
    if (mesh_stage && shader->mesh && shader->mesh->runtime) {
       struct kk_mesh_shader_runtime *runtime = shader->mesh->runtime;
@@ -4643,9 +4653,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       /* Sparse residency guards are already part of the generated MSL; only
        * the native library and pipeline build moves to the compiler queue.
        * Guarded variants selected at bind compile outside pipeline creation. */
-      bool deferred = kk_defer_compute && !s->info.indirect_bindable &&
-         !s->msl_data[MESA_SHADER_COMPUTE].uses_atomic64_locks &&
-         kk_async_compute_start(dev, s, kk_compile_async_compute);
+      bool deferred = kk_translate_only ||
+         (kk_defer_compute && !s->info.indirect_bindable &&
+          !s->msl_data[MESA_SHADER_COMPUTE].uses_atomic64_locks &&
+          kk_async_compute_start(dev, s, kk_compile_async_compute));
       if (!deferred)
          result = kk_compile_compute_pipeline(dev, s, &s->msl_data[MESA_SHADER_COMPUTE],
                                               local_size_threads, &s->pipeline.cs);
@@ -4968,9 +4979,10 @@ kk_deserialize_shader_native_inner(struct vk_device *vk_dev, struct blob_reader 
        * native build defers exactly as it does after a fresh compile: an
        * ordinary vkCreateComputePipelines on a warm cache no longer waits
        * for the Metal library and pipeline on the application thread. */
-      bool deferred = kk_defer_compute && !shader->info.indirect_bindable &&
-         !shader->msl_data[MESA_SHADER_COMPUTE].uses_atomic64_locks &&
-         kk_async_compute_start(dev, shader, kk_compile_async_compute);
+      bool deferred = kk_translate_only ||
+         (kk_defer_compute && !shader->info.indirect_bindable &&
+          !shader->msl_data[MESA_SHADER_COMPUTE].uses_atomic64_locks &&
+          kk_async_compute_start(dev, shader, kk_compile_async_compute));
       if (!deferred)
          result = kk_compile_compute_pipeline(
             dev, shader, &shader->msl_data[MESA_SHADER_COMPUTE], local_size_threads,
