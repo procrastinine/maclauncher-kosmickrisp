@@ -617,7 +617,7 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
       NSError *error = nil;
       id<MTLComputePipelineState> pipeline = kk_archive_compute(compiler, desc);
       if (!pipeline) {
-         pipeline = MTL_COMPILER_PIPELINE_CALL(compiler,
+         pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc,
             [comp newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
       }
 
@@ -729,7 +729,7 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
       NSError *error = nil;
       id<MTLRenderPipelineState> pipeline = kk_archive_render(compiler, desc);
       if (!pipeline) {
-         pipeline = MTL_COMPILER_PIPELINE_CALL(compiler,
+         pipeline = MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, desc,
             [comp newRenderPipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
       }
 

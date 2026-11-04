@@ -57,14 +57,17 @@ void mtl_compiler_finish_cache(mtl_compiler *compiler);
 void *mtl_compiler_cache_begin(mtl_compiler *compiler);
 void mtl_compiler_cache_end(void *token);
 void mtl_compiler_cache_record_pipeline(mtl_compiler *compiler);
+void mtl_compiler_cache_record_descriptor(mtl_compiler *compiler, void *descriptor);
 #ifdef __OBJC__
-#define MTL_COMPILER_PIPELINE_CALL(compiler, expression) ({ \
+#define MTL_COMPILER_PIPELINE_CALL(compiler, expression) \
+   MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, NULL, expression)
+#define MTL_COMPILER_PIPELINE_CALL_DESCRIPTOR(compiler, descriptor, expression) ({ \
    mtl_compiler *_kk_native_compiler = (mtl_compiler *)(compiler); \
    void *_kk_capture = mtl_compiler_cache_begin(_kk_native_compiler); \
    __typeof__(expression) _kk_pipeline = nil; \
    @try { \
       _kk_pipeline = (expression); \
-      if (_kk_pipeline) mtl_compiler_cache_record_pipeline(_kk_native_compiler); \
+      if (_kk_pipeline) mtl_compiler_cache_record_descriptor(_kk_native_compiler, (void *)(descriptor)); \
    } @finally { mtl_compiler_cache_end(_kk_capture); } \
    _kk_pipeline; \
 })

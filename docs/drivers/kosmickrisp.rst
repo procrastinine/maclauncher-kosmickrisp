@@ -421,6 +421,24 @@ constants and render pipeline state remain part of pipeline creation.
 Single-library compute compilation and persistent archive identities do not
 use it.
 
+Native pipeline archives
+========================
+
+Native pipeline archives share Mesa's disk-cache namespace and storage
+budget. Checkpoint journals retain all referenced archive pieces. Up to eight
+opened archive objects are retained in an in-memory least-recently-used set;
+active requests retain their own archive and backing file.
+
+Lookup hints combine shader-library source hashes and compiler options with
+selected resolved pipeline state. A hint selects the first piece to try.
+Metal verifies the complete native descriptor, including function constants.
+Missing, stale or colliding hints continue through the remaining candidates.
+Unavailable archive payloads are cache misses and use normal compilation.
+
+A checkpoint stores and verifies its archive payload before publishing the
+piece reference and captured lookup hints together in the two-slot journal.
+Legacy journals containing only piece references remain readable.
+
 Metal workarounds
 *****************
 
