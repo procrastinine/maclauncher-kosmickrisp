@@ -727,12 +727,15 @@ kk_perf_compile_end(struct kk_perf_compile_scope *scope, bool binary, int result
    for (unsigned i = 0; i < KK_PERF_METRIC_COUNT; i++)
       fprintf(p->log, "%s\"%s\":{\"count\":%"PRIu64",\"total_ms\":%.6f}",
               i ? "," : "", names[i], scope->count[i], scope->ns[i]/1e6);
+   if (p->build_reasons)
    fprintf(p->log, "},\"build_id\":%"PRIu64",\"build_reasons\":{"
       "\"cache-key-miss\":%s,\"archive-miss\":%u,\"archive-hit\":%u,"
       "\"library-miss\":%u,\"library-hit\":%u,\"specialization\":%s,\"cancelled\":%s}}\n",
       scope->build_id, binary ? "false" : "true", scope->archive_misses,
       scope->archive_hits, scope->library_misses, scope->library_hits,
       scope->specialized ? "true" : "false", scope->cancelled ? "true" : "false");
+   else
+      fprintf(p->log, "}}\n");
    fflush(p->log);
    pthread_mutex_unlock(&p->mutex);
 }
