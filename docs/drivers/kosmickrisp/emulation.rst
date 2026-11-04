@@ -14,7 +14,7 @@
    * - ``denorm_preserve``
      - Gradual underflow for requested floating-point preservation modes.
        Controls: ``shaderDenormPreserveFloat16``, ``shaderDenormPreserveFloat32``, ``shaderDenormPreserveFloat64``.
-     - mixed native / software. FP16 uses native half arithmetic; FP32 replaces most arithmetic and comparisons with software; FP64 uses software binary64. About 7x GPU time was reported for a workload requesting FP32 preservation. Per-operation cost is unmeasured.
+     - mixed native / software. FP16 uses native half arithmetic. Requested FP32 add, multiply, FMA and divide use native operations with subnormal-operand and result guards, with exact software handling in out-of-line cold functions; other preservation operations retain their numerical helpers. FP64 uses software binary64.
      - On
      - vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.
      - Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.
@@ -22,7 +22,7 @@
    * - ``denorm_flush``
      - Flush subnormal results to zero in requested floating-point modes.
        Controls: ``shaderDenormFlushToZeroFloat16``, ``shaderDenormFlushToZeroFloat32``, ``shaderDenormFlushToZeroFloat64``.
-     - native arithmetic / ALU fixups. FP32 adds exponent-mask fixups to selected operations; no full software FP32 replacement. Per-operation cost is unmeasured. FTZ16 and FTZ64 are unsupported.
+     - native arithmetic / ALU fixups / cold software repair. FP32 arithmetic remains native. Multiply, FMA and divide test a zero result and repair finite normal nonzero operands through a cold correctly rounded fallback before final subnormal flushing. Selected non-arithmetic operations retain exponent-mask fixups. FTZ16 and FTZ64 remain unsupported.
      - On
      - vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.
      - Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.
@@ -163,3 +163,107 @@
      - DXVK and vkd3d-proton treat depth-bias control as optional; disabling it does not lower their shader model or feature level or prevent device creation.
      - No D3D shader-model, feature-level or translator-device-creation loss in DXVK or vkd3d-proton; exact and alternate-representation Vulkan depth bias is unavailable and translators retain their default bias path.
      - ``performance,+depth_bias_control``
+   * - ``float64``
+     - Binary64 floating-point arithmetic and comparisons.
+       Controls: ``shaderFloat64``, ``shaderFmaFloat64``, ``shaderSignedZeroInfNanPreserveFloat64``, ``shaderDenormPreserveFloat64``, ``shaderDenormFlushToZeroFloat64``, ``shaderRoundingModeRTEFloat64``, ``shaderRoundingModeRTZFloat64``.
+     - software binary64. Only actual FP64 operations are lowered to integer and FP32 algorithms; equality uses branchless 32-bit integer operations. FP32 and integer-only shaders emit no FP64 code. Runtime cost is unmeasured.
+     - Off
+     - Double precision is an optional D3D11/D3D12 capability; the pinned DXVK and vkd3d-proton SM/FL and device-creation gates do not require it, and Apple family 8 has no native binary64 ALU.
+     - D3D11/D3D12 double-precision capabilities and FP64 shader creation are unavailable; the pinned translator SM/FL limits and ordinary device creation are unchanged. Integer64 support is independent.
+     - ``performance,+float64``
+   * - ``device_generated_commands``
+     - Generated graphics and compute sequences with push-data and vertex/index-buffer tokens.
+       Controls: ``VK_EXT_device_generated_commands``, ``deviceGeneratedCommands``, ``dynamicGeneratedPipelineLayout``, ``maxIndirectPipelineCount``, ``maxIndirectShaderObjectCount``, ``maxIndirectSequenceCount``, ``maxIndirectCommandsTokenCount``, ``maxIndirectCommandsTokenOffset``, ``maxIndirectCommandsIndirectStride``, ``supportedIndirectCommandsInputModes``, ``supportedIndirectCommandsShaderStages``, ``supportedIndirectCommandsShaderStagesPipelineBinding``, ``supportedIndirectCommandsShaderStagesShaderBinding``, ``deviceGeneratedCommandsTransformFeedback``, ``deviceGeneratedCommandsMultiDrawIndirectCount``.
+     - GPU token expansion / native Metal ICB. Used sequences snapshot token bytes and expand root, draw and vertex-input data on the GPU before native ICB execution. Native expansion and command encoding share one dispatch per 512-sequence slice; graphics crosses from compute to render. Poly stages retain their own expansion. The shared runtime library is compiled only for generated-command or indirect-count execution; application shaders gain no DGC MSL.
+     - On
+     - Keeps state-changing D3D12 ExecuteIndirect signatures working where vkd3d-proton has no complete fallback; unused DGC adds no application-shader MSL or GPU preprocessing.
+     - ExecuteIndirect tier 1.1 is unavailable; vkd3d-proton can skip state-changing indirect signatures without a DGC template. No shader-model or feature-level reduction or device-creation rejection is established for DGC alone.
+     - ``performance,+device_generated_commands``
+   * - ``draw_indirect_count``
+     - GPU-counted ordinary multi-draw indirect commands.
+       Controls: ``VK_KHR_draw_indirect_count``, ``VK_AMD_draw_indirect_count``, ``drawIndirectCount``.
+     - GPU count filtering / native Metal ICB. Large native batches expand active draw records and encode ICB commands in one dispatch per 512-draw slice. Other selected routes filter indirect arguments on the GPU and retain their own stage work. Counts remain GPU-resident. No count command adds application-shader MSL. The shared maxDrawIndirectCount limit also serves native fixed-count draws and is retained.
+     - On
+     - Preserves D3D12 counter-backed ExecuteIndirect and predication semantics; vkd3d-proton returns without executing these commands if drawIndirectCount is unavailable.
+     - Counter-buffer and fallback-predicated ExecuteIndirect commands are skipped by vkd3d-proton. Its reported shader model and feature level can remain unchanged and no device-creation rejection is established; those reports do not provide the missing command semantics.
+     - ``performance,+draw_indirect_count``
+   * - ``fragment_barycentric``
+     - Fragment barycentric coordinates and per-vertex inputs.
+       Controls: ``VK_KHR_fragment_shader_barycentric``, ``fragmentShaderBarycentric``, ``triStripVertexOrderIndependentOfProvokingVertex``.
+     - native interpolation / corner transport. Legal center-only coordinates use native barycentric_coord. A representative float4 corner interpolation emits 4 fragment input reads and 20 scalar arithmetic assignments; its producer emits 155 temporary assignments versus 3 for the ordinary producer. Exact or reordered coordinates retain corner transport. These are emitted MSL counts; GPU timing is unmeasured.
+     - On
+     - Preserves SM 6.1 barycentric shader support and the barycentric requirement of vkd3d-proton mesh shaders, which are required for feature level 12.2.
+     - Without a translator fallback, SV_Barycentrics shaders are unavailable and vkd3d-proton normally disables mesh shaders; this prevents feature level 12.2 when its other requirements are met. The maximum reported shader model is not independently reduced by this entry.
+     - ``performance,+fragment_barycentric``
+   * - ``sampler_filter_minmax``
+     - Minimum and maximum sampler filtering on Apple8 and Apple9 GPUs.
+       Controls: ``VK_EXT_sampler_filter_minmax``, ``samplerFilterMinmax``, ``filterMinmaxSingleComponentFormats``, ``filterMinmaxImageComponentMapping``, ``VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT``.
+     - native Apple10 / software filter footprints. Apple10 uses native sampler reduction. Apple8 and Apple9 reduce up to 2^dimensions point taps per filtered mip, with up to two mip footprints and additional anisotropic footprints. Immutable MIN/MAX helpers omit weighted-result dispatch and inline internal taps; ordinary weighted sampling keeps its native path.
+     - On
+     - DXVK uses min/max filtering for tiled-resource tier 2, which is required for D3D feature level 12_0; only samplers selecting reduction perform software taps.
+     - Disabling min/max filtering can lower DXVK tiled-resource support below tier 2 and remove D3D feature level 12_0.
+     - ``performance,+sampler_filter_minmax``
+   * - ``descriptor_heap``
+     - Descriptor heap addressing and shared image, buffer and sampler metadata.
+       Controls: ``VK_EXT_descriptor_heap``, ``descriptorHeap``, ``descriptorHeapCaptureReplay``, ``samplerHeapAlignment``, ``resourceHeapAlignment``, ``maxSamplerHeapSize``, ``maxResourceHeapSize``, ``samplerDescriptorSize``, ``imageDescriptorSize``, ``bufferDescriptorSize``, ``samplerDescriptorAlignment``, ``imageDescriptorAlignment``, ``bufferDescriptorAlignment``, ``maxPushDataSize``, ``maxDescriptorHeapEmbeddedSamplers``, ``samplerYcbcrConversionCount``.
+     - native resource handles / descriptor indirection. In emitted non-sparse, unrobust signatures, a buffer access uses one 8-byte heap-root load and one 16-byte packet load; a sampled texture/sampler pair uses two 8-byte heap-root loads plus one 8-byte sampler-metadata pointer load before shared decoding. Unused set shaders emit no heap access. GPU latency and relative speed are unmeasured.
+     - Off
+     - Pinned DXVK and vkd3d-proton retain conventional descriptor binding, device creation and D3D SM/FL without this optional interface; no relative speedup is claimed.
+     - Pinned DXVK/vkd3d-proton device creation and D3D SM/FL are unchanged; the Vulkan heap interface and vkd3d experimental work graphs are unavailable, and byte-offset views require descriptor-buffer support.
+     - ``performance,+descriptor_heap``
+   * - ``zero_initialize_device_memory``
+     - Explicit zero contents for requested device-memory allocations and ZERO_INITIALIZED images.
+       Controls: ``VK_EXT_zero_initialize_device_memory``, ``zeroInitializeDeviceMemory``.
+     - host clear / native Metal blit. Each flagged allocation clears the whole BO with CPU stores or a Metal buffer fill and completion wait. ZERO_INITIALIZED images use unoptimized storage to preserve zero bits. No shader instructions are added.
+     - Off
+     - DXVK 3.1.1 and vkd3d-proton 3.1 do not require this allocation extension for D3D shader models, feature levels or device creation; vkd3d-proton retains its resource-clearing path.
+     - D3D shader-model, feature-level and translator device-creation support remain; explicit Vulkan zero-initialized allocation requests and ZERO_INITIALIZED image layout are unavailable.
+     - ``performance,+zero_initialize_device_memory``
+   * - ``sliced_3d_views``
+     - Restricted-depth storage views of native 3D textures.
+       Controls: ``VK_EXT_image_sliced_view_of_3d``, ``imageSlicedViewOf3D``.
+     - native texture / shader address adaptation. Selected 3D storage operations load slice bounds and adjust or reject Z coordinates; image-size queries replace the depth result. The native texture operation is retained. Sparse descriptors can add query-record loads. Runtime timing is unmeasured.
+     - On
+     - Preserve restricted-depth D3D Texture3D UAV semantics: the pinned vkd3d-proton fallback uses the full depth and is not equivalent, so disabling is not established safe for the required D3D view contract.
+     - D3D Texture3D FirstWSlice/WSize UAV semantics are lost; vkd3d-proton reports an unhandled depth view and uses the full depth while its reported SM/FL and device creation remain unchanged.
+     - ``performance,+sliced_3d_views``
+   * - ``maintenance11_views``
+     - Single-layer image dimension alias guarantees.
+       Controls: ``VK_KHR_maintenance11``, ``maintenance11``.
+     - native views / typed descriptor selection. Native Metal plain and array views share the existing backing; selected shader accesses choose the appropriate typed descriptor address. Representative array storage load lowering adds one descriptor load and four pre-optimization ALU operations. Runtime timing is unmeasured.
+     - On
+     - Preserve D3D single-layer dimension reinterpretation: the pinned vkd3d-proton legacy natural-view path has no maintenance11 guarantee or established equivalent native Metal argument-type fallback.
+     - D3D single-layer 2D/2D-array descriptor reinterpretation loses its maintenance11 guarantee even though reported SM/FL and device creation are unchanged; DXVK uploads fall back to the graphics queue.
+     - ``performance,+maintenance11_views``
+   * - ``layered_block_views``
+     - Multiple layers in uncompressed block-compatible views of compressed images.
+       Controls: ``blockTexelViewCompatibleMultipleLayers``.
+     - native per-layer views / layer and raster adaptation. Native per-layer views share backing; selected shader accesses select a layer descriptor. Cube filtering may add taps and layered attachments may use retained raster readers. Representative array-load lowering adds five descriptor or record loads and 37 pre-optimization ALU operations. Runtime timing is unmeasured.
+     - Off
+     - DXVK has a per-layer compressed-upload fallback and does not use this optional maintenance6 property to choose D3D SM/FL or require device creation.
+     - Reported D3D SM/FL and translator device creation are unchanged; public multi-layer raw block views are unavailable and DXVK uses per-layer uploads. Other maintenance6 guarantees and internal copy paths remain available.
+     - ``performance,+layered_block_views``
+   * - ``transform_feedback``
+     - Transform-feedback buffer output, geometry streams and stream queries.
+       Controls: ``VK_EXT_transform_feedback``, ``VK_EXT_primitives_generated_query``, ``transformFeedback``, ``geometryStreams``, ``primitivesGeneratedQuery``, ``primitivesGeneratedQueryWithRasterizerDiscard``, ``primitivesGeneratedQueryWithNonZeroStreams``, ``maxTransformFeedbackStreams``, ``maxTransformFeedbackBuffers``, ``maxTransformFeedbackBufferSize``, ``maxTransformFeedbackStreamDataSize``, ``maxTransformFeedbackBufferDataSize``, ``maxTransformFeedbackBufferDataStride``, ``transformFeedbackQueries``, ``transformFeedbackStreamsLinesTriangles``, ``transformFeedbackRasterizationStreamSelect``, ``transformFeedbackDraw``, ``transformFeedbackPreservesTriangleFanProvokingVertex``.
+     - compute / buffer output. Active feedback captures producer output, checks buffer room and writes enabled components and counters. A family-8 point-GS vec4 output adds 16 emitted MSL assignment/store sites to the raster sibling and a 115-site report program. These are static source sites, not native instruction counts; replay/report dispatch depends on actual use.
+     - On
+     - vkd3d-proton requires transform-feedback queries for device creation, and D3D11 stream output requires the implemented output path.
+     - vkd3d-proton rejects devices without transformFeedbackQueries; D3D11 stream output and dependent generated-primitive queries are unavailable.
+     - ``performance,+transform_feedback``
+   * - ``primitives_generated_query``
+     - Generated-primitive queries and the shared transform-feedback stream-query reports.
+       Controls: ``VK_EXT_primitives_generated_query``, ``primitivesGeneratedQuery``, ``primitivesGeneratedQueryWithRasterizerDiscard``, ``primitivesGeneratedQueryWithNonZeroStreams``, ``transformFeedbackQueries``.
+     - compute / counter reports. Active queries execute counter/report work without per-draw CPU readback. Family-8 emitted GS reports contain 33 assignment/store sites; VS/TES helper programs contain 82, or 190 with restart counting. Query-capable GS pipelines retain report MSL before query use; native report compilation and dispatch are lazy. Counts are static MSL sites, not native instructions.
+     - On
+     - The shared report path supplies transformFeedbackQueries, which vkd3d-proton requires for device creation.
+     - Generated-primitive queries and shared XFB stream-query reports are unavailable; clearing transformFeedbackQueries prevents vkd3d-proton device creation.
+     - ``performance,+primitives_generated_query``
+   * - ``conservative_rasterization``
+     - Triangle conservative overestimation, degenerate coverage and fully-covered fragment input.
+       Controls: ``VK_EXT_conservative_rasterization``, ``extendedDynamicState3ConservativeRasterizationMode``, ``extendedDynamicState3ExtraPrimitiveOverestimationSize``, ``primitiveOverestimationSize``, ``maxExtraPrimitiveOverestimationSize``, ``extraPrimitiveOverestimationSizeGranularity``, ``primitiveUnderestimation``, ``conservativePointAndLineRasterization``, ``degenerateTrianglesRasterized``, ``degenerateLinesRasterized``, ``fullyCoveredFragmentShaderInputVariable``, ``conservativeRasterizationPostDepthCoverage``.
+     - compute / raster expansion / fragment prolog. Enabled mode captures original vertices, expands coverage and reconstructs original interpolation in the fragment prolog. Family-8 support kernels contain 1935 clip, 1466 prepare, 45 output-setup and 175 output assignment/store sites; these are static MSL sites, not per-fragment native instruction counts. FullyCovered adds edge tests when read; static disabled mode emits ordinary VS/FS code.
+     - On
+     - Conservative rasterization tier 1 is required for D3D12 feature level 12_1; the implementation also supplies higher-tier coverage behavior.
+     - D3D12 conservative rasterization is unavailable, preventing feature levels 12_1 and 12_2; DXVK reports no D3D11 conservative-rasterization tier.
+     - ``performance,+conservative_rasterization``
