@@ -335,6 +335,17 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       _mesa_blake3_update(&blake3_ctx, &state->mv->view_mask,
                           sizeof(state->mv->view_mask));
 
+   /* Without a fragment stage the pipeline links an empty one, and its last
+    * pre-raster shader holds the native render pipeline and depth/stencil
+    * state built from the render pass, depth/stencil, blend and multisample
+    * state. Key that state as for an application fragment stage, so pipelines
+    * that share pre-raster code never share another pipeline's state. */
+   if (!(stages & VK_SHADER_STAGE_FRAGMENT_BIT) && state && state->rp) {
+      struct kk_fs_key key;
+      kk_populate_fs_key(&key, state);
+      _mesa_blake3_update(&blake3_ctx, &key, sizeof(key));
+   }
+
    const uint32_t feature_key[] = {
       (KK_SHADER_INFO_CACHE_VERSION << 16) | KK_FEAT_COUNT,
       sizeof(struct kk_shader_info),
