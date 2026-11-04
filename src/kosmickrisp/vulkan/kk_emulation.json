@@ -319,5 +319,27 @@
     "performance": true,
     "performance_reason": "DXVK requires sparse buffer residency for tiled resources; removing it can lower the D3D feature-level ceiling. Translation is selected by actual sparse resources and shader interfaces.",
     "off_consequence": "Sparse buffer residency and sparse 3D image residency are unavailable, including standard-shaped 3D blocks; DXVK tiled-resource tiers and feature levels requiring them are unavailable. Native sparse binding, aliasing, 2D residency and native texture residency status remain available when supported."
+  },
+  {
+    "name": "robustness2",
+    "description": "Exact out-of-bounds buffer and image access behavior and null descriptors.",
+    "cost_class": "native access / bounds and null guards",
+    "cost_note": "Selected bounded buffer loads use bounds predicates and zero/default selection; selected image and null accesses use guards. Unused operations emit no checks. Runtime cost is unmeasured.",
+    "extensions": [
+      "VK_EXT_robustness2",
+      "VK_KHR_robustness2"
+    ],
+    "features": [
+      "robustBufferAccess2",
+      "robustImageAccess2",
+      "nullDescriptor"
+    ],
+    "properties": [
+      "robustStorageBufferAccessSizeAlignment",
+      "robustUniformBufferAccessSizeAlignment"
+    ],
+    "performance": true,
+    "performance_reason": "DXVK 2.x/3.x requires VK_EXT_robustness2 and nullDescriptor for device creation and uses robustBufferAccess2/robustImageAccess2; vkd3d-proton also requires nullDescriptor. Required buffer bounds and null semantics remain enabled.",
+    "off_consequence": "DXVK 2.x/3.x and vkd3d-proton device creation fails when required nullDescriptor/robustness2 support is hidden. Both extension aliases and their three features are hidden; core robustness and pipeline robustness remain available."
   }
 ]
