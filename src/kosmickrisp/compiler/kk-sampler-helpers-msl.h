@@ -651,7 +651,11 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       /* Only implicit callers (operation0) require quad derivatives; their
        * descriptor dispatch is quad-uniform. Explicit callers supply inputs. */
       P(ctx, "    float2 dx = source_dx, dy = source_dy;\n");
-      P(ctx, "    if (operation == 0u) { dx = dfdx(coord.xy); dy = dfdy(coord.xy); }\n");
+      /* The descriptor pass admits prepared implicit operations only in
+       * fragments. Other stages supply explicit level/gradient operands. */
+      if (ctx->shader->info.stage == MESA_SHADER_FRAGMENT) {
+         P(ctx, "    if (operation == 0u) { dx = dfdx(coord.xy); dy = dfdy(coord.xy); }\n");
+      }
       P(ctx, "    float sampler_bias = kk_sampler_metadata_value(address, %uu, %s);\n",
         KK_SAMPLER_META_BIAS, tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS ? "true" : "false");
       if (tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS) {
