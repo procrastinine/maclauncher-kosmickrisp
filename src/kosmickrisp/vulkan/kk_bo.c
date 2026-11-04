@@ -22,6 +22,15 @@ VkResult
 kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
             uint64_t size_B, uint64_t align_B, struct kk_bo **bo_out)
 {
+   return kk_alloc_bo_options(dev, log_obj, size_B, align_B,
+                              KK_MTL_RESOURCE_OPTIONS, bo_out);
+}
+
+VkResult
+kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
+                    uint64_t size_B, uint64_t align_B,
+                    enum mtl_resource_options options, struct kk_bo **bo_out)
+{
    VkResult result = VK_SUCCESS;
 
    // TODO_KOSMICKRISP: Probably requires handling the buffer maximum 256MB
@@ -40,7 +49,7 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
 
    size_B = align64(size_B, minimum_alignment);
    mtl_heap *handle =
-      mtl_new_heap(dev->mtl_handle, size_B, KK_MTL_RESOURCE_OPTIONS);
+      mtl_new_heap(dev->mtl_handle, size_B, options);
    if (handle == NULL) {
       result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
       goto fail_heap;
@@ -63,7 +72,9 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
    bo->size_B = size_B;
    bo->map = map;
    bo->gpu = mtl_buffer_get_gpu_address(map);
-   bo->cpu = mtl_get_contents(map);
+   if ((options & (3u << MTL_RESOURCE_STORAGE_MODE_SHIFT)) ==
+       MTL_RESOURCE_STORAGE_MODE_SHARED)
+      bo->cpu = mtl_get_contents(map);
 
    kk_device_add_heap_to_residency_set(dev, handle);
 

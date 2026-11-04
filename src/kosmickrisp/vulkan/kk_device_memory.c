@@ -57,8 +57,15 @@ kk_GetMemoryMetalHandlePropertiesEXT(
    default:
       return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
    }
-   pMemoryMetalHandleProperties->memoryTypeBits =
-      BITFIELD_MASK(pdev->mem_type_count);
+   pMemoryMetalHandleProperties->memoryTypeBits = 0;
+   enum mtl_storage_mode mode = mtl_heap_get_storage_mode((mtl_heap *)pHandle);
+   for (uint32_t i = 0; i < pdev->mem_type_count; i++) {
+      bool host_visible = pdev->mem_types[i].propertyFlags &
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+      if ((mode == MTL_STORAGE_MODE_SHARED && host_visible) ||
+          (mode == MTL_STORAGE_MODE_PRIVATE && !host_visible))
+         pMemoryMetalHandleProperties->memoryTypeBits |= BITFIELD_BIT(i);
+   }
 
    return VK_SUCCESS;
 }
@@ -80,8 +87,11 @@ kk_GetMemoryHostPointerPropertiesEXT(
    default:
       return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
    }
-   pMemoryHostPointerProperties->memoryTypeBits =
-      BITFIELD_MASK(pdev->mem_type_count);
+   pMemoryHostPointerProperties->memoryTypeBits = 0;
+   for (uint32_t i = 0; i < pdev->mem_type_count; i++) {
+      if (pdev->mem_types[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+         pMemoryHostPointerProperties->memoryTypeBits |= BITFIELD_BIT(i);
+   }
 
    return VK_SUCCESS;
 }
@@ -97,6 +107,14 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
       pAllocateInfo->pNext, IMPORT_MEMORY_METAL_HANDLE_INFO_EXT);
    const VkImportMemoryHostPointerInfoEXT *host_info = vk_find_struct_const(
       pAllocateInfo->pNext, IMPORT_MEMORY_HOST_POINTER_INFO_EXT);
+
+   struct kk_physical_device *pdev = kk_device_physical(dev);
+   VkMemoryPropertyFlags properties =
+      pdev->mem_types[pAllocateInfo->memoryTypeIndex].propertyFlags;
+   bool host_visible = properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+   enum mtl_resource_options options = MTL_RESOURCE_TRACKING_MODE_UNTRACKED |
+      (host_visible ? MTL_RESOURCE_STORAGE_MODE_SHARED
+                    : MTL_RESOURCE_STORAGE_MODE_PRIVATE);
 
    uint64_t alignment = 4096;
    os_get_page_size(&alignment);
@@ -125,11 +143,16 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
             result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
             goto fail_import;
          }
+         enum mtl_storage_mode mode = mtl_heap_get_storage_mode(metal_info->handle);
+         if (mode != (host_visible ? MTL_STORAGE_MODE_SHARED : MTL_STORAGE_MODE_PRIVATE)) {
+            result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+            goto fail_import;
+         }
          mem->bo->mtl_handle = mtl_retain(metal_info->handle);
          mem->bo->map = mtl_new_buffer_with_length(
             mem->bo->mtl_handle, mem->vk.size, 0u);
       } else {
-         if (!(host_info->handleType & kk_host_mem_props.compatibleHandleTypes) ||
+         if (!host_visible || !(host_info->handleType & kk_host_mem_props.compatibleHandleTypes) ||
              !host_info->pHostPointer ||
              (uintptr_t)host_info->pHostPointer % alignment) {
             result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
@@ -155,10 +178,11 @@ fail_import:
       }
 
       mem->bo->gpu = mtl_buffer_get_gpu_address(mem->bo->map);
-      mem->bo->cpu = mtl_get_contents(mem->bo->map);
+      if (host_visible)
+         mem->bo->cpu = mtl_get_contents(mem->bo->map);
    } else {
       result =
-         kk_alloc_bo(dev, &dev->vk.base, aligned_size, alignment, &mem->bo);
+         kk_alloc_bo_options(dev, &dev->vk.base, aligned_size, alignment, options, &mem->bo);
       if (result != VK_SUCCESS)
          goto fail_alloc;
    }
@@ -203,6 +227,9 @@ kk_MapMemory2KHR(VkDevice device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
       *ppData = NULL;
       return VK_SUCCESS;
    }
+
+   if (!mem->bo->cpu)
+      return vk_error(dev, VK_ERROR_MEMORY_MAP_FAILED);
 
    const VkDeviceSize offset = pMemoryMapInfo->offset;
    const VkDeviceSize size = vk_device_memory_range(

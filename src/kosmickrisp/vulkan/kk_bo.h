@@ -37,6 +37,11 @@ struct kk_ptr {
 VkResult kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
                      uint64_t size_B, uint64_t align_B, struct kk_bo **bo_out);
 
+VkResult kk_alloc_bo_options(struct kk_device *dev, struct vk_object_base *log_obj,
+                             uint64_t size_B, uint64_t align_B,
+                             enum mtl_resource_options options,
+                             struct kk_bo **bo_out);
+
 void kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo);
 
 VkResult kk_bo_map_placed(struct kk_device *dev, struct kk_bo *bo, void **addr);

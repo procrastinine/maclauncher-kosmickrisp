@@ -174,7 +174,8 @@ kk_bind_buffer_memory(struct kk_device *dev, const VkBindBufferMemoryInfo *info)
       mtl_buffer_get_gpu_address(buffer->metal.handle) + buffer->metal.offset;
    /* We need Metal to give us a CPU mapping so it correctly captures the
     * data in the GPU debugger... */
-   mtl_get_contents(buffer->metal.handle);
+   if (mem->bo->cpu)
+      mtl_get_contents(buffer->metal.handle);
 
    return VK_SUCCESS;
 }

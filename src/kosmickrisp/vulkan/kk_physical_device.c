@@ -1206,6 +1206,12 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
       .used = kk_get_sysmem_heap_used,
    };
 
+   /* A subset of the shared type's flags comes first, as Vulkan requires. */
+   pdev->mem_types[pdev->mem_type_count++] = (VkMemoryType){
+      .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      .heapIndex = sysmem_heap_idx,
+   };
+
    pdev->mem_types[pdev->mem_type_count++] = (VkMemoryType){
       .propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |

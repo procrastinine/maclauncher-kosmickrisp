@@ -38,6 +38,12 @@ mtl_heap_get_size(mtl_heap *heap)
    }
 }
 
+enum mtl_storage_mode
+mtl_heap_get_storage_mode(mtl_heap *heap)
+{
+   return (enum mtl_storage_mode)((id<MTLHeap>)heap).storageMode;
+}
+
 static MTLTextureDescriptor *
 mtl_new_texture_descriptor(const struct kk_image_layout *layout)
 {
@@ -65,7 +71,7 @@ mtl_new_buffer_with_length(mtl_heap *heap, uint64_t size_B, uint64_t offset_B)
 {
    @autoreleasepool {
       id<MTLHeap> hp = (id<MTLHeap>)heap;
-      return (mtl_buffer *)[hp newBufferWithLength:size_B options:KK_MTL_RESOURCE_OPTIONS offset:offset_B];
+      return (mtl_buffer *)[hp newBufferWithLength:size_B options:hp.resourceOptions offset:offset_B];
    }
 }
 

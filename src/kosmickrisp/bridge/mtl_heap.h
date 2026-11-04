@@ -20,6 +20,7 @@ mtl_heap *mtl_new_heap(mtl_device *device, uint64_t size,
 
 /* Utils */
 uint64_t mtl_heap_get_size(mtl_heap *heap);
+enum mtl_storage_mode mtl_heap_get_storage_mode(mtl_heap *heap);
 
 /* Allocation from heap */
 mtl_buffer *mtl_new_buffer_with_length(mtl_heap *heap, uint64_t size_B,
