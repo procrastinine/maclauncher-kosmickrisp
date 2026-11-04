@@ -20,7 +20,7 @@ libkk_prefix_sum_tess(global struct poly_tess_params *p)
    /* After prefix summing, we know the total # of indices, so allocate the
     * index buffer now. Elect a thread for the allocation.
     */
-   barrier(CLK_LOCAL_MEM_FENCE);
+   barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
    if (cl_local_id.x != 0)
       return;
 
