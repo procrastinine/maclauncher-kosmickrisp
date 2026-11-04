@@ -35,8 +35,8 @@ static uint32_t kk_dgc_token_span(const struct vk_indirect_command_layout *l)
        (l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DISPATCH))
            ? l->dispatch_src_offset_B + 12
            : l->draw_src_offset_B +
-                 ((l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_INDEXED)) ? 20
-                                                                         : 16);
+                 ((l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH)) ? 12 :
+                  (l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_INDEXED)) ? 20 : 16);
    for (uint32_t i = 0; i < l->n_pc_layouts; ++i)
       size =
           MAX2(size, l->pc_layouts[i].src_offset_B + l->pc_layouts[i].size_B);
@@ -53,6 +53,9 @@ VKAPI_ATTR VkResult VKAPI_CALL kk_CreateIndirectCommandsLayoutEXT(
     const VkAllocationCallbacks *alloc, VkIndirectCommandsLayoutEXT *out)
 {
    VK_FROM_HANDLE(kk_device, dev, device);
+   if ((info->shaderStages & (VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_TASK_BIT_EXT)) &&
+       !kk_dgc_native_mesh_groups(kk_device_physical(dev)->info.gpu_apple_family))
+      return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
    struct kk_indirect_commands_layout *layout =
        vk_indirect_command_layout_create(&dev->vk, info, alloc,
                                          sizeof(*layout));
@@ -138,10 +141,8 @@ kk_dgc_parameters(struct kk_cmd_buffer *cmd,
        .draw_base_instance =
            offsetof(struct kk_per_draw_data, base_instance_addr),
        .action =
-           compute
-               ? 2
-               : ((l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_INDEXED)) ? 1
-                                                                         : 0),
+           compute ? 2 : (l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH)) ? 3 :
+               (l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_INDEXED)) ? 1 : 0,
        .index = cmd->state.gfx.index.gpu.addr,
        .index_size = cmd->state.gfx.index.bytes_per_index,
        .dx_index = l->index_mode_is_dx,
@@ -151,7 +152,7 @@ kk_dgc_parameters(struct kk_cmd_buffer *cmd,
            cmd->state.cond_render.enabled ? cmd->state.cond_render.address : 0,
        .inverted = cmd->state.cond_render.inverted,
    };
-   if (!compute) {
+   if (!compute && !(l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH))) {
       const struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
       p.vertex_input_size = vs->info.vs.dynamic_vi
          ? util_bitcount(vs->info.vs.attribs_read) * sizeof(struct kk_vertex_fetch) : 0;
@@ -161,7 +162,8 @@ kk_dgc_parameters(struct kk_cmd_buffer *cmd,
       p.local[0] = cs->info.cs.local_size.x;
       p.local[1] = cs->info.cs.local_size.y;
       p.local[2] = cs->info.cs.local_size.z;
-   } else if (!kk_dgc_needs_poly(cmd))
+   } else if (!(l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH)) &&
+              !kk_dgc_needs_poly(cmd))
       p.primitive = kk_dgc_primitive(cmd);
    return p;
 }
@@ -174,7 +176,8 @@ static struct kk_dgc_params kk_dgc_state(struct kk_cmd_buffer *cmd,
                   info->indirectCommandsLayout);
    const struct vk_indirect_command_layout *l = &layout->vk;
    bool compute = l->stages & VK_SHADER_STAGE_COMPUTE_BIT;
-   kk_sparse_refresh_shader(cmd, state, compute ? MESA_SHADER_COMPUTE : MESA_SHADER_VERTEX);
+   kk_sparse_refresh_shader(cmd, state, compute ? MESA_SHADER_COMPUTE :
+      (l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH)) ? MESA_SHADER_MESH : MESA_SHADER_VERTEX);
    struct kk_dgc_params p = kk_dgc_parameters(state, info);
    struct kk_descriptor_state *desc =
        compute ? &state->state.cs.descriptors : &state->state.gfx.descriptors;
@@ -233,7 +236,7 @@ static struct kk_dgc_params kk_dgc_state(struct kk_cmd_buffer *cmd,
           kk_pool_upload(cmd, patches, p.patch_count * sizeof(patches[0]), 8)
               .gpu;
    struct kk_dgc_attribute attributes[KK_MAX_ATTRIBS];
-   if (!compute && l->n_vb_layouts) {
+   if (!compute && l->n_vb_layouts && !(l->dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH))) {
       const struct vk_dynamic_graphics_state *dyn =
           &state->vk.dynamic_graphics_state;
       struct kk_shader *vs = state->state.shaders[MESA_SHADER_VERTEX];
@@ -267,7 +270,7 @@ static struct kk_dgc_params kk_dgc_state(struct kk_cmd_buffer *cmd,
    return p;
 }
 
-VKAPI_ATTR void VKAPI_CALL kk_CmdPreprocessGeneratedCommandsEXT(
+static void kk_dgc_preprocess_inner(
     VkCommandBuffer commandBuffer, const VkGeneratedCommandsInfoEXT *info,
     VkCommandBuffer stateCommandBuffer)
 {
@@ -310,11 +313,12 @@ void kk_dgc_set_linked_table_buffers(struct kk_cmd_buffer *cmd,
    cmd->state.gfx.dgc_linked_fs_buffer = fragment_buffer;
 }
 
-static void kk_dgc_set_graphics_indirect(struct kk_cmd_buffer *cmd, bool indirect)
+void kk_dgc_set_graphics_indirect(struct kk_cmd_buffer *cmd, bool indirect)
 {
    if (cmd->state.gfx.dgc_icb == indirect) return;
    cmd->state.gfx.dgc_icb = indirect;
-   cmd->state.dirty_shaders |= BITFIELD_BIT(MESA_SHADER_VERTEX);
+   cmd->state.dirty_shaders |= BITFIELD_BIT(
+      cmd->state.shaders[MESA_SHADER_MESH] ? MESA_SHADER_MESH : MESA_SHADER_VERTEX);
 }
 
 static void
@@ -349,6 +353,8 @@ kk_dgc_compact_records(struct kk_dgc_params *p, bool compute, bool poly)
    }
 }
 
+#include "kk_dgc_mesh.h"
+
 static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
                                       struct kk_dgc_params p, bool compute)
 {
@@ -357,10 +363,14 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
       return;
    }
-   kk_sparse_refresh_shader(cmd, cmd, compute ? MESA_SHADER_COMPUTE : MESA_SHADER_VERTEX);
    if (!p.base_root || (!compute && !p.base_draw) || (p.patch_count && !p.patches) ||
        (p.attribute_count && !p.attributes))
       return;
+   if (p.action == 3) {
+      kk_dgc_execute_mesh(cmd, p);
+      return;
+   }
+   kk_sparse_refresh_shader(cmd, cmd, compute ? MESA_SHADER_COMPUTE : MESA_SHADER_VERTEX);
    /* Vulkan index tokens may select UINT8 on the GPU. Metal ICBs accept
     * UINT16/UINT32, so resolve Vulkan tokens through the shared Poly index
     * normalization. DXGI tokens can retain native ICB execution. */
@@ -469,7 +479,7 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
    kk_cmd_bind_root_to_argument_table(cmd, cmd->state.root_addr);
 }
-VKAPI_ATTR void VKAPI_CALL kk_CmdExecuteGeneratedCommandsEXT(
+static void kk_dgc_execute_inner(
     VkCommandBuffer commandBuffer, VkBool32 preprocessed,
     const VkGeneratedCommandsInfoEXT *info)
 {
@@ -480,7 +490,7 @@ VKAPI_ATTR void VKAPI_CALL kk_CmdExecuteGeneratedCommandsEXT(
    if (!compute)
       kk_dgc_flush_graphics(cmd);
    if (!preprocessed)
-      kk_CmdPreprocessGeneratedCommandsEXT(commandBuffer, info, commandBuffer);
+      kk_dgc_preprocess_inner(commandBuffer, info, commandBuffer);
    if (cmd->vk.record_result != VK_SUCCESS)
       return;
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
@@ -510,6 +520,52 @@ VKAPI_ATTR void VKAPI_CALL kk_CmdExecuteGeneratedCommandsEXT(
    p.vertex_input_offset = ALIGN_POT(p.index_offset + 16, 8);
    p.record_stride = ALIGN_POT(p.vertex_input_offset + p.vertex_input_size, 64);
    kk_dgc_execute_parameters(cmd, p, compute);
+}
+
+
+/* Command inputs and both command buffers are borrowed only through the
+ * synchronous join. Native creation stays on the existing KK-owned queue. */
+struct kk_dgc_mesh_work {
+   VkCommandBuffer command, state;
+   const VkGeneratedCommandsInfoEXT *info;
+   VkBool32 preprocessed;
+   bool preprocess;
+};
+static void kk_dgc_mesh_work_execute(void *data)
+{
+   struct kk_dgc_mesh_work *work = data;
+   if (work->preprocess)
+      kk_dgc_preprocess_inner(work->command, work->info, work->state);
+   else
+      kk_dgc_execute_inner(work->command, work->preprocessed, work->info);
+}
+VKAPI_ATTR void VKAPI_CALL kk_CmdPreprocessGeneratedCommandsEXT(
+   VkCommandBuffer command, const VkGeneratedCommandsInfoEXT *info,
+   VkCommandBuffer state)
+{
+   if (!info->maxSequenceCount) return;
+   VK_FROM_HANDLE(kk_indirect_commands_layout, layout, info->indirectCommandsLayout);
+   if (layout->vk.dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH)) {
+      VK_FROM_HANDLE(kk_cmd_buffer, cmd, command);
+      struct kk_dgc_mesh_work work = {command, state, info, false, true};
+      if (!kk_dgc_run_native_command(kk_cmd_buffer_device(cmd), &work,
+                                    kk_dgc_mesh_work_execute))
+         vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
+   } else kk_dgc_preprocess_inner(command, info, state);
+}
+VKAPI_ATTR void VKAPI_CALL kk_CmdExecuteGeneratedCommandsEXT(
+   VkCommandBuffer command, VkBool32 preprocessed,
+   const VkGeneratedCommandsInfoEXT *info)
+{
+   if (!info->maxSequenceCount) return;
+   VK_FROM_HANDLE(kk_indirect_commands_layout, layout, info->indirectCommandsLayout);
+   if (layout->vk.dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_MESH)) {
+      VK_FROM_HANDLE(kk_cmd_buffer, cmd, command);
+      struct kk_dgc_mesh_work work = {command, command, info, preprocessed, false};
+      if (!kk_dgc_run_native_command(kk_cmd_buffer_device(cmd), &work,
+                                    kk_dgc_mesh_work_execute))
+         vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INITIALIZATION_FAILED);
+   } else kk_dgc_execute_inner(command, preprocessed, info);
 }
 
 void kk_dgc_release_commands(struct kk_cmd_buffer *cmd)

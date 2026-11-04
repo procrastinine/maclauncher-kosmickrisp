@@ -7,10 +7,19 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
+#include "kosmickrisp/libkk/kk_mesh_types.h"
 
 /* Shared byte layout with kk_dgc.metal. Offsets are derived from the actual
  * Kosmic root/per-draw structures, not duplicated host structure definitions.
  */
+/* Hardware limits are sampled from the cached family at DGC setup. Round
+ * the total down to a whole legal row so padding never exceeds that limit. */
+static inline uint32_t kk_dgc_native_mesh_groups(uint32_t family)
+{
+   if (family < 9) return 0;
+   uint32_t total = family >= 10 ? (1u << 22) - 1 : (1u << 20) - 1;
+   return (total / KK_MESH_MAX_DIMENSION) * KK_MESH_MAX_DIMENSION;
+}
 struct kk_dgc_patch {
    uint32_t src, dst, size, sequence;
 };
@@ -37,6 +46,19 @@ struct kk_dgc_params {
    uint32_t layer_replay;
 };
 static_assert(sizeof(struct kk_dgc_params) == 256, "DGC parameter ABI");
+struct kk_dgc_mesh_params {
+   struct kk_dgc_params p;
+   struct kk_mesh_params mesh;
+   uint32_t metadata_offset, slices, group_limit;
+   uint32_t object_local[3], mesh_local[3];
+};
+static_assert(sizeof(struct kk_dgc_mesh_params) == 392, "Mesh DGC parameter ABI");
+struct kk_dgc_mesh_config {
+   void *pipeline;
+   struct kk_mesh_params mesh;
+   uint32_t object_local[3], mesh_local[3];
+   uint32_t group_limit;
+};
 struct kk_device;
 struct kk_cmd_buffer;
 struct kk_dgc_metal;
@@ -74,6 +96,18 @@ void kk_dgc_set_linked_table_buffers(struct kk_cmd_buffer *cmd,
  * raster-reader boundary; returns only after every reader has been encoded. */
 void kk_dgc_execute_layered_sequence(struct kk_cmd_buffer *cmd, uint64_t root,
    uint64_t args, uint64_t binding, bool indexed, uint32_t draw_id);
+bool kk_dgc_run_native_command(struct kk_device *dev, void *data, void (*execute)(void *));
+void kk_dgc_set_graphics_indirect(struct kk_cmd_buffer *cmd, bool indirect);
+uint32_t kk_dgc_mesh_group_limit(struct kk_device *dev);
+bool kk_dgc_mesh_prepare(struct kk_cmd_buffer *cmd, struct kk_dgc_params *p,
+   struct kk_dgc_mesh_config *config);
+void kk_dgc_mesh_execute(struct kk_cmd_buffer *cmd, const struct kk_dgc_mesh_config *config,
+   void *icb, uint64_t range);
+void kk_dgc_draw_mesh_sequence(struct kk_cmd_buffer *cmd, uint64_t root, uint64_t args);
+bool kk_dgc_mesh_encode(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder,
+   uint64_t parameters, uint32_t count, bool native);
+void *kk_dgc_new_mesh_icb(struct kk_device *dev, uint32_t count,
+   const struct kk_dgc_mesh_params *params);
 void kk_dgc_release_commands(struct kk_cmd_buffer *cmd);
 uint32_t kk_dgc_primitive(struct kk_cmd_buffer *cmd);
 bool kk_dgc_prepare_graphics_root(struct kk_cmd_buffer *allocator, struct kk_cmd_buffer *state, struct kk_root_descriptor_table *root);

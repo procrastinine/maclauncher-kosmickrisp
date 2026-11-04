@@ -2819,6 +2819,7 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
 
 #include "kk_statistics_command.h"
 #include "kk_mesh_command.h"
+#include "kk_dgc_mesh_draw.h"
 
 #include "kk_barycentric_draw.h"
 
@@ -3341,6 +3342,7 @@ void kk_dgc_flush_graphics(struct kk_cmd_buffer *cmd) { kk_flush_gfx_state(cmd);
 bool kk_dgc_prepare_graphics_root(struct kk_cmd_buffer *allocator,
    struct kk_cmd_buffer *state, struct kk_root_descriptor_table *root)
 {
+   if (state->state.shaders[MESA_SHADER_MESH]) return true;
    return kk_prepare_vertex_input(allocator, &state->state.gfx,
       &state->vk.dynamic_graphics_state, state->state.shaders[MESA_SHADER_VERTEX], root);
 }

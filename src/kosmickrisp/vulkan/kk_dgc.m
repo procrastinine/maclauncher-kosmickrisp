@@ -5,14 +5,22 @@
 #include "kk_cmd_buffer.h"
 #include "kk_shader.h"
 #include "kosmickrisp/bridge/mtl_compiler.h"
+#include "kosmickrisp/bridge/mtl_bridge.h"
 #include "util/simple_mtx.h"
 #include "kk_dgc_shader.h"
+#include "kk_dgc_mesh_shader.h"
+#include "kk_physical_device.h"
+#include "util/ralloc.h"
 #import <Metal/Metal.h>
 #include <stdio.h>
 
+struct kk_dgc_mesh_metal;
+static void kk_dgc_mesh_finish(struct kk_dgc_mesh_metal *mesh);
 struct kk_dgc_metal {
    id<MTLLibrary> library;
    mtl_compute_pipeline_state *pipeline[4];
+   struct kk_dgc_mesh_metal *mesh;
+   uint32_t mesh_group_limit;
    simple_mtx_t pipeline_mutex;
 };
 
@@ -39,6 +47,8 @@ static bool kk_dgc_create(struct kk_device *dev)
          return false;
       }
       dgc->library = lib;
+      dgc->mesh_group_limit = kk_dgc_native_mesh_groups(
+         kk_device_physical(dev)->info.gpu_apple_family);
       simple_mtx_init(&dgc->pipeline_mutex, mtx_plain);
       p_atomic_set(&dev->dgc, dgc);
       return true;
@@ -63,6 +73,7 @@ void kk_dgc_finish(struct kk_device *dev)
       return;
    for (unsigned i = 0; i < 4; ++i)
       [(id<MTLComputePipelineState>)dev->dgc->pipeline[i] release];
+   kk_dgc_mesh_finish(dev->dgc->mesh);
    [dev->dgc->library release];
    simple_mtx_destroy(&dev->dgc->pipeline_mutex);
    free(dev->dgc);
@@ -228,3 +239,5 @@ mtl_compute_pipeline_state *kk_dgc_get_compute_pipeline(struct kk_device *dev, s
    return kk_sampler_compute_pipeline(dev, shader, pipeline, &selected) == VK_SUCCESS
       ? selected : NULL;
 }
+
+#include "kk_dgc_mesh_bridge.h"

@@ -724,7 +724,10 @@ kk_get_device_properties(
       .maxIndirectCommandsTokenOffset = 4095,
       .maxIndirectCommandsIndirectStride = 4096,
       .supportedIndirectCommandsInputModes = VK_INDIRECT_COMMANDS_INPUT_MODE_VULKAN_INDEX_BUFFER_EXT | VK_INDIRECT_COMMANDS_INPUT_MODE_DXGI_INDEX_BUFFER_EXT,
-      .supportedIndirectCommandsShaderStages = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT,
+      .supportedIndirectCommandsShaderStages =
+         VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT |
+         (pdev->info.gpu_apple_family >= 9 ?
+            VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT : 0),
       .supportedIndirectCommandsShaderStagesPipelineBinding = 0,
       .supportedIndirectCommandsShaderStagesShaderBinding = 0,
       .deviceGeneratedCommandsTransformFeedback = false,

@@ -2975,7 +2975,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */
    const bool dgc_graphics = (features & BITFIELD_BIT(KK_FEAT_DGC_REPLAY)) &&
-      infos[0].stage <= MESA_SHADER_FRAGMENT;
+      (infos[0].stage <= MESA_SHADER_FRAGMENT ||
+       infos[0].stage == MESA_SHADER_TASK || infos[0].stage == MESA_SHADER_MESH);
    bool dgc_replay = false;
    bool dgc_interlock_guard = false;
    uint32_t push_size = 0;
@@ -3866,7 +3867,7 @@ kk_sparse_refresh_shader(struct kk_cmd_buffer *cmd, struct kk_cmd_buffer *state,
    struct kk_shader *selected = kk_sparse_select_shader(cmd, shader);
    kk_sparse_shader_bound(cmd, selected);
    if (selected == shader) return;
-   if (stage == MESA_SHADER_VERTEX)
+   if (stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_MESH)
       kk_cmd_bind_graphics_shader_selected(state, stage, selected);
    else kk_cmd_bind_compute_shader_selected(state, selected);
 }
