@@ -75,6 +75,12 @@ Environment variables
 
 KosmicKrisp specific environment variables:
 
+``KK_EXPOSE_RAY_TRACING=1`` exposes the ray-tracing pipeline, acceleration
+structure, ray-query and ray-tracing-maintenance interfaces to an explicitly
+opted-in test process. Only the exact value ``1`` enables this setting; it is
+sampled at physical-device creation. The interfaces are disabled by default
+and are separate from ``MESA_KK_EXPERIMENTAL``.
+
 - ``MESA_KK_DEBUG``: ``msl`` to log all generated Metal Shading Language (MSL) shaders. ``force_robustness`` to force robustness on all shaders.
 - ``MESA_KK_GPU_CAPTURE``: Starts Metal capture at device create and ends it at device destroy. Set to ``1`` to activate.
 - ``MESA_KK_GPU_CAPTURE_DIRECTORY``: Metal capture will be saved to the specified directory. Defaults to Xcode if no path is provided.

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_device.h"
+#include "kk_as_format.h"
 #include "kk_query_pool.h"
 #include "kk_bo.h"
 #include "kk_cmd_buffer.h"
@@ -136,24 +137,10 @@ kk_GetAccelerationStructureBuildSizesKHR(VkDevice device,
 static uint32_t
 kk_as_convert_format(VkFormat format)
 {
-   switch (format) {
-#define KK_AS_FORMAT(vk, as) case VK_FORMAT_##vk: return KK_AS_##as
-   KK_AS_FORMAT(R32G32_SFLOAT, R32G32_SFLOAT);
-   KK_AS_FORMAT(R32G32B32_SFLOAT, R32G32B32_SFLOAT);
-   KK_AS_FORMAT(R16G16_SFLOAT, R16G16_SFLOAT);
-   KK_AS_FORMAT(R16G16_SNORM, R16G16_SNORM);
-   KK_AS_FORMAT(R16G16B16A16_SFLOAT, R16G16B16A16_SFLOAT);
-   KK_AS_FORMAT(R16G16B16A16_SNORM, R16G16B16A16_SNORM);
-   KK_AS_FORMAT(R16G16B16A16_UNORM, R16G16B16A16_UNORM);
-   KK_AS_FORMAT(R16G16_UNORM, R16G16_UNORM);
-   KK_AS_FORMAT(A2B10G10R10_UNORM_PACK32, A2B10G10R10_UNORM);
-   KK_AS_FORMAT(R8G8B8A8_UNORM, R8G8B8A8_UNORM);
-   KK_AS_FORMAT(R8G8_UNORM, R8G8_UNORM);
-   KK_AS_FORMAT(R8G8B8A8_SNORM, R8G8B8A8_SNORM);
-   KK_AS_FORMAT(R8G8_SNORM, R8G8_SNORM);
-#undef KK_AS_FORMAT
-   default: UNREACHABLE("unsupported AS vertex format");
-   }
+   uint32_t decoded;
+   if (!kk_as_vertex_format(format, &decoded))
+      UNREACHABLE("unsupported AS vertex format");
+   return decoded;
 }
 
 static bool

@@ -9,6 +9,7 @@
 #include "kk_descriptor_types.h"
 #include "kk_descriptor_set_layout.h"
 #include "kk_zero_init.h"
+#include "kosmickrisp/as/kosmickrisp-as-types.h"
 
 #include "kk_debug.h"
 #include "kk_entrypoints.h"
@@ -51,6 +52,12 @@ kk_get_device_extensions(const struct kk_instance *instance,
                          struct vk_device_extension_table *ext)
 {
    *ext = (struct vk_device_extension_table){
+      /* Explicit process-local test opt-in; never enabled by experimental=all. */
+      .KHR_acceleration_structure = pdev->settings.expose_ray_tracing,
+      .KHR_ray_tracing_pipeline = pdev->settings.expose_ray_tracing,
+      .KHR_ray_query = pdev->settings.expose_ray_tracing,
+      .KHR_ray_tracing_maintenance1 = pdev->settings.expose_ray_tracing,
+      .KHR_pipeline_library = pdev->settings.expose_ray_tracing,
       .KHR_cooperative_matrix = pdev->info.gpu_apple_family >= 7,
       .EXT_shader_float8 = true,
       .EXT_shader_long_vector = true,
@@ -256,6 +263,15 @@ kk_get_device_features(
    struct vk_features *features)
 {
    *features = (struct vk_features){
+      .accelerationStructure = pdev->settings.expose_ray_tracing,
+      .descriptorBindingAccelerationStructureUpdateAfterBind =
+         pdev->settings.expose_ray_tracing,
+      .rayTracingPipeline = pdev->settings.expose_ray_tracing,
+      .rayTracingPipelineTraceRaysIndirect = pdev->settings.expose_ray_tracing,
+      .rayTraversalPrimitiveCulling = pdev->settings.expose_ray_tracing,
+      .rayQuery = pdev->settings.expose_ray_tracing,
+      .rayTracingMaintenance1 = pdev->settings.expose_ray_tracing,
+      .rayTracingPipelineTraceRaysIndirect2 = pdev->settings.expose_ray_tracing,
       .longVector = true,
       /* Vulkan 1.0 */
       .alphaToOne = true,
@@ -1139,6 +1155,33 @@ kk_get_device_properties(
    snprintf(properties->driverName, VK_MAX_DRIVER_NAME_SIZE, "KosmicKrisp");
    snprintf(properties->driverInfo, VK_MAX_DRIVER_INFO_SIZE,
             "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
+
+   if (pdev->settings.expose_ray_tracing) {
+      properties->maxGeometryCount = KK_AS_MAX_GEOMETRIES;
+      properties->maxInstanceCount = KK_AS_MAX_INSTANCES;
+      properties->maxPrimitiveCount = KK_AS_MAX_PRIMITIVES;
+      properties->maxPerStageDescriptorAccelerationStructures = KK_MAX_DESCRIPTORS;
+      properties->maxPerStageDescriptorUpdateAfterBindAccelerationStructures =
+         KK_MAX_DESCRIPTORS;
+      properties->maxDescriptorSetAccelerationStructures = KK_MAX_DESCRIPTORS;
+      properties->maxDescriptorSetUpdateAfterBindAccelerationStructures =
+         KK_MAX_DESCRIPTORS;
+      properties->minAccelerationStructureScratchOffsetAlignment =
+         KK_AS_SCRATCH_ALIGNMENT;
+      /* kk_rt_sbt.h requires a 64-byte base and 32-byte records. The CPS
+       * dispatcher allocates for 31 trace levels and 32-byte attributes. */
+      properties->shaderGroupHandleSize = 32;
+      properties->shaderGroupHandleAlignment = 32;
+      properties->shaderGroupBaseAlignment = 64;
+      properties->maxShaderGroupStride = 4096;
+      properties->maxRayRecursionDepth = 31;
+      properties->maxRayHitAttributeSize = 32;
+      properties->maxRayDispatchInvocationCount = 1u << 30;
+      properties->subgroupSupportedStages |=
+         VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
+         VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |
+         VK_SHADER_STAGE_INTERSECTION_BIT_KHR | VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+   }
 }
 
 struct disk_cache *
@@ -1308,6 +1351,11 @@ static void
 kk_parse_environment_options(struct kk_physical_device *pdev)
 {
    struct kk_env_settings *settings = &pdev->settings;
+
+   /* Test-only advertisement, sampled once during physical-device creation.
+    * No rendering, compilation or submission path reads the environment. */
+   settings->expose_ray_tracing =
+      strcmp(debug_get_option("KK_EXPOSE_RAY_TRACING", ""), "1") == 0;
 
    settings->gpu_capture_enabled =
       debug_get_bool_option("MESA_KK_GPU_CAPTURE", false);

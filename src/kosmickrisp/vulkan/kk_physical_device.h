@@ -53,6 +53,7 @@ struct kk_device_info {
 };
 
 struct kk_env_settings {
+   bool expose_ray_tracing;
    bool experimental_enabled;
    bool gpu_capture_enabled;
    const char *gpu_capture_dir;

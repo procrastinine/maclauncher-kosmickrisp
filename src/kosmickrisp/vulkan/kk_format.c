@@ -8,6 +8,7 @@
 #include "kk_format.h"
 
 #include "kk_buffer_view.h"
+#include "kk_as_format.h"
 #include "kk_entrypoints.h"
 #include "kk_image.h"
 #include "kk_physical_device.h"
@@ -439,6 +440,8 @@ kk_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
    optimal2 =
       kk_get_image_format_features(pdevice, format, VK_IMAGE_TILING_OPTIMAL, 0);
    buffer2 = kk_get_buffer_format_features(pdevice, format);
+   if (pdevice->settings.expose_ray_tracing && kk_as_vertex_format(format, NULL))
+      buffer2 |= VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR;
 
    pFormatProperties->formatProperties = (VkFormatProperties){
       .linearTilingFeatures = vk_format_features2_to_features(linear2),
