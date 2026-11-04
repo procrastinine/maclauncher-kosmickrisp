@@ -190,6 +190,13 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
 
    uint32_t reports_per_query = kk_reports_per_query(pool);
    pool->query_stride = reports_per_query * sizeof(struct kk_query_report);
+   if (pool->vk.query_type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
+      uint8_t offset = 0;
+      u_foreach_bit(stat, pool->vk.pipeline_statistics) {
+         pool->statistic_offsets[stat] = offset;
+         offset += sizeof(struct kk_query_report);
+      }
+   }
 
    /* For occlusion queries, results come from the global visibility buffer */
    if (kk_pool_is_oq(pool)) {
@@ -404,7 +411,7 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
       kk_pipeline_stages_to_mtl_render_stage(stage);
 
    uint32_t heap_index;
-   mtl_counter_heap *heap = kk_timestamp_query_heap(pool, query, &heap_index);
+   mtl_counter_heap *heap;
 
    if (cmd->metal.render) {
       /* If we've already issued a timestamp write for a render stage, reuse it
@@ -422,6 +429,9 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
       }
 
       if (!reused) {
+         /* A reused stage already carries its actual heap and local index.
+          * Map a logical query only when a new native sample is needed. */
+         heap = kk_timestamp_query_heap(pool, query, &heap_index);
          struct kk_ts_stage_entry entry = {.pool = pool,
                                            .heap = heap,
                                            .stage = mtl_stage,
@@ -432,6 +442,8 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
                                     heap_index);
       }
    } else {
+      heap = kk_timestamp_query_heap(pool, query, &heap_index);
+
       /* compute encoder active or nothing active. If the latter, the write will
        * create a new compute encoder.  The timestamp write needs compute work
        * in the encoder to trigger it.  Rewrite the low half of the sentinel the
@@ -483,12 +495,14 @@ kk_begin_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
       unsigned mask = pool->vk.pipeline_statistics;
       cmd->state.pipeline_statistics = addr;
       cmd->state.pipeline_statistics_flags = mask;
+      cmd->state.pipeline_statistic_offsets = pool->statistic_offsets;
       cmd->state.compute_statistic = (mask & VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT) ?
-         addr + util_bitcount(mask & (VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT - 1)) * sizeof(uint64_t) : 0;
-      cmd->state.gfx.descriptors.root.draw.fragment_statistic =
-         (mask & VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT) ?
-         addr + util_bitcount(mask & (VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT - 1)) * sizeof(uint64_t) : 0;
-      cmd->state.gfx.descriptors.root_dirty = true;
+         addr + pool->statistic_offsets[10] : 0;
+      if (mask & VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT) {
+         cmd->state.gfx.descriptors.root.draw.fragment_statistic =
+            addr + pool->statistic_offsets[7];
+         cmd->state.gfx.descriptors.root_dirty = true;
+      }
       return;
    }
    if (pool->vk.query_type == VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT) {
@@ -520,9 +534,12 @@ kk_end_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
    if (pool->vk.query_type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
       cmd->state.compute_statistic = 0;
+      cmd->state.pipeline_statistics = 0;
       cmd->state.pipeline_statistics_flags = 0;
-      cmd->state.gfx.descriptors.root.draw.fragment_statistic = 0;
-      cmd->state.gfx.descriptors.root_dirty = true;
+      if (cmd->state.gfx.descriptors.root.draw.fragment_statistic) {
+         cmd->state.gfx.descriptors.root.draw.fragment_statistic = 0;
+         cmd->state.gfx.descriptors.root_dirty = true;
+      }
    } else if (pool->vk.query_type == VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT) {
       cmd->state.gfx.mesh_primitives_query = 0;
    } else if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {

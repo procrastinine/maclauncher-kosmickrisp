@@ -2818,8 +2818,13 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
       if (BITSET_TEST(shader->info.system_values_read, SYSTEM_VALUE_SUBGROUP_INVOCATION)) {
          P_IND(&ctx, "uint kk_active_lanes = (uint)(ulong)simd_active_threads_mask();\n");
          P_IND(&ctx, "uint kk_active_rank = simd_prefix_exclusive_sum(1u);\n");
-         P_IND(&ctx, "while (kk_active_rank != 0u) { kk_active_lanes &= kk_active_lanes - 1u; --kk_active_rank; }\n");
-         P_IND(&ctx, "const uint gl_SubGroupInvocation = ctz(kk_active_lanes);\n");
+         P_IND(&ctx, "uint gl_SubGroupInvocation = kk_active_rank;\n");
+         /* Full and partially filled prefix waves already number physical
+          * lanes by rank. Preserve the real-mask selection for sparse waves. */
+         P_IND(&ctx, "if ((kk_active_lanes & (kk_active_lanes + 1u)) != 0u) {\n");
+         P_IND(&ctx, "   while (kk_active_rank != 0u) { kk_active_lanes &= kk_active_lanes - 1u; --kk_active_rank; }\n");
+         P_IND(&ctx, "   gl_SubGroupInvocation = ctz(kk_active_lanes);\n");
+         P_IND(&ctx, "}\n");
       }
    }
    predeclare_ssa_values(&ctx, impl);

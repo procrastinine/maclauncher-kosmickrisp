@@ -224,7 +224,7 @@ kk_prepare_gs_per_vertex_draw(struct kk_cmd_buffer *cmd,
 
    struct kk_ptr per_draw =
       kk_pool_upload(cmd, &cmd->state.gfx.per_draw_data,
-                     sizeof(cmd->state.gfx.per_draw_data), 8u);
+                     offsetof(struct kk_per_draw_data, geometry_statistics), 8u);
    if (unlikely(!per_draw.gpu))
       return false;
    mtl_set_address(cmd->argument_table, per_draw.gpu, 2u);

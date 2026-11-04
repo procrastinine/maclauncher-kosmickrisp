@@ -19,6 +19,7 @@ struct kk_compile_options {
    bool pixel_envelope;
    bool pixel_sample_shading;
    bool mesh_queries;
+   bool pipeline_statistics;
    uint32_t *mesh_retained_strides;
    uint32_t *mesh_retained_fields;
    const struct nir_to_msl_options *msl_custom;

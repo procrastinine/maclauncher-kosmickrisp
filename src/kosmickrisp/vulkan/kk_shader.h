@@ -123,6 +123,7 @@ struct kk_shader_info {
    bool dgc_replay;
    bool indirect_bindable;
    bool has_geometry;
+   bool geometry_statistics;
    bool api_geometry;
    bool polygon_point;
    bool polygon_native;
@@ -339,7 +340,7 @@ kk_nir_lower_descriptors(nir_shader *nir, bool standard_3d,
 /* KK_WORKAROUND_18 */
 bool kk_nir_add_device_barrier_workaround(nir_shader *nir);
 
-bool kk_nir_lower_poly(struct nir_shader *nir);
+bool kk_nir_lower_poly(struct nir_shader *nir, bool statistics);
 bool kk_nir_lower_null_images(nir_shader *nir);
 bool kk_nir_lower_sparse(nir_shader *nir);
 bool kk_nir_lower_standard_3d_samples(nir_shader *,uint32_t,struct vk_descriptor_set_layout *const *);

@@ -38,6 +38,8 @@ struct kk_query_pool {
    union {
       struct kk_ts_state ts;
       struct kk_oq_state oq;
+      /* Packed report offsets fit the existing timestamp-state union. */
+      uint8_t statistic_offsets[13];
    };
 };
 

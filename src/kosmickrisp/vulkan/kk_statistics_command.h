@@ -10,13 +10,22 @@ kk_pipeline_stat_addr(const struct kk_cmd_buffer *cmd,
    if (!(cmd->state.pipeline_statistics_flags & bit))
       return 0;
    return cmd->state.pipeline_statistics +
-          util_bitcount(cmd->state.pipeline_statistics_flags & (bit - 1)) * sizeof(uint64_t);
+          cmd->state.pipeline_statistic_offsets[ffs(bit) - 1];
 }
 
 static void
 kk_update_ia_statistics(struct kk_cmd_buffer *cmd,
                         struct kk_draw_command *data)
 {
+   const VkQueryPipelineStatisticFlags ia =
+      VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
+      VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT |
+      VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
+      VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+      VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT;
+   if (!(cmd->state.pipeline_statistics_flags & ia))
+      return;
+
    uint64_t vertices = kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT);
    uint64_t primitives = kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT);
    uint64_t vs = kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT);
@@ -59,10 +68,10 @@ kk_finish_geometry_statistics(struct kk_cmd_buffer *cmd)
    struct kk_per_draw_data *p = &cmd->state.gfx.per_draw_data;
    bool api_gs = cmd->state.shaders[MESA_SHADER_VERTEX]->info.api_geometry;
    libkk_accumulate_geometry_statistics(cmd, kk_grid_1d(1), true,
-      p->geometry_statistics[PIPE_STAT_QUERY_GS_INVOCATIONS],
-      p->geometry_statistics[PIPE_STAT_QUERY_GS_PRIMITIVES],
-      p->geometry_statistics[PIPE_STAT_QUERY_C_INVOCATIONS],
-      p->geometry_statistics[PIPE_STAT_QUERY_C_PRIMITIVES],
+      p->geometry_statistics[PIPE_STAT_QUERY_GS_INVOCATIONS - KK_GEOMETRY_STAT_FIRST],
+      p->geometry_statistics[PIPE_STAT_QUERY_GS_PRIMITIVES - KK_GEOMETRY_STAT_FIRST],
+      p->geometry_statistics[PIPE_STAT_QUERY_C_INVOCATIONS - KK_GEOMETRY_STAT_FIRST],
+      p->geometry_statistics[PIPE_STAT_QUERY_C_PRIMITIVES - KK_GEOMETRY_STAT_FIRST],
       api_gs ? kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT) : 0,
       api_gs ? kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT) : 0,
       kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT),

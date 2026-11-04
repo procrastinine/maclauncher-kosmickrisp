@@ -130,6 +130,10 @@ kk_descriptor_push_update(struct kk_descriptor_state *desc, uint32_t offset,
    }
 }
 
+/* The four adjacent GS/clip producers are the only Poly scratch reports. */
+#define KK_GEOMETRY_STAT_FIRST PIPE_STAT_QUERY_GS_INVOCATIONS
+#define KK_GEOMETRY_STAT_COUNT (PIPE_STAT_QUERY_C_PRIMITIVES - KK_GEOMETRY_STAT_FIRST + 1)
+
 struct kk_per_draw_data {
    uint32_t draw_id;
    uint32_t index_size;
@@ -147,7 +151,6 @@ struct kk_per_draw_data {
 
    /* Address of geometry param buffer if a GS is used, else 0 */
    uint64_t geometry_params;
-   uint64_t geometry_statistics[PIPE_STAT_QUERY_COUNT];
 
    /* Whether the last vertex of a primitive is its provoking vertex */
    uint32_t provoking_last;
@@ -170,6 +173,9 @@ struct kk_per_draw_data {
    uint64_t per_vertex_heap;
    /* Optional Poly multiview tail. Ordinary draws do not upload it. */
    uint64_t multiview_index;
+
+   /* Only a statistics-enabled Poly pipeline consumes this optional tail. */
+   uint64_t geometry_statistics[KK_GEOMETRY_STAT_COUNT];
 };
 
 struct kk_depth_stencil_record;
@@ -421,6 +427,7 @@ struct kk_cmd_buffer {
       struct kk_compute_state cs;
       uint64_t compute_statistic;
       uint64_t pipeline_statistics;
+      const uint8_t *pipeline_statistic_offsets;
       VkQueryPipelineStatisticFlags pipeline_statistics_flags;
       struct kk_conditional_rendering_state cond_render;
       struct kk_shader *shaders[MESA_ALL_SHADER_STAGES];

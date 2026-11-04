@@ -615,6 +615,14 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
    case nir_intrinsic_load_workgroup_size:
       UNREACHABLE("Should have been lowered by nir_lower_cs_intrinsics()");
 
+   case nir_intrinsic_load_view_index:
+      /* Active multiview was lowered before descriptor lowering, including
+       * the Poly and task/mesh replay paths. No-view shaders need no extra
+       * traversal, uniform or dependence on early system-value metadata. */
+      b->cursor = nir_before_instr(&intrin->instr);
+      nir_def_replace(&intrin->def, nir_imm_int(b, 0));
+      return true;
+
    case nir_intrinsic_load_cmat_map_kk: {
       b->cursor = nir_before_instr(&intrin->instr);
       nir_def *root = nir_load_buffer_ptr_kk(b, 1, 64, .binding = 0);
@@ -1182,9 +1190,15 @@ kk_nir_lower_descriptors(nir_shader *nir, bool standard_3d,
 
 #include "kk_descriptor_heap_nir.h"
 
+struct lower_poly_state {
+   bool is_compute;
+   bool statistics;
+};
+
 static bool
 lower_poly(struct nir_builder *b, nir_intrinsic_instr *intrin, void *data)
 {
+   const struct lower_poly_state *state = data;
    switch (intrin->intrinsic) {
    case nir_intrinsic_load_vs_outputs_poly:
       return lower_sysval_to_per_draw(b, intrin, vertex_outputs);
@@ -1195,8 +1209,14 @@ lower_poly(struct nir_builder *b, nir_intrinsic_instr *intrin, void *data)
       return true;
    case nir_intrinsic_load_stat_query_address_poly: {
       b->cursor = nir_before_instr(&intrin->instr);
+      if (!state->statistics) {
+         nir_def_replace(&intrin->def, nir_imm_int64(b, 0));
+         return true;
+      }
+      unsigned index = nir_intrinsic_base(intrin) - KK_GEOMETRY_STAT_FIRST;
+      assert(index < KK_GEOMETRY_STAT_COUNT);
       unsigned offset = kk_per_draw_offset(geometry_statistics) +
-                        nir_intrinsic_base(intrin) * sizeof(uint64_t);
+                        index * sizeof(uint64_t);
       nir_def_replace(&intrin->def, load_per_draw(b, 1, 64,
                          nir_imm_int(b, offset), 8));
       return true;
@@ -1213,7 +1233,7 @@ lower_poly(struct nir_builder *b, nir_intrinsic_instr *intrin, void *data)
       return lower_sysval_to_per_draw(b, intrin, index_size);
    case nir_intrinsic_load_first_vertex:
       /* Lower only compute shaders */
-      if (*(bool *)data) {
+      if (state->is_compute) {
          uint32_t root_table_offset = kk_per_draw_offset(base_vertex_addr);
          b->cursor = nir_instr_remove(&intrin->instr);
          assert((root_table_offset & 3) == 0 && "aligned");
@@ -1229,7 +1249,7 @@ lower_poly(struct nir_builder *b, nir_intrinsic_instr *intrin, void *data)
       return false;
    case nir_intrinsic_load_base_instance:
       /* Lower only compute shaders */
-      if (*(bool *)data) {
+      if (state->is_compute) {
          uint32_t root_table_offset = kk_per_draw_offset(base_instance_addr);
          b->cursor = nir_instr_remove(&intrin->instr);
          assert((root_table_offset & 3) == 0 && "aligned");
@@ -1249,11 +1269,14 @@ lower_poly(struct nir_builder *b, nir_intrinsic_instr *intrin, void *data)
 }
 
 bool
-kk_nir_lower_poly(struct nir_shader *nir)
+kk_nir_lower_poly(struct nir_shader *nir, bool statistics)
 {
-   bool is_compute = nir->info.stage == MESA_SHADER_COMPUTE;
+   struct lower_poly_state state = {
+      .is_compute = nir->info.stage == MESA_SHADER_COMPUTE,
+      .statistics = statistics,
+   };
    return nir_shader_intrinsics_pass(nir, lower_poly, nir_metadata_control_flow,
-                                     &is_compute);
+                                     &state);
 }
 
 static bool

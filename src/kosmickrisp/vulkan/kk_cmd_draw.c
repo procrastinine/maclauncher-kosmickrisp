@@ -1458,7 +1458,7 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
    /* Absent reports use null destinations. Only actual pipeline statistics
     * and the GS's own dynamic counts need scratch storage. */
    uint32_t statistics_bytes = statistics ?
-      PIPE_STAT_QUERY_COUNT * sizeof(uint32_t) : 0;
+      KK_GEOMETRY_STAT_COUNT * sizeof(uint32_t) : 0;
    uint32_t count_bytes = info->count_words && !info->prefix_sum ?
       info->count_words * sizeof(uint32_t) : 0;
    uint64_t scratch = 0;
@@ -1479,9 +1479,11 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          params.xfb_offs_ptrs[i] = gfx->xfb_offsets + i * sizeof(uint32_t);
       }
    }
-   for (unsigned i = 0; i < PIPE_STAT_QUERY_COUNT; ++i)
-      gfx->per_draw_data.geometry_statistics[i] = statistics ?
-         scratch + i * sizeof(uint32_t) : 0;
+   if (gfx->shader->info.geometry_statistics) {
+      for (unsigned i = 0; i < KK_GEOMETRY_STAT_COUNT; ++i)
+         gfx->per_draw_data.geometry_statistics[i] = statistics ?
+            scratch + i * sizeof(uint32_t) : 0;
+   }
    if (count_bytes)
       params.count_buffer = scratch + statistics_bytes;
 
@@ -2403,7 +2405,9 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
       (cmd->state.shaders[MESA_SHADER_TESS_EVAL] ||
        cmd->state.gfx.shader->info.api_geometry ||
        gfx->layer_replay.bind || gfx->polygon_points);
-   uint32_t per_draw_size = multiview ? sizeof(gfx->per_draw_data) :
+   uint32_t per_draw_size = geom && gfx->shader->info.geometry_statistics ?
+      sizeof(gfx->per_draw_data) :
+      multiview ? offsetof(struct kk_per_draw_data, geometry_statistics) :
       per_vertex ? offsetof(struct kk_per_draw_data, multiview_index) :
       offsetof(struct kk_per_draw_data, per_vertex_index_addr);
    struct kk_ptr shader_data_gpu =
@@ -2511,14 +2515,21 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
    libkk_tessellate(cmd, grid_tess, true, info.mode, POLY_TESS_MODE_WITH_COUNTS,
                     state);
 
-   bool clip = !kk_geometry_shader(cmd);
-   uint64_t tcs_stat = kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_CONTROL_SHADER_PATCHES_BIT);
-   uint64_t tes_stat = kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_SHADER_INVOCATIONS_BIT);
-   uint64_t ci = clip ? kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT) : 0;
-   uint64_t cp = clip ? kk_pipeline_stat_addr(cmd, VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT) : 0;
-   if (tcs_stat || tes_stat || ci || cp)
-      libkk_accumulate_tess_statistics(cmd, kk_grid_1d(1), true, state,
-         tcs_stat, tes_stat, ci, cp, cmd->interlock_heap_active ? 1 : MAX2(1, util_bitcount(gfx->render.view_mask)));
+   if (cmd->state.pipeline_statistics_flags) {
+      bool clip = !kk_geometry_shader(cmd);
+      uint64_t tcs_stat = kk_pipeline_stat_addr(cmd,
+         VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_CONTROL_SHADER_PATCHES_BIT);
+      uint64_t tes_stat = kk_pipeline_stat_addr(cmd,
+         VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_SHADER_INVOCATIONS_BIT);
+      uint64_t ci = clip ? kk_pipeline_stat_addr(cmd,
+         VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT) : 0;
+      uint64_t cp = clip ? kk_pipeline_stat_addr(cmd,
+         VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT) : 0;
+      if (tcs_stat || tes_stat || ci || cp)
+         libkk_accumulate_tess_statistics(cmd, kk_grid_1d(1), true, state,
+            tcs_stat, tes_stat, ci, cp, cmd->interlock_heap_active ? 1 :
+            MAX2(1, util_bitcount(gfx->render.view_mask)));
+   }
 
    draw.grid = kk_grid_indirect(gfx->tess.out_draws_addr);
 
@@ -2933,10 +2944,15 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_shader *vs = cmd->state.gfx.shader;
    uint32_t view_mask = gfx->render.view_mask;
+   if (!view_mask) {
+      kk_draw_one_view(cmd, data);
+      return;
+   }
+
    bool cached_views = vs->info.poly_layer_replay &&
       (gfx->render.layered_bc || gfx->poly_retained.consume || kk_polygon_expansion_active(cmd) ||
        !vs->info.polygon_native);
-   if (!view_mask || !(vs->info.api_geometry || cached_views ||
+   if (!(vs->info.api_geometry || cached_views ||
                       cmd->state.shaders[MESA_SHADER_TESS_EVAL])) {
       kk_draw_one_view(cmd, data);
       return;

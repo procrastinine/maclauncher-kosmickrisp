@@ -280,7 +280,9 @@ kk_hash_graphics_state(struct vk_physical_device *device,
                           sizeof(state->mv->view_mask));
 
    const uint32_t feature_key[] = {
-      KK_FEAT_COUNT, sizeof(struct kk_shader_info), kk_make_feature_key(enabled_features),
+      KK_FEAT_COUNT, sizeof(struct kk_shader_info),
+      offsetof(struct kk_per_draw_data, geometry_statistics),
+      kk_make_feature_key(enabled_features),
    };
    _mesa_blake3_update(&blake3_ctx, &feature_key, sizeof(feature_key));
    if (kk_conservative_possible(state)) {
@@ -940,14 +942,15 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
    bool last_preraster = nir->info.stage == MESA_SHADER_GEOMETRY ||
       (nir->info.stage == MESA_SHADER_TESS_EVAL &&
        !(state->shader_stages & VK_SHADER_STAGE_GEOMETRY_BIT));
-   /* Scan actual intrinsics: early system_values_read predates MSL
-    * preprocessing and cannot gate ViewIndex lowering for these stages. */
-   if (poly_preraster && nir->info.stage != MESA_SHADER_FRAGMENT)
+   /* Only active multiview needs a separate Layer/EmitVertex pass. The
+    * ordinary descriptor pass folds remaining ViewIndex loads to zero. */
+   if (poly_multiview && nir->info.stage != MESA_SHADER_FRAGMENT)
       NIR_PASS(_, nir, kk_nir_lower_poly_multiview, poly_multiview,
                last_preraster);
 
-   if (nir->info.stage == MESA_SHADER_TASK || nir->info.stage == MESA_SHADER_MESH)
-      NIR_PASS(_, nir, kk_nir_lower_poly_multiview, state && state->mv && state->mv->view_mask, false);
+   if ((nir->info.stage == MESA_SHADER_TASK || nir->info.stage == MESA_SHADER_MESH) &&
+       state && state->mv && state->mv->view_mask)
+      NIR_PASS(_, nir, kk_nir_lower_poly_multiview, true, false);
 
    /* Massage IO related variables to please Metal */
    if (nir->info.stage == MESA_SHADER_VERTEX) {
@@ -1290,9 +1293,9 @@ kk_nir_lower_vertex_id_zero_base(struct nir_shader *nir)
 }
 
 static void
-kk_finish_msl_nir(nir_shader *nir)
+kk_finish_msl_nir(nir_shader *nir, bool statistics)
 {
-   NIR_PASS(_, nir, kk_nir_lower_poly);
+   NIR_PASS(_, nir, kk_nir_lower_poly, statistics);
    msl_optimize_nir(nir);
    modify_nir_info(nir);
 }
@@ -1306,7 +1309,8 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
                bool *has_framebuffer_reads)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
-   KK_PERF_VOID(dev, KK_PERF_NIR, kk_finish_msl_nir(nir));
+   KK_PERF_VOID(dev, KK_PERF_NIR,
+                kk_finish_msl_nir(nir, opts && opts->pipeline_statistics));
    if (has_framebuffer_reads)
       *has_framebuffer_reads = nir->info.stage == MESA_SHADER_FRAGMENT &&
                                nir->info.outputs_read != 0;
@@ -1687,11 +1691,13 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             programs[i]->info.workgroup_size[0] = KK_POLY_WG_SIZE;
             programs[i]->info.workgroup_size[1] = programs[i]->info.workgroup_size[2] = 1;
             msl_preprocess_nir(programs[i]);
-            kk_compile_msl(dev, programs[i], state, &shader->polygon[i]);
+            kk_compile_msl_options(dev, programs[i], state, &shader->polygon[i],
+                                   opts, NULL);
          }
       }
 
       shader->info.has_geometry = true;
+      shader->info.geometry_statistics = opts->pipeline_statistics;
       shader->info.geometry = shader->info.gs;
       nir_shader *aux[] = {count, pre_gs};
       for (unsigned i = 0; i < ARRAY_SIZE(aux); ++i) {
@@ -1702,13 +1708,14 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          aux[i]->info.workgroup_size[0] = i ? 1 : KK_POLY_WG_SIZE;
          aux[i]->info.workgroup_size[1] = aux[i]->info.workgroup_size[2] = 1;
          msl_preprocess_nir(aux[i]);
-         kk_compile_msl(dev, aux[i], state, &shader->gs_aux[i]);
+         kk_compile_msl_options(dev, aux[i], state, &shader->gs_aux[i],
+                                opts, NULL);
       }
 
       nir->info.stage = MESA_SHADER_COMPUTE;
       memset(&nir->info.cs, 0, sizeof(nir->info.cs));
       nir->xfb_info = NULL;
-      kk_compile_msl(dev, nir, state, &shader->gs_main);
+      kk_compile_msl_options(dev, nir, state, &shader->gs_main, opts, NULL);
 
       /* From here on, nir is the rasterization VS of the GS */
       nir = rast;
@@ -2116,6 +2123,7 @@ gather_graphics_pipeline_create_info(
                if (s->polygon[j].code) kk_msl_copy(&vs->polygon[j], &s->polygon[j]);
          }
          info->has_geometry = true;
+         info->geometry_statistics = s->info.geometry_statistics;
          info->geometry = s->info.gs;
          info->gs_aux_mask = s->info.gs_aux_mask;
          u_foreach_bit(i, info->gs_aux_mask)
@@ -2793,6 +2801,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       .polygon_regular = polygon_regular,
       .per_vertex_map = &per_vertex_map,
       .mesh_queries = features & BITFIELD_BIT(KK_FEAT_MESH_QUERIES),
+      .pipeline_statistics = features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS),
       .conservative_fs = conservative_fs,
    };
    for (uint32_t i = 0; i < total_shaders; i++) {
