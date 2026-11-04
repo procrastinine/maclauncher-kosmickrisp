@@ -95,17 +95,17 @@
   },
   {
     "name": "pipeline_statistics",
-    "description": "Stage-dependent pipeline statistics for explicitly active queries.",
-    "cost_class": "shader counters / compute reports",
-    "cost_note": "Inactive fragment and pre-geometry counter regions specialize away. An active fragment invocation loads its counter address and performs one low-word device atomic, with a high-word atomic on overflow. Active IA and geometry queries use their selected report paths. GPU timing is unmeasured.",
+    "description": "Pipeline-statistics queries backed by draw data and shader execution counters.",
+    "cost_class": "draw-data counters / shader atomics",
+    "cost_note": "An active fragment query adds a counter-address load and one 32-bit atomic increment, plus a carry atomic when the low word wraps. Other stages use draw data or instrumented execution. Inactive queries specialize the counter region away. Per-use timing is unmeasured.",
     "extensions": [],
     "features": [
       "pipelineStatisticsQuery"
     ],
     "properties": [],
     "performance": true,
-    "performance_reason": "The macfx-vkd3d translator requires pipelineStatisticsQuery for D3D feature level 11_0; inactive queries retain the default-false shader specialization.",
-    "off_consequence": "Core Vulkan pipeline-statistics queries are unavailable. The macfx-vkd3d feature-level 11_0 capability check fails. This entry does not disable shader demote, helper invocation semantics, mesh queries or primitives-generated queries."
+    "performance_reason": "Wine vkd3d requires pipelineStatisticsQuery for feature level 11_1 and above; inactive queries retain the false native specialization without counter operations.",
+    "off_consequence": "Disabling pipelineStatisticsQuery limits Wine vkd3d to feature level 11_0 and removes pipeline-statistics queries; DXVK treats the feature as optional."
   },
   {
     "name": "mesh_shader",
