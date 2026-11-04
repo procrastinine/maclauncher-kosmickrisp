@@ -55,8 +55,8 @@ Metal path where that family provides one:
   buffer support for ``R64_UINT`` and ``R64_SINT`` in every mode. Each image
   operation takes a hashed lock and publishes its result with a native 64-bit
   texture minimum or maximum. On Apple7 the same capabilities are the
-  ``image_atomic64`` emulation entry, which is off in the default performance
-  mode: Apple7 has no 64-bit texture atomics, so each operation reads and
+  ``image_atomic64`` emulation entry, which is on in the default performance
+  mode. Apple7 has no 64-bit texture atomics, so each operation reads and
   writes the two 32-bit words of the texel under the lock.
 - Sparse binding and sparse residency are reported when the device supports
   placement sparse resources with 64 KiB sparse pages. On macOS 26.4 and later
@@ -105,18 +105,23 @@ Two modes set the starting selection:
 
 Performance defaults are selected for the running Apple GPU family. Native
 paths and bounded compatibility work remain available; software ray traversal,
-FP64 and coarse fragment shading require explicit selection. Mesh dispatch
-is selected on Apple9 and later; Apple7 and Apple8 require explicit selection. Buffer atomic64, denormal controls, raster ordering and conservative
-rasterization retain their selected costs. Requested FP32 preservation uses
-native arithmetic and comparisons with subnormal guards; cold repair handles
-true or possibly flushed subnormal results. Shaders that request neither
-denormal mode emit no preservation guards.
+FP64 and coarse fragment shading require explicit selection. Mesh dispatch is
+selected on every family: direct Mesh and bounded direct Task draws are
+native, Apple7 and Apple8 prepare native indirect inputs before complete
+render scopes, and Apple9 and later retain GPU indirect command expansion
+where eligible. Buffer atomic64, denormal controls, raster ordering and
+conservative rasterization retain their selected costs. Requested FP32
+preservation uses native arithmetic and comparisons with subnormal guards;
+cold repair handles true or possibly flushed subnormal results. Shaders that
+request neither denormal mode emit no preservation guards.
 
-Apple10 and Apple11 select fragment barycentrics because eligible pipelines use
-native pre-raster per-vertex inputs. Topology and replay combinations outside
-that path retain corner transport. Hardware availability alone does not select
-a feature: the ray-tracing implementation uses software traversal even on GPUs
-with hardware ray tracing.
+Fragment barycentrics are selected on every family. Center-only coordinates
+are native; exact or reordered coordinates and per-vertex inputs use corner
+transport only in shaders that request them. Apple10 and Apple11 use native
+pre-raster per-vertex inputs for eligible pipelines, and topology and replay
+combinations outside that path retain corner transport. Hardware availability
+alone does not select a feature: the ray-tracing implementation uses software
+traversal even on GPUs with hardware ray tracing.
 
 .. include:: kosmickrisp/emulation-performance-families.rst
 
