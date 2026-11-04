@@ -30,7 +30,8 @@ enum kk_perf_metric {
 struct kk_perf_compile_scope {
    struct kk_perf_compile_scope *previous;
    struct kk_perf *perf;
-   uint64_t id, start;
+   uint64_t id, start, request_id, thread_id;
+   uint32_t input_count, stage_mask;
    uint64_t ns[KK_PERF_METRIC_COUNT];
    uint64_t count[KK_PERF_METRIC_COUNT];
 };

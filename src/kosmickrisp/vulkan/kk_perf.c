@@ -24,7 +24,7 @@ struct kk_perf {
    bool close_log, compile_details;
    bool device_features_known;
    bool pipeline_statistics_query, writable_msaa, dynamic_rendering;
-   uint64_t compile_sequence;
+   uint64_t compile_sequence, pipeline_sequence;
    uint64_t created, interval_start, frames, interval_frames;
    uint64_t frame_interval, time_interval, sequence;
    int64_t pending, submit_pending, compiler_active;
@@ -143,6 +143,59 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
    p->compiler_peak = p->compiler_active > 0 ? p->compiler_active : 0;
 }
 
+struct kk_perf_pipeline_scope {
+   struct kk_perf_pipeline_scope *previous;
+   struct kk_perf *perf;
+   uint64_t id, start, thread;
+   uint32_t count;
+   const char *kind;
+};
+static _Thread_local struct kk_perf_pipeline_scope *pipeline_scope;
+
+static uint64_t
+kk_perf_thread_id(void)
+{
+#ifdef __APPLE__
+   uint64_t id = 0;
+   pthread_threadid_np(NULL, &id);
+   return id;
+#else
+   return (uintptr_t)pthread_self();
+#endif
+}
+
+static void
+kk_perf_pipeline_begin(struct kk_perf *p, struct kk_perf_pipeline_scope *scope,
+                       const char *kind, uint32_t count)
+{
+   *scope = (struct kk_perf_pipeline_scope) {
+      .previous = pipeline_scope, .perf = p, .start = kk_perf_now(),
+      .thread = kk_perf_thread_id(), .count = count, .kind = kind,
+   };
+   pthread_mutex_lock(&p->mutex);
+   scope->id = ++p->pipeline_sequence;
+   fprintf(p->log, "{\"kk_pipeline_create\":1,\"device\":\"%p\",\"request_id\":%"PRIu64
+      ",\"phase\":\"begin\",\"kind\":\"%s\",\"thread\":%"PRIu64",\"count\":%u,\"start_ms\":%.6f}\n",
+      (void *)p, scope->id, kind, scope->thread, count, (scope->start - p->created) / 1e6);
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+   pipeline_scope = scope;
+}
+
+static void
+kk_perf_pipeline_end(struct kk_perf_pipeline_scope *scope, VkResult result)
+{
+   uint64_t end = kk_perf_now();
+   struct kk_perf *p = scope->perf;
+   pipeline_scope = scope->previous;
+   pthread_mutex_lock(&p->mutex);
+   fprintf(p->log, "{\"kk_pipeline_create\":1,\"device\":\"%p\",\"request_id\":%"PRIu64
+      ",\"phase\":\"end\",\"kind\":\"%s\",\"thread\":%"PRIu64",\"count\":%u,\"result\":%d,\"wall_ms\":%.6f}\n",
+      (void *)p, scope->id, scope->kind, scope->thread, scope->count, result, (end - scope->start) / 1e6);
+   fflush(p->log);
+   pthread_mutex_unlock(&p->mutex);
+}
+
 static _Thread_local struct kk_perf_compile_scope *compile_scope;
 
 void
@@ -156,6 +209,8 @@ kk_perf_compile_begin(struct kk_perf *p, struct kk_perf_compile_scope *scope)
    scope->id = ++p->compile_sequence;
    pthread_mutex_unlock(&p->mutex);
    scope->start = kk_perf_now();
+   scope->thread_id = kk_perf_thread_id();
+   scope->request_id = pipeline_scope && pipeline_scope->perf == p ? pipeline_scope->id : 0;
    compile_scope = scope;
 }
 
@@ -168,9 +223,10 @@ kk_perf_compile_end(struct kk_perf_compile_scope *scope, bool binary, int result
    compile_scope = scope->previous;
    pthread_mutex_lock(&p->mutex);
    fprintf(p->log, "{\"kk_compile\":1,\"device\":\"%p\",\"id\":%"PRIu64
-           ",\"origin\":\"%s\",\"result\":%d,\"start_ms\":%.6f,\"wall_ms\":%.6f,"
+           ",\"request_id\":%"PRIu64",\"thread\":%"PRIu64",\"input_count\":%u,\"stage_mask\":%u,"
+           "\"origin\":\"%s\",\"result\":%d,\"start_ms\":%.6f,\"wall_ms\":%.6f,"
            "\"cpu_spans\":\"nested_caller_thread_wall_ms\",\"metrics\":{",
-           (void *)p, scope->id, binary ? "deserialize" : "compile", result,
+           (void *)p, scope->id, scope->request_id, scope->thread_id, scope->input_count, scope->stage_mask, binary ? "deserialize" : "compile", result,
            (scope->start-p->created)/1e6, (end-scope->start)/1e6);
    for (unsigned i = 0; i < KK_PERF_METRIC_COUNT; i++)
       fprintf(p->log, "%s\"%s\":{\"count\":%"PRIu64",\"total_ms\":%.6f}",
@@ -315,6 +371,20 @@ kk_perf_destroy(struct kk_perf *p)
    free(p);
 }
 
+static ATTRIBUTE_NOINLINE VkResult
+kk_perf_CreateGraphicsPipelines_detailed(VkDevice device, VkPipelineCache cache,
+   uint32_t count, const VkGraphicsPipelineCreateInfo *infos,
+   const VkAllocationCallbacks *alloc, VkPipeline *pipelines)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   struct kk_perf_pipeline_scope scope;
+   kk_perf_pipeline_begin(dev->perf, &scope, "graphics", count);
+   VkResult result = KK_PERF_CALL(dev, KK_PERF_PIPELINE_CREATE,
+      dev->vk.dispatch_table.CreateGraphicsPipelines(device, cache, count, infos, alloc, pipelines));
+   kk_perf_pipeline_end(&scope, result);
+   return result;
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL
 kk_perf_CreateGraphicsPipelines(VkDevice device, VkPipelineCache cache,
                                 uint32_t count,
@@ -323,9 +393,25 @@ kk_perf_CreateGraphicsPipelines(VkDevice device, VkPipelineCache cache,
                                 VkPipeline *pipelines)
 {
    VK_FROM_HANDLE(kk_device, dev, device);
+   if (dev->perf && dev->perf->compile_details)
+      return kk_perf_CreateGraphicsPipelines_detailed(device, cache, count, infos, alloc, pipelines);
    return KK_PERF_CALL(dev, KK_PERF_PIPELINE_CREATE,
       dev->vk.dispatch_table.CreateGraphicsPipelines(device, cache, count,
                                                       infos, alloc, pipelines));
+}
+
+static ATTRIBUTE_NOINLINE VkResult
+kk_perf_CreateComputePipelines_detailed(VkDevice device, VkPipelineCache cache,
+   uint32_t count, const VkComputePipelineCreateInfo *infos,
+   const VkAllocationCallbacks *alloc, VkPipeline *pipelines)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   struct kk_perf_pipeline_scope scope;
+   kk_perf_pipeline_begin(dev->perf, &scope, "compute", count);
+   VkResult result = KK_PERF_CALL(dev, KK_PERF_PIPELINE_CREATE,
+      dev->vk.dispatch_table.CreateComputePipelines(device, cache, count, infos, alloc, pipelines));
+   kk_perf_pipeline_end(&scope, result);
+   return result;
 }
 
 static VKAPI_ATTR VkResult VKAPI_CALL
@@ -336,6 +422,8 @@ kk_perf_CreateComputePipelines(VkDevice device, VkPipelineCache cache,
                                VkPipeline *pipelines)
 {
    VK_FROM_HANDLE(kk_device, dev, device);
+   if (dev->perf && dev->perf->compile_details)
+      return kk_perf_CreateComputePipelines_detailed(device, cache, count, infos, alloc, pipelines);
    return KK_PERF_CALL(dev, KK_PERF_PIPELINE_CREATE,
       dev->vk.dispatch_table.CreateComputePipelines(device, cache, count,
                                                      infos, alloc, pipelines));

@@ -489,6 +489,11 @@ kk_compile_shaders_tracked(struct vk_device *device, uint32_t count,
    kk_perf_compiler(perf, 1);
    struct kk_perf_compile_scope scope;
    kk_perf_compile_begin(perf, &scope);
+   if (scope.perf) {
+      scope.input_count = count;
+      for (uint32_t i = 0; i < count; ++i)
+         scope.stage_mask |= BITFIELD_BIT(infos[i].stage);
+   }
    VkResult result = kk_compile_shaders_untracked(device, count, infos, graphics, features, alloc, out);
    kk_perf_compile_end(&scope, false, result);
    kk_perf_compiler(perf, -1);
@@ -583,6 +588,11 @@ kk_deserialize_shader_tracked(struct vk_device *dev, struct blob_reader *blob, u
    struct kk_perf_compile_scope scope;
    kk_perf_compile_begin(perf, &scope);
    VkResult result = kk_deserialize_shader_untracked(dev, blob, version, alloc, out);
+   if (scope.perf) {
+      scope.input_count = 1;
+      if (result == VK_SUCCESS)
+         scope.stage_mask = BITFIELD_BIT(container_of(*out, struct kk_shader, vk)->info.stage);
+   }
    kk_perf_compile_end(&scope, true, result);
    kk_perf_compiler(perf, -1);
    kk_perf_add(perf, KK_PERF_SHADER_COMPILE, kk_perf_now() - start);
