@@ -97,16 +97,31 @@ kk_archive_temporary_path(void)
    return path;
 }
 
-@interface KKArchivePiece : NSObject {
+/* Readers own the archive and backing file across concurrent LRU eviction. */
+@interface KKLoadedArchive : NSObject {
 @public
-   NSData *identity;
-   dispatch_once_t loaded;
    id<MTL4Archive> archive;
    NSString *path;
 }
-- (id)initWithIdentity:(NSData *)key;
+@end
+@implementation KKLoadedArchive
+- (void)dealloc
+{
+   [archive release];
+   if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+   [path release];
+   [super dealloc];
+}
 @end
 
+@interface KKArchivePiece : NSObject {
+@public
+   NSData *identity;
+   KKLoadedArchive *resident;
+   bool unavailable;
+}
+- (id)initWithIdentity:(NSData *)key;
+@end
 @implementation KKArchivePiece
 - (id)initWithIdentity:(NSData *)key
 {
@@ -116,13 +131,14 @@ kk_archive_temporary_path(void)
 }
 - (void)dealloc
 {
-   [archive release];
-   if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
-   [path release];
+   [resident release];
    [identity release];
    [super dealloc];
 }
 @end
+
+/* Bounds cached native objects, not persistent or in-flight coverage. */
+#define KK_RESIDENT_ARCHIVE_LIMIT 8
 
 /* Graphics libraries only: bounded source retention and native object count.
  * Specialization and PSO state remain on their original descriptor paths. */
@@ -161,6 +177,8 @@ kk_archive_temporary_path(void)
    dispatch_queue_t checkpoint_queue;
    NSMutableArray *pieces;
    NSMutableDictionary *hints;
+   NSMutableDictionary *piece_by_identity;
+   NSMutableArray *resident_pieces;
    KKArchivePiece *preferred;
    NSMutableArray *graphics_libraries;
    size_t graphics_source_bytes;
@@ -171,7 +189,7 @@ kk_archive_temporary_path(void)
 - (id)initWithDevice:(id<MTLDevice>)dev operations:(const struct mtl_compiler_cache_ops *)ops data:(void *)data;
 - (void)load;
 - (NSArray *)candidates:(NSData *)hint;
-- (id<MTL4Archive>)archiveForPiece:(KKArchivePiece *)piece;
+- (KKLoadedArchive *)archiveForPiece:(KKArchivePiece *)piece;
 - (void)recordHit:(KKArchivePiece *)piece hint:(NSData *)hint;
 - (void)recordCompile;
 - (void)scheduleLocked;
@@ -191,6 +209,8 @@ kk_archive_temporary_path(void)
    cache_data = data;
    pieces = [[NSMutableArray alloc] init];
    hints = [NSMutableDictionary new];
+   piece_by_identity = [NSMutableDictionary new];
+   resident_pieces = [NSMutableArray new];
    MTL4PipelineDataSetSerializerDescriptor *desc = [[MTL4PipelineDataSetSerializerDescriptor new] autorelease];
    desc.configuration = MTL4PipelineDataSetSerializerConfigurationCaptureBinaries;
    serializer = [dev newPipelineDataSetSerializerWithDescriptor:desc];
@@ -208,16 +228,19 @@ kk_archive_temporary_path(void)
       if (!bytes) return;
       NSData *data = [NSData dataWithBytesNoCopy:bytes length:length freeWhenDone:YES];
       id index = [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:NULL error:NULL];
-      if (![index isKindOfClass:[NSArray class]] || [index count] > 64) return;
+      if (![index isKindOfClass:[NSArray class]]) return;
       /* The index contains only content identifiers, never object graphs. */
       for (id key in index) {
          if (![key isKindOfClass:[NSData class]] || [key length] != 32) {
             [pieces removeAllObjects];
+            [piece_by_identity removeAllObjects];
             return;
          }
+         if (piece_by_identity[key]) continue;
          KKArchivePiece *piece = [[KKArchivePiece alloc] initWithIdentity:key];
          if (!piece) { [pieces removeAllObjects]; return; }
          [pieces addObject:piece];
+         piece_by_identity[key] = piece;
          [piece release];
       }
    });
@@ -229,9 +252,7 @@ kk_archive_temporary_path(void)
    @synchronized(self) {
       NSMutableArray *result = [NSMutableArray arrayWithCapacity:pieces.count];
       NSData *identity = hint ? hints[hint] : nil;
-      KKArchivePiece *hinted = nil;
-      for (KKArchivePiece *piece in pieces)
-         if ([piece->identity isEqual:identity]) { hinted = piece; break; }
+      KKArchivePiece *hinted = identity ? piece_by_identity[identity] : nil;
       if (hinted) [result addObject:hinted];
       if (preferred && preferred != hinted) [result addObject:preferred];
       for (KKArchivePiece *piece in [pieces reverseObjectEnumerator])
@@ -240,24 +261,50 @@ kk_archive_temporary_path(void)
    }
 }
 
-- (id<MTL4Archive>)archiveForPiece:(KKArchivePiece *)piece
+- (KKLoadedArchive *)archiveForPiece:(KKArchivePiece *)piece
 {
-   dispatch_once(&piece->loaded, ^{
-      size_t length = 0;
-      void *bytes = operations.load_piece(cache_data, piece->identity.bytes, &length);
-      if (!bytes) return;
-      NSData *data = [NSData dataWithBytesNoCopy:bytes length:length freeWhenDone:YES];
-      NSString *path = kk_archive_temporary_path();
-      NSError *error = nil;
-      if (path && [data writeToFile:path options:NSDataWritingAtomic error:&error]) {
-         piece->archive = [device newArchiveWithURL:[NSURL fileURLWithPath:path] error:&error];
-         if (piece->archive) piece->path = [path copy];
+   KKLoadedArchive *result = nil;
+   /* No global publication lock during disk IO or native archive opening. */
+   @synchronized(piece) {
+      if (!piece->resident && !piece->unavailable) {
+         size_t length = 0;
+         void *bytes = operations.load_piece(cache_data, piece->identity.bytes, &length);
+         NSData *data = bytes
+            ? [NSData dataWithBytesNoCopy:bytes length:length freeWhenDone:YES] : nil;
+         KKLoadedArchive *opened = [KKLoadedArchive new];
+         NSString *path = data ? kk_archive_temporary_path() : nil;
+         NSError *error = nil;
+         if (path && [data writeToFile:path options:NSDataWritingAtomic error:&error]) {
+            opened->archive = [device newArchiveWithURL:[NSURL fileURLWithPath:path] error:&error];
+            opened->path = [path copy];
+         }
+         if (opened->archive) piece->resident = opened;
+         else {
+            [opened release];
+            if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+            piece->unavailable = true; /* Disk eviction/corruption is a miss. */
+         }
       }
-      if (!piece->archive && path)
-         [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
-   });
-   if (piece->archive) @synchronized(self) { stats.archive_loaded = true; }
-   return piece->archive;
+      result = [piece->resident retain];
+   }
+   KKArchivePiece *retired = nil;
+   if (result) @synchronized(self) {
+      stats.archive_loaded = true;
+      [resident_pieces removeObjectIdenticalTo:piece];
+      [resident_pieces addObject:piece];
+      if (resident_pieces.count > KK_RESIDENT_ARCHIVE_LIMIT) {
+         retired = [resident_pieces[0] retain];
+         [resident_pieces removeObjectAtIndex:0];
+      }
+   }
+   if (retired) {
+      @synchronized(retired) {
+         [retired->resident release];
+         retired->resident = nil;
+      }
+      [retired release];
+   }
+   return [result autorelease];
 }
 
 - (void)recordHit:(KKArchivePiece *)piece hint:(NSData *)hint
@@ -351,8 +398,10 @@ kk_archive_temporary_path(void)
          if (piece) {
             NSMutableArray *index = [NSMutableArray array];
             @synchronized(self) {
-               [pieces addObject:piece];
-               while (pieces.count > 64) [pieces removeObjectAtIndex:0];
+               if (!piece_by_identity[key]) {
+                  [pieces addObject:piece];
+                  piece_by_identity[key] = piece;
+               }
                for (KKArchivePiece *entry in pieces) [index addObject:entry->identity];
             }
             [piece release];
@@ -389,6 +438,8 @@ kk_archive_temporary_path(void)
    [preferred release];
    [pieces release];
    [hints release];
+   [piece_by_identity release];
+   [resident_pieces release];
    [serializer release];
    [device release];
    if (checkpoint_queue) dispatch_release(checkpoint_queue);
@@ -541,8 +592,9 @@ kk_archive_compute(mtl_compiler *compiler, MTL4ComputePipelineDescriptor *descri
    @synchronized(cache) { cache->stats.requests++; }
    NSData *hint = kk_pipeline_hint(descriptor);
    for (KKArchivePiece *piece in [cache candidates:hint]) {
-      id<MTL4Archive> archive = [cache archiveForPiece:piece];
-      if (!archive) continue;
+      KKLoadedArchive *loaded = [cache archiveForPiece:piece];
+      if (!loaded) continue;
+      id<MTL4Archive> archive = loaded->archive;
       @synchronized(cache) { cache->stats.lookups++; }
       NSError *error = nil;
       id<MTLComputePipelineState> state = [archive newComputePipelineStateWithDescriptor:descriptor error:&error];
@@ -559,8 +611,9 @@ kk_archive_render(mtl_compiler *compiler, MTL4PipelineDescriptor *descriptor)
    @synchronized(cache) { cache->stats.requests++; }
    NSData *hint = kk_pipeline_hint(descriptor);
    for (KKArchivePiece *piece in [cache candidates:hint]) {
-      id<MTL4Archive> archive = [cache archiveForPiece:piece];
-      if (!archive) continue;
+      KKLoadedArchive *loaded = [cache archiveForPiece:piece];
+      if (!loaded) continue;
+      id<MTL4Archive> archive = loaded->archive;
       @synchronized(cache) { cache->stats.lookups++; }
       NSError *error = nil;
       id<MTLRenderPipelineState> state = [archive newRenderPipelineStateWithDescriptor:descriptor error:&error];
