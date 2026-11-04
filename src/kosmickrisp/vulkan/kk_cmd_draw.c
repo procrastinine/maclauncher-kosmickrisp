@@ -2023,6 +2023,74 @@ kk_set_unrolled_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
    data->indirect_command.stride = sizeof(VkDrawIndexedIndirectCommand);
 }
 
+/* Largest direct fan converted on the CPU; larger fans use the unroll kernel. */
+#define KK_CPU_FAN_MAX_TRIANGLES 4096u
+
+/* Converts a direct, non-indexed triangle fan into an indexed triangle list
+ * whose indices are written on the CPU, in the vertex order the unroll kernel
+ * produces. No compute encoder is needed, so the current render pass stays
+ * open. Returns false when the draw needs the unroll kernel. */
+static bool
+kk_fan_to_list(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+{
+   if (data->prim != MESA_PRIM_TRIANGLE_FAN || data->indexed ||
+       data->indirect || data->draw_count != 1u)
+      return false;
+
+   const VkDrawIndirectCommand draw = data->draws[0];
+   if (draw.vertexCount < 3u ||
+       draw.vertexCount - 2u > KK_CPU_FAN_MAX_TRIANGLES ||
+       draw.firstVertex > (uint32_t)INT32_MAX)
+      return false;
+
+   const uint32_t triangles = draw.vertexCount - 2u;
+   const uint32_t size_B = triangles * 3u * sizeof(uint32_t);
+   struct kk_ptr indices = kk_pool_alloc(cmd, size_B, 4u);
+   if (unlikely(!indices.gpu || !indices.cpu))
+      return false;
+
+   /* Vulkan orders fan triangle i as (i + 1, i + 2, 0) when the first vertex
+    * provokes. With the last vertex provoking, (0, i + 1, i + 2) is rotated
+    * to (i + 2, 0, i + 1) so that the provoking vertex comes first. */
+   uint32_t *out = indices.cpu;
+   const bool first = data->flatshade_first;
+   for (uint32_t i = 0; i < triangles; i++) {
+      out[3u * i + 0u] = first ? i + 1u : i + 2u;
+      out[3u * i + 1u] = first ? i + 2u : 0u;
+      out[3u * i + 2u] = first ? 0u : i + 1u;
+   }
+
+   data->prim = MESA_PRIM_TRIANGLES;
+   data->index_buffer = (struct kk_addr_range){
+      .addr = indices.gpu,
+      .range = size_B,
+   };
+   data->index_buffer_el_size_B = 4u;
+   data->restart_index = UINT32_MAX;
+   data->indexed = true;
+   data->restart = false;
+   data->flatshade_first = true;
+   data->indexed_draws[0] = (VkDrawIndexedIndirectCommand){
+      .indexCount = triangles * 3u,
+      .instanceCount = draw.instanceCount,
+      .firstIndex = 0u,
+      .vertexOffset = (int32_t)draw.firstVertex,
+      .firstInstance = draw.firstInstance,
+   };
+
+   if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL))
+      kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_FAN_LIST, 0);
+   return true;
+}
+
+/* Counts a draw-time kernel that closes the open render encoder. */
+static void
+kk_count_unroll_split(struct kk_cmd_buffer *cmd)
+{
+   if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL) && cmd->metal.render)
+      kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_RENDER_SPLIT_UNROLL, 0);
+}
+
 /* Unrolling will always be done through indirect rendering, so if this is
  * called from non-indirect calls, we will fake it. */
 /* With emulate_flatshade_last, last-vertex provoking triangles are rotated so
@@ -2032,6 +2100,7 @@ static bool
 kk_unroll_geometry(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
                    bool emulate_flatshade_last)
 {
+   kk_count_unroll_split(cmd);
    if (unlikely(!kk_convert_to_indirect_draw(cmd, data)))
       return false;
 
@@ -2076,6 +2145,7 @@ static bool
 kk_unroll_adjacency(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
                     bool emulate_flatshade_last)
 {
+   kk_count_unroll_split(cmd);
    if (unlikely(!kk_convert_to_indirect_draw(cmd, data)))
       return false;
 
@@ -2909,8 +2979,9 @@ kk_draw_one_view(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    bool per_vertex = !tess && !geom && emulates_per_vertex;
 
    /* Unroll geometry. Skip draw if we fail. The per-vertex emulation issues
-    * its own lists. */
+    * its own lists. Direct non-indexed fans are converted on the CPU. */
    if (!per_vertex && requires_unroll(cmd, data) &&
+       !kk_fan_to_list(cmd, data) &&
        !kk_unroll_geometry(cmd, data, true))
       goto layered_bc_done;
 

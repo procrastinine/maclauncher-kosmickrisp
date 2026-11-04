@@ -88,7 +88,8 @@ static const char *const names[KK_PERF_METRIC_COUNT] = {
    "encoder_setup", "encoder_state", "encoder_draw", "encoder_end",
    "render_encoder_begin", "compute_encoder_begin",
    "setup_descriptor", "setup_encoder", "setup_binds",
-   "setup_bind_skipped", "descriptor_reuse"
+   "setup_bind_skipped", "descriptor_reuse",
+   "render_split", "render_split_unroll", "fan_list"
 };
 
 uint64_t kk_perf_now(void) { return os_time_get_nano(); }

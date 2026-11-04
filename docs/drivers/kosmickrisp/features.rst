@@ -185,9 +185,11 @@ Feature table
        ``VK_EXT_primitive_restart_index``,
        ``VK_EXT_primitive_topology_list_restart``, triangle fans
      - Native with emulated cases: 32-bit and 16-bit indices with default
-       strip restart are native. 8-bit indices, triangle fans, list restart
-       and other restart indices are rewritten by a compute pass. Patch-list
-       restart is not provided.
+       strip restart are native. A direct, non-indexed triangle fan of up to
+       4096 triangles is drawn as a triangle list with indices written on the
+       CPU. 8-bit indices, other triangle fans, list restart and other restart
+       indices are rewritten by a compute pass. Patch-list restart is not
+       provided.
      - None listed; emulated cases on all families.
      - —
      - Always

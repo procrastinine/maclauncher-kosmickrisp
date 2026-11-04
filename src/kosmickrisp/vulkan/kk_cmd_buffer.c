@@ -598,6 +598,8 @@ cs_get_compute_internal(struct kk_cmd_buffer *cmd, bool preserve_pipeline)
    KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_SETUP, setup);
    /* If we are inside render, we need to force a restart later */
    if (cmd->metal.render) {
+      if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL))
+         kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_RENDER_SPLIT, 0);
       kk_apply_attachment_store_ops(cmd, true);
       cs_end(cmd);
       kk_cmd_buffer_invalidate_gfx_encoder(cmd);

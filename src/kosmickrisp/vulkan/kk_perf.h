@@ -32,6 +32,9 @@ enum kk_perf_metric {
    KK_PERF_RENDER_ENCODER_BEGIN, KK_PERF_COMPUTE_ENCODER_BEGIN,
    KK_PERF_SETUP_DESCRIPTOR, KK_PERF_SETUP_ENCODER, KK_PERF_SETUP_BINDS,
    KK_PERF_SETUP_BIND_SKIPPED, KK_PERF_DESCRIPTOR_REUSE,
+   /* A compute encoder closed an open render encoder; the unroll subset;
+    * direct fans converted to triangle lists on the CPU. */
+   KK_PERF_RENDER_SPLIT, KK_PERF_RENDER_SPLIT_UNROLL, KK_PERF_FAN_LIST,
    KK_PERF_METRIC_COUNT
 };
 
