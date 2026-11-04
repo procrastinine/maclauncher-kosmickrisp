@@ -1246,7 +1246,9 @@ kk_upload_tess_params(struct kk_cmd_buffer *cmd, struct poly_tess_params *out,
    struct poly_tess_params args = {
       .heap = kk_heap(cmd),
       .tcs_stride_el = tcs->info.tess.tcs_output_stride / 4,
-      .statistic = kk_pool_upload(cmd, (uint64_t[1]){0}, sizeof(uint64_t), 8).gpu,
+      .statistic = (cmd->state.pipeline_statistics_flags &
+         VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_SHADER_INVOCATIONS_BIT) ?
+         kk_pool_upload(cmd, (uint64_t[1]){0}, sizeof(uint64_t), 8).gpu : 0u,
       .input_patch_size = dyn->ts.patch_control_points,
       .output_patch_size = tcs->info.tess.tcs_output_patch_size,
       .tcs_patch_constants = tcs->info.tess.tcs_nr_patch_outputs,
@@ -1343,7 +1345,13 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
    params.count_buffer_stride = info->count_words * sizeof(uint32_t);
    struct kk_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
    params.flat_outputs = fs ? fs->info.fs.flat_outputs : 0;
-   uint64_t scratch = kk_pool_upload(cmd, (uint64_t[32]){0}, 256, 8).gpu;
+   bool statistics = cmd->state.pipeline_statistics_flags &
+      (VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT |
+       VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
+       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
+       VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT);
+   static const uint64_t zeros[32] = {0};
+   uint64_t scratch = kk_pool_upload(cmd, zeros, statistics ? 256 : 128, 8).gpu;
    for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; ++i) {
       params.prims_generated_counter[i] = scratch + 8 * i;
       params.xfb_prims_generated_counter[i] = scratch + 32 + 8 * i;
@@ -1364,7 +1372,8 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
    }
    params.xfb_any_overflow = scratch + 96;
    for (unsigned i = 0; i < PIPE_STAT_QUERY_COUNT; ++i)
-      gfx->per_draw_data.geometry_statistics[i] = scratch + 128 + i * sizeof(uint32_t);
+      gfx->per_draw_data.geometry_statistics[i] = statistics ?
+         scratch + 128 + i * sizeof(uint32_t) : 0;
    if (info->count_words && !info->prefix_sum)
       params.count_buffer = scratch + 112;
 

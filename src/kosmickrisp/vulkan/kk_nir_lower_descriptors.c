@@ -889,12 +889,6 @@ lower_poly(struct nir_builder *b, nir_intrinsic_instr *intrin, void *data)
       return true;
    case nir_intrinsic_load_stat_query_address_poly: {
       b->cursor = nir_before_instr(&intrin->instr);
-      if (b->shader->info.stage == MESA_SHADER_FRAGMENT &&
-          nir_intrinsic_base(intrin) == PIPE_STAT_QUERY_PS_INVOCATIONS) {
-         nir_def_replace(&intrin->def, load_root(b, 1, 64,
-            nir_imm_int(b, offsetof(struct kk_root_descriptor_table, draw.fragment_statistic)), 8));
-         return true;
-      }
       unsigned offset = kk_per_draw_offset(geometry_statistics) +
                         nir_intrinsic_base(intrin) * sizeof(uint64_t);
       nir_def_replace(&intrin->def, load_per_draw(b, 1, 64,

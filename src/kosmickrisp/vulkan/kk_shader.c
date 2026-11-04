@@ -185,6 +185,8 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX);
    if (feats->minLod)
       key |= BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD);
+   if (feats->pipelineStatisticsQuery)
+      key |= BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS);
    return key;
 }
 
@@ -1833,10 +1835,11 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
       emulated_stage |= (nir->xfb_info || kk_polygon_possible(state)) && (nir->info.stage == MESA_SHADER_VERTEX ||
                                          nir->info.stage == MESA_SHADER_TESS_EVAL);
       msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
-      if (nir->info.stage == MESA_SHADER_FRAGMENT)
-         NIR_PASS(_, nir, kk_nir_statistics_fs);
       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
                    info->set_layout_count, info->set_layouts, state, features);
+      if (nir->info.stage == MESA_SHADER_FRAGMENT &&
+          (features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS)))
+         NIR_PASS(_, nir, kk_nir_statistics_fs);
 
       if (nir->info.stage == MESA_SHADER_VERTEX)
          vertex_robustness = info->robustness;

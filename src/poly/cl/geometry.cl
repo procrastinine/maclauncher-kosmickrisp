@@ -361,8 +361,10 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
     *    geometry shader invocations count is incremented for each separate
     *    instanced invocation.
     */
-   *gs_invocations += unrolled_in_prims * invocations;
-   *gs_primitives += emitted_prims;
+   if (gs_invocations)
+      *gs_invocations += unrolled_in_prims * invocations;
+   if (gs_primitives)
+      *gs_primitives += emitted_prims;
 
    /* Clipper queries are not well-defined, so we can emulate them in lots of
     * silly ways. We need the hardware counters to implement them properly. For
@@ -377,6 +379,8 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
     *    volume, the counter is incremented by one or more. Otherwise, the
     *    counter is incremented by zero or more.
     */
-   *c_primitives += emitted_prims;
-   *c_invocations += emitted_prims;
+   if (c_primitives)
+      *c_primitives += emitted_prims;
+   if (c_invocations)
+      *c_invocations += emitted_prims;
 }
