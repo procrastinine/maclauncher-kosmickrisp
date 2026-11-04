@@ -455,21 +455,23 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
  * other sample invocations wait for them.
  *
  * The tag identifies the draw, the rasterized primitive and the fragment, and
- * its low byte is the render pass epoch (the low byte of the draw serial). A
- * slot is free when it is zero or holds the tag of a pass at least
- * FSR_SLOT_AGE epochs older; the slot index is a hash of the tag, probed
- * linearly. Metal runs the fragments of all draws of a pass tile by tile, so
- * a fragment of the last draw can run before one of the first draw in
- * another tile: a claim never replaces a slot of the current or the seven
- * previous passes, and a waiting invocation always finds its own
- * publication. A fragment that finds no free slot within the probe limit
- * runs on its own, as without the slots, and an invocation whose
- * publication does not arrive within the wait limit keeps its own results. */
+ * its low byte is the render pass epoch (the low byte of the draw serial).
+ * Even and odd epochs use separate halves of the table, and a slot is free
+ * when it is zero or holds the tag of a pass at least FSR_SLOT_AGE epochs
+ * older; the slot index is a hash of the tag, probed linearly within the
+ * half. Metal runs the fragments of all draws of a pass tile by tile, so a
+ * fragment of the last draw can run before one of the first draw in another
+ * tile: a claim never replaces a slot of the current pass, and the previous
+ * pass, which can still be running, uses the other half. A waiting
+ * invocation therefore always finds its own publication. A fragment that
+ * finds no free slot within the probe limit runs on its own, as without the
+ * slots, and an invocation whose publication does not arrive within the wait
+ * limit keeps its own results. */
 #define FSR_SLOT_READY 4
 #define FSR_SLOT_DISCARD 8
 #define FSR_SLOT_DATA 12
 #define FSR_SLOT_PROBES 64
-#define FSR_SLOT_AGE 8
+#define FSR_SLOT_AGE 2
 #define FSR_SLOT_TRIES (1u << 12)
 
 static unsigned
@@ -522,10 +524,12 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
    h = nir_ixor(b, h, nir_ushr_imm(b, h, 12));
    nir_def *serial8 = nir_iand_imm(b, serial, 0xff);
    ctx->tag = nir_ior(b, nir_ior_imm(b, nir_iand_imm(b, h, 0xfffffe00u), 0x100), serial8);
-   const unsigned bits = util_logbase2(KK_FSR_SLOT_BYTES / stride);
-   assert(bits > 0 && bits < 32);
+   /* Even and odd epochs use separate halves of the table. */
+   const unsigned bits = util_logbase2(KK_FSR_SLOT_BYTES / stride) - 1;
+   assert(bits > 0 && bits < 31);
    nir_def *base = nir_ushr_imm(b, nir_imul_imm(b, nir_ixor(b, h, nir_ushr_imm(b, h, 16)), 0x7feb352du),
                                 32 - bits);
+   nir_def *half = nir_ishl_imm(b, nir_iand_imm(b, serial, 1), bits);
    nir_def *active = nir_ine_imm(b, slots, 0);
 
    nir_variable *won = nir_local_variable_create(b->impl, glsl_bool_type(), "kk_fsr_won");
@@ -541,7 +545,8 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
       nir_push_loop(b);
       {
          nir_def *i = nir_load_var(b, probe);
-         nir_def *index = nir_iand_imm(b, nir_iadd(b, base, i), BITFIELD_MASK(bits));
+         nir_def *index = nir_ior(b, nir_iand_imm(b, nir_iadd(b, base, i), BITFIELD_MASK(bits)),
+                                  half);
          nir_def *addr = nir_iadd(b, slots, nir_u2u64(b, nir_imul_imm(b, index, stride)));
          nir_def *old = fsr_slot_read(b, addr);
          nir_def *n = nir_iadd_imm(b, nir_load_var(b, tries), 1);

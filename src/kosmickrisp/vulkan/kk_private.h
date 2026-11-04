@@ -23,7 +23,7 @@
 /* Fixed VK_KHR_fragment_shading_rate attachment texel size. */
 #define KK_FSR_TEXEL_SIZE                8
 /* Per-fragment slots of multisampled shading-rate fragments. */
-#define KK_FSR_SLOT_BYTES                (32u << 20)
+#define KK_FSR_SLOT_BYTES                (64u << 20)
 #define KK_MIN_SSBO_ALIGNMENT            4
 #define KK_MIN_TEXEL_BUFFER_ALIGNMENT    16
 #define KK_MIN_UBO_ALIGNMENT             64
