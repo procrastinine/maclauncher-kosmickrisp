@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef KK_TEMPORAL_H
 #define KK_TEMPORAL_H
+#include <stdbool.h>
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
 
@@ -55,6 +56,15 @@ struct kk_temporal_frame_info {
    uint32_t release_feature_id_count;
    const uint64_t *release_feature_ids;
 };
+
+/* Whether a feature's tracked image holds a frame: a new allocation (first use, resize or format change)
+ * holds none, a successful process into it makes it hold one, and a busy or failed frame keeps the previous
+ * state. The game's output receives the tracked image only while it holds a frame. */
+static inline bool
+kk_temporal_tracked_valid(bool valid, bool reallocated, bool processed)
+{
+   return processed || (valid && !reallocated);
+}
 
 /* driverInfo words: " temporal-sr" when the graphics pipeline and MetalFX's temporal scaler are
  * available, or "". */

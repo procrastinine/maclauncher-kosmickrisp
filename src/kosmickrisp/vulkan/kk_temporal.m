@@ -5,7 +5,8 @@
  * of the Vulkan command buffer's native MTL4 parts: the queue signals an event after the earlier parts, the
  * classic command buffer waits for it, encodes the frame and signals, and the later parts wait for that.
  * KosmicKrisp's images are untracked; the pipeline writes a tracked image of the feature, copied into the
- * frame's output at the end. Nothing here encodes MetalFX itself. Metal objects are created synchronously. */
+ * frame's output at the end once it holds a processed frame. Nothing here encodes MetalFX itself. Metal
+ * objects are created synchronously. */
 #include "kk_temporal.h"
 #include "kk_cmd_buffer.h"
 #include "kk_device.h"
@@ -39,6 +40,7 @@ struct kk_temporal_owner {
    uint64_t feature_id;
    id<MTLTexture> output;
    double previous_time;
+   bool output_valid; /* see kk_temporal_tracked_valid */
    bool reported;
 };
 
@@ -371,11 +373,12 @@ kk_temporal_now(void)
    return now.tv_sec + now.tv_nsec * 1e-9;
 }
 
-/* The feature's tracked image at the frame's output extent and format. */
+/* The feature's tracked image at the frame's output extent and format; *reallocated when it is new. */
 static id<MTLTexture>
 kk_temporal_owner_output(struct kk_temporal_owner *owner, id<MTLTexture> output, uint32_t width,
-                         uint32_t height)
+                         uint32_t height, bool *reallocated)
 {
+   *reallocated = false;
    id<MTLTexture> current = owner->output;
    if (current && current.width == width && current.height == height &&
        current.pixelFormat == output.pixelFormat)
@@ -390,6 +393,7 @@ kk_temporal_owner_output(struct kk_temporal_owner *owner, id<MTLTexture> output,
    if (made) {
       [owner->output release];
       owner->output = made;
+      *reallocated = true;
    }
    return made;
 }
@@ -401,7 +405,8 @@ kk_temporal_encode(const struct kk_temporal_pipeline *pipeline, struct kk_tempor
    struct kk_temporal_owner *owner = r->owner;
    id<MTLTexture> output = r->textures[KK_TEMPORAL_OUTPUT];
    RSTemporalFrame f = r->frame;
-   id<MTLTexture> tracked = kk_temporal_owner_output(owner, output, f.outputWidth, f.outputHeight);
+   bool reallocated;
+   id<MTLTexture> tracked = kk_temporal_owner_output(owner, output, f.outputWidth, f.outputHeight, &reallocated);
    if (!tracked)
       return;
    f.commandBuffer = commands;
@@ -436,7 +441,12 @@ kk_temporal_encode(const struct kk_temporal_pipeline *pipeline, struct kk_tempor
       owner->reported = status == RS_TEMPORAL_OK && result.encoded;
    }
 
-   /* Busy or failed frames keep the feature's previous image. */
+   /* Busy or failed frames keep the feature's previous image; without one, the game's output is left as
+    * it is. */
+   owner->output_valid = kk_temporal_tracked_valid(owner->output_valid, reallocated,
+                                                   status == RS_TEMPORAL_OK && result.encoded);
+   if (!owner->output_valid)
+      return;
    id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
    [blit copyFromTexture:tracked sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
               sourceSize:MTLSizeMake(f.outputWidth, f.outputHeight, 1) toTexture:output destinationSlice:0
