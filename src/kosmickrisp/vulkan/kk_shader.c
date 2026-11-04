@@ -5134,7 +5134,9 @@ kk_cmd_bind_compute_shader_selected(struct kk_cmd_buffer *cmd, struct kk_shader 
       shader->pipeline.compute.pending ? kk_async_compute_join(shader) : VK_SUCCESS;
    if (unlikely(ready != VK_SUCCESS)) {
       cmd->state.shaders[MESA_SHADER_COMPUTE] = shader;
-      vk_command_buffer_set_error(&cmd->vk, ready);
+      /* vkEndCommandBuffer reports a failed build as out of host memory, as
+       * other Mesa drivers do; device loss is not one of its results. */
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
       return;
    }
    kk_sparse_shader_bound(cmd, shader);

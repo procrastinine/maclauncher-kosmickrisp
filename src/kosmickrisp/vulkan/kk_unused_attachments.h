@@ -271,7 +271,10 @@ kk_cmd_sampler_compute_pipeline_used(struct kk_cmd_buffer *cmd,
    mtl_compute_pipeline_state *pipeline;
    VkResult result = kk_sampler_compute_pipeline(kk_cmd_buffer_device(cmd), shader,
                                                 base, &pipeline);
-   if (result != VK_SUCCESS) vk_command_buffer_set_error(&cmd->vk, result);
+   /* vkEndCommandBuffer reports a failed build as out of host memory. */
+   if (result != VK_SUCCESS)
+      vk_command_buffer_set_error(&cmd->vk, result == VK_ERROR_OUT_OF_DEVICE_MEMORY ?
+                                  result : VK_ERROR_OUT_OF_HOST_MEMORY);
    return result == VK_SUCCESS ? pipeline : NULL;
 }
 
@@ -282,7 +285,7 @@ kk_cmd_compute_pipeline_missing(struct kk_cmd_buffer *cmd, struct kk_shader *sha
    if (cmd->vk.record_result == VK_SUCCESS)
       mesa_loge("%s shader has no native compute pipeline for a recorded dispatch; "
                 "the command buffer fails", mesa_shader_stage_name(shader->info.stage));
-   vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INVALID_SHADER_NV);
+   vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
 }
 
 bool

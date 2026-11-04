@@ -511,12 +511,13 @@ join_shader(struct kk_shader *shader, const char *reason)
    job_wait(job, reason);
    if (p_atomic_read(&job->cancel_requested)) return VK_ERROR_DEVICE_LOST;
    if (job->result == VK_SUCCESS) return VK_SUCCESS;
-   if (p_atomic_cmpxchg(&job->reported, false, true))
-      return VK_ERROR_DEVICE_LOST;
-   fprintf(stderr, "KosmicKrisp: compute pipeline %p failed native compilation (%d); first use cannot continue\n",
-              (void *)shader, job->result);
-   vk_error(job->dev, job->result);
-   return vk_device_set_lost(&job->dev->vk, "Asynchronous compute pipeline compilation failed (%d)", job->result);
+   /* A failed build fails each use that needs it, with out of host memory as
+    * other Mesa drivers report a failed internal build; the device stays
+    * usable for everything else. */
+   if (!p_atomic_cmpxchg(&job->reported, false, true))
+      mesa_loge("compute pipeline %p failed native compilation (%d); work that binds it fails",
+                (void *)shader, job->result);
+   return VK_ERROR_OUT_OF_HOST_MEMORY;
 }
 
 VkResult
