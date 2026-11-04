@@ -123,14 +123,10 @@ kk_CmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX,
    } else {
       kk_count_compute_invocations(cmd, 0,
          (struct mtl_size){groupCountX, groupCountY, groupCountZ}, local_size);
-      struct mtl_size grid_size = {
-         .x = groupCountX * local_size.x,
-         .y = groupCountY * local_size.y,
-         .z = groupCountZ * local_size.z,
-      };
+      struct mtl_size groups = {groupCountX, groupCountY, groupCountZ};
 
       kk_flush_compute_state(cmd);
-      mtl_dispatch_threads(encoder, grid_size, local_size);
+      mtl_dispatch_threadgroups(encoder, groups, local_size);
    }
 }
 

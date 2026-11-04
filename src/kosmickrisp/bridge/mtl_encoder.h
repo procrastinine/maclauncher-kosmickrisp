@@ -69,6 +69,10 @@ void mtl_dispatch_threads(mtl_compute_encoder *encoder,
                           struct mtl_size grid_size,
                           struct mtl_size local_size);
 
+void mtl_dispatch_threadgroups(mtl_compute_encoder *encoder,
+                               struct mtl_size groups,
+                               struct mtl_size local_size);
+
 void mtl_dispatch_threadgroups_with_indirect_buffer(
    mtl_compute_encoder *encoder, uint64_t addr, struct mtl_size local_size);
 

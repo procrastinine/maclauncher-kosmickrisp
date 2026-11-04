@@ -250,6 +250,20 @@ mtl_dispatch_threads(mtl_compute_encoder *encoder,
 }
 
 void
+mtl_dispatch_threadgroups(mtl_compute_encoder *encoder,
+                          struct mtl_size groups, struct mtl_size local_size)
+{
+   @autoreleasepool {
+      id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
+      MTLSize threadgroups = MTLSizeMake(groups.x, groups.y, groups.z);
+      MTLSize threads_per_threadgroup = MTLSizeMake(local_size.x, local_size.y,
+                                                    local_size.z);
+      [enc dispatchThreadgroups:threadgroups
+             threadsPerThreadgroup:threads_per_threadgroup];
+   }
+}
+
+void
 mtl_dispatch_threadgroups_with_indirect_buffer(mtl_compute_encoder *encoder,
                                                uint64_t addr,
                                                struct mtl_size local_size)
