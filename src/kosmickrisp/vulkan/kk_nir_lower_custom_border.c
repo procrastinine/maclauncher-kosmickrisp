@@ -80,6 +80,10 @@ lower(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
           * Linear filtering is linear (duh), so lerping is compatible.
           */
          replaced = nir_flrp(b, clamp_to_0, clamp_to_1, border);
+         /* Identical samples have no border contribution. Preserve their
+          * exact bits, avoiding inf-inf and non-finite border contamination. */
+         replaced = nir_bcsel(b, nir_ieq(b, clamp_to_0, clamp_to_1),
+                              clamp_to_0, replaced);
          b->shader->info.flrp_lowered = false;
       } else {
          /* For integers, just select componentwise since there is no linear
