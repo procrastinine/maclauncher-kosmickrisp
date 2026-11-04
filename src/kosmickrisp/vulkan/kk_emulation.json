@@ -160,7 +160,10 @@
     "performance": true,
     "performance_reason": "vkd3d-proton requires both meshShader and taskShader for D3D12 MeshTier1; disabling them removes feature-level 12.2 eligibility.",
     "off_consequence": "D3D12 MeshTier1 and feature-level 12.2 are unavailable; mesh/task Vulkan shaders and mesh queries are unavailable. Lower feature levels remain subject to their other requirements; this entry does not remove a shader-model requirement or a translator device-creation prerequisite.",
-    "native_from": null
+    "native_from": null,
+    "property_bits": {
+      "supportedIndirectCommandsShaderStages": "VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT"
+    }
   },
   {
     "name": "polygon_points",
