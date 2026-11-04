@@ -101,7 +101,7 @@ property fields, including promoted query aliases. For example,
 ``conformance,-VK_KHR_ray_query`` removes ray-query advertisement. These removals
 apply after named entry selection. Unknown tokens produce one stderr line per
 token and are ignored. The setting changes capability reports; rendering and
-shader compilation do not parse it. Ray tracing remains outside release scope.
+shader compilation do not parse it. Ray tracing requires explicit selection.
 
 .. include:: kosmickrisp/emulation.rst
 
