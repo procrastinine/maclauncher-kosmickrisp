@@ -1141,7 +1141,7 @@
   },
   {
     "name": "image_atomic64",
-    "description": "64-bit integer atomics and R64_UINT and R64_SINT storage images and storage texel buffers on Apple7 GPUs.",
+    "description": "64-bit integer atomics and R64_UINT and R64_SINT storage images and storage texel buffers.",
     "cost_class": "native Apple8 texture min/max / hashed locks",
     "cost_note": "Image operations take the shared hashed lock keyed by texel coordinates, with CAS retry and two sequential fences. Apple8 and later publish each result with one native unsigned 64-bit texture minimum or maximum. Apple7 reads and writes the two 32-bit words of the RG32Uint texel under the lock and creates R64 images without Metal texture atomics. Texel-buffer operations use the buffer atomic64 transaction. Shaders without 64-bit image operations are unchanged.",
     "extensions": [
@@ -1151,16 +1151,17 @@
       "shaderImageInt64Atomics"
     ],
     "properties": [],
-    "performance": false,
-    "performance_reason": "On Apple7 the entry raises only vkd3d-proton sampler feedback to tier 0.9 and typed-resource 64-bit atomics; performance mode reports feature level 12_1 with or without it.",
+    "performance": true,
+    "performance_reason": "Only actual 64-bit image operations emit the transaction helpers. Apple7 uses split-word texture reads and writes under the shared lock; Apple8 and later retain native texture min/max publication under that lock. Ordinary shaders and draws are unchanged.",
     "off_consequence": "On Apple7, VK_EXT_shader_image_atomic_int64 and the R64_UINT and R64_SINT storage image and storage texel buffer formats are unavailable; vkd3d-proton reports sampler feedback tier 0 and no typed-resource 64-bit atomics, so feature level 12_2 is unavailable.",
     "native_from": 8,
     "performance_families": [
+      7,
       8,
       9,
       10,
       11
     ],
-    "family_cost_note": "Off Apple7: split-word image transactions. On Apple8-11: native texture min/max publishes under the existing mixed-operation lock; sampler feedback tier0.9. The lock remains real work."
+    "family_cost_note": "On Apple7: split-word image transactions under the existing hashed lock. On Apple8-11: native texture min/max publishes under the same mixed-operation lock. Actual atomics retain CAS retries and fences; shaders without 64-bit image operations are unchanged."
   }
 ]

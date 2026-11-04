@@ -298,9 +298,9 @@
      - On
      - Off Apple7-9: per-sample depth/stencil replay. On Apple10-11: native Metal depth bounds.
    * - ``image_atomic64``
-     - Off
      - On
      - On
      - On
      - On
-     - Off Apple7: split-word image transactions. On Apple8-11: native texture min/max publishes under the existing mixed-operation lock; sampler feedback tier0.9. The lock remains real work.
+     - On
+     - On Apple7: split-word image transactions under the existing hashed lock. On Apple8-11: native texture min/max publishes under the same mixed-operation lock. Actual atomics retain CAS retries and fences; shaders without 64-bit image operations are unchanged.
