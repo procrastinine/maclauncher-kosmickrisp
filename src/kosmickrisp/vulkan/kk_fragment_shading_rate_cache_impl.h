@@ -518,7 +518,7 @@ kk_vrs_build_linked_fragment(struct kk_device *dev,
       result = VK_ERROR_FEATURE_NOT_PRESENT;
       goto finish;
    }
-   kk_compile_msl_options(pdev, nir, &state, out, NULL, framebuffer_reads);
+   kk_compile_msl_options(dev, nir, &state, out, NULL, framebuffer_reads);
    nir = NULL; /* The common compiler consumes its compilation clone. */
    if (out->requires_msl41 && pdev->info.msl_version < MTL_LANGUAGE_VERSION_4_1) {
       result = VK_ERROR_FEATURE_NOT_PRESENT;

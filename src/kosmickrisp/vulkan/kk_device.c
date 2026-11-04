@@ -6,6 +6,7 @@
  */
 
 #include "kk_device.h"
+#include "kk_perf.h"
 #include "kk_sampler.h"
 #include "kk-sampler-cap-keys.h"
 #include "kk_bo.h"
@@ -410,6 +411,12 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_alloc;
 
+   dev->perf = kk_perf_create();
+   if (dev->perf) {
+      dev->vk.pipeline_cache_lookup = kk_perf_cache_lookup;
+      kk_perf_init_dispatch(dev);
+   }
+
    /* Metal cannot order a queue behind work that has not been encoded.
     * Start Mesa's submit worker only when a pending dependency requires it. */
    vk_device_enable_threaded_submit(&dev->vk);
@@ -565,6 +572,7 @@ fail_compiler:
 fail_init:
    kk_vrs_device_finish(dev);
    kk_descriptor_heap_finish(dev);
+   kk_perf_destroy(dev->perf);
    vk_device_finish(&dev->vk);
 fail_alloc:
    vk_free(&dev->vk.alloc, dev);
@@ -632,6 +640,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_release_compiler(dev);
    kk_interlock_submission_finish(dev);
 
+   kk_perf_destroy(dev->perf);
    vk_device_finish(&dev->vk);
 
    vk_free(&dev->vk.alloc, dev);

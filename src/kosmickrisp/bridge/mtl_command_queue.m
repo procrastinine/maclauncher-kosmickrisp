@@ -44,6 +44,38 @@ mtl_commit_options_add_feedback_handler(mtl_commit_options *options,
    }
 }
 
+void
+mtl_commit_options_add_tracked_feedback_handler(
+   mtl_commit_options *options, mtl_feedback_handler_callback callback,
+   void *data, mtl_gpu_range_callback gpu_callback, void *gpu_data,
+   uint64_t frame, uint32_t command_buffers)
+{
+   @autoreleasepool {
+      MTL4CommitOptions *opt = (MTL4CommitOptions *)options;
+      [opt addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+         @autoreleasepool {
+            /* These are the whole Metal commit range, not independent
+             * timestamps for each buffer. Capture before the owner callback
+             * can publish completion and allow device tracking teardown. */
+            gpu_callback(gpu_data, frame, feedback.GPUStartTime,
+                         feedback.GPUEndTime, command_buffers);
+            NSError *error = feedback.error;
+            struct mtl_feedback_data feedback_data = (struct mtl_feedback_data){
+               .user_data = data,
+               .error_message =
+                  error ? error.localizedDescription.UTF8String : NULL,
+               .gpu_start = feedback.GPUStartTime,
+               .gpu_end = feedback.GPUEndTime,
+               .error = error
+                           ? (enum mtl_command_queue_error)error.code
+                           : MTL_COMMAND_QUEUE_ERROR_NONE,
+            };
+            callback(&feedback_data);
+         }
+      }];
+   }
+}
+
 /* MTL4CommandQueue */
 mtl_command_queue *
 mtl_new_command_queue(mtl_device *device)

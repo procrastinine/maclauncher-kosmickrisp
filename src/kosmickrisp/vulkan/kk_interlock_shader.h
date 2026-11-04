@@ -10,7 +10,7 @@
 #include "kk_interlock_shader_data.h"
 
 /* The shared compiler implementation is defined later in kk_shader.c. */
-static void kk_compile_msl_options(struct kk_physical_device *pdev,
+static void kk_compile_msl_options(struct kk_device *dev,
    nir_shader *nir, const struct vk_graphics_pipeline_state *state,
    struct msl_compile_data *data, const struct kk_compile_options *opts,
    bool *has_framebuffer_reads);
@@ -39,7 +39,7 @@ kk_interlock_shader_parameters(nir_builder *b, void *data)
 }
 
 static void
-kk_interlock_compile_program(struct kk_physical_device *pdev,
+kk_interlock_compile_program(struct kk_device *dev,
    struct kk_interlock_shader *shader, enum kk_interlock_program program,
    nir_shader *nir, const struct vk_graphics_pipeline_state *state,
    const struct vk_pipeline_robustness_state *robustness)
@@ -52,7 +52,7 @@ kk_interlock_compile_program(struct kk_physical_device *pdev,
     * blend read the transaction shadow; replay only writes attachments. */
    bool *framebuffer_reads = program <= KK_INTERLOCK_REPLAY ?
       &shader->info.framebuffer_reads[program] : NULL;
-   kk_compile_msl_options(pdev, nir, state, &shader->program[program], NULL,
+   kk_compile_msl_options(dev, nir, state, &shader->program[program], NULL,
       framebuffer_reads);
    ralloc_steal(shader, shader->program[program].code);
    ralloc_steal(shader, shader->program[program].entrypoint_name);
@@ -202,7 +202,7 @@ kk_interlock_compile_fragment(struct kk_device *dev, struct kk_shader *owner,
    unsigned max_samples = 1u << (util_last_bit(counts) - 1u);
    nir_builder capture = kk_interlock_capture_shader(original->options,
       &render, max_samples, NULL);
-   kk_interlock_compile_program(pdev, shader, KK_INTERLOCK_CAPTURE,
+   kk_interlock_compile_program(dev, shader, KK_INTERLOCK_CAPTURE,
       capture.shader, state, robustness);
 
    nir_shader *transaction = nir_shader_clone(NULL, original);
@@ -213,18 +213,18 @@ kk_interlock_compile_fragment(struct kk_device *dev, struct kk_shader *owner,
    memcpy(framebuffer.color_format, shader->info.color_format,
       sizeof(framebuffer.color_format));
    kk_interlock_wrap_framebuffer(transaction, &framebuffer);
-   kk_interlock_compile_program(pdev, shader, KK_INTERLOCK_TRANSACTION,
+   kk_interlock_compile_program(dev, shader, KK_INTERLOCK_TRANSACTION,
       transaction, state, robustness);
 
    struct kk_interlock_replay_info replay = {
       .depth = shader->info.depth, .stencil = shader->info.stencil,
    };
    memcpy(replay.color_format, shader->info.color_format, sizeof(replay.color_format));
-   kk_interlock_compile_program(pdev, shader, KK_INTERLOCK_REPLAY,
+   kk_interlock_compile_program(dev, shader, KK_INTERLOCK_REPLAY,
       kk_interlock_replay_shader(original->options, &render, &replay), state, robustness);
-   kk_interlock_compile_program(pdev, shader, KK_INTERLOCK_TILE_VERTEX,
+   kk_interlock_compile_program(dev, shader, KK_INTERLOCK_TILE_VERTEX,
       kk_interlock_tile_vertex_shader(original->options), state, robustness);
-   kk_interlock_compile_program(pdev, shader, KK_INTERLOCK_LOAD,
+   kk_interlock_compile_program(dev, shader, KK_INTERLOCK_LOAD,
       kk_interlock_load_shader(original->options, &render, &replay), state, robustness);
    return VK_SUCCESS;
 }

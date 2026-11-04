@@ -332,8 +332,8 @@ vk_pipeline_cache_insert_object(struct vk_pipeline_cache *cache,
    return result;
 }
 
-struct vk_pipeline_cache_object *
-vk_pipeline_cache_lookup_object(struct vk_pipeline_cache *cache,
+static struct vk_pipeline_cache_object *
+vk_pipeline_cache_lookup_object_untracked(struct vk_pipeline_cache *cache,
                                 const void *key_data, size_t key_size,
                                 const struct vk_pipeline_cache_object_ops *ops,
                                 bool *cache_hit)
@@ -424,6 +424,20 @@ vk_pipeline_cache_lookup_object(struct vk_pipeline_cache *cache,
 
    assert(object->ops == ops);
 
+   return object;
+}
+
+struct vk_pipeline_cache_object *
+vk_pipeline_cache_lookup_object(struct vk_pipeline_cache *cache,
+                                const void *key_data, size_t key_size,
+                                const struct vk_pipeline_cache_object_ops *ops,
+                                bool *cache_hit)
+{
+   struct vk_pipeline_cache_object *object =
+      vk_pipeline_cache_lookup_object_untracked(cache, key_data, key_size,
+                                                ops, cache_hit);
+   if (unlikely(cache && cache->base.device->pipeline_cache_lookup))
+      cache->base.device->pipeline_cache_lookup(cache->base.device, object != NULL);
    return object;
 }
 

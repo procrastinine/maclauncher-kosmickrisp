@@ -3,6 +3,7 @@
 #define KK_UNUSED_ATTACHMENTS_H
 
 #include "util/simple_mtx.h"
+#include "kk_perf.h"
 
 /* The retained descriptor stays unspecialized for later format variants. */
 static mtl_render_pipeline_state *
@@ -10,10 +11,10 @@ kk_attachment_compile_pipeline(struct kk_device *device,
    struct kk_shader *shader, mtl_render_pipeline_descriptor *descriptor)
 {
    if (!shader->info.has_framebuffer_reads)
-      return mtl_new_render_pipeline(device->mtl_compiler_handle, descriptor);
-   return mtl_new_render_pipeline_for_attachments(device->mtl_compiler_handle,
+      return KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_render_pipeline(device->mtl_compiler_handle, descriptor));
+   return KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_render_pipeline_for_attachments(device->mtl_compiler_handle,
       descriptor, shader->info.vs.rt_formats, MAX_DRAW_BUFFERS, 0,
-      shader->info.vs.sample_count, true);
+      shader->info.vs.sample_count, true));
 }
 
 struct kk_attachment_variant {
@@ -154,10 +155,10 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
          *error = VK_ERROR_OUT_OF_HOST_MEMORY;
          return NULL;
       }
-      variant->pipeline = mtl_new_render_pipeline_for_raster_attachments(
+      variant->pipeline = KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_render_pipeline_for_raster_attachments(
          device->mtl_compiler_handle,
          descriptor, formats, MAX_DRAW_BUFFERS, disabled, samples,
-         shader->info.has_framebuffer_reads, topology);
+         shader->info.has_framebuffer_reads, topology));
       mtl_release(descriptor);
       result = VK_ERROR_INVALID_SHADER_NV;
       if (variant->pipeline) {

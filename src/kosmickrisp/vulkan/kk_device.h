@@ -31,6 +31,7 @@ struct kk_buffer;
 struct kk_bo;
 struct kk_physical_device;
 struct vk_pipeline_cache;
+struct kk_perf;
 
 struct kk_residency_set {
    simple_mtx_t mutex;
@@ -95,6 +96,7 @@ struct kk_precompiled_cache {
 
 struct kk_device {
    struct vk_device vk;
+   struct kk_perf *perf;
    struct kk_sparse_device_state *sparse;
    uint32_t sparse_residency_used;
    struct kk_sparse_sample_row *sparse_sample_rows;

@@ -12,6 +12,9 @@
 #include "kk_entrypoints.h"
 #include "kk_image.h"
 #include "kk_instance.h"
+#include "kk_perf.h"
+#include "kk_queue.h"
+#include "wsi_common_entrypoints.h"
 #include "wsi_common.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -184,4 +187,68 @@ kk_finish_wsi(struct kk_physical_device *pdev)
 {
    pdev->vk.wsi_device = NULL;
    wsi_device_finish(&pdev->wsi_device, &pdev->vk.instance->alloc);
+}
+
+/* Installed only for explicitly enabled tracking. Acquire includes both the
+ * previous image fence and nextDrawable; fence waits are also reported as
+ * nested fence latency. These CPU wall durations must not be summed together. */
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_acquire_next_image2(VkDevice device,
+                           const VkAcquireNextImageInfoKHR *info,
+                           uint32_t *image_index)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   return KK_PERF_CALL(dev, KK_PERF_ACQUIRE,
+      wsi_AcquireNextImage2KHR(device, info, image_index));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_queue_present(VkQueue queue_handle, const VkPresentInfoKHR *info)
+{
+   VK_FROM_HANDLE(vk_queue, queue, queue_handle);
+   struct kk_device *dev = container_of(queue->base.device, struct kk_device, vk);
+   VkResult result = KK_PERF_CALL(dev, KK_PERF_PRESENT,
+      wsi_QueuePresentKHR(queue_handle, info));
+
+   /* A frame here is an accepted swapchain present, not a physical display
+    * callback. Failed presents cannot advance the frame logging interval. */
+   for (uint32_t i = 0; i < info->swapchainCount; i++) {
+      VkResult present_result = info->pResults ? info->pResults[i] : result;
+      if (present_result == VK_SUCCESS || present_result == VK_SUBOPTIMAL_KHR)
+         kk_perf_frame(dev->perf);
+   }
+   return result;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_wait_for_present(VkDevice device, VkSwapchainKHR swapchain,
+                         uint64_t present_id, uint64_t timeout)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   return KK_PERF_CALL(dev, KK_PERF_PRESENT_WAIT,
+      wsi_WaitForPresentKHR(device, swapchain, present_id, timeout));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_wait_for_present2(VkDevice device, VkSwapchainKHR swapchain,
+                          const VkPresentWait2InfoKHR *info)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   return KK_PERF_CALL(dev, KK_PERF_PRESENT_WAIT,
+      wsi_WaitForPresent2KHR(device, swapchain, info));
+}
+
+void
+kk_perf_init_wsi_dispatch(struct kk_device *dev)
+{
+   /* AcquireNextImageKHR delegates through the device's AcquireNextImage2KHR
+    * slot. Wrap only the common backend so either API is counted exactly once. */
+   dev->vk.dispatch_table.AcquireNextImage2KHR = kk_perf_acquire_next_image2;
+   dev->vk.dispatch_table.QueuePresentKHR = kk_perf_queue_present;
+   dev->vk.dispatch_table.WaitForPresentKHR = kk_perf_wait_for_present;
+   dev->vk.dispatch_table.WaitForPresent2KHR = kk_perf_wait_for_present2;
+   dev->exposed_dispatch_table.AcquireNextImage2KHR = kk_perf_acquire_next_image2;
+   dev->exposed_dispatch_table.QueuePresentKHR = kk_perf_queue_present;
+   dev->exposed_dispatch_table.WaitForPresentKHR = kk_perf_wait_for_present;
+   dev->exposed_dispatch_table.WaitForPresent2KHR = kk_perf_wait_for_present2;
 }

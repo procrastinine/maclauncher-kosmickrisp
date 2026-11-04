@@ -61,6 +61,7 @@ TEMPLATE_C = Template(COPYRIGHT + """\
 
 #include "kk_device.h"
 #include "kk_cmd_buffer.h"
+#include "kk_perf.h"
 #include "kk_dispatch_cmd.h"
 #include "vk_cmd_enqueue_entrypoints.h"
 
@@ -78,9 +79,11 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
   % if e.params[0].type == 'VkCommandBuffer':
     struct kk_device *dev = kk_cmd_buffer_device(cmd);
     % if e.return_type == 'void':
-    vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
+    KK_PERF_VOID(dev, KK_PERF_RECORD,
+        vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()}));
     % else:
-    return vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
+    return KK_PERF_CALL(dev, KK_PERF_RECORD,
+        vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()}));
     % endif
   % endif
 }

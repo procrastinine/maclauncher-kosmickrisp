@@ -39,6 +39,7 @@ struct kk_queue {
       VkResult (*resume)(struct kk_queue *, void *, bool);
       void *data;
       uint32_t next_command;
+      uint64_t perf_queued_ns;
    } deferred;
 };
 

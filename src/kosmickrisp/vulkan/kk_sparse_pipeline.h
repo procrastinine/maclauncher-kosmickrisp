@@ -312,7 +312,7 @@ kk_sparse_select_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
 }
 
 static VkResult
-kk_compile_shaders(struct vk_device *device, uint32_t count,
+kk_compile_shaders_untracked(struct vk_device *device, uint32_t count,
    struct vk_shader_compile_info *infos, const struct vk_graphics_pipeline_state *graphics,
    const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
@@ -334,6 +334,24 @@ kk_compile_shaders(struct vk_device *device, uint32_t count,
       }
    }
    return result;
+}
+
+static VkResult
+kk_compile_shaders(struct vk_device *device, uint32_t count,
+   struct vk_shader_compile_info *infos, const struct vk_graphics_pipeline_state *graphics,
+   const struct vk_features *features, const VkAllocationCallbacks *alloc, struct vk_shader **out)
+{
+   struct kk_device *tracking_dev = container_of(device, struct kk_device, vk);
+   if (unlikely(tracking_dev->perf)) {
+      struct kk_perf *perf = tracking_dev->perf;
+      uint64_t start = kk_perf_now();
+      kk_perf_compiler(perf, 1);
+      VkResult result = kk_compile_shaders_untracked(device, count, infos, graphics, features, alloc, out);
+      kk_perf_compiler(perf, -1);
+      kk_perf_add(perf, KK_PERF_SHADER_COMPILE, kk_perf_now() - start);
+      return result;
+   }
+   return kk_compile_shaders_untracked(device, count, infos, graphics, features, alloc, out);
 }
 
 static bool
@@ -360,7 +378,7 @@ kk_shader_serialize(struct vk_device *dev, const struct vk_shader *vk_shader, st
 }
 
 static VkResult
-kk_deserialize_shader(struct vk_device *dev, struct blob_reader *blob, uint32_t version,
+kk_deserialize_shader_untracked(struct vk_device *dev, struct blob_reader *blob, uint32_t version,
    const VkAllocationCallbacks *alloc, struct vk_shader **out)
 {
    VkResult result = kk_deserialize_shader_native(dev, blob, version, alloc, out);
@@ -383,6 +401,25 @@ kk_deserialize_shader(struct vk_device *dev, struct blob_reader *blob, uint32_t 
    if (blob->overrun) result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    if (result != VK_SUCCESS) kk_shader_destroy(dev, container_of(*out, struct kk_shader, vk), alloc);
    return result;
+}
+
+static VkResult
+kk_deserialize_shader(struct vk_device *dev, struct blob_reader *blob, uint32_t version,
+   const VkAllocationCallbacks *alloc, struct vk_shader **out)
+{
+   struct kk_device *tracking_dev = container_of(dev, struct kk_device, vk);
+   if (unlikely(tracking_dev->perf)) {
+      struct kk_perf *perf = tracking_dev->perf;
+      uint64_t start = kk_perf_now();
+      kk_perf_compiler(perf, 1);
+      VkResult result = kk_deserialize_shader_untracked(dev, blob, version, alloc, out);
+      kk_perf_compiler(perf, -1);
+      kk_perf_add(perf, KK_PERF_SHADER_COMPILE, kk_perf_now() - start);
+      if (result == VK_SUCCESS)
+         kk_perf_add(perf, KK_PERF_CACHE_BINARY_HIT, 0);
+      return result;
+   }
+   return kk_deserialize_shader_untracked(dev, blob, version, alloc, out);
 }
 #undef KK_SPARSE_GRAPHICS_STATES
 #endif

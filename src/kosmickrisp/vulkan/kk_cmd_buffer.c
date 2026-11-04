@@ -6,6 +6,7 @@
  */
 
 #include "kk_cmd_buffer.h"
+#include "kk_perf.h"
 #include "kk_depth_stencil_state.h"
 #include "kk_interlock_submit.h"
 #include "kk_interlock_heap.h"
@@ -368,10 +369,11 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
       cmd->transient_safe = kk_whole_pass_transient_safe(kk_cmd_buffer_device(cmd),
                                                          &source, 1);
       if (!cmd->enqueue_commands && !cmd->deferred_render_chain)
-         mtl_execute_command_queue(&cmd->vk.cmd_queue, commandBuffer,
-                              &kk_cmd_buffer_device(cmd)->vk.dispatch_table);
+         KK_PERF_VOID(kk_cmd_buffer_device(cmd), KK_PERF_REPLAY,
+            mtl_execute_command_queue(&cmd->vk.cmd_queue, commandBuffer,
+                              &kk_cmd_buffer_device(cmd)->vk.dispatch_table));
    }
-   end_recording(cmd);
+   KK_PERF_VOID(kk_cmd_buffer_device(cmd), KK_PERF_ENCODE, end_recording(cmd));
 
    return vk_command_buffer_end(&cmd->vk);
 }

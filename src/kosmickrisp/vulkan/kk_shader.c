@@ -11,6 +11,7 @@
 #include "kk_debug.h"
 #include "kk_descriptor_set_layout.h"
 #include "kk_device.h"
+#include "kk_perf.h"
 #include "kk_format.h"
 #include "kk_nir_lower_per_vertex.h"
 #include "kk_nir_lower_vbo.h"
@@ -882,7 +883,7 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
 }
 
 static void
-kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
              const struct vk_pipeline_robustness_state *rs,
              uint32_t set_layout_count,
              struct vk_descriptor_set_layout *const *set_layouts,
@@ -1040,6 +1041,21 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
 
    if (nir->info.stage != MESA_SHADER_FRAGMENT)
       kk_finish_nir(dev, nir, rs, set_layout_count, set_layouts, features);
+}
+
+static void
+kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+             const struct vk_pipeline_robustness_state *rs,
+             uint32_t set_layout_count,
+             struct vk_descriptor_set_layout *const *set_layouts,
+             const struct vk_graphics_pipeline_state *state,
+             kk_feature_key features,
+             const struct vk_shader_compile_info *compile_info,
+             const uint64_t *embedded)
+{
+   KK_PERF_VOID(dev, KK_PERF_NIR,
+      kk_lower_nir_untracked(dev, nir, emulated_stage, rs, set_layout_count,
+                            set_layouts, state, features, compile_info, embedded));
 }
 
 static const struct vk_shader_ops kk_shader_ops;
@@ -1273,18 +1289,24 @@ kk_nir_requires_msl41(nir_shader *nir)
    return false;
 }
 
+static void
+kk_finish_msl_nir(nir_shader *nir)
+{
+   NIR_PASS(_, nir, kk_nir_lower_poly);
+   msl_optimize_nir(nir);
+   modify_nir_info(nir);
+}
+
 /* Consumes nir */
 static void
-kk_compile_msl_options(struct kk_physical_device *pdev, nir_shader *nir,
+kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
                const struct vk_graphics_pipeline_state *state,
                struct msl_compile_data *data,
                const struct kk_compile_options *opts,
                bool *has_framebuffer_reads)
 {
-   NIR_PASS(_, nir, kk_nir_lower_poly);
-
-   msl_optimize_nir(nir);
-   modify_nir_info(nir);
+   struct kk_physical_device *pdev = kk_device_physical(dev);
+   KK_PERF_VOID(dev, KK_PERF_NIR, kk_finish_msl_nir(nir));
    if (has_framebuffer_reads)
       *has_framebuffer_reads = nir->info.stage == MESA_SHADER_FRAGMENT &&
                                nir->info.outputs_read != 0;
@@ -1328,7 +1350,8 @@ kk_compile_msl_options(struct kk_physical_device *pdev, nir_shader *nir,
    }
 
    data->requires_msl41 = kk_nir_requires_msl41(nir);
-   data->code = nir_to_msl(nir, &translate_options);
+   data->code = KK_PERF_CALL(dev, KK_PERF_MSL,
+      nir_to_msl(nir, &translate_options));
    const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
 
    /* We need to steal so it doesn't get destroyed with the nir. Needs to happen
@@ -1344,11 +1367,11 @@ kk_compile_msl_options(struct kk_physical_device *pdev, nir_shader *nir,
 }
 
 static void
-kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
+kk_compile_msl(struct kk_device *dev, nir_shader *nir,
                const struct vk_graphics_pipeline_state *state,
                struct msl_compile_data *data)
 {
-   kk_compile_msl_options(pdev, nir, state, data, NULL, NULL);
+   kk_compile_msl_options(dev, nir, state, data, NULL, NULL);
 }
 
 #include "kk_conservative_nir.h"
@@ -1501,7 +1524,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             kk_vrs_finish_captured_fragment(captured, prev_stage, state, opts,
                robustness, pixel_envelope);
          }
-         kk_compile_msl(pdev, point_fs, state, &shader->polygon[3]);
+         kk_compile_msl(dev, point_fs, state, &shader->polygon[3]);
          if (captured) {
             shader->vrs_source = kk_vrs_source_capture(dev, captured,
                per_vertex_map, state, &shader->polygon[3]);
@@ -1513,7 +1536,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       if (conservative_fs) {
          kk_conservative_lower_fs(conservative_fs, &prev_stage->info.polygon);
          if (opts->poly_layer_replay) kk_poly_layer_lower_fs(conservative_fs);
-         kk_compile_msl(pdev, conservative_fs, state, &shader->polygon[5]);
+         kk_compile_msl(dev, conservative_fs, state, &shader->polygon[5]);
       }
    }
 
@@ -1645,7 +1668,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          NIR_PASS(_, point_vs, msl_nir_vs_io_types);
          NIR_PASS(_, point_vs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
          if (pixel_envelope || kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay)
-            kk_compile_msl(pdev, point_vs, state, &shader->polygon[2]);
+            kk_compile_msl(dev, point_vs, state, &shader->polygon[2]);
          else
             ralloc_free(point_vs);
          if (shader->info.conservative) {
@@ -1653,7 +1676,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             if (opts->poly_layer_replay) kk_poly_layer_lower_vs(conservative_vs);
             NIR_PASS(_, conservative_vs, msl_nir_vs_io_types);
             NIR_PASS(_, conservative_vs, kk_nir_lower_descriptors, false, robustness, 0, NULL);
-            kk_compile_msl(pdev, conservative_vs, state, &shader->polygon[4]);
+            kk_compile_msl(dev, conservative_vs, state, &shader->polygon[4]);
          }
          nir_shader *programs[] = {capture, capture_xfb};
          for (unsigned i = 0; i < ARRAY_SIZE(programs); ++i) {
@@ -1663,7 +1686,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             programs[i]->info.workgroup_size[0] = KK_POLY_WG_SIZE;
             programs[i]->info.workgroup_size[1] = programs[i]->info.workgroup_size[2] = 1;
             msl_preprocess_nir(programs[i]);
-            kk_compile_msl(pdev, programs[i], state, &shader->polygon[i]);
+            kk_compile_msl(dev, programs[i], state, &shader->polygon[i]);
          }
       }
 
@@ -1678,13 +1701,13 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          aux[i]->info.workgroup_size[0] = i ? 1 : KK_POLY_WG_SIZE;
          aux[i]->info.workgroup_size[1] = aux[i]->info.workgroup_size[2] = 1;
          msl_preprocess_nir(aux[i]);
-         kk_compile_msl(pdev, aux[i], state, &shader->gs_aux[i]);
+         kk_compile_msl(dev, aux[i], state, &shader->gs_aux[i]);
       }
 
       nir->info.stage = MESA_SHADER_COMPUTE;
       memset(&nir->info.cs, 0, sizeof(nir->info.cs));
       nir->xfb_info = NULL;
-      kk_compile_msl(pdev, nir, state, &shader->gs_main);
+      kk_compile_msl(dev, nir, state, &shader->gs_main);
 
       /* From here on, nir is the rasterization VS of the GS */
       nir = rast;
@@ -1725,7 +1748,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    if (pixel_envelope && stage == MESA_SHADER_FRAGMENT)
       nir_shader_intrinsics_pass(nir, kk_interlock_trim_native_output,
          nir_metadata_control_flow, (void *)state);
-   kk_compile_msl_options(pdev, nir, state, &shader->msl_data[stage], opts,
+   kk_compile_msl_options(dev, nir, state, &shader->msl_data[stage], opts,
                           &shader->info.has_framebuffer_reads);
 
    if (opts->vrs_source) {
@@ -1844,19 +1867,19 @@ kk_compile_compute_pipeline_mode(struct kk_device *device,
 {
    struct kk_physical_device *pdev = kk_device_physical(device);
 
-   mtl_library *library = mtl_new_library(
+   mtl_library *library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY, mtl_new_library(
       device->mtl_compiler_handle, data->code, kk_msl_language_version(data, pdev->info.msl_version),
-      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
+      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
    if (library == NULL)
       return VK_ERROR_INVALID_SHADER_NV;
 
    mtl_function_descriptor *function =
       mtl_new_library_function_descriptor(library, data->entrypoint_name);
    mtl_compute_pipeline_state *pipeline = indirect
-      ? kk_dgc_new_compute_pipeline_state(device->mtl_compiler_handle, function,
-                                           local_size_threads)
-      : mtl_new_compute_pipeline_state(device->mtl_compiler_handle, function,
-                                        local_size_threads);
+      ? KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, kk_dgc_new_compute_pipeline_state(device->mtl_compiler_handle, function,
+                                           local_size_threads))
+      : KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE, mtl_new_compute_pipeline_state(device->mtl_compiler_handle, function,
+                                        local_size_threads));
    mtl_release(function);
    mtl_release(library);
 
@@ -1929,7 +1952,8 @@ kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
    }
 
    mtl_depth_stencil_state *state =
-      mtl_new_depth_stencil_state(device->mtl_handle, descriptor);
+      KK_PERF_CALL(device, KK_PERF_METAL_PIPELINE,
+         mtl_new_depth_stencil_state(device->mtl_handle, descriptor));
 
    if (front)
       mtl_release(front);
@@ -2246,9 +2270,9 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    }
    const struct msl_compile_data *vs_data = polygon ? &vs->polygon[2 * polygon] :
       vs->info.polygon_native ? &vs->polygon_native : &vs->msl_data[vs_stage];
-   mtl_library *vertex_library = mtl_new_library(
+   mtl_library *vertex_library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY, mtl_new_library(
       device->mtl_compiler_handle, vs_data->code, kk_msl_language_version(vs_data, pdev->info.msl_version),
-      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
+      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
    if (vertex_library == NULL)
       return VK_ERROR_INVALID_SHADER_NV;
 
@@ -2258,9 +2282,9 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
 
    const struct msl_compile_data *fs_data = polygon ? &vs->polygon[2 * polygon + 1] :
       vs->info.polygon_native ? &vs->polygon_native_fs : &vs->msl_data[MESA_SHADER_FRAGMENT];
-   mtl_library *fragment_library = mtl_new_library(
+   mtl_library *fragment_library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY, mtl_new_library(
       device->mtl_compiler_handle, fs_data->code, kk_msl_language_version(fs_data, pdev->info.msl_version),
-      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
+      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
    if (fragment_library == NULL) {
       result = VK_ERROR_INVALID_SHADER_NV;
       goto destroy_vertex;
@@ -2398,7 +2422,7 @@ kk_forward_gs_primitive_id(nir_shader *gs, nir_shader *fs)
 #include "kk_sparse_pipeline.h"
 
 static void
-kk_finish_fragment_nir(struct kk_device *dev, nir_shader *fs,
+kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
                        const struct vk_graphics_pipeline_state *state,
                        const struct vk_shader_compile_info *info,
                        kk_feature_key features, nir_shader **retained)
@@ -2417,6 +2441,16 @@ kk_finish_fragment_nir(struct kk_device *dev, nir_shader *fs,
    kk_nir_vrs_lower_fine_rate(fs);
    nir_opts(fs, NULL);
    nir_shader_gather_info(fs, nir_shader_get_entrypoint(fs));
+}
+
+static void
+kk_finish_fragment_nir(struct kk_device *dev, nir_shader *fs,
+                       const struct vk_graphics_pipeline_state *state,
+                       const struct vk_shader_compile_info *info,
+                       kk_feature_key features, nir_shader **retained)
+{
+   KK_PERF_VOID(dev, KK_PERF_NIR,
+      kk_finish_fragment_nir_untracked(dev, fs, state, info, features, retained));
 }
 
 static VkResult
@@ -2812,9 +2846,9 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          NIR_PASS(_, native_pair[0], kk_nir_lower_descriptors, false,
                   vertex_robustness, 0, NULL);
          NIR_PASS(_, native_pair[0], kk_nir_lower_polygon_scalar_outputs);
-         kk_compile_msl(pdev, native_pair[0], state, &shaders[0]->polygon_native);
+         kk_compile_msl(dev, native_pair[0], state, &shaders[0]->polygon_native);
          kk_line_fragment(native_pair[1], false, state);
-         kk_compile_msl(pdev, native_pair[1], state, &shaders[0]->polygon_native_fs);
+         kk_compile_msl(dev, native_pair[1], state, &shaders[0]->polygon_native_fs);
          native_pair[0] = native_pair[1] = NULL;
          shaders[0]->info.polygon_native = true;
       }

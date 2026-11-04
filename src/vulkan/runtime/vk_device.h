@@ -246,6 +246,9 @@ struct vk_device {
    /** Implicit pipeline cache, or NULL */
    struct vk_pipeline_cache *mem_cache;
 
+   /* Optional driver diagnostics; NULL avoids all collection when disabled. */
+   void (*pipeline_cache_lookup)(struct vk_device *device, bool hit);
+
    /** An enum describing how timeline semaphores work */
    enum vk_device_timeline_mode {
       /** Timeline semaphores are not supported */

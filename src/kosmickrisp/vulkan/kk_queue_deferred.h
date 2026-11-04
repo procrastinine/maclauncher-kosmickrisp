@@ -41,12 +41,17 @@ kk_queue_defer(struct kk_queue *queue, struct vk_sync *ready,
    queue->deferred.data = data;
    queue->deferred.submit = submit;
    submit->driver_defer_sync = ready;
+   if (unlikely(dev->perf)) {
+      queue->deferred.perf_queued_ns = kk_perf_now();
+      kk_perf_queue(dev->perf, 1);
+   }
    return VK_SUCCESS;
 }
 
 static VkResult
 kk_queue_resume_deferred(struct kk_queue *queue, bool cancelled)
 {
+   struct kk_device *dev = kk_queue_device(queue);
    VkResult (*resume)(struct kk_queue *, void *, bool) = queue->deferred.resume;
    void *data = queue->deferred.data;
    queue->deferred.ready = NULL;
@@ -55,7 +60,19 @@ kk_queue_resume_deferred(struct kk_queue *queue, bool cancelled)
    queue->deferred.submit = NULL;
    /* Clear ownership before invoking the callback: a resumed segment may
     * register another fresh point. This is never called with queue->mutex. */
-   VkResult result = resume(queue, data, cancelled);
+   VkResult result;
+   if (unlikely(dev->perf)) {
+      const uint64_t start = kk_perf_now();
+      kk_perf_add(dev->perf, KK_PERF_QUEUE_WAIT,
+                  start - queue->deferred.perf_queued_ns);
+      kk_perf_queue(dev->perf, -1);
+      /* A nested defer owns a new timestamp and pending entry. */
+      queue->deferred.perf_queued_ns = 0;
+      result = resume(queue, data, cancelled);
+      kk_perf_add(dev->perf, KK_PERF_DEFERRED, kk_perf_now() - start);
+   } else {
+      result = resume(queue, data, cancelled);
+   }
    if (result != VK_SUCCESS)
       return vk_device_set_lost(&kk_queue_device(queue)->vk,
                                 "Host-deferred continuation failed");

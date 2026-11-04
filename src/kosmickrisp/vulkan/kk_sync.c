@@ -8,6 +8,8 @@
 
 #include "kk_device.h"
 #include "kk_interlock_submit.h"
+#include "kk_perf.h"
+#include "vk_common_entrypoints.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 
@@ -71,7 +73,7 @@ kk_timeline_get_value(struct vk_device *device, struct vk_sync *sync,
 }
 
 static VkResult
-kk_timeline_wait(struct vk_device *device, struct vk_sync *sync,
+kk_timeline_wait_impl(struct vk_device *device, struct vk_sync *sync,
                  uint64_t wait_value, enum vk_sync_wait_flags wait_flags,
                  uint64_t abs_timeout_ns)
 {
@@ -124,6 +126,46 @@ kk_timeline_wait(struct vk_device *device, struct vk_sync *sync,
          timeout_ms = (abs_timeout_ns - now + 999999) / 1000000;
       }
    }
+}
+
+/* The backend metric includes internal pending waits as well as Metal event
+ * waits; API fence/semaphore metrics below are enclosing, potentially nested
+ * latencies rather than disjoint CPU work. */
+static VkResult
+kk_timeline_wait(struct vk_device *device, struct vk_sync *sync,
+                 uint64_t wait_value, enum vk_sync_wait_flags wait_flags,
+                 uint64_t abs_timeout_ns)
+{
+   struct kk_device *dev = container_of(device, struct kk_device, vk);
+   return KK_PERF_CALL(dev, KK_PERF_SYNC_WAIT,
+      kk_timeline_wait_impl(device, sync, wait_value, wait_flags, abs_timeout_ns));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_wait_for_fences(VkDevice device, uint32_t count, const VkFence *fences,
+                        VkBool32 wait_all, uint64_t timeout)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   return KK_PERF_CALL(dev, KK_PERF_FENCE_WAIT,
+      vk_common_WaitForFences(device, count, fences, wait_all, timeout));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+kk_perf_wait_semaphores(VkDevice device, const VkSemaphoreWaitInfo *info,
+                        uint64_t timeout)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   return KK_PERF_CALL(dev, KK_PERF_SEMAPHORE_WAIT,
+      vk_common_WaitSemaphores(device, info, timeout));
+}
+
+void
+kk_perf_init_wait_dispatch(struct kk_device *dev)
+{
+   dev->vk.dispatch_table.WaitForFences = kk_perf_wait_for_fences;
+   dev->vk.dispatch_table.WaitSemaphores = kk_perf_wait_semaphores;
+   dev->exposed_dispatch_table.WaitForFences = kk_perf_wait_for_fences;
+   dev->exposed_dispatch_table.WaitSemaphores = kk_perf_wait_semaphores;
 }
 
 const struct vk_sync_type kk_sync_type = {

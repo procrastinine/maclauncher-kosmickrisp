@@ -13,6 +13,7 @@
 #include "kk_physical_device.h"
 #include "kk_sync.h"
 #include "kk_interlock_submit.h"
+#include "kk_perf.h"
 #include "kk_sparse.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -30,9 +31,11 @@ struct kk_commit_data {
 static void
 kk_queue_wait_for_commits(struct kk_queue *queue)
 {
+   struct kk_device *dev = kk_queue_device(queue);
    mtx_lock(&queue->mutex);
    while (queue->commits_in_flight > 0u)
-      cnd_wait(&queue->cond, &queue->mutex);
+      KK_PERF_VOID(dev, KK_PERF_QUEUE_WAIT,
+                   cnd_wait(&queue->cond, &queue->mutex));
    mtx_unlock(&queue->mutex);
 }
 
@@ -94,6 +97,13 @@ kk_cmd_buffer_has_work(struct kk_cmd_buffer *cmd)
    return cmd->metal.cmd_buf;
 }
 
+static void
+kk_queue_gpu_range(void *data, uint64_t frame, double start, double end,
+                   uint32_t count)
+{
+   kk_perf_gpu_frame(data, frame, start, end, count);
+}
+
 static VkResult
 kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
                 mtl_feedback_handler_callback callback, void *user_data)
@@ -111,11 +121,22 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
       (cmd->drawable != NULL && !primary_retained);
    for (uint32_t i = 0; i < count; i++) {
       void *drawable = i < retained_count ? drawables[i] : cmd->drawable;
-      mtl_command_queue_wait_for_drawable(queue->mtl_handle, drawable);
+      KK_PERF_VOID(kk_queue_device(queue), KK_PERF_DRAWABLE_WAIT,
+                   mtl_command_queue_wait_for_drawable(queue->mtl_handle,
+                                                        drawable));
    }
 
    mtl_commit_options *options = mtl_new_commit_options();
-   mtl_commit_options_add_feedback_handler(options, callback, user_data);
+   struct kk_perf *perf = kk_queue_device(queue)->perf;
+   if (unlikely(perf)) {
+      const uint32_t native_count = 1u + util_dynarray_num_elements(
+         &cmd->mesh_command_buffers, mtl_command_buffer *);
+      mtl_commit_options_add_tracked_feedback_handler(
+         options, callback, user_data, kk_queue_gpu_range, perf,
+         kk_perf_frame_id(perf), native_count);
+   } else {
+      mtl_commit_options_add_feedback_handler(options, callback, user_data);
+   }
 
    if (util_dynarray_num_elements(&cmd->mesh_command_buffers,
                                   mtl_command_buffer *) > 0) {
@@ -202,8 +223,9 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
             *drawable = mtl_retain(source->drawable);
          }
       }
-      mtl_execute_command_queue(&source->vk.cmd_queue, rerecord_handle,
-                           &dev->vk.dispatch_table);
+      KK_PERF_VOID(dev, KK_PERF_REPLAY,
+         mtl_execute_command_queue(&source->vk.cmd_queue, rerecord_handle,
+                                    &dev->vk.dispatch_table));
       if (!rerecord->whole_pass.suspended) {
          (*consumed)++;
          break;
@@ -256,7 +278,7 @@ unlock:
 }
 
 static VkResult
-kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+kk_queue_submit_internal(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
 {
    struct kk_queue *queue = container_of(vk_queue, struct kk_queue, vk);
    struct kk_device *dev = kk_queue_device(queue);
@@ -359,6 +381,15 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
    }
 
    return VK_SUCCESS;
+}
+
+static VkResult
+kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+{
+   struct kk_queue *queue = container_of(vk_queue, struct kk_queue, vk);
+   struct kk_device *dev = kk_queue_device(queue);
+   return KK_PERF_CALL(dev, KK_PERF_SUBMIT,
+                       kk_queue_submit_internal(vk_queue, submit));
 }
 
 VkResult
