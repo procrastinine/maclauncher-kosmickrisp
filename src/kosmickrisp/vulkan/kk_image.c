@@ -79,6 +79,10 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
              VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
              VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
    }
+   /* Some formats require a minimum GPU family, or may be texel buffer only */
+   if (pdev->info.gpu_apple_family < va_format->gpu_family ||
+       va_format->image_feats == 0)
+      return 0;
 
    // Textures can at least be sampled
    features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT;
