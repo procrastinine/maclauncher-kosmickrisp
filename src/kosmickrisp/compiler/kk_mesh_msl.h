@@ -269,6 +269,9 @@ kk_mesh_emit_functions(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
    ctx->indentlevel++;
    kk_mesh_emit_aliases(ctx);
    kk_mesh_emit_locals(ctx);
+   /* Function temporaries, such as sparse-access residency results, are
+    * declared in the body as in the ordinary entry points. */
+   msl_helper_locals(ctx, impl);
    if (ctx->mesh.queries)
       P_IND(ctx, "if (gl_LocalInvocationIndex == 0) kk_mesh_stat(params.%s_statistic, 1);\n", task ? "task" : "mesh");
    predeclare_ssa_values(ctx, impl);
