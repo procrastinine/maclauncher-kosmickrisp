@@ -459,6 +459,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto fail_alloc;
 
+   simple_mtx_init(&dev->depth_stencil_cache_mutex, mtx_plain);
    dev->perf = kk_perf_create();
    if (dev->perf) {
       dev->vk.pipeline_cache_lookup = kk_perf_cache_lookup;
@@ -614,6 +615,7 @@ fail_vab_memory:
 fail_compiler:
    kk_release_compiler(dev);
 fail_init:
+   kk_depth_stencil_cache_finish(dev);
    kk_vrs_device_finish(dev);
    kk_descriptor_heap_finish(dev);
    kk_perf_destroy(dev->perf);
@@ -657,6 +659,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    kk_interlock_submission_drain(dev);
    /* Meta first since it may destroy Vulkan objects */
    kk_device_finish_meta(dev);
+   kk_depth_stencil_cache_finish(dev);
    kk_dgc_finish(dev);
    kk_device_finish_lib(dev);
    kk_interlock_device_finish(dev);

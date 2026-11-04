@@ -6,6 +6,7 @@
  */
 
 #include "kk_shader.h"
+#include "util/hash_table.h"
 
 #include "kk_cmd_buffer.h"
 #include "kk_debug.h"
@@ -1925,7 +1926,7 @@ kk_compile_indirect_compute_pipeline(struct kk_device *device,
 }
 
 static mtl_depth_stencil_state *
-kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
+kk_create_ds_state(struct kk_device *device, struct kk_shader_info *info)
 {
    mtl_stencil_descriptor *front = NULL;
    mtl_stencil_descriptor *back = NULL;
@@ -1979,6 +1980,98 @@ kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
    mtl_release(descriptor);
 
    return state;
+}
+
+/* Native depth/stencil objects are immutable. Keep a bounded device cache,
+ * shared by pipeline creation and dynamic state, with an independent reference
+ * for every caller. Unused stencil fields do not distinguish native states. */
+struct kk_ds_cache_key {
+   uint32_t ops;
+   uint32_t front_read, front_write, back_read, back_write;
+};
+
+struct kk_ds_cache_entry {
+   struct kk_ds_cache_key key;
+   mtl_depth_stencil_state *state;
+};
+
+static uint32_t
+kk_ds_key_hash(const void *key)
+{
+   return _mesa_hash_data(key, sizeof(struct kk_ds_cache_key));
+}
+
+static bool
+kk_ds_key_equal(const void *a, const void *b)
+{
+   return memcmp(a, b, sizeof(struct kk_ds_cache_key)) == 0;
+}
+
+static mtl_depth_stencil_state *
+kk_compile_ds_state(struct kk_device *device, struct kk_shader_info *info)
+{
+   struct kk_ds_cache_key key = {
+      .ops = info->vs.depth_compare_op | (info->vs.has_depth_write << 3) |
+             (info->vs.has_stencil_test << 4),
+   };
+   if (info->vs.has_stencil_test) {
+      key.ops |= (info->vs.stencil_front.fail << 5) |
+                 (info->vs.stencil_front.depth_fail << 8) |
+                 (info->vs.stencil_front.pass << 11) |
+                 (info->vs.stencil_front.compare << 14) |
+                 (info->vs.stencil_back.fail << 17) |
+                 (info->vs.stencil_back.depth_fail << 20) |
+                 (info->vs.stencil_back.pass << 23) |
+                 (info->vs.stencil_back.compare << 26);
+      key.front_read = info->vs.stencil_front.compare_mask;
+      key.front_write = info->vs.stencil_front.write_mask;
+      key.back_read = info->vs.stencil_back.compare_mask;
+      key.back_write = info->vs.stencil_back.write_mask;
+   }
+
+   simple_mtx_lock(&device->depth_stencil_cache_mutex);
+   if (!device->depth_stencil_cache)
+      device->depth_stencil_cache =
+         _mesa_hash_table_create(NULL, kk_ds_key_hash, kk_ds_key_equal);
+   struct hash_table *cache = device->depth_stencil_cache;
+   struct hash_entry *found = cache ? _mesa_hash_table_search(cache, &key) : NULL;
+   if (found) {
+      struct kk_ds_cache_entry *entry = found->data;
+      mtl_depth_stencil_state *state = mtl_retain(entry->state);
+      simple_mtx_unlock(&device->depth_stencil_cache_mutex);
+      return state;
+   }
+
+   /* Creation is cheap native state setup, not shader compilation. Holding
+    * this cache's mutex prevents duplicate objects on concurrent misses. */
+   mtl_depth_stencil_state *state = kk_create_ds_state(device, info);
+   if (state && cache && cache->entries < 1024) {
+      struct kk_ds_cache_entry *entry = ralloc(cache, struct kk_ds_cache_entry);
+      if (entry) {
+         entry->key = key;
+         entry->state = state;
+         if (_mesa_hash_table_insert(cache, &entry->key, entry))
+            mtl_retain(state); /* Cache ownership; caller keeps creation ref. */
+         else
+            ralloc_free(entry);
+      }
+   }
+   /* A full cache or host allocation failure preserves ordinary creation. */
+   simple_mtx_unlock(&device->depth_stencil_cache_mutex);
+   return state;
+}
+
+void
+kk_depth_stencil_cache_finish(struct kk_device *device)
+{
+   if (device->depth_stencil_cache) {
+      hash_table_foreach(device->depth_stencil_cache, entry) {
+         struct kk_ds_cache_entry *ds = entry->data;
+         mtl_release(ds->state);
+      }
+      _mesa_hash_table_destroy(device->depth_stencil_cache, NULL);
+   }
+   simple_mtx_destroy(&device->depth_stencil_cache_mutex);
 }
 
 static void

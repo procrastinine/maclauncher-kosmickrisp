@@ -104,6 +104,8 @@ struct kk_precompiled_cache {
 struct kk_device {
    struct vk_device vk;
    struct kk_perf *perf;
+   simple_mtx_t depth_stencil_cache_mutex;
+   struct hash_table *depth_stencil_cache;
    struct kk_sparse_device_state *sparse;
    uint32_t sparse_residency_used;
    struct kk_sparse_sample_row *sparse_sample_rows;
@@ -170,6 +172,8 @@ VkResult kk_device_init_lib(struct kk_device *dev);
 VkResult kk_device_init_conservative_lib(struct kk_device *dev);
 VkResult kk_device_init_primitives_generated_lib(struct kk_device *dev);
 void kk_device_finish_lib(struct kk_device *dev);
+void kk_depth_stencil_cache_finish(struct kk_device *dev);
+
 void kk_device_add_bo_to_residency_set(struct kk_device *dev, struct kk_bo *bo);
 void kk_device_remove_bo_from_residency_set(struct kk_device *dev, struct kk_bo *bo);
 void kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap);

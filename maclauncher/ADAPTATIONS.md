@@ -968,6 +968,12 @@ Consumers: Vulkan descriptor heap pipelines.
 
 Implementation: [kk_cmd_buffer.h](../src/kosmickrisp/vulkan/kk_cmd_buffer.h), [kk_cmd_buffer.c](../src/kosmickrisp/vulkan/kk_cmd_buffer.c), [kk_cmd_dgc.c](../src/kosmickrisp/vulkan/kk_cmd_dgc.c), [kk_shader.h](../src/kosmickrisp/vulkan/kk_shader.h), [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_descriptor_set.h](../src/kosmickrisp/vulkan/kk_descriptor_set.h), [kk_descriptor_heap_api.h](../src/kosmickrisp/vulkan/kk_descriptor_heap_api.h), [kk_descriptor_heap_nir.h](../src/kosmickrisp/vulkan/kk_descriptor_heap_nir.h), [kk_embedded_sampler_runtime.h](../src/kosmickrisp/vulkan/kk_embedded_sampler_runtime.h).
 
+### Native depth/stencil state reuse
+
+Pipeline creation and dynamic depth/stencil changes share immutable Metal states within each device. The cache keys the native depth and stencil operations and masks; stencil references and depth bounds remain encoder state. It retains up to 1024 states, with ordinary state creation for additional combinations. Each caller owns a separate reference, and device destruction releases the cached references.
+
+Implementation: [kk_shader.c](../src/kosmickrisp/vulkan/kk_shader.c), [kk_device.h](../src/kosmickrisp/vulkan/kk_device.h), [kk_device.c](../src/kosmickrisp/vulkan/kk_device.c).
+
 ### Driver shader memory and disk caches
 
 Vulkan contract: Driver shader memory and disk caches.
