@@ -234,7 +234,9 @@ kk_soft_fp64_outline_op(const nir_alu_instr *alu)
       return false;
    for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; ++i) {
       unsigned bits = alu->src[i].src.ssa->bit_size;
-      if (nir_src_num_components(alu->src[i].src) != 1 || (bits != 32 && bits != 64))
+      /* Scalarization selects one swizzle from a possibly vector source. */
+      if (nir_ssa_alu_instr_src_components(alu, i) != 1 ||
+          (bits != 32 && bits != 64))
          return false;
    }
    return true;
