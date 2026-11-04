@@ -10,6 +10,7 @@
 
 #include "kk_device_memory.h"
 #include "kk_private.h"
+#include <limits.h>
 
 #include "kosmickrisp/bridge/mtl_format.h"
 
@@ -18,6 +19,21 @@
 #include "vk_pipeline_cache.h"
 
 #include "vk_shader.h"
+
+/* Feature enumerators are bit indices, assigned once by the compiler.
+ * New shader-affecting features belong here without explicit values. */
+enum kk_feature_bit {
+   KK_FEAT_CUSTOM_BORDER,
+   KK_FEAT_NULL_DESCRIPTOR,
+   KK_FEAT_IMAGE_VIEW_MIN_LOD,
+   KK_FEAT_PIPELINE_STATISTICS,
+   KK_FEAT_SAMPLER_MINMAX,
+   KK_FEAT_COUNT,
+};
+
+typedef uint32_t kk_feature_key;
+static_assert(KK_FEAT_COUNT <= sizeof(kk_feature_key) * CHAR_BIT,
+              "shader feature bits fit the shader-cache key");
 
 struct kk_cmd_buffer;
 

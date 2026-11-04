@@ -168,22 +168,16 @@ kk_populate_fs_key(struct kk_fs_key *key,
       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_INPUT_ATTACHMENT_MAP);
 }
 
-enum kk_feature_key {
-   KK_FEAT_CUSTOM_BORDER = BITFIELD_BIT(0),
-   KK_FEAT_NULL_DESCRIPTOR = BITFIELD_BIT(1),
-   KK_FEAT_IMAGE_VIEW_MIN_LOD = BITFIELD_BIT(2),
-};
-
-static enum kk_feature_key
+static kk_feature_key
 kk_make_feature_key(const struct vk_features *feats)
 {
-   enum kk_feature_key key = 0;
+   kk_feature_key key = 0;
    if (feats->customBorderColors)
-      key |= KK_FEAT_CUSTOM_BORDER;
+      key |= BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER);
    if (feats->nullDescriptor)
-      key |= KK_FEAT_NULL_DESCRIPTOR;
+      key |= BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR);
    if (feats->minLod)
-      key |= KK_FEAT_IMAGE_VIEW_MIN_LOD;
+      key |= BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD);
    return key;
 }
 
@@ -211,7 +205,9 @@ kk_hash_graphics_state(struct vk_physical_device *device,
                           sizeof(state->mv->view_mask));
    }
 
-   enum kk_feature_key feature_key = kk_make_feature_key(enabled_features);
+   const uint32_t feature_key[] = {
+      KK_FEAT_COUNT, kk_make_feature_key(enabled_features),
+   };
    _mesa_blake3_update(&blake3_ctx, &feature_key, sizeof(feature_key));
 
    _mesa_blake3_final(&blake3_ctx, blake3_out);
@@ -681,7 +677,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
              uint32_t set_layout_count,
              struct vk_descriptor_set_layout *const *set_layouts,
              const struct vk_graphics_pipeline_state *state,
-             enum kk_feature_key features)
+             kk_feature_key features)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
@@ -791,10 +787,10 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
       kk_lower_fs(dev, nir, state);
    }
 
-   if (features & KK_FEAT_CUSTOM_BORDER)
+   if (features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER))
       NIR_PASS(_, nir, kk_nir_lower_custom_border);
 
-   if (features & KK_FEAT_IMAGE_VIEW_MIN_LOD)
+   if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
       NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
 
    /* Descriptor lowering needs to happen after lowering blend since we will
@@ -817,7 +813,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
 
    NIR_PASS(_, nir, kk_nir_lower_textures);
 
-   if (features & KK_FEAT_NULL_DESCRIPTOR)
+   if (features & BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR))
       NIR_PASS(_, nir, kk_nir_lower_null_images);
 
    NIR_PASS(_, nir, nir_lower_global_vars_to_local);
@@ -1241,7 +1237,7 @@ nir_opts(nir_shader *nir, void *data)
 static nir_shader *
 get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
               const struct vk_graphics_pipeline_state *state,
-              enum kk_feature_key features)
+              kk_feature_key features)
 {
    nir_shader *nir = nir_shader_create(
       NULL, stage,
@@ -1690,7 +1686,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
    struct kk_device *dev = container_of(device, struct kk_device, vk);
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
-   enum kk_feature_key features = kk_make_feature_key(enabled_features);
+   kk_feature_key features = kk_make_feature_key(enabled_features);
 
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */
