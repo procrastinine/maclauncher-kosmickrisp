@@ -13,6 +13,8 @@
 #include <Metal/MTL4SpecializedFunctionDescriptor.h>
 #include <Metal/MTL4RenderPipeline.h>
 #include <Metal/MTLDevice.h>
+#include <Metal/MTL4CompilerTask.h>
+#include <dispatch/dispatch.h>
 
 /* Compiler */
 mtl_compiler *
@@ -21,6 +23,7 @@ mtl_new_compiler(mtl_device *device)
    @autoreleasepool {
       id<MTLDevice> dev = (id<MTLDevice>)device;
 
+      dev.shouldMaximizeConcurrentCompilation = YES;
       MTL4CompilerDescriptor *desc = [[MTL4CompilerDescriptor new] autorelease];
 
       NSError *error;
@@ -35,6 +38,22 @@ mtl_new_compiler(mtl_device *device)
 }
 
 /* Library */
+static MTL4LibraryDescriptor *
+mtl_library_descriptor(const char *src, enum mtl_language_version msl_version,
+                       enum mtl_math_mode math_mode,
+                       enum mtl_math_floating_point_functions math_fp_fns)
+{
+   MTLCompileOptions *opts = [[MTLCompileOptions new] autorelease];
+   opts.languageVersion = (MTLLanguageVersion)msl_version;
+   opts.mathMode = (MTLMathMode)math_mode;
+   opts.mathFloatingPointFunctions = (MTLMathFloatingPointFunctions)math_fp_fns;
+
+   MTL4LibraryDescriptor *desc = [[MTL4LibraryDescriptor new] autorelease];
+   desc.source = [NSString stringWithCString:src encoding:NSASCIIStringEncoding];
+   desc.options = opts;
+   return desc;
+}
+
 mtl_library *
 mtl_new_library(mtl_compiler *compiler, const char *src,
                 enum mtl_language_version msl_version,
@@ -43,25 +62,59 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
 {
    @autoreleasepool {
       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
-      NSString *ns_src = [NSString stringWithCString:src encoding:NSASCIIStringEncoding];
-
-      MTLCompileOptions *opts = [[MTLCompileOptions new] autorelease];
-      opts.languageVersion = (MTLLanguageVersion)msl_version;
-      opts.mathMode = (MTLMathMode)math_mode;
-      opts.mathFloatingPointFunctions = (MTLMathFloatingPointFunctions)math_fp_fns;
-
-      MTL4LibraryDescriptor *desc = [[MTL4LibraryDescriptor new] autorelease];
-      desc.source = ns_src;
-      desc.options = opts;
-
-      NSError *error;
+      MTL4LibraryDescriptor *desc =
+         mtl_library_descriptor(src, msl_version, math_mode, math_fp_fns);
+      NSError *error = nil;
       id<MTLLibrary> lib = [comp newLibraryWithDescriptor:desc error:&error];
-
-      if (lib == nil) {
-         fprintf(stderr, "Failed to create MTLLibrary: %s\n", [error.localizedDescription UTF8String]);
-      }
-
+      if (lib == nil)
+         fprintf(stderr, "Failed to create MTLLibrary: %s\n",
+                 error.localizedDescription.UTF8String ?: "Unknown Metal error");
       return lib;
+   }
+}
+
+bool
+mtl_new_library_pair(mtl_compiler *compiler,
+                     const struct mtl_library_source sources[2],
+                     enum mtl_math_mode math_mode,
+                     enum mtl_math_floating_point_functions math_fp_fns,
+                     mtl_library *libraries[2])
+{
+   @autoreleasepool {
+      id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
+      id<MTL4CompilerTask> tasks[2];
+      dispatch_group_t completion = dispatch_group_create();
+      libraries[0] = libraries[1] = NULL;
+
+      /* Metal owns scheduling on the existing device compiler. Queue both
+       * independent front ends before waiting for their completion callbacks. */
+      for (unsigned i = 0; i < 2; ++i) {
+         MTL4LibraryDescriptor *desc = mtl_library_descriptor(
+            sources[i].code, sources[i].language_version, math_mode, math_fp_fns);
+         dispatch_group_enter(completion);
+         tasks[i] = [comp newLibraryWithDescriptor:desc
+            completionHandler:^(id<MTLLibrary> library, NSError *error) {
+               @autoreleasepool {
+                  libraries[i] = (mtl_library *)[library retain];
+                  if (library == nil)
+                     fprintf(stderr, "Failed to create MTLLibrary: %s\n",
+                        error.localizedDescription.UTF8String ?: "Unknown Metal error");
+               }
+               dispatch_group_leave(completion);
+            }];
+      }
+      dispatch_group_wait(completion, DISPATCH_TIME_FOREVER);
+      dispatch_release(completion);
+      for (unsigned i = 0; i < 2; ++i)
+         [tasks[i] release];
+
+      if (libraries[0] && libraries[1])
+         return true;
+      for (unsigned i = 0; i < 2; ++i) {
+         [(id)libraries[i] release];
+         libraries[i] = NULL;
+      }
+      return false;
    }
 }
 

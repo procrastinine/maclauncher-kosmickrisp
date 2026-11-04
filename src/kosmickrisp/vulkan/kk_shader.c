@@ -1271,24 +1271,6 @@ kk_nir_lower_vertex_id_zero_base(struct nir_shader *nir)
    return progress;
 }
 
-static bool
-kk_nir_requires_msl41(nir_shader *nir)
-{
-   nir_foreach_function_impl(impl, nir) {
-      nir_foreach_block(block, impl) {
-         nir_foreach_instr(instr, block) {
-            if (instr->type != nir_instr_type_intrinsic)
-               continue;
-            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-            if (intr->intrinsic == nir_intrinsic_shared_atomic &&
-                nir_intrinsic_atomic_op(intr) == nir_atomic_op_fadd)
-               return true;
-         }
-      }
-   }
-   return false;
-}
-
 static void
 kk_finish_msl_nir(nir_shader *nir)
 {
@@ -1349,9 +1331,9 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
       }
    }
 
-   data->requires_msl41 = kk_nir_requires_msl41(nir);
    data->code = KK_PERF_CALL(dev, KK_PERF_MSL,
       nir_to_msl(nir, &translate_options));
+   data->requires_msl41 = translate_options.requires_msl41;
    const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
 
    /* We need to steal so it doesn't get destroyed with the nir. Needs to happen
@@ -2270,25 +2252,24 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    }
    const struct msl_compile_data *vs_data = polygon ? &vs->polygon[2 * polygon] :
       vs->info.polygon_native ? &vs->polygon_native : &vs->msl_data[vs_stage];
-   mtl_library *vertex_library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY, mtl_new_library(
-      device->mtl_compiler_handle, vs_data->code, kk_msl_language_version(vs_data, pdev->info.msl_version),
-      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
-   if (vertex_library == NULL)
+   const struct msl_compile_data *fs_data = polygon ? &vs->polygon[2 * polygon + 1] :
+      vs->info.polygon_native ? &vs->polygon_native_fs : &vs->msl_data[MESA_SHADER_FRAGMENT];
+   const struct mtl_library_source sources[2] = {
+      {vs_data->code, kk_msl_language_version(vs_data, pdev->info.msl_version)},
+      {fs_data->code, kk_msl_language_version(fs_data, pdev->info.msl_version)},
+   };
+   mtl_library *libraries[2];
+   if (!KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY_PAIR,
+                    mtl_new_library_pair(device->mtl_compiler_handle, sources,
+                       MTL_MATH_MODE_FAST,
+                       MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST, libraries)))
       return VK_ERROR_INVALID_SHADER_NV;
-
+   mtl_library *vertex_library = libraries[0];
+   mtl_library *fragment_library = libraries[1];
    mtl_function_descriptor *vertex_function =
       mtl_new_library_function_descriptor(vertex_library,
                                           vs_data->entrypoint_name);
 
-   const struct msl_compile_data *fs_data = polygon ? &vs->polygon[2 * polygon + 1] :
-      vs->info.polygon_native ? &vs->polygon_native_fs : &vs->msl_data[MESA_SHADER_FRAGMENT];
-   mtl_library *fragment_library = KK_PERF_CALL(device, KK_PERF_METAL_LIBRARY, mtl_new_library(
-      device->mtl_compiler_handle, fs_data->code, kk_msl_language_version(fs_data, pdev->info.msl_version),
-      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST));
-   if (fragment_library == NULL) {
-      result = VK_ERROR_INVALID_SHADER_NV;
-      goto destroy_vertex;
-   }
    mtl_function_descriptor *fragment_function =
       mtl_new_library_function_descriptor(fragment_library,
                                           fs_data->entrypoint_name);
@@ -2320,7 +2301,6 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    mtl_release(pipeline_descriptor);
    mtl_release(fragment_function);
    mtl_release(fragment_library);
-destroy_vertex:
    mtl_release(vertex_function);
    mtl_release(vertex_library);
 

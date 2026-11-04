@@ -21,6 +21,8 @@ struct nir_to_msl_options {
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;
    bool mesh_queries;
+   /* Output: the emitted source uses a Metal 4.1 operation. */
+   bool requires_msl41;
    uint32_t *mesh_retained_strides;
    uint32_t *mesh_retained_fields;
    uint32_t mesh_view_mask, mesh_view_index_offset;

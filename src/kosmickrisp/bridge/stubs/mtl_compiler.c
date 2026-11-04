@@ -25,6 +25,17 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
    return NULL;
 }
 
+bool
+mtl_new_library_pair(mtl_compiler *compiler,
+                     const struct mtl_library_source sources[2],
+                     enum mtl_math_mode math_mode,
+                     enum mtl_math_floating_point_functions math_fp_fns,
+                     mtl_library *libraries[2])
+{
+   libraries[0] = libraries[1] = NULL;
+   return false;
+}
+
 mtl_function_descriptor *
 mtl_new_library_function_descriptor(mtl_library *library,
                                     const char *entry_point)

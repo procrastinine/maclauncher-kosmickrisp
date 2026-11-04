@@ -29,6 +29,19 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
                 enum mtl_language_version msl_version,
                 enum mtl_math_mode math_mode,
                 enum mtl_math_floating_point_functions math_fp_fns);
+/* Each source preserves its own language version. Both returned libraries are
+ * owned by the caller; on failure both outputs are NULL. */
+struct mtl_library_source {
+   const char *code;
+   enum mtl_language_version language_version;
+};
+
+bool mtl_new_library_pair(mtl_compiler *compiler,
+                         const struct mtl_library_source sources[2],
+                         enum mtl_math_mode math_mode,
+                         enum mtl_math_floating_point_functions math_fp_fns,
+                         mtl_library *libraries[2]);
+
 mtl_function_descriptor *
 mtl_new_library_function_descriptor(mtl_library *library,
                                     const char *entry_point);

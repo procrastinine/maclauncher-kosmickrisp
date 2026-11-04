@@ -1481,6 +1481,8 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       atomic_swap_to_msl(ctx, instr, "device", false);
       break;
    case nir_intrinsic_shared_atomic:
+      if (nir_intrinsic_atomic_op(instr) == nir_atomic_op_fadd)
+         ctx->requires_msl41 = true;
       atomic_to_msl(ctx, instr, "threadgroup", true);
       break;
    case nir_intrinsic_shared_atomic_swap:
@@ -2754,6 +2756,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    }
    if (shader->info.stage == MESA_SHADER_MESH && options->mesh_retained_fields)
       memcpy(options->mesh_retained_fields, ctx.mesh_retained_fields, sizeof(ctx.mesh_retained_fields));
+   options->requires_msl41 = ctx.requires_msl41;
    char *ret = ctx.text->buf;
    if (ctx.sampler_helpers) _mesa_hash_table_destroy(ctx.sampler_helpers, NULL);
    _mesa_hash_table_destroy(ctx.types, NULL);
