@@ -27,6 +27,8 @@ struct nir_to_msl_ctx {
    uint64_t disabled_workarounds;
    bool native_sampler_lod_bias;
    bool uses_per_draw_data;
+   bool has_sampler_helpers;
+   bool sparse_residency;
    bool interlock;
    bool mesh_queries;
    bool requires_msl41;
@@ -59,7 +61,7 @@ struct nir_to_msl_ctx {
 /* Perform type inference. The returned value is a
  * map from nir_def* to base type.*/
 
-struct hash_table *msl_infer_types(nir_shader *shader, bool *has_sampler_helpers);
+struct hash_table *msl_infer_types(struct nir_to_msl_ctx *ctx);
 
 const char *msl_type_for_def(struct hash_table *types, nir_def *def);
 

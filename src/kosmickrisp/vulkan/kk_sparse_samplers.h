@@ -48,6 +48,21 @@ static VkResult
 kk_sparse_canonical_taps(struct kk_device *dev, struct kk_sparse_sample_row *row)
 {
    uint64_t *ids = mtl_get_contents(row->table);
+   /* Canonical taps depend only on the address modes, not view LODs. Rows
+    * live until device retirement and creation holds the sampler mutex. */
+   if (dev->sparse_sample_rows) {
+      const uint64_t *source = mtl_get_contents(dev->sparse_sample_rows->table);
+      static_assert(KK_SPARSE_ROW_WHITE_TAP_WORD == KK_SPARSE_ROW_BLACK_TAP_WORD + 1,
+                    "canonical tap pair is contiguous");
+      for (unsigned u = 0; u <= VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE; ++u)
+      for (unsigned v = 0; v <= VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE; ++v)
+      for (unsigned w = 0; w <= VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE; ++w) {
+         unsigned at = KK_SPARSE_ROW_ENTRY_WORDS * (u | (v << 3) | (w << 6)) +
+            KK_SPARSE_ROW_BLACK_TAP_WORD;
+         memcpy(ids + at, source + at, 2 * sizeof(uint64_t));
+      }
+      return VK_SUCCESS;
+   }
    for (unsigned u = 0; u <= VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE; ++u)
    for (unsigned v = 0; v <= VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE; ++v)
    for (unsigned w = 0; w <= VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE; ++w)

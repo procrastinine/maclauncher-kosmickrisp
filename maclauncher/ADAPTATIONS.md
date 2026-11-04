@@ -792,9 +792,9 @@ Implementation: [kk_physical_device.c](../src/kosmickrisp/vulkan/kk_physical_dev
 
 Vulkan contract: `sparseBinding`, `sparseResidencyBuffer`, `sparseResidencyImage2D`, `sparseResidencyImage3D`, `sparseResidencyAliased`, `shaderResourceResidency`.
 
-Maps 64 KiB private heap pages into sparse buffers and optimal textures, including per-layer mip tails, and emits native shader residency queries.
+Maps 64 KiB private heap pages into sparse buffers and optimal textures, including per-layer mip tails, and emits native shader residency queries. Buffer residency directories are allocated on first partially resident buffer creation. Submission tracking initializes on first guarded resource creation. Native sparse views allocate query metadata only when residency instructions are enabled; standard3D views retain the logical metadata used by ordinary 3D operations. Pipeline recipes retain only shaders with buffer or 3D operations that can use sparse resources. Buffer and standard3D variants activate independently, bind from the command recording snapshot, and reuse immutable compiled variants. Submission replays recordings when a new resource class becomes active. Native heap sampler queries use an existing indexed record after a full 64-bit source-ID comparison and retain the native list fallback for unindexed or mismatched records. Type inference records whether a shader has residency-status instructions, so ordinary MSL results skip status-user searches.
 
-Limits and reported properties: `residencyNonResidentStrict = "GPU buffer residency guards and native strict texture access"`; `residencyStandard2DBlockShape = true`; `residencyStandard3DBlockShape = false`.
+Limits and reported properties: strict nonresident access and standard 2D/3D block shapes follow native placement-sparse support. Standard multisample block shapes are not reported.
 
 Consumers: DXVK, vkd3d-proton, Wine vkd3d.
 

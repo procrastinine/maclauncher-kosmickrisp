@@ -275,7 +275,8 @@ infer_types_from_alu(struct hash_table *types, nir_alu_instr *alu)
 }
 
 static void
-infer_types_from_intrinsic(struct hash_table *types, nir_intrinsic_instr *instr)
+infer_types_from_intrinsic(struct nir_to_msl_ctx *ctx, struct hash_table *types,
+                           nir_intrinsic_instr *instr)
 {
    switch (instr->intrinsic) {
    case nir_intrinsic_load_per_primitive_input:
@@ -453,6 +454,8 @@ infer_types_from_intrinsic(struct hash_table *types, nir_intrinsic_instr *instr)
       set_type(types, &instr->def, TYPE_FLOAT);
       break;
    case nir_intrinsic_is_sparse_resident_zink:
+      ctx->sparse_residency = true;
+      FALLTHROUGH;
    case nir_intrinsic_load_front_face:
    case nir_intrinsic_elect:
    case nir_intrinsic_load_helper_invocation:
@@ -607,18 +610,18 @@ infer_types_from_tex(struct hash_table *types, nir_tex_instr *tex)
 }
 
 static void
-infer_types_from_instr(struct hash_table *types, nir_instr *instr,
-                       bool *has_sampler_helpers)
+infer_types_from_instr(struct nir_to_msl_ctx *ctx, struct hash_table *types,
+                       nir_instr *instr)
 {
    switch (instr->type) {
    case nir_instr_type_alu:
       infer_types_from_alu(types, nir_instr_as_alu(instr));
       return;
    case nir_instr_type_intrinsic:
-      infer_types_from_intrinsic(types, nir_instr_as_intrinsic(instr));
+      infer_types_from_intrinsic(ctx, types, nir_instr_as_intrinsic(instr));
       return;
    case nir_instr_type_tex:
-      *has_sampler_helpers |= nir_instr_as_tex(instr)->backend_flags &
+      ctx->has_sampler_helpers |= nir_instr_as_tex(instr)->backend_flags &
                               (KK_SAMPLE_HELPER | KK_SAMPLE_METADATA);
       infer_types_from_tex(types, nir_instr_as_tex(instr));
       break;
@@ -904,16 +907,18 @@ msl_src_as_const(struct nir_to_msl_ctx *ctx, nir_src *src)
 }
 
 struct hash_table *
-msl_infer_types(nir_shader *shader, bool *has_sampler_helpers)
+msl_infer_types(struct nir_to_msl_ctx *ctx)
 {
-   *has_sampler_helpers = false;
+   nir_shader *shader = ctx->shader;
+   ctx->has_sampler_helpers = false;
+   ctx->sparse_residency = false;
    struct hash_table *types = _mesa_pointer_hash_table_create(NULL);
    bool progress = false;
    // First, seed the types for every instruction for every source and def
    nir_foreach_function_impl(impl, shader) {
       nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
-            infer_types_from_instr(types, instr, has_sampler_helpers);
+            infer_types_from_instr(ctx, types, instr);
          }
       }
    }

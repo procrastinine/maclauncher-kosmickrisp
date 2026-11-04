@@ -13,7 +13,7 @@ kk_sparse_sample_field(nir_builder *b, nir_deref_instr *deref, unsigned plane,
 }
 
 static nir_def *
-kk_sparse_native_sampler_record_address(nir_builder *b, nir_def *table, nir_def *source)
+kk_sparse_native_sampler_list_address(nir_builder *b, nir_def *table, nir_def *source)
 {
    nir_variable *cursor = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "sparse_sampler");
    nir_variable *result = nir_local_variable_create(b->impl, glsl_uint64_t_type(), "sparse_sampler_params");
@@ -35,6 +35,41 @@ kk_sparse_native_sampler_record_address(nir_builder *b, nir_def *table, nir_def 
    nir_store_var(b, cursor, nir_load_global_constant(b, 1, 64, record, .align_mul = 8), 1);
    nir_pop_loop(b, NULL);
    return nir_load_var(b, result);
+}
+
+/* Existing indexed rows also cover native heap sources with a real index.
+ * Validate the complete opaque ID before using the row; native-only entries
+ * without an index retain the existing full-ID list lookup. */
+static nir_def *
+kk_sparse_native_sampler_record_address(nir_builder *b, nir_def *table,
+                                        nir_def *source, nir_def *index)
+{
+   nir_if *indexed = nir_push_if(b, nir_ult_imm(b, index, MSL_MAX_SAMPLERS));
+   nir_def *row = nir_iadd(b, table,
+      nir_imul_imm(b, nir_u2u64(b, index), KK_SPARSE_SAMPLER_STRIDE));
+   nir_def *params = nir_load_global_constant(b, 1, 64,
+      nir_iadd_imm(b, row, KK_SPARSE_ROW_NATIVE_PARAMS_WORD * sizeof(uint64_t)),
+      .align_mul = 8);
+   nir_if *present = nir_push_if(b, nir_ine_imm(b, params, 0));
+   nir_def *record = nir_iadd_imm(b, params,
+      -(int)offsetof(struct kk_sparse_native_sampler_record, params));
+   nir_def *id = nir_load_global_constant(b, 1, 64,
+      nir_iadd_imm(b, record, offsetof(struct kk_sparse_native_sampler_record, source_id)),
+      .align_mul = 8);
+   nir_def *match = nir_bcsel(b, nir_ieq(b, id, source), record, nir_imm_int64(b, 0));
+   nir_push_else(b, present);
+   nir_def *missing = nir_imm_int64(b, 0);
+   nir_pop_if(b, present);
+   match = nir_if_phi(b, match, missing);
+   nir_push_else(b, indexed);
+   nir_def *unindexed = nir_imm_int64(b, 0);
+   nir_pop_if(b, indexed);
+   record = nir_if_phi(b, match, unindexed);
+   nir_if *fallback = nir_push_if(b, nir_ieq_imm(b, record, 0));
+   nir_def *listed = kk_sparse_native_sampler_list_address(b, table, source);
+   nir_push_else(b, fallback);
+   nir_pop_if(b, fallback);
+   return nir_if_phi(b, listed, record);
 }
 
 static bool
@@ -71,7 +106,9 @@ kk_sparse_sample_attach(nir_builder *b, nir_tex_instr *tex,
       nir_def *source = load_resource_deref_desc(b, 1, 64, sd,
          plane * sizeof(struct kk_sampled_image_descriptor) +
          offsetof(struct kk_sampled_image_descriptor, aux_resource_id), ctx);
-      nir_def *native_record = kk_sparse_native_sampler_record_address(b, table, source);
+      nir_def *native_index = kk_sparse_sample_field(b, sd, plane,
+         offsetof(struct kk_sampled_image_descriptor, sampler_index), ctx);
+      nir_def *native_record = kk_sparse_native_sampler_record_address(b, table, source, native_index);
       nir_if *found = nir_push_if(b, nir_ine_imm(b, native_record, 0));
       nir_def *native_params = nir_iadd_imm(b, native_record,
          offsetof(struct kk_sparse_native_sampler_record, params));

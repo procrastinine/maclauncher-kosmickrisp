@@ -166,21 +166,34 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
          nir_foreach_block(block, impl) {
             nir_foreach_instr(instr, block) {
                if (instr->type == nir_instr_type_tex) {
-                  if (nir_instr_as_tex(instr)->sampler_dim == GLSL_SAMPLER_DIM_3D)
+                  nir_tex_instr *tex = nir_instr_as_tex(instr);
+                  bool sampled = !tex->is_shadow &&
+                     (tex->op == nir_texop_tex || tex->op == nir_texop_txb ||
+                      tex->op == nir_texop_txl || tex->op == nir_texop_txd);
+                  if (tex->sampler_dim == GLSL_SAMPLER_DIM_3D &&
+                      (sampled || tex->op == nir_texop_txf))
                      modes |= KK_SPARSE_STANDARD_3D;
                } else if (instr->type == nir_instr_type_intrinsic) {
                   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-                  if (nir_intrinsic_has_image_dim(intr) &&
-                      nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_3D)
-                     modes |= KK_SPARSE_STANDARD_3D;
-                  for (unsigned j = 0; j < nir_intrinsic_infos[intr->intrinsic].num_srcs; ++j) {
-                     nir_instr *parent = nir_def_instr(intr->src[j].ssa);
-                     if (parent->type == nir_instr_type_deref &&
-                         nir_deref_mode_is_one_of(nir_instr_as_deref(parent),
-                            nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_mem_global))
-                        modes |= KK_SPARSE_BUFFER;
-                  }
                   switch (intr->intrinsic) {
+                  case nir_intrinsic_image_load:
+                  case nir_intrinsic_image_sparse_load:
+                  case nir_intrinsic_image_store:
+                  case nir_intrinsic_image_atomic:
+                  case nir_intrinsic_image_atomic_swap:
+                  case nir_intrinsic_image_deref_load:
+                  case nir_intrinsic_image_deref_sparse_load:
+                  case nir_intrinsic_image_deref_store:
+                  case nir_intrinsic_image_deref_atomic:
+                  case nir_intrinsic_image_deref_atomic_swap:
+                  case nir_intrinsic_bindless_image_load:
+                  case nir_intrinsic_bindless_image_sparse_load:
+                  case nir_intrinsic_bindless_image_store:
+                  case nir_intrinsic_bindless_image_atomic:
+                  case nir_intrinsic_bindless_image_atomic_swap:
+                     if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_3D)
+                        modes |= KK_SPARSE_STANDARD_3D;
+                     break;
                   /* Explicit IO may already have been applied by a caller. */
                   case nir_intrinsic_load_ubo:
                   case nir_intrinsic_load_ssbo:
@@ -195,6 +208,14 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                      break;
                   default: break;
                   }
+                  for (unsigned j = 0; j < nir_intrinsic_infos[intr->intrinsic].num_srcs; ++j) {
+                     nir_instr *parent = nir_def_instr(intr->src[j].ssa);
+                     if (parent->type == nir_instr_type_deref &&
+                         nir_deref_mode_is_one_of(nir_instr_as_deref(parent),
+                            nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_mem_global))
+                        modes |= KK_SPARSE_BUFFER;
+                  }
+
                }
                if ((modes & enabled) == enabled) return enabled;
             }
@@ -379,14 +400,19 @@ kk_sparse_select_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
    struct kk_sparse_shader_state *state = shader->sparse;
    uint32_t modes = state->required_modes & cmd->sparse_guarded;
    if (!modes) return shader;
+   /* A native variant is immutable and published exactly once. Warm binds
+    * do not need the compilation/serialization mutex. */
+   struct kk_shader *selected = p_atomic_read(&state->guarded[modes]);
+   if (selected) return selected;
    simple_mtx_lock(&state->mutex);
-   if (!state->guarded[modes]) {
-      VkResult result = kk_sparse_compile_variant(dev, state, modes, &state->guarded[modes]);
+   selected = state->guarded[modes];
+   if (!selected) {
+      VkResult result = kk_sparse_compile_variant(dev, state, modes, &selected);
       if (result != VK_SUCCESS) vk_command_buffer_set_error(&cmd->vk, result);
+      else p_atomic_set(&state->guarded[modes], selected);
    }
-   struct kk_shader *selected = state->guarded[modes] ? state->guarded[modes] : shader;
    simple_mtx_unlock(&state->mutex);
-   return selected;
+   return selected ? selected : shader;
 }
 
 static VkResult

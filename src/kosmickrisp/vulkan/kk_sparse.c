@@ -158,26 +158,36 @@ kk_sparse_publish_ranges(struct kk_device *dev)
 /* Resource creation is the first possible user. Serialize publication with
  * the existing residency lock so an unused device allocates no sparse state. */
 static VkResult
-kk_sparse_device_ensure(struct kk_device *dev)
+kk_sparse_device_ensure(struct kk_device *dev, uint32_t mode)
 {
-   if ((!dev->vk.enabled_features.sparseResidencyBuffer &&
-        !dev->vk.enabled_features.sparseResidencyImage3D) || kk_sparse_state(dev))
-      return VK_SUCCESS;
+   mode &= kk_sparse_enabled_modes(dev);
+   if (!mode) return VK_SUCCESS;
+   bool buffer = mode & KK_SPARSE_BUFFER;
+   struct kk_sparse_device_state *state = kk_sparse_state(dev);
+   if (state && (!buffer || p_atomic_read(&state->root))) return VK_SUCCESS;
    simple_mtx_lock(&dev->residency_set.mutex);
    VkResult result = VK_SUCCESS;
-   if (!kk_sparse_state(dev)) {
-      struct kk_sparse_device_state *state = calloc(1, sizeof(*state));
+   state = kk_sparse_state(dev);
+   bool created = !state;
+   if (created) {
+      state = calloc(1, sizeof(*state));
       if (!state) { result = VK_ERROR_OUT_OF_HOST_MEMORY; goto unlock; }
-      state->root = mtl_sparse_new_residency_buffer(dev->mtl_handle, 16 + 4096 * 8, false);
-      if (!state->root) { free(state); result = VK_ERROR_OUT_OF_DEVICE_MEMORY; goto unlock; }
       simple_mtx_init(&state->mutex, mtx_plain);
       state->ranges = UTIL_DYNARRAY_INIT;
       state->retired_maps = UTIL_DYNARRAY_INIT;
       state->next_record = 1; /* zero denotes an ordinary buffer */
-      mtl_residency_set_add_allocation(dev->residency_set.handle, state->root);
-      dev->residency_set.dirty = true;
-      p_atomic_set(&dev->sparse, state);
    }
+   if (buffer && !p_atomic_read(&state->root)) {
+      mtl_buffer *root = mtl_sparse_new_residency_buffer(dev->mtl_handle, 16 + 4096 * 8, false);
+      if (!root) {
+         if (created) { simple_mtx_destroy(&state->mutex); free(state); }
+         result = VK_ERROR_OUT_OF_DEVICE_MEMORY; goto unlock;
+      }
+      mtl_residency_set_add_allocation(dev->residency_set.handle, root);
+      dev->residency_set.dirty = true;
+      p_atomic_set(&state->root, root);
+   }
+   if (created) p_atomic_set(&dev->sparse, state);
 unlock:
    simple_mtx_unlock(&dev->residency_set.mutex);
    return result;
@@ -200,7 +210,8 @@ uint64_t
 kk_sparse_device_address(struct kk_device *dev)
 {
    struct kk_sparse_device_state *state = kk_sparse_state(dev);
-   return state ? mtl_buffer_get_gpu_address(state->root) : 0;
+   mtl_buffer *root = state ? p_atomic_read(&state->root) : NULL;
+   return root ? mtl_buffer_get_gpu_address(root) : 0;
 }
 
 void
@@ -216,20 +227,22 @@ kk_sparse_device_finish(struct kk_device *dev)
    kk_sparse_reclaim(dev);
    util_dynarray_fini(&state->ranges);
    util_dynarray_fini(&state->retired_maps);
-   for (unsigned i = 0; i < 4096; ++i) {
-      struct kk_sparse_record_node *mid = state->children[i];
-      if (!mid) continue;
-      for (unsigned j = 0; j < 1024; ++j) {
-         struct kk_sparse_record_node *leaf = mid->children[j];
-         if (!leaf) continue;
-         kk_sparse_residency(dev, leaf->buffer, false);
-         mtl_release(leaf->buffer); free(leaf);
+   if (state->root) {
+      for (unsigned i = 0; i < 4096; ++i) {
+         struct kk_sparse_record_node *mid = state->children[i];
+         if (!mid) continue;
+         for (unsigned j = 0; j < 1024; ++j) {
+            struct kk_sparse_record_node *leaf = mid->children[j];
+            if (!leaf) continue;
+            kk_sparse_residency(dev, leaf->buffer, false);
+            mtl_release(leaf->buffer); free(leaf);
+         }
+         kk_sparse_residency(dev, mid->buffer, false);
+         mtl_release(mid->buffer); free(mid);
       }
-      kk_sparse_residency(dev, mid->buffer, false);
-      mtl_release(mid->buffer); free(mid);
+      kk_sparse_residency(dev, state->root, false);
+      mtl_release(state->root);
    }
-   kk_sparse_residency(dev, state->root, false);
-   mtl_release(state->root);
    simple_mtx_destroy(&state->mutex);
    free(state); p_atomic_set(&dev->sparse, NULL);
 }
@@ -239,7 +252,8 @@ kk_sparse_buffer_record(struct kk_device *dev, struct kk_buffer *buffer)
 {
    struct kk_sparse_device_state *state = kk_sparse_state(dev);
    /* Opaque binding alone does not require shader residency metadata. */
-   if (!dev->vk.enabled_features.sparseResidencyBuffer) return VK_SUCCESS;
+   if (!(buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT) ||
+       !dev->vk.enabled_features.sparseResidencyBuffer) return VK_SUCCESS;
    assert(state);
    simple_mtx_lock(&state->mutex);
    if (state->next_record == 0) {
@@ -380,7 +394,8 @@ kk_sparse_buffer_init(struct kk_device *dev, struct kk_buffer *buffer)
 {
    if (!kk_device_physical(dev)->info.placement_sparse)
       return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
-   VkResult result = kk_sparse_device_ensure(dev);
+   VkResult result = kk_sparse_device_ensure(dev,
+      buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT ? KK_SPARSE_BUFFER : 0);
    if (result != VK_SUCCESS) return result;
    buffer->metal.handle = mtl_new_sparse_buffer(dev->mtl_handle,
       align64(buffer->vk.size, KK_SPARSE_PAGE_SIZE));
@@ -483,7 +498,7 @@ kk_sparse_image_init(struct kk_device *dev, struct kk_image *image,
       return vk_error(dev, VK_ERROR_FORMAT_NOT_SUPPORTED);
    if (image->vk.image_type == VK_IMAGE_TYPE_3D &&
        (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT)) {
-      VkResult result = kk_sparse_device_ensure(dev);
+      VkResult result = kk_sparse_device_ensure(dev, KK_SPARSE_STANDARD_3D);
       if (result != VK_SUCCESS) return result;
    }
    image->sparse = calloc(1, sizeof(*image->sparse));
@@ -569,6 +584,7 @@ kk_sparse_image_view_query(struct kk_device *dev, struct kk_image_view *view,
 {
    struct kk_image *image = container_of(view->vk.image, struct kk_image, vk);
    if (!(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) ||
+       (!dev->vk.enabled_features.shaderResourceResidency && !kk_image_is_standard_3d(image)) ||
        (storage && !view->vk.base_mip_level && !image->sparse->standard_3d))
       return VK_SUCCESS;
    if (!view->sparse) {
