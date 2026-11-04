@@ -374,7 +374,12 @@ kk_GetPhysicalDeviceImageFormatProperties2(
                     VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
        !(pImageFormatInfo->flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) &&
        !(all_usage & VK_IMAGE_USAGE_STORAGE_BIT)) {
-      sampleCounts = pdev->info.supported_sample_counts;
+      enum pipe_format format = vk_format_to_pipe_format(pImageFormatInfo->format);
+      const struct kk_va_format *caps = kk_get_va_format(format);
+      bool integer32 = util_format_is_pure_integer(format) &&
+                       util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 0) == 32;
+      if (caps->msaa && (!integer32 || pdev->info.supports_32bit_msaa))
+         sampleCounts = pdev->info.supported_sample_counts;
    }
 
    /* From the Vulkan 1.2.199 spec:

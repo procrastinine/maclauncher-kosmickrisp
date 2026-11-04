@@ -115,6 +115,12 @@ mtl_device_get_registry_id(mtl_device *dev)
 }
 
 bool
+mtl_device_supports_32bit_msaa(mtl_device *dev)
+{
+   return [(id<MTLDevice>)dev supports32BitMSAA];
+}
+
+bool
 mtl_device_supports_sample_count(mtl_device *dev, uint32_t sample_count)
 {
    @autoreleasepool {

@@ -1097,6 +1097,8 @@ get_metal_limits(struct kk_physical_device *pdev)
    pdev->info.rendering_tile_width = 32;
    pdev->info.rendering_tile_height = 32;
 
+   pdev->info.supports_32bit_msaa =
+      mtl_device_supports_32bit_msaa(pdev->mtl_dev_handle);
    pdev->info.supported_sample_counts = VK_SAMPLE_COUNT_1_BIT;
    for (uint32_t sample_count = VK_SAMPLE_COUNT_2_BIT;
         sample_count <= VK_SAMPLE_COUNT_8_BIT; sample_count <<= 1) {

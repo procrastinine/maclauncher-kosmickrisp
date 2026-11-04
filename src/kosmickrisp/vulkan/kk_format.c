@@ -46,6 +46,10 @@
    .bit_widths = width, .filter = 0u, .write = 1u, .color = 1u, .blend = 0u,   \
    .msaa = 1u, .resolve = 0u, .sparse = 1u, .atomic = 0u
 
+#define MTL_FMT_WCMSA(width) \
+   .bit_widths = width, .filter = 0u, .write = 1u, .color = 1u, .blend = 0u, \
+   .msaa = 1u, .resolve = 0u, .sparse = 1u, .atomic = 1u
+
 // Write, Color, Sparse, Atomic
 #define MTL_FMT_WCSA(width)                                                    \
    .bit_widths = width, .filter = 0u, .write = 1u, .color = 1u, .blend = 0u,   \
@@ -187,8 +191,8 @@ static const struct kk_va_format kk_vf_formats[] = {
    MTL_FMT_NATIVE(R8G8_SINT, MTL_FMT_WCMS(16), MTL_FMT_TB_WR),
 
    // 32-bit formats
-   MTL_FMT_NATIVE(R32_UINT, MTL_FMT_WCSA(32), MTL_FMT_TB_ALL),
-   MTL_FMT_NATIVE(R32_SINT, MTL_FMT_WCSA(32), MTL_FMT_TB_ALL),
+   MTL_FMT_NATIVE(R32_UINT, MTL_FMT_WCMSA(32), MTL_FMT_TB_ALL),
+   MTL_FMT_NATIVE(R32_SINT, MTL_FMT_WCMSA(32), MTL_FMT_TB_ALL),
    MTL_FMT_NATIVE(R32_FLOAT, MTL_FMT_ALL_NO_ATOMIC(32), MTL_FMT_TB_ALL),
    MTL_FMT_NATIVE(R16G16_UNORM, MTL_FMT_ALL_NO_ATOMIC(32), MTL_FMT_TB_WR),
    MTL_FMT_NATIVE(R16G16_SNORM, MTL_FMT_ALL_NO_ATOMIC(32), MTL_FMT_TB_WR),
@@ -215,8 +219,8 @@ static const struct kk_va_format kk_vf_formats[] = {
                   MTL_FMT_TB_ALL),
 
    // 128-bit formats
-   MTL_FMT_NATIVE(R32G32B32A32_UINT, MTL_FMT_WCS(128), MTL_FMT_TB_ALL),
-   MTL_FMT_NATIVE(R32G32B32A32_SINT, MTL_FMT_WCS(128), MTL_FMT_TB_ALL),
+   MTL_FMT_NATIVE(R32G32B32A32_UINT, MTL_FMT_WCMS(128), MTL_FMT_TB_ALL),
+   MTL_FMT_NATIVE(R32G32B32A32_SINT, MTL_FMT_WCMS(128), MTL_FMT_TB_ALL),
    MTL_FMT_NATIVE(R32G32B32A32_FLOAT, MTL_FMT_ALL_NO_ATOMIC(128),
                   MTL_FMT_TB_ALL),
 
