@@ -60,6 +60,8 @@ struct kk_image {
 
    /* Forces alpha value to be one when creating views. Needed for WSI */
    bool wsi_opaque_alpha;
+   /* Immutable full-range opaque presentation source view; not a drawable. */
+   mtl_texture *wsi_opaque_sampled_view;
    VkImageUsageFlags2KHR application_usage;
 
    uint8_t plane_count;

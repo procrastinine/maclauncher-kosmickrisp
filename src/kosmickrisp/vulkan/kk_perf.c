@@ -38,7 +38,8 @@ static const char *const names[KK_PERF_METRIC_COUNT] = {
    "shader_compile", "nir", "msl", "metal_library", "metal_pipeline",
    "cache_hit", "cache_miss", "cache_binary_hit", "metal_library_pair",
    "command_bo_allocate", "command_bo_reuse", "execution_residency_commit",
-   "command_begin", "command_end", "command_reset", "command_pool_reset"
+   "command_begin", "command_end", "command_reset", "command_pool_reset",
+   "sampled_view_create", "sampled_view_get"
 };
 
 uint64_t kk_perf_now(void) { return os_time_get_nano(); }

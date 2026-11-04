@@ -10,6 +10,7 @@
 #include "kk-writable-msaa.h"
 
 #include "kk_device.h"
+#include "kk_perf.h"
 #include "kk_entrypoints.h"
 #include "kk_format.h"
 #include "kk_image.h"
@@ -84,6 +85,60 @@ kk_image_view_plane_error(const struct kk_device *dev,
         !view->planes[p].cube_face_gpu_resource_id))
       return "cube face";
    return NULL;
+}
+
+/* The opaque WSI source is stable across acquisitions. The drawable-backed
+ * destination is rebound on each acquisition and must never enter this cache.
+ * This one canonical view needs no general per-image view map or mutex. */
+static mtl_texture *
+kk_sampled_image_view(struct kk_device *dev, struct kk_image *image,
+                      const struct kk_image_view *view,
+                      VkImageViewCreateFlags flags, mtl_texture *texture,
+                      const struct kk_view_layout *layout)
+{
+   const bool cacheable = image->wsi_opaque_alpha &&
+      (flags & VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA) &&
+      image->plane_count == 1 && view->plane_count == 1 &&
+      image->vk.image_type == VK_IMAGE_TYPE_2D &&
+      image->vk.mip_levels == 1 && image->vk.array_layers == 1 &&
+      image->vk.samples == VK_SAMPLE_COUNT_1_BIT &&
+      view->vk.aspects == VK_IMAGE_ASPECT_COLOR_BIT &&
+      view->vk.usage == VK_IMAGE_USAGE_SAMPLED_BIT &&
+      view->vk.format == image->vk.format &&
+      view->vk.swizzle.r == VK_COMPONENT_SWIZZLE_R &&
+      view->vk.swizzle.g == VK_COMPONENT_SWIZZLE_G &&
+      view->vk.swizzle.b == VK_COMPONENT_SWIZZLE_B &&
+      view->vk.swizzle.a == VK_COMPONENT_SWIZZLE_ONE &&
+      layout->view_type == VK_IMAGE_VIEW_TYPE_2D_ARRAY &&
+      layout->base_level == 0 && layout->num_levels == 1 &&
+      layout->base_array_layer == 0 && layout->array_len == 1 &&
+      layout->min_lod_clamp == 0.0f &&
+      layout->format.mtl == image->planes[0].layout.format.mtl &&
+      !image->sparse && !image->planes[0].memoryless &&
+      texture == image->planes[0].mtl_handle;
+   if (cacheable) {
+      mtl_texture *cached =
+         __atomic_load_n(&image->wsi_opaque_sampled_view, __ATOMIC_ACQUIRE);
+      if (cached)
+         return mtl_retain(cached);
+   }
+
+   mtl_texture *created = KK_PERF_CALL(dev, KK_PERF_SAMPLED_VIEW_CREATE,
+      mtl_new_texture_view_with(texture, layout));
+   if (!created || !cacheable)
+      return created;
+
+   /* The image keeps the creation reference. Every VkImageView keeps its own
+    * reference, including concurrent first-use callers. Failed construction
+    * leaves the slot empty and follows ordinary view error propagation. */
+   mtl_texture *expected = NULL;
+   if (__atomic_compare_exchange_n(&image->wsi_opaque_sampled_view, &expected,
+                                  created, false, __ATOMIC_ACQ_REL,
+                                  __ATOMIC_ACQUIRE))
+      return mtl_retain(created);
+
+   mtl_release(created);
+   return mtl_retain(expected);
 }
 
 VkResult
@@ -254,7 +309,9 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
          VkResult result = kk_sparse_image_view_query(dev, view, mtl_handle, &view_layout, false);
          if (result != VK_SUCCESS) { kk_image_view_finish(dev, view); return result; }
          view->planes[view_plane].mtl_handle_sampled =
-            mtl_new_texture_view_with(mtl_handle, &view_layout);
+            KK_PERF_CALL(dev, KK_PERF_SAMPLED_VIEW_GET,
+               kk_sampled_image_view(dev, image, view, pCreateInfo->flags,
+                                      mtl_handle, &view_layout));
          view->planes[view_plane].sampled_gpu_resource_id =
             mtl_texture_get_gpu_resource_id(
                view->planes[view_plane].mtl_handle_sampled);

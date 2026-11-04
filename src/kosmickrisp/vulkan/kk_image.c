@@ -624,6 +624,7 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
               const VkImageCreateInfo *pCreateInfo)
 {
    image->writable_msaa = NULL;
+   image->wsi_opaque_sampled_view = NULL;
    vk_image_init(&dev->vk, &image->vk, pCreateInfo);
    image->application_usage = vk_image_usage_flags(pCreateInfo);
    if ((image->vk.external_handle_types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT) &&
@@ -726,6 +727,10 @@ static void
 kk_image_finish(struct kk_device *dev, struct kk_image *image,
                 const VkAllocationCallbacks *pAllocator)
 {
+   mtl_texture *wsi_view =
+      __atomic_load_n(&image->wsi_opaque_sampled_view, __ATOMIC_RELAXED);
+   if (wsi_view)
+      mtl_release(wsi_view);
    kk_writable_msaa_image_finish(dev, image);
    kk_descriptor_heap_image_finish(dev, image);
    kk_sparse_image_finish(dev, image);

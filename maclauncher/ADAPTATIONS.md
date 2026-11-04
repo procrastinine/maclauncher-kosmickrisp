@@ -972,9 +972,15 @@ Implementation: [kk_cmd_buffer.h](../src/kosmickrisp/vulkan/kk_cmd_buffer.h), [k
 
 `KK_PERF_TRACKING=1` enables per-device JSON interval records; `KK_PERF_TRACKING_LOG` selects the output file. Tracking is disabled by default. Stage durations are nested elapsed wall times and cannot be added into CPU utilization.
 
-`command_bo_allocate` measures attempts to allocate command-upload backing storage. `command_bo_reuse` counts backing buffers taken from a command pool, with zero duration. `execution_residency_commit` measures actual dirty execution-residency commits; unchanged submissions do not increment it. These counters do not measure root-table or dynamic-descriptor upload bytes.
+`command_bo_allocate` measures attempts to allocate command-upload backing storage. `command_bo_reuse` counts backing buffers taken from a command pool, with zero duration. `execution_residency_commit` measures actual dirty execution-residency commits; unchanged submissions do not increment it. These counters do not measure root-table or dynamic-descriptor upload bytes. `sampled_view_create` counts and times native sampled-view construction. `sampled_view_get` includes lookup and construction; these spans overlap on cache misses.
 
 Implementation: [kk_perf.c](../src/kosmickrisp/vulkan/kk_perf.c), [kk_cmd_pool.c](../src/kosmickrisp/vulkan/kk_cmd_pool.c), [kk_device.c](../src/kosmickrisp/vulkan/kk_device.c).
+
+### Opaque presentation source views
+
+Full-range sampled views of opaque 2D swapchain source images share an immutable Metal view when the image has one sample, mip and layer. Only original-format internal views with identity RGB, opaque alpha and no minimum-LOD clamp qualify. Each Vulkan view retains its own reference; image destruction releases the shared reference. Other sampled views use ordinary construction.
+
+Implementation: [kk_image_view.c](../src/kosmickrisp/vulkan/kk_image_view.c), [kk_image.h](../src/kosmickrisp/vulkan/kk_image.h), [kk_image.c](../src/kosmickrisp/vulkan/kk_image.c).
 
 ### Native depth/stencil state reuse
 
