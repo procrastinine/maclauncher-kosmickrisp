@@ -74,11 +74,11 @@ struct kk_view_layout;
 VkResult kk_standard_3d_raw_view(struct kk_device *,struct kk_image_view *,const struct kk_view_layout *,mtl_texture **);
 struct kk_queue;
 struct kk_cmd_buffer;
-bool kk_standard_3d_blit(struct kk_cmd_buffer *,const VkBlitImageInfo2 *);
-bool kk_standard_3d_clear(struct kk_cmd_buffer *,struct kk_image *,VkImageLayout,const VkClearColorValue *,uint32_t,const VkImageSubresourceRange *);
-bool kk_standard_3d_copy_buffer_to_image(struct kk_cmd_buffer *,const VkCopyBufferToImageInfo2 *);
-bool kk_standard_3d_copy_image_to_buffer(struct kk_cmd_buffer *,const VkCopyImageToBufferInfo2 *);
-bool kk_standard_3d_copy_image(struct kk_cmd_buffer *,const VkCopyImageInfo2 *);
+void kk_standard_3d_blit(struct kk_cmd_buffer *,const VkBlitImageInfo2 *);
+void kk_standard_3d_clear(struct kk_cmd_buffer *,struct kk_image *,VkImageLayout,const VkClearColorValue *,uint32_t,const VkImageSubresourceRange *);
+void kk_standard_3d_copy_buffer_to_image(struct kk_cmd_buffer *,const VkCopyBufferToImageInfo2 *);
+void kk_standard_3d_copy_image_to_buffer(struct kk_cmd_buffer *,const VkCopyImageToBufferInfo2 *);
+void kk_standard_3d_copy_image(struct kk_cmd_buffer *,const VkCopyImageInfo2 *);
 struct kk_rc_sampler;
 struct vk_queue_submit;
 /* Appended to the existing texel-buffer descriptor. Ordinary image

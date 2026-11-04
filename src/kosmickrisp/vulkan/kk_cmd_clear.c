@@ -141,7 +141,10 @@ kk_CmdClearColorImage(VkCommandBuffer commandBuffer, VkImage _image,
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_image, image, _image);
 
-   if (kk_standard_3d_clear(cmd, image, imageLayout, pColor, rangeCount, pRanges)) return;
+   if (unlikely(kk_image_is_standard_3d(image))) {
+      kk_standard_3d_clear(cmd, image, imageLayout, pColor, rangeCount, pRanges);
+      return;
+   }
 
    VkClearValue clear_value = {
       .color = *pColor,

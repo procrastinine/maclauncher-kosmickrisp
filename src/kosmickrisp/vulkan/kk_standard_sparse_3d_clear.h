@@ -57,17 +57,17 @@ kk_standard_3d_clear_pipeline(struct kk_device *dev,VkFormat format,
    ralloc_free(shader.nir);return result;
 }
 
-bool
+void
 kk_standard_3d_clear(struct kk_cmd_buffer *cmd,struct kk_image *image,
    VkImageLayout image_layout,const VkClearColorValue *color,uint32_t count,
    const VkImageSubresourceRange *ranges)
 {
-   if(!kk_standard_3d_copy_enabled(image))return false;
+   assert(kk_image_is_standard_3d(image));
    struct kk_device *dev=kk_cmd_buffer_device(cmd);
    VkPipelineLayout layout;VkPipeline pipeline;
    VkFormat raw=kk_standard_3d_copy_properties(image).color.view_format;
    VkResult result=kk_standard_3d_clear_pipeline(dev,raw,&layout,&pipeline);
-   if(result!=VK_SUCCESS){vk_command_buffer_set_error(&cmd->vk,result);return true;}
+   if(result!=VK_SUCCESS){vk_command_buffer_set_error(&cmd->vk,result);return;}
    uint32_t push[8]={0};util_format_pack_rgba(vk_format_to_pipe_format(image->vk.format),push+4,color,1);
    struct kk_standard_3d_meta_save save;
    kk_standard_3d_meta_begin(cmd,&save,"meta:sparse volume clear");
@@ -95,5 +95,5 @@ kk_standard_3d_clear(struct kk_cmd_buffer *cmd,struct kk_image *image,
       disp->CmdDispatch(handle,DIV_ROUND_UP(extent.width,8),DIV_ROUND_UP(extent.height,8),extent.depth);
    }
    kk_standard_3d_meta_end(cmd,&save);
-   return true;
+   return;
 }

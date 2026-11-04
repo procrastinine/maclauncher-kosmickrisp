@@ -1464,13 +1464,10 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
       memset(storage.cpu, 0, statistics_bytes + count_bytes);
       scratch = storage.gpu;
    }
+   params.prims_generated_counter_secondary = gfx->xfb_generated_counters;
    for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; ++i) {
       params.prims_generated_counter[i] = gfx->primitives_query[i];
-      if (gfx->xfb_query[i]) {
-         params.xfb_prims_generated_counter[i] = gfx->xfb_query[i];
-         params.prims_generated_counter_secondary[i] =
-            gfx->xfb_query[i] + sizeof(uint64_t);
-      }
+      params.xfb_prims_generated_counter[i] = gfx->xfb_query[i];
       if (gfx->xfb_enabled) {
          params.xfb_base_original[i] = gfx->xfb[i].addr;
          params.xfb_size[i] = gfx->xfb[i].range;
@@ -1656,13 +1653,15 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       desc->root_dirty = true;
    }
 
-   const struct kk_shader *gs = kk_geometry_shader(cmd);
-   bool rast_discard = dyn->rs.rasterizer_discard_enable ||
-      (dyn->rs.rasterization_stream != 0 && !(gs && gs->info.geometry.multistream));
    if (IS_DIRTY(RS_RASTERIZER_DISCARD_ENABLE) ||
        IS_DIRTY(RS_RASTERIZATION_STREAM) || (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) ||
        IS_SHADER_DIRTY(GEOMETRY)) {
-      if (rast_discard) {
+      const struct kk_shader *gs = kk_geometry_shader(cmd);
+      gfx->rasterizer_discard = dyn->rs.rasterizer_discard_enable ||
+         (dyn->rs.rasterization_stream != 0 &&
+          !(gs && gs->info.geometry.multistream));
+      gfx->per_draw_data.rasterization_stream = dyn->rs.rasterization_stream;
+      if (gfx->rasterizer_discard) {
          set_empty_scissor(enc);
       } else {
          /* Enforce setting the correct scissors */
@@ -1687,7 +1686,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
    }
 
    /* We enable raster discard by setting scissor to size (0, 0) */
-   if (!(rast_discard || gfx->is_cull_front_and_back) &&
+   if (!(gfx->rasterizer_discard || gfx->is_cull_front_and_back) &&
        (IS_DIRTY(VP_VIEWPORT_COUNT) || IS_DIRTY(VP_VIEWPORTS) ||
         IS_DIRTY(VP_SCISSOR_COUNT) || IS_DIRTY(VP_SCISSORS) ||
         IS_DIRTY(RS_DEPTH_CLAMP_ENABLE) || IS_DIRTY(RS_DEPTH_CLIP_ENABLE)))
@@ -2381,7 +2380,6 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
 
       const struct vk_dynamic_graphics_state *dyn =
          &cmd->vk.dynamic_graphics_state;
-      gfx->per_draw_data.rasterization_stream = dyn->rs.rasterization_stream;
       gfx->per_draw_data.provoking_last =
          dyn->rs.provoking_vertex == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
    }

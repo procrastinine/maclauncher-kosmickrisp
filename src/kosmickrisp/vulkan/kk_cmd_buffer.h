@@ -237,6 +237,7 @@ struct kk_graphics_state {
    struct kk_mesh_retained_consumer mesh_retained_consumer;
    bool polygon_points;
    bool conservative;
+   bool rasterizer_discard;
    uint64_t polygon_capture;
    struct kk_ptr interlock_capture;
    uint32_t interlock_source_view;
@@ -252,6 +253,7 @@ struct kk_graphics_state {
    struct kk_addr_range xfb[POLY_MAX_SO_BUFFERS];
    uint64_t xfb_offsets;
    uint64_t xfb_query[POLY_MAX_VERTEX_STREAMS];
+   uint64_t xfb_generated_counters;
    uint64_t primitives_query[POLY_MAX_VERTEX_STREAMS];
    bool xfb_enabled;
 

@@ -514,7 +514,8 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
    if (mem->map)
       kk_bo_unmap(dev, mem->bo, mem->map, false);
 
-   kk_standard_3d_memory_finish(dev, mem);
+   if (mem->standard_3d)
+      kk_standard_3d_memory_finish(dev, mem);
    kk_device_memory_set_priority(dev, mem, 0.0f);
    if (mem->bo)
       kk_destroy_bo(dev, mem->bo);

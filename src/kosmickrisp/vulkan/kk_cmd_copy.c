@@ -78,7 +78,10 @@ kk_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_buffer, buffer, pCopyBufferToImageInfo->srcBuffer);
    VK_FROM_HANDLE(kk_image, image, pCopyBufferToImageInfo->dstImage);
-   if (kk_standard_3d_copy_buffer_to_image(cmd, pCopyBufferToImageInfo)) return;
+   if (unlikely(kk_image_is_standard_3d(image))) {
+      kk_standard_3d_copy_buffer_to_image(cmd, pCopyBufferToImageInfo);
+      return;
+   }
 
    if (kk_format_is_rgb32(vk_format_to_pipe_format(image->vk.format))) {
       for (uint32_t r = 0; r < pCopyBufferToImageInfo->regionCount; ++r)
@@ -115,7 +118,10 @@ kk_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(kk_image, image, pCopyImageToBufferInfo->srcImage);
    VK_FROM_HANDLE(kk_buffer, buffer, pCopyImageToBufferInfo->dstBuffer);
-   if (kk_standard_3d_copy_image_to_buffer(cmd, pCopyImageToBufferInfo)) return;
+   if (unlikely(kk_image_is_standard_3d(image))) {
+      kk_standard_3d_copy_image_to_buffer(cmd, pCopyImageToBufferInfo);
+      return;
+   }
 
    if (kk_format_is_rgb32(vk_format_to_pipe_format(image->vk.format))) {
       for (uint32_t r = 0; r < pCopyImageToBufferInfo->regionCount; ++r)
@@ -361,7 +367,10 @@ kk_CmdCopyImage2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_image, src, pCopyImageInfo->srcImage);
    VK_FROM_HANDLE(kk_image, dst, pCopyImageInfo->dstImage);
 
-   if (kk_standard_3d_copy_image(cmd, pCopyImageInfo)) return;
+   if (unlikely(kk_image_is_standard_3d(src) || kk_image_is_standard_3d(dst))) {
+      kk_standard_3d_copy_image(cmd, pCopyImageInfo);
+      return;
+   }
    if (kk_writable_msaa_copy_image(cmd, pCopyImageInfo))
       return;
 

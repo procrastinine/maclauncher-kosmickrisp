@@ -258,7 +258,8 @@ struct poly_geometry_params {
 
    /* Address of the primitives generated counters */
    DEVICE(uint64_t) prims_generated_counter[POLY_MAX_VERTEX_STREAMS];
-   DEVICE(uint64_t) prims_generated_counter_secondary[POLY_MAX_VERTEX_STREAMS];
+   /* Optional immutable table of additional report destination addresses. */
+   DEVICE(uint64_t) prims_generated_counter_secondary;
    DEVICE(uint64_t) xfb_prims_generated_counter[POLY_MAX_VERTEX_STREAMS];
    DEVICE(uint) xfb_overflow[POLY_MAX_VERTEX_STREAMS];
    DEVICE(uint) xfb_any_overflow;
@@ -322,8 +323,8 @@ struct poly_geometry_params {
    uint32_t capture_pad;
    uint64_t capture;
 } PACKED;
-static_assert(sizeof(struct poly_geometry_params) == 90 * 4,
-              "struct poly_geometry_params must be 90 words");
+static_assert(sizeof(struct poly_geometry_params) == 84 * 4,
+              "struct poly_geometry_params must be 84 words");
 
 static inline void
 poly_geometry_params_init(struct poly_geometry_params *p,

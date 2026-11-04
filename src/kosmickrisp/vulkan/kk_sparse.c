@@ -519,7 +519,8 @@ kk_sparse_image_finish(struct kk_device *dev, struct kk_image *image)
    if ((image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&
        image->planes[0].mtl_handle)
       kk_sparse_residency(dev, image->planes[0].mtl_handle, false);
-   kk_standard_3d_image_finish(dev, image);
+   if (image->sparse->standard_3d)
+      kk_standard_3d_image_finish(dev, image);
    free(image->sparse); image->sparse = NULL;
 }
 
@@ -565,8 +566,10 @@ kk_sparse_image_view_query(struct kk_device *dev, struct kk_image_view *view,
       .base_lod = view->vk.base_mip_level, .level_count = view->vk.level_count,
       .view_type = view->vk.view_type,
    };
-   VkResult logical = kk_standard_3d_query_initialize(view, storage, layout);
-   if (logical != VK_SUCCESS) return logical;
+   if (kk_image_is_standard_3d(image)) {
+      VkResult logical = kk_standard_3d_query_initialize(view, storage, layout);
+      if (logical != VK_SUCCESS) return logical;
+   }
    if (storage) {
       /* The sliced-3D lowering reads the same descriptor prefix after the
        * sparse load has selected this parent view. Keep its range at +8. */
@@ -685,7 +688,8 @@ void
 kk_sparse_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
 {
    if (!view->sparse) return;
-   kk_standard_3d_query_finish(dev, view);
+   if (view->sparse->standard_3d)
+      kk_standard_3d_query_finish(dev, view);
    for (unsigned i = 0; i < 2; ++i) {
       mtl_release(view->sparse->query[i]);
       mtl_release(view->sparse->alias_query[i]);

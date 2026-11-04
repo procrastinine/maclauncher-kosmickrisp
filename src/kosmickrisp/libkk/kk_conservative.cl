@@ -136,10 +136,13 @@ libkk_conservative_prepare(global struct poly_geometry_params *geometry,
       global uint4 *values = poly_heap_alloc(heap, 3 * slots * 16, 16);
       for (uint corner = 0; corner < 3; ++corner) {
          global uint4 *input = polygon_vertex(p, invocation, stream, vertices[corner]);
-         for (uint location = VARYING_SLOT_VAR0; location <= VARYING_SLOT_VAR31; ++location) {
-            if (!(config->canonical_locations & (1ul << location)))
-               continue;
-            uint index = location - VARYING_SLOT_VAR0;
+         /* Keep the canonical ABI stride, but visit only locations the final
+          * fragment interface actually consumes. */
+         uint locations = config->canonical_locations >> VARYING_SLOT_VAR0;
+         while (locations) {
+            uint index = ctz(locations);
+            uint location = VARYING_SLOT_VAR0 + index;
+            locations &= locations - 1;
             uint4 value = p->outputs & (1ul << location) ? input[polygon_slot(p, location)] : (uint4)(0);
             uint mask = (config->canonical_provoking_components[index / 16] >> ((index % 16) * 4)) & 15;
             if (degenerate && mask && (p->outputs & (1ul << location)))

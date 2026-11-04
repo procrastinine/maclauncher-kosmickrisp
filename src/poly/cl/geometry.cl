@@ -316,8 +316,12 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
 
       if (p->prims_generated_counter[i])
          *(p->prims_generated_counter[i]) += in_prims[i];
-      if (p->prims_generated_counter_secondary[i])
-         *(p->prims_generated_counter_secondary[i]) += in_prims[i];
+      if (p->prims_generated_counter_secondary) {
+         global uint64_t *secondary = (global uint64_t *)(uintptr_t)
+            p->prims_generated_counter_secondary[i];
+         if (secondary)
+            *secondary += in_prims[i];
+      }
    }
 
    uint4 prims = in_prims;

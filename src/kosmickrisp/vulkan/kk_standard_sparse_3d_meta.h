@@ -30,11 +30,6 @@ kk_standard_3d_meta_end(struct kk_cmd_buffer *cmd,
 }
 
 
-static bool
-kk_standard_3d_copy_enabled(const struct kk_image *image)
-{
-   return image->sparse && image->sparse->standard_3d;
-}
 
 static struct vk_meta_copy_image_properties
 kk_standard_3d_copy_properties(const struct kk_image *image)
@@ -53,42 +48,40 @@ kk_standard_3d_copy_properties(const struct kk_image *image)
    };
 }
 
-bool
+void
 kk_standard_3d_copy_buffer_to_image(struct kk_cmd_buffer *cmd,
    const VkCopyBufferToImageInfo2 *info)
 {
    VK_FROM_HANDLE(kk_image, image, info->dstImage);
-   if (!kk_standard_3d_copy_enabled(image)) return false;
+   assert(kk_image_is_standard_3d(image));
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    struct kk_standard_3d_meta_save save;
    kk_standard_3d_meta_begin(cmd, &save, "meta:sparse volume upload");
    const struct vk_meta_copy_image_properties props = kk_standard_3d_copy_properties(image);
    vk_meta_copy_buffer_to_image(&cmd->vk, &dev->meta, info, &props, VK_PIPELINE_BIND_POINT_COMPUTE);
    kk_standard_3d_meta_end(cmd, &save);
-   return true;
 }
 
-bool
+void
 kk_standard_3d_copy_image_to_buffer(struct kk_cmd_buffer *cmd,
    const VkCopyImageToBufferInfo2 *info)
 {
    VK_FROM_HANDLE(kk_image, image, info->srcImage);
-   if (!kk_standard_3d_copy_enabled(image)) return false;
+   assert(kk_image_is_standard_3d(image));
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    struct kk_standard_3d_meta_save save;
    kk_standard_3d_meta_begin(cmd, &save, "meta:sparse volume download");
    const struct vk_meta_copy_image_properties props = kk_standard_3d_copy_properties(image);
    vk_meta_copy_image_to_buffer(&cmd->vk, &dev->meta, info, &props);
    kk_standard_3d_meta_end(cmd, &save);
-   return true;
 }
 
-bool
+void
 kk_standard_3d_copy_image(struct kk_cmd_buffer *cmd, const VkCopyImageInfo2 *info)
 {
    VK_FROM_HANDLE(kk_image, src, info->srcImage);
    VK_FROM_HANDLE(kk_image, dst, info->dstImage);
-   if (!kk_standard_3d_copy_enabled(src) && !kk_standard_3d_copy_enabled(dst)) return false;
+   assert(kk_image_is_standard_3d(src) || kk_image_is_standard_3d(dst));
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
    struct kk_standard_3d_meta_save save;
    kk_standard_3d_meta_begin(cmd, &save, "meta:sparse volume copy");
@@ -96,7 +89,6 @@ kk_standard_3d_copy_image(struct kk_cmd_buffer *cmd, const VkCopyImageInfo2 *inf
    const struct vk_meta_copy_image_properties dp = kk_standard_3d_copy_properties(dst);
    vk_meta_copy_image(&cmd->vk, &dev->meta, info, &sp, &dp, VK_PIPELINE_BIND_POINT_COMPUTE);
    kk_standard_3d_meta_end(cmd, &save);
-   return true;
 }
 
 #include "kk_standard_sparse_3d_clear.h"

@@ -450,6 +450,22 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
    }
 }
 
+/* Snapshot destinations only when the active query set changes. Older draws
+ * retain their immutable table through the command pool, including after End. */
+static void
+kk_update_xfb_generated_reports(struct kk_cmd_buffer *cmd)
+{
+   uint64_t reports[POLY_MAX_VERTEX_STREAMS] = {0};
+   bool active = false;
+   for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; i++) {
+      if (!cmd->state.gfx.xfb_query[i]) continue;
+      reports[i] = cmd->state.gfx.xfb_query[i] + sizeof(uint64_t);
+      active = true;
+   }
+   cmd->state.gfx.xfb_generated_counters = active ?
+      kk_pool_upload(cmd, reports, sizeof(reports), 8).gpu : 0;
+}
+
 static void
 kk_begin_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
                uint32_t query, VkQueryControlFlags flags, uint32_t index)
@@ -475,6 +491,7 @@ kk_begin_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
    }
    if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
       cmd->state.gfx.xfb_query[index] = kk_query_report_addr(kk_cmd_buffer_device(cmd), pool, query);
+      kk_update_xfb_generated_reports(cmd);
       return;
    }
    if (pool->vk.query_type == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {
@@ -504,6 +521,7 @@ kk_end_query(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
       cmd->state.gfx.mesh_primitives_query = 0;
    } else if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
       cmd->state.gfx.xfb_query[index] = 0;
+      kk_update_xfb_generated_reports(cmd);
    } else if (pool->vk.query_type == VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT) {
       cmd->state.gfx.primitives_query[index] = 0;
    } else {

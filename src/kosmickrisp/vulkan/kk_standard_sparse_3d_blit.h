@@ -83,19 +83,19 @@ kk_standard_3d_blit_pipeline(struct kk_device *dev,VkImageType source,VkFormat f
    ralloc_free(shader.nir);return result;
 }
 
-bool
+void
 kk_standard_3d_blit(struct kk_cmd_buffer *cmd,const VkBlitImageInfo2 *info)
 {
    VK_FROM_HANDLE(kk_image,dst,info->dstImage);
-   if(!kk_standard_3d_copy_enabled(dst))return false;
+   assert(kk_image_is_standard_3d(dst));
    VK_FROM_HANDLE(kk_image,src,info->srcImage);
    struct kk_device *dev=kk_cmd_buffer_device(cmd);
    VkPipelineLayout layout;VkPipeline pipeline;VkSampler sampler;
    VkFormat raw=kk_standard_3d_copy_properties(dst).color.view_format;
    VkResult result=kk_standard_3d_blit_pipeline(dev,src->vk.image_type,dst->vk.format,raw,&layout,&pipeline);
-   if(result!=VK_SUCCESS){vk_command_buffer_set_error(&cmd->vk,result);return true;}
+   if(result!=VK_SUCCESS){vk_command_buffer_set_error(&cmd->vk,result);return;}
    result=vk_meta_get_color_blit_sampler(&dev->vk,&dev->meta,info->filter,&sampler);
-   if(result!=VK_SUCCESS){vk_command_buffer_set_error(&cmd->vk,result);return true;}
+   if(result!=VK_SUCCESS){vk_command_buffer_set_error(&cmd->vk,result);return;}
    struct kk_standard_3d_meta_save save;kk_standard_3d_meta_begin(cmd,&save,"meta:sparse volume blit");
    const struct vk_device_dispatch_table *disp=&dev->vk.dispatch_table;VkCommandBuffer handle=kk_cmd_buffer_to_handle(cmd);
    disp->CmdBindPipeline(handle,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);
@@ -142,5 +142,5 @@ kk_standard_3d_blit(struct kk_cmd_buffer *cmd,const VkBlitImageInfo2 *info)
       disp->CmdPushConstants(handle,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(push),&push);
       disp->CmdDispatch(handle,DIV_ROUND_UP(push.extent[0],8),DIV_ROUND_UP(push.extent[1],8),push.extent[2]);
    }
-   kk_standard_3d_meta_end(cmd,&save);return true;
+   kk_standard_3d_meta_end(cmd,&save);return;
 }

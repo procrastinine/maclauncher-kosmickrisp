@@ -66,6 +66,13 @@ struct kk_image {
    struct kk_image_plane planes[3];
 };
 
+/* Resource classification is immutable after successful image creation. */
+static inline bool
+kk_image_is_standard_3d(const struct kk_image *image)
+{
+   return image->sparse && image->sparse->standard_3d;
+}
+
 mtl_texture *kk_image_plane_render_base(const struct kk_image_plane *);
 bool kk_image_plane_is_committed(const struct kk_image_plane *);
 

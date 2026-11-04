@@ -265,7 +265,11 @@ kk_CmdBlitImage2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
 
-   if (kk_standard_3d_blit(cmd,pBlitImageInfo))return;
+   VK_FROM_HANDLE(kk_image, dst, pBlitImageInfo->dstImage);
+   if (unlikely(kk_image_is_standard_3d(dst))) {
+      kk_standard_3d_blit(cmd, pBlitImageInfo);
+      return;
+   }
    struct kk_meta_save save;
    kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS,
                  "meta:vkCmdBlitImage2");
