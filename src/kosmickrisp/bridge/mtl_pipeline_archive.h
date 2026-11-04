@@ -10,6 +10,8 @@
 #include <pthread.h>
 #include <pthread/qos.h>
 #include <time.h>
+#include <errno.h>
+#include <signal.h>
 #include <unistd.h>
 
 static char kk_archive_association, kk_library_hint_association;
@@ -183,10 +185,15 @@ kk_archive_now(void)
    return (uint64_t)value.tv_sec * 1000000000ull + value.tv_nsec;
 }
 
+/* Temporary archive files carry the owning process ID. A process that exits
+ * without releasing its open archives leaves their files behind; the next
+ * process with an archive removes files whose owner has exited, and unowned
+ * names from earlier builds once they are a day old. */
 static NSString *
 kk_archive_temporary_path(void)
 {
-   NSString *pattern = [NSTemporaryDirectory() stringByAppendingPathComponent:@"kk-metal-XXXXXX"];
+   NSString *pattern = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"kk-metal-%d-XXXXXX", (int)getpid()]];
    const char *filesystem_name = pattern.fileSystemRepresentation;
    if (!filesystem_name) return nil;
    char *name = strdup(filesystem_name);
@@ -196,6 +203,30 @@ kk_archive_temporary_path(void)
    if (fd >= 0) close(fd);
    free(name);
    return path;
+}
+
+static void
+kk_archive_remove_stale_temporaries(void)
+{
+   NSString *directory = NSTemporaryDirectory();
+   NSFileManager *files = [NSFileManager defaultManager];
+   NSDate *day = [NSDate dateWithTimeIntervalSinceNow:-86400];
+   for (NSString *name in [files contentsOfDirectoryAtPath:directory error:NULL]) {
+      if (![name hasPrefix:@"kk-metal-"]) continue;
+      NSArray *parts = [[name substringFromIndex:9] componentsSeparatedByString:@"-"];
+      NSString *path = [directory stringByAppendingPathComponent:name];
+      if (parts.count == 2) {
+         pid_t owner = (pid_t)[parts[0] intValue];
+         if (owner <= 0 || owner == getpid() || !kill(owner, 0) || errno != ESRCH)
+            continue;
+      } else if (parts.count == 1) {
+         NSDate *modified = [files attributesOfItemAtPath:path error:NULL].fileModificationDate;
+         if (!modified || [modified compare:day] != NSOrderedAscending) continue;
+      } else {
+         continue;
+      }
+      [files removeItemAtPath:path error:NULL];
+   }
 }
 
 /* Readers own the archive and backing file across concurrent LRU eviction. */
@@ -219,6 +250,7 @@ kk_archive_temporary_path(void)
 @public
    NSData *identity;
    KKLoadedArchive *resident;
+   size_t bytes; /* Size of the resident archive file. */
    bool unavailable;
 }
 - (id)initWithIdentity:(NSData *)key;
@@ -238,8 +270,14 @@ kk_archive_temporary_path(void)
 }
 @end
 
-/* Bounds cached native objects, not persistent or in-flight coverage. */
-#define KK_RESIDENT_ARCHIVE_LIMIT 8
+/* Bounds open archives and their temporary files by size, with a count
+ * backstop for native objects. Pieces vary from one pipeline (an idle
+ * checkpoint) to many, so a count alone evicted pieces that later lookups
+ * read, wrote and opened again. Persistent coverage is unaffected. */
+#ifndef KK_RESIDENT_ARCHIVE_BYTES
+#define KK_RESIDENT_ARCHIVE_BYTES (256u * 1024 * 1024)
+#endif
+#define KK_RESIDENT_ARCHIVE_LIMIT 256
 
 /* In-process MTLLibrary cache keyed by exact MSL source and compile options.
  * Bounds the native object count and retained source characters (MSL is
@@ -285,6 +323,7 @@ kk_archive_temporary_path(void)
    NSMutableDictionary *pending_hints;
    NSMutableDictionary *piece_by_identity;
    NSMutableArray *resident_pieces;
+   size_t resident_bytes;
    NSMutableArray *cached_libraries;
    size_t cached_source_bytes;
    /* Non-capturing compiler for pipeline creation during a snapshot, and the
@@ -349,6 +388,9 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
       available = operations.load_piece && operations.store_piece &&
          (!operations.available || operations.available(cache_data));
       if (!available) return;
+      dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+         @autoreleasepool { kk_archive_remove_stale_temporaries(); }
+      });
       size_t length = 0;
       void *bytes = operations.load(cache_data, &length);
       if (!bytes) return;
@@ -431,8 +473,10 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
             archive_opened = true;
             opened->path = [path copy];
          }
-         if (opened->archive) piece->resident = opened;
-         else {
+         if (opened->archive) {
+            piece->resident = opened;
+            piece->bytes = data.length;
+         } else {
             [opened release];
             if (path) [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
             piece->unavailable = true; /* Disk eviction/corruption is a miss. */
@@ -440,7 +484,7 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
       }
       result = [piece->resident retain];
    }
-   KKArchivePiece *retired = nil;
+   NSMutableArray *retired = nil;
    if (piece_read) @synchronized(self) {
       stats.piece_loads++;
       stats.piece_load_ns += load_ns;
@@ -451,20 +495,29 @@ kk_archive_add_hint(NSMutableDictionary *directory, NSData *hint, NSData *identi
    }
    if (result) @synchronized(self) {
       stats.archive_loaded = true;
-      [resident_pieces removeObjectIdenticalTo:piece];
+      if ([resident_pieces indexOfObjectIdenticalTo:piece] == NSNotFound)
+         resident_bytes += piece->bytes;
+      else
+         [resident_pieces removeObjectIdenticalTo:piece];
       [resident_pieces addObject:piece];
-      if (resident_pieces.count > KK_RESIDENT_ARCHIVE_LIMIT) {
-         retired = [resident_pieces[0] retain];
+      /* Least recently used first; the piece just used always stays. */
+      while (resident_pieces.count > 1 &&
+             (resident_pieces.count > KK_RESIDENT_ARCHIVE_LIMIT ||
+              resident_bytes > KK_RESIDENT_ARCHIVE_BYTES)) {
+         KKArchivePiece *oldest = resident_pieces[0];
+         if (!retired) retired = [[NSMutableArray alloc] init];
+         [retired addObject:oldest];
+         resident_bytes -= oldest->bytes;
          [resident_pieces removeObjectAtIndex:0];
       }
    }
-   if (retired) {
-      @synchronized(retired) {
-         [retired->resident release];
-         retired->resident = nil;
+   for (KKArchivePiece *old in retired) {
+      @synchronized(old) {
+         [old->resident release];
+         old->resident = nil;
       }
-      [retired release];
    }
+   [retired release];
    return [result autorelease];
 }
 
