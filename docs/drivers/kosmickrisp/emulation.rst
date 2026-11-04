@@ -15,10 +15,10 @@
    * - ``denorm_preserve``
      - Gradual underflow for requested floating-point preservation modes.
        Controls: ``shaderDenormPreserveFloat16``, ``shaderDenormPreserveFloat32``, ``shaderDenormPreserveFloat64``.
-     - mixed native / software. FP16 uses native half arithmetic. Requested FP32 add, multiply, FMA and divide use native operations with subnormal-operand and result guards, with exact software handling in out-of-line cold functions; other preservation operations retain their numerical helpers. FP64 uses software binary64.
+     - mixed native / software. Requested FP32 arithmetic uses native operations with an exponent/mantissa subnormal guard and a flushed-underflow check. Ordinary zero and normal results avoid integer repair; cancellation near the underflow boundary retains cold repair. Comparisons use native predicates unless an operand is subnormal. FP64 remains software.
      - No Apple family
-     - Off
-     - Requested preservation still runs integer repair for zero and subnormal results and integer ordering for comparisons; shader model reporting follows the disabled capability.
+     - On
+     - vkd3d-proton requires both FP32 denorm controls for SM 6.2 and higher; only shaders requesting the modes pay the cost, and DXC default fp32 denorm mode any requests neither.
      - Without either FP32 denorm control, vkd3d-proton limits non-NVIDIA D3D12 devices to SM 6.1; SM 6.2 and higher are unavailable.
      - ``performance,+denorm_preserve``
    * - ``denorm_flush``

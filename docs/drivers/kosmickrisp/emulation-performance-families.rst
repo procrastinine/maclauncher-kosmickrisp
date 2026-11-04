@@ -11,12 +11,12 @@
      - Apple11
      - Implemented path and cost
    * - ``denorm_preserve``
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off
-     - Off Apple7-11: e7e8d449464 isolates add/mul/FMA/div repair, but normal operations still classify operands and result, zero/subnormal results call integer repair, and comparisons/minmax use integer helpers. Apple11 native denorm hardware is not yet selected by this compiler.
+     - On
+     - On
+     - On
+     - On
+     - On
+     - On Apple7-11: only explicitly requested preservation emits guards; ordinary zeros and normal arithmetic use native operations, true or possibly flushed subnormals use cold repair, and comparisons use native predicates unless an operand is subnormal.
    * - ``denorm_flush``
      - On
      - On
