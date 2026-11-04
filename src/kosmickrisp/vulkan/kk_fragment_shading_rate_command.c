@@ -49,8 +49,6 @@ kk_vrs_cmd_encode_phases(struct kk_cmd_buffer *cmd,
    if (!kk_cmd_depth_stencil_variant(snapshot, KK_DEPTH_STENCIL_BYPASS))
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-   const enum mtl_visibility_result_mode visibility = cmd->state.gfx.occlusion.mode;
-   const size_t visibility_offset = cmd->state.gfx.occlusion.index * sizeof(uint64_t);
    bool early = mtl_vrs_pipelines_early_tests(pipelines);
    for (enum mtl_vrs_phase phase = MTL_VRS_COVERAGE; phase <= MTL_VRS_REPLAY; phase++) {
       if (!kk_vrs_snapshot_is_live(snapshot)) {
@@ -65,13 +63,6 @@ kk_vrs_cmd_encode_phases(struct kk_cmd_buffer *cmd,
          commit ? KK_DEPTH_STENCIL_ORIGINAL : KK_DEPTH_STENCIL_BYPASS);
       if (result != VK_SUCCESS)
          goto restore;
-      /* Count passing samples at the same phase that commits DS. Early-test
-       * queries precede application kill/A2C; late queries include the final
-       * fine output mask. Internal body/other raster draws never contribute.
-       * Leave the logical query state and query-free native path unchanged. */
-      if (visibility != MTL_VISIBILITY_RESULT_MODE_DISABLED)
-         mtl_set_visibility_result_mode(snapshot->encoder,
-            commit ? visibility : MTL_VISIBILITY_RESULT_MODE_DISABLED, visibility_offset);
       result = draw(cmd, pipelines, context, phase, data);
       if (result != VK_SUCCESS)
          goto restore;
@@ -84,8 +75,6 @@ restore:
    } else {
       VkResult restored = kk_cmd_bind_depth_stencil(snapshot, KK_DEPTH_STENCIL_ORIGINAL);
       restore_raster(snapshot->encoder, data);
-      if (visibility != MTL_VISIBILITY_RESULT_MODE_DISABLED)
-         mtl_set_visibility_result_mode(snapshot->encoder, visibility, visibility_offset);
       if (result == VK_SUCCESS)
          result = restored;
    }

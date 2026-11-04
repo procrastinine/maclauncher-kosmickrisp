@@ -2424,7 +2424,7 @@ kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
                        const struct vk_shader_compile_info *info,
                        kk_feature_key features, nir_shader **retained)
 {
-   bool callable = kk_nir_vrs_split_application(fs);
+   bool callable = retained && dev->vrs && kk_nir_vrs_split_application(fs);
    kk_lower_fs(dev, fs, state);
    kk_finish_nir(dev, fs, info ? info->robustness : &rs_none,
       info ? info->set_layout_count : 0, info ? info->set_layouts : NULL, features);
@@ -2434,8 +2434,10 @@ kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
                  "retained embedded source uses portable runtime root bindings");
    if (retained && dev->vrs && callable)
       *retained = nir_shader_clone(NULL, fs);
-   kk_nir_vrs_flatten(fs);
-   kk_nir_vrs_lower_fine_rate(fs);
+   if (callable)
+      kk_nir_vrs_flatten(fs);
+   if (dev->vrs)
+      kk_nir_vrs_lower_fine_rate(fs);
    nir_opts(fs, NULL);
    nir_shader_gather_info(fs, nir_shader_get_entrypoint(fs));
 }
@@ -2476,8 +2478,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    uint32_t push_size = 0;
    uint32_t heap_push_size = 0;
    nir_shader *nir_shaders[shader_count + 2u];
-   nir_shader *vrs_sources[shader_count + 2u];
-   memset(vrs_sources, 0, sizeof(vrs_sources));
+   nir_shader *retained_fs = NULL;
    nir_shader *fs_to_finish = NULL;
    struct kk_shader *shaders[shader_count + 2u];
 
@@ -2732,7 +2733,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          if (infos[j].stage == MESA_SHADER_FRAGMENT) info = &infos[j];
       /* Main and native alternatives share the same fine epilogue and
        * descriptor finishing; only the main program retains VRS source. */
-      kk_finish_fragment_nir(dev, fs, state, info, features, &vrs_sources[i]);
+      kk_finish_fragment_nir(dev, fs, state, info, features, &retained_fs);
    }
 
    nir_shader *conservative_fs = kk_conservative_possible(state) &&
@@ -2761,18 +2762,16 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    if (per_vertex_map.out_of_slots) {
       for (uint32_t i = 0; i < total_shaders; i++) {
          ralloc_free(nir_shaders[i]);
-         ralloc_free(vrs_sources[i]);
       }
+      ralloc_free(retained_fs);
       memset(shaders_out, 0, shader_count * sizeof(*shaders_out));
       return vk_errorf(dev, VK_ERROR_UNKNOWN,
                        "Out of varying slots for barycentric emulation");
    }
 
-   for (unsigned i = 0; i < total_shaders; i++) {
-      if (vrs_sources[i] && per_vertex_map.active) {
-         struct kk_per_vertex_map retained_map = per_vertex_map;
-         kk_nir_apply_fs_per_vertex_map(vrs_sources[i], &retained_map);
-      }
+   if (retained_fs && per_vertex_map.active) {
+      struct kk_per_vertex_map retained_map = per_vertex_map;
+      kk_nir_apply_fs_per_vertex_map(retained_fs, &retained_map);
    }
    const struct kk_compile_options compile_options = {
       .pixel_envelope = pixel_envelope,
@@ -2787,8 +2786,10 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    for (uint32_t i = 0; i < total_shaders; i++) {
       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
       struct kk_compile_options stage_options = compile_options;
-      stage_options.vrs_source = vrs_sources[i];
-      vrs_sources[i] = NULL;
+      if (nir_shaders[i]->info.stage == MESA_SHADER_FRAGMENT) {
+         stage_options.vrs_source = retained_fs;
+         retained_fs = NULL;
+      }
       result =
          kk_compile_shader(dev, nir_shaders[i], prev_stage, vertex_robustness,
                            state, &stage_options, pAllocator, &shaders[i]);
@@ -2813,8 +2814,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          /* Clean up all the NIR after this point */
          for (uint32_t j = i + 1; j < total_shaders; j++) {
             ralloc_free(nir_shaders[j]);
-            ralloc_free(vrs_sources[j]);
          }
+         ralloc_free(retained_fs);
 
          ralloc_free(native_pair[0]);
       ralloc_free(native_pair[1]);
