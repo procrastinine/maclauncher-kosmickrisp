@@ -341,7 +341,15 @@ libkk_polygon_output_setup(global struct poly_geometry_params *geometry,
    /* Extra final slot carries the original polygon's facing to the FS. */
    bool geometry_stipple = p->line_stipple_flags & KK_LINE_STIPPLE_GEOMETRY;
    uint packet_stride = p->vertex_stride + 16 + (geometry_stipple ? 16 : 0);
-   p->output = (uintptr_t)poly_heap_alloc(heap, count * packet_stride, 16);
+   uint64_t output = poly_heap_try_alloc(heap, poly_heap_bytes(count, packet_stride), 16);
+   /* On overflow, cover no primitives: the output pass and the retained
+    * draw read clip_grid[0], and the count is reused parameter memory. */
+   if (output == POLY_HEAP_PTR_FAILED) {
+      p->clip_grid[0] = 0;
+      p->draw[0] = 0;
+      return;
+   }
+   p->output = output;
    p->draw[0] = kk_poly_retained_vertex(count, p->polygon_mode, p->line_expand,
       p->line_mode, p->line_width, geometry_stipple, false);
 }

@@ -204,7 +204,16 @@ libkk_conservative_output_setup(global struct poly_geometry_params *geometry,
    global struct poly_geometry_capture *p = polygon_capture(geometry);
    uint n = p->clip_grid[0];
    uint count = n ? ((global uint *)p->clip_counts)[n - 1] : 0;
-   p->output = (uintptr_t)poly_heap_alloc(heap, count * sizeof(struct kk_conservative_span), 8);
+   uint64_t output = poly_heap_try_alloc(heap,
+      poly_heap_bytes(count, sizeof(struct kk_conservative_span)), 8);
+   /* On overflow, cover no primitives: the output pass and the retained
+    * draw read clip_grid[0], and the count is reused parameter memory. */
+   if (output == POLY_HEAP_PTR_FAILED) {
+      p->clip_grid[0] = 0;
+      p->draw[0] = 0;
+      return;
+   }
+   p->output = output;
    p->draw[0] = count * 6;
 }
 
