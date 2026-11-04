@@ -19,11 +19,15 @@ mtl_texture_get_info(mtl_texture *texture, struct mtl_texture_info *info)
 {
    @autoreleasepool {
       id<MTLTexture> tex = (id<MTLTexture>)texture;
+      id<MTLTexture> base = tex;
+      while (base.parentTexture)
+         base = base.parentTexture;
       *info = (struct mtl_texture_info) {
          .format = (uint32_t)tex.pixelFormat,
          .usage = (uint32_t)tex.usage,
          .storage_mode = (uint32_t)tex.storageMode,
          .samples = (uint32_t)tex.sampleCount,
+         .base_texture = (const void *)base,
       };
    }
 }

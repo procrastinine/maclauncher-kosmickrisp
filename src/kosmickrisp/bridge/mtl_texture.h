@@ -17,6 +17,7 @@ struct kk_view_layout;
 /* Read-only native state for opt-in diagnostics. */
 struct mtl_texture_info {
    uint32_t format, usage, storage_mode, samples;
+   const void *base_texture;
 };
 void mtl_texture_get_info(mtl_texture *texture, struct mtl_texture_info *info);
 

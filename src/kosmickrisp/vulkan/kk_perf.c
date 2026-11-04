@@ -33,6 +33,7 @@ struct kk_perf_render_pass {
 struct kk_perf_attachment_stat {
    uint32_t aspect, format, samples, load, store;
    uint64_t count;
+   const void *texture, *base_texture;
 };
 
 struct kk_perf {
@@ -278,8 +279,10 @@ kk_perf_image_bind(struct kk_perf *p, const struct kk_image *image, uint32_t pla
    fprintf(p->log, "{\"kk_image\":1,\"event\":\"bind\",\"device\":\"%p\","
            "\"image\":\"%p\",\"plane\":%u,\"start_ms\":%.6f,"
            "\"metal_format\":%u,\"metal_usage\":%u,\"storage_mode\":%u,"
-           "\"samples\":%u}\n", (void *)p, (const void *)image, plane, start_ms,
-           info.format, info.usage, info.storage_mode, info.samples);
+           "\"samples\":%u,\"texture\":\"%p\",\"base_texture\":\"%p\"}\n",
+           (void *)p, (const void *)image, plane, start_ms, info.format, info.usage,
+           info.storage_mode, info.samples,
+           (const void *)image->planes[plane].mtl_handle, info.base_texture);
    fflush(p->log);
    pthread_mutex_unlock(&p->mutex);
 }
@@ -318,9 +321,10 @@ render_flush_locked(struct kk_perf *p)
    for (unsigned i = 0; i < p->render_attachment_count; ++i) {
       const struct kk_perf_attachment_stat *a = &p->render_attachments[i];
       fprintf(p->log, "%s{\"aspect\":\"%s\",\"metal_format\":%u,\"samples\":%u,"
-              "\"load_action\":%u,\"store_action\":%u,\"count\":%"PRIu64"}",
+              "\"load_action\":%u,\"store_action\":%u,\"count\":%"PRIu64
+              ",\"texture\":\"%p\",\"base_texture\":\"%p\"}",
               i ? "," : "", aspects[a->aspect], a->format, a->samples,
-              a->load, a->store, a->count);
+              a->load, a->store, a->count, a->texture, a->base_texture);
    }
    fprintf(p->log, "]}");
    p->render_count = p->render_dropped_passes = p->render_dropped_attachments = 0;
@@ -399,7 +403,8 @@ kk_perf_render_end(struct kk_perf *p, const void *encoder)
             struct kk_perf_attachment_stat *s = &p->render_attachments[k];
             if (s->aspect == aspect && s->format == info->format &&
                 s->samples == info->samples && s->load == (uint32_t)info->load &&
-                s->store == (uint32_t)info->store) {
+                s->store == (uint32_t)info->store &&
+                s->texture == info->texture && s->base_texture == info->base_texture) {
                s->count++;
                break;
             }
@@ -409,7 +414,8 @@ kk_perf_render_end(struct kk_perf *p, const void *encoder)
                p->render_dropped_attachments++;
             else {
                p->render_attachments[k] = (struct kk_perf_attachment_stat){
-                  aspect, info->format, info->samples, info->load, info->store, 1};
+                  aspect, info->format, info->samples, info->load, info->store, 1,
+                  info->texture, info->base_texture};
                p->render_attachment_count++;
             }
          }

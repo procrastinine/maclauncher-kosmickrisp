@@ -32,12 +32,17 @@ static struct mtl_render_pass_attachment_info
 mtl_render_pass_attachment_get_info(MTLRenderPassAttachmentDescriptor *attachment)
 {
    id<MTLTexture> texture = attachment.texture;
+   id<MTLTexture> base = texture;
+   while (base.parentTexture)
+      base = base.parentTexture;
    return (struct mtl_render_pass_attachment_info) {
       .present = texture != nil,
       .format = texture ? (uint32_t)texture.pixelFormat : 0,
       .samples = texture ? (uint32_t)texture.sampleCount : 0,
       .load = (enum mtl_load_action)attachment.loadAction,
       .store = (enum mtl_store_action)attachment.storeAction,
+      .texture = (const void *)texture,
+      .base_texture = (const void *)base,
    };
 }
 

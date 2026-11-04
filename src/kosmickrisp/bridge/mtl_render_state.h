@@ -29,6 +29,7 @@ struct mtl_render_pass_attachment_info {
    uint32_t samples;
    enum mtl_load_action load;
    enum mtl_store_action store;
+   const void *texture, *base_texture;
 };
 
 struct mtl_render_pass_info {
