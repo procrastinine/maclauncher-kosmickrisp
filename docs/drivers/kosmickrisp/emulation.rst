@@ -48,6 +48,15 @@
      - Opacity micromaps require ray tracing, which requires explicit selection.
      - VK_KHR_opacity_micromap is unavailable; vkd3d-proton reports at most ray tracing tier 1.1 and shader model 6.8.
      - ``performance,+opacity_micromap``
+   * - ``invocation_reorder``
+     - Hit objects: recorded traces, misses and ray-query hits that a shader inspects and then executes.
+       Controls: ``VK_EXT_ray_tracing_invocation_reorder``, ``rayTracingInvocationReorder``, ``rayTracingInvocationReorderReorderingHint``, ``maxShaderBindingTableRecordIndex``.
+     - software traversal. A traced hit object runs the ordinary traversal, then the scheduler writes the committed result (68 words) into the hit object in the caller's frame instead of entering closest-hit or miss. Executing a hit object loads those words into the call context and enters the closest-hit or miss shader as a callable. Execution is never reordered. Shaders without hit objects are unchanged.
+     - No Apple family
+     - Off
+     - Hit objects require ray tracing, which requires explicit selection.
+     - VK_EXT_ray_tracing_invocation_reorder is unavailable; vkd3d-proton reports at most shader model 6.8.
+     - ``performance,+invocation_reorder``
    * - ``pixel_interlock``
      - Pixel interlock with cross-sample ordering for multisampled rendering.
        Controls: ``fragmentShaderPixelInterlock``.

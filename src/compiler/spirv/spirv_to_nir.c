@@ -6187,13 +6187,28 @@ vtn_handle_hit_object(struct vtn_builder *b, SpvOp opcode,
                                  vtn_get_nir_ssa(b, w[6]), vtn_get_nir_ssa(b, w[7]));
       return;
 
-   case SpvOpHitObjectRecordFromQueryEXT:
-      nir_hit_object_record_from_query(&b->nb, &vtn_nir_deref(b, w[1])->def,
-                                       &vtn_nir_deref(b, w[2])->def,
+   case SpvOpHitObjectRecordFromQueryEXT: {
+      nir_def *query = &vtn_nir_deref(b, w[2])->def;
+      nir_def *hit_kind;
+      if (count > 5) {
+         hit_kind = vtn_get_nir_ssa(b, w[5]);
+      } else {
+         /* Without a hit kind operand, a committed triangle gives its
+          * facing hit kind and other intersections give 0. */
+         nir_def *type = nir_rq_load(&b->nb, 1, 32, query, .committed = true,
+            .ray_query_value = nir_ray_query_value_intersection_type);
+         nir_def *front = nir_rq_load(&b->nb, 1, 1, query, .committed = true,
+            .ray_query_value = nir_ray_query_value_intersection_front_face);
+         hit_kind = nir_bcsel(&b->nb, nir_ieq_imm(&b->nb, type, 1),
+                              nir_bcsel(&b->nb, front, nir_imm_int(&b->nb, 0xfe),
+                                        nir_imm_int(&b->nb, 0xff)),
+                              nir_imm_int(&b->nb, 0));
+      }
+      nir_hit_object_record_from_query(&b->nb, &vtn_nir_deref(b, w[1])->def, query,
                                        vtn_get_nir_ssa(b, w[3]),
-                                       &vtn_nir_deref(b, w[4])->def,
-                                       vtn_get_nir_ssa(b, w[5]));
+                                       &vtn_nir_deref(b, w[4])->def, hit_kind);
       return;
+   }
 
    case SpvOpHitObjectTraceRayEXT:
    case SpvOpHitObjectTraceRayMotionEXT:

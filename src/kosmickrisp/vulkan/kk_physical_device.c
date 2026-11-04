@@ -63,6 +63,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_pipeline_library = true,
       .EXT_pipeline_library_group_handles = true,
       .KHR_opacity_micromap = true,
+      .EXT_ray_tracing_invocation_reorder = true,
       .KHR_cooperative_matrix = pdev->info.gpu_apple_family >= 7,
       .EXT_shader_float8 = true,
       .EXT_shader_long_vector = true,
@@ -277,6 +278,7 @@ kk_get_device_features(
       .rayTracingMaintenance1 = true,
       .rayTracingPipelineTraceRaysIndirect2 = true,
       .micromap = true,
+      .rayTracingInvocationReorder = true,
       .pipelineLibraryGroupHandles = true,
       .longVector = true,
       /* Vulkan 1.0 */
@@ -1204,6 +1206,9 @@ kk_get_device_properties(
    /* Lossy micromap builds keep the exact states. */
    properties->maxOpacityLossy4StateSubdivisionLevel = KK_AS_MAX_MICROMAP_LEVEL;
    properties->maxMicromapTriangles = KK_AS_MAX_PRIMITIVES;
+   /* Hit objects run in the order the shader calls them. */
+   properties->rayTracingInvocationReorderReorderingHint = VK_RAY_TRACING_INVOCATION_REORDER_MODE_NONE_EXT;
+   properties->maxShaderBindingTableRecordIndex = UINT32_MAX;
    properties->maxRayDispatchInvocationCount = 1u << 30;
    properties->subgroupSupportedStages |=
       VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR |

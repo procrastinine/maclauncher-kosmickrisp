@@ -107,6 +107,26 @@
     "native_from": null
   },
   {
+    "name": "invocation_reorder",
+    "description": "Hit objects: recorded traces, misses and ray-query hits that a shader inspects and then executes.",
+    "cost_class": "software traversal",
+    "cost_note": "A traced hit object runs the ordinary traversal, then the scheduler writes the committed result (68 words) into the hit object in the caller's frame instead of entering closest-hit or miss. Executing a hit object loads those words into the call context and enters the closest-hit or miss shader as a callable. Execution is never reordered. Shaders without hit objects are unchanged.",
+    "extensions": [
+      "VK_EXT_ray_tracing_invocation_reorder"
+    ],
+    "features": [
+      "rayTracingInvocationReorder"
+    ],
+    "properties": [
+      "rayTracingInvocationReorderReorderingHint",
+      "maxShaderBindingTableRecordIndex"
+    ],
+    "performance": false,
+    "performance_reason": "Hit objects require ray tracing, which requires explicit selection.",
+    "off_consequence": "VK_EXT_ray_tracing_invocation_reorder is unavailable; vkd3d-proton reports at most shader model 6.8.",
+    "native_from": null
+  },
+  {
     "name": "pixel_interlock",
     "description": "Pixel interlock with cross-sample ordering for multisampled rendering.",
     "cost_class": "native single-sample / software multisample envelope",

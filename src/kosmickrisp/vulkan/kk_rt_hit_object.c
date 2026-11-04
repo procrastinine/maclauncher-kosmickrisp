@@ -157,11 +157,11 @@ lower(nir_builder *b, nir_intrinsic_instr *in, void *unused)
                                       .committed = true, ##__VA_ARGS__)
       nir_def *type = RQ(intersection_type, 1);
       clear(b, h);
-      /* A committed intersection records a hit; none records a miss whose
-       * SBT record index is the given index. */
+      /* A committed intersection records a hit; without one the hit object
+       * is empty. */
       store_words(b, h, KK_HO_KIND, nir_bcsel(b, nir_ine_imm(b, type, 0),
                                               nir_imm_int(b, nir_hit_object_kind_hit),
-                                              nir_imm_int(b, nir_hit_object_kind_miss)));
+                                              nir_imm_int(b, nir_hit_object_kind_empty)));
       store_words(b, h, KK_HO_RAY_FLAGS, RQ(flags, 1));
       store_words(b, h, KK_HO_ORIGIN, RQ(world_ray_origin, 3));
       store_words(b, h, KK_HO_TMIN, RQ(tmin, 1));
