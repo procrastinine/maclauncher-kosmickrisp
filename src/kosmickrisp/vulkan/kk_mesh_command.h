@@ -330,10 +330,11 @@ kk_mesh_bind_draw(struct kk_cmd_buffer *cmd, mtl_argument_table *table,
    if (s->mesh->info.flat_heap) {
       cmd->state.gfx.per_draw_data.per_vertex_heap = kk_heap(cmd);
       cmd->state.gfx.per_draw_data.per_vertex_topology = s->mesh->info.primitive;
+   }
+   if (s->mesh->info.flat_heap || s->mesh->info.dynamic_provoking)
       cmd->state.gfx.per_draw_data.provoking_last =
          cmd->vk.dynamic_graphics_state.rs.provoking_vertex ==
          VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
-   }
    cmd->state.gfx.mesh_per_draw_address = 0;
    bool uses = s->info.uses_per_draw_data || cmd->state.gfx.mesh_retained_consumer.consume;
    if (!uses)

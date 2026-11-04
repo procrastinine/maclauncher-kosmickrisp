@@ -47,6 +47,8 @@ struct kk_mesh_msl_info {
    bool flat_heap, projected_basis;
    unsigned flat_heap_offset;
    bool provoking_last;
+   bool provoking_dynamic;
+   unsigned provoking_offset;
    bool point_reader;
 };
 

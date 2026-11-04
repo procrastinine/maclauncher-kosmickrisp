@@ -17,6 +17,9 @@ struct kk_compile_options {
    /* Static last-vertex provoking for a Mesh pipeline whose fragment stage
     * reads flat inputs and no barycentric coordinates or per-vertex inputs. */
    bool mesh_provoking_last;
+   /* The same fragment inputs with a dynamic provoking mode: the Mesh shader
+    * selects the index order from per-draw data. */
+   bool mesh_provoking_dynamic;
    bool poly_layer_replay;
    bool polygon_capture;
    bool polygon_regular;

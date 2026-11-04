@@ -26,6 +26,10 @@ struct kk_mesh_msl_options {
     * line's swap so the provoking vertex comes first, as Metal takes flat
     * values from it. */
    bool provoking_last;
+   /* Dynamic provoking mode: the same order is selected at draw time from
+    * the per-draw word at provoking_offset. */
+   bool provoking_dynamic;
+   unsigned provoking_offset;
    /* Triangle output that can be drawn in VK_POLYGON_MODE_POINT carries the
     * point reader entry. */
    bool point_reader;

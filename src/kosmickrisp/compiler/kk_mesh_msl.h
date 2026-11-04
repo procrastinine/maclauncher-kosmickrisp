@@ -175,6 +175,10 @@ kk_mesh_emit_copy_outputs(struct nir_to_msl_ctx *ctx)
    P(ctx, "#endif\n");
    ctx->indentlevel--;
    P_IND(ctx, "}\n");
+   const bool select = ctx->mesh.provoking_dynamic && vpp > 1;
+   if (select)
+      P_IND(ctx, "const bool kk_provoking_last = *((constant uint *)((constant uchar *)&per_draw.contents[0] + %u)) != 0;\n",
+            ctx->mesh.provoking_offset);
    P_IND(ctx, "for (uint i = kk_index; i < kk_counts[1]; i += %u) {\n", threads);
    ctx->indentlevel++;
    P_IND(ctx, "MeshPrimitive primitive = {};\n");
@@ -230,14 +234,20 @@ kk_mesh_emit_copy_outputs(struct nir_to_msl_ctx *ctx)
    P_IND(ctx, "kk_output.set_primitive(i, primitive);\n");
    P(ctx, "#endif\n");
    /* Last-vertex provoking triangles are emitted as (v2, v0, v1), which keeps
-    * their winding, and lines as (v1, v0), as the vertex path's unroll does. */
+    * their winding, and lines as (v1, v0), as the vertex path's unroll does.
+    * A dynamic mode selects between that and the original order. */
    const bool reorder = ctx->mesh.provoking_last && vpp > 1;
    for (unsigned v = 0; v < vpp; ++v) {
-      const unsigned src = !reorder ? v : vpp == 3 ? (v + 2) % 3 : 1 - v;
+      const unsigned last = vpp == 3 ? (v + 2) % 3 : 1 - v;
+      char src[48];
+      if (select)
+         snprintf(src, sizeof(src), "(kk_provoking_last ? %uu : %uu)", last, v);
+      else
+         snprintf(src, sizeof(src), "%u", reorder ? last : v);
       P(ctx, "#ifdef KK_MESH_RETAINED_CAPTURE\n");
-      P_IND(ctx, "((device uint *)(kk_cache + KK_RETAINED_INDICES))[i * %u + %u] = kk_indices[i * %u + %u];\n", vpp, v, vpp, src);
+      P_IND(ctx, "((device uint *)(kk_cache + KK_RETAINED_INDICES))[i * %u + %u] = kk_indices[i * %u + %s];\n", vpp, v, vpp, src);
       P(ctx, "#else\n");
-      P_IND(ctx, "kk_output.set_index(i * %u + %u, kk_indices[i * %u + %u]);\n", vpp, v, vpp, src);
+      P_IND(ctx, "kk_output.set_index(i * %u + %u, kk_indices[i * %u + %s]);\n", vpp, v, vpp, src);
       P(ctx, "#endif\n");
    }
    ctx->indentlevel--;

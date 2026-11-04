@@ -125,6 +125,8 @@ struct kk_mesh_shader_info {
    bool retained_capture, retained_reader;
    bool line_reader;
    bool point_reader;
+   /* The index order follows per_draw_data.provoking_last. */
+   bool dynamic_provoking;
    uint32_t max_vertices;
    uint32_t retained_strides[2];
    struct kk_mesh_retained_field retained_fields[KK_MESH_RETAINED_FIELD_COUNT];
@@ -132,7 +134,7 @@ struct kk_mesh_shader_info {
 };
 
 /* Serialized info may change within padding without changing sizeof. */
-#define KK_SHADER_INFO_CACHE_VERSION 12u
+#define KK_SHADER_INFO_CACHE_VERSION 13u
 
 enum kk_gpl_shader_kind {
    KK_GPL_NONE,

@@ -9,6 +9,7 @@ kk_dgc_mesh_prepare(struct kk_cmd_buffer *cmd, struct kk_dgc_params *p,
    struct kk_shader *s = cmd->state.gfx.shader;
    const struct kk_mesh_shader_info *info = &s->mesh->info;
    if (s->info.dgc_replay || s->info.depth_bounds_emulation || info->flat_heap ||
+       info->dynamic_provoking ||
        kk_mesh_retained_active(cmd) || cmd->state.gfx.render.layered_bc ||
        cmd->state.gfx.render.view_mask || s->pipeline.gfx.pre_render_count)
       return false;

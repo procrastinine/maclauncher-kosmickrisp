@@ -326,6 +326,12 @@ kk_mesh_static_provoking_last(const struct vk_graphics_pipeline_state *state)
           state->rs->provoking_vertex == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
 }
 
+static bool
+kk_mesh_dynamic_provoking(const struct vk_graphics_pipeline_state *state)
+{
+   return state && BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_PROVOKING_VERTEX);
+}
+
 static void
 kk_hash_graphics_state(struct vk_physical_device *device,
                        const struct vk_graphics_pipeline_state *state,
@@ -366,10 +372,14 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       _mesa_blake3_update(&blake3_ctx, presence, sizeof(presence));
    }
 
-   /* Mesh index order follows a static last-vertex provoking mode. Other
-    * keys are unchanged. */
+   /* Mesh index order follows a static last-vertex provoking mode, or is
+    * selected at draw time for a dynamic one. Other keys are unchanged. */
    if ((stages & VK_SHADER_STAGE_MESH_BIT_EXT) && kk_mesh_static_provoking_last(state)) {
       const uint32_t mesh_provoking_key = 0x4d50564cu;
+      _mesa_blake3_update(&blake3_ctx, &mesh_provoking_key, sizeof(mesh_provoking_key));
+   }
+   if ((stages & VK_SHADER_STAGE_MESH_BIT_EXT) && kk_mesh_dynamic_provoking(state)) {
+      const uint32_t mesh_provoking_key = 0x4d505644u;
       _mesa_blake3_update(&blake3_ctx, &mesh_provoking_key, sizeof(mesh_provoking_key));
    }
 
@@ -1903,6 +1913,10 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
       /* Flat-heap pipelines resolve the provoking vertex from per-draw data. */
       mesh_options.provoking_last = nir->info.stage == MESA_SHADER_MESH &&
          !mesh_options.flat_heap && opts && opts->mesh_provoking_last;
+      mesh_options.provoking_dynamic = nir->info.stage == MESA_SHADER_MESH &&
+         nir->info.mesh.primitive_type != MESA_PRIM_POINTS &&
+         !mesh_options.flat_heap && opts && opts->mesh_provoking_dynamic;
+      mesh_options.provoking_offset = offsetof(struct kk_per_draw_data, provoking_last);
       mesh_options.point_reader = nir->info.stage == MESA_SHADER_MESH &&
          nir->info.mesh.primitive_type == MESA_PRIM_TRIANGLES &&
          kk_mesh_point_possible(state);
@@ -2091,6 +2105,10 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
             per_vertex_map->projected_basis;
          shader->mesh->info.max_primitives = nir->info.mesh.max_primitives_out;
          shader->info.uses_per_draw_data |= shader->mesh->info.flat_heap;
+         shader->mesh->info.dynamic_provoking =
+            nir->info.mesh.primitive_type != MESA_PRIM_POINTS &&
+            !shader->mesh->info.flat_heap && opts && opts->mesh_provoking_dynamic;
+         shader->info.uses_per_draw_data |= shader->mesh->info.dynamic_provoking;
          shader->mesh->info.max_vertices = nir->info.mesh.max_vertices_out;
          shader->mesh->info.view_mask = state && state->mv ? state->mv->view_mask : 0;
          shader->info.uses_per_draw_data |= shader->mesh->info.view_mask != 0;
@@ -4159,14 +4177,20 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    if (enabled_features->fragmentShaderBarycentric && shader_count &&
        infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT)
       barycentric_inputs = kk_barycentric_input_flags(infos[shader_count - 1u].nir);
-   /* A Mesh pipeline with a static last-vertex provoking mode rotates its
-    * indices only for flat fragment inputs; barycentric coordinates and
-    * per-vertex inputs need the original corner order. */
+   /* A Mesh pipeline with a static or dynamic last-vertex provoking mode
+    * reorders its indices only for flat fragment inputs; barycentric
+    * coordinates and per-vertex inputs need the original corner order. */
+   const bool mesh_pipeline = state &&
+      (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT);
+   const bool mesh_static_last = mesh_pipeline && kk_mesh_static_provoking_last(state);
+   const bool mesh_dynamic_provoking = mesh_pipeline && kk_mesh_dynamic_provoking(state);
    unsigned mesh_fs_inputs = 0;
-   if (state && (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT) &&
-       kk_mesh_static_provoking_last(state) && shader_count &&
+   if ((mesh_static_last || mesh_dynamic_provoking) && shader_count &&
        infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT)
       mesh_fs_inputs = kk_barycentric_input_flags(infos[shader_count - 1u].nir);
+   const bool mesh_flat_order = (mesh_fs_inputs & KK_BARYCENTRIC_INPUT_FLAT) &&
+      !(mesh_fs_inputs & (KK_BARYCENTRIC_INPUT_PER_VERTEX |
+                          KK_BARYCENTRIC_INPUT_COORD));
 
    /* Lower shaders, notably lowering IO. This is a prerequisite for intershader
     * optimization. */
@@ -4517,9 +4541,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       .per_vertex_map = &per_vertex_map,
       .native_per_vertex = native_per_vertex && !per_vertex_map.active
          ? &native_inputs : NULL,
-      .mesh_provoking_last = (mesh_fs_inputs & KK_BARYCENTRIC_INPUT_FLAT) &&
-         !(mesh_fs_inputs & (KK_BARYCENTRIC_INPUT_PER_VERTEX |
-                             KK_BARYCENTRIC_INPUT_COORD)),
+      .mesh_provoking_last = mesh_static_last && mesh_flat_order,
+      .mesh_provoking_dynamic = mesh_dynamic_provoking && mesh_flat_order,
       .mesh_queries = features & BITFIELD_BIT(KK_FEAT_MESH_QUERIES),
       .pipeline_statistics = features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS),
       .geometry_reports = features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS),
