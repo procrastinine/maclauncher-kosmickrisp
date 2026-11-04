@@ -246,12 +246,9 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD);
    if (feats->imageSlicedViewOf3D)
       key |= BITFIELD_BIT(KK_FEAT_SLICED_3D);
-   /* A raw block view requires a compressed parent image. Without an
-    * enabled compression family no descriptor can contain its layer table. */
-   if (feats->textureCompressionBC || feats->textureCompressionETC2 ||
-       feats->textureCompressionASTC_LDR || feats->textureCompressionASTC_HDR ||
-       feats->textureCompressionASTC_3D)
-      key |= BITFIELD_BIT(KK_FEAT_LAYERED_BLOCK_VIEWS);
+   /* Individual queried compressed formats remain usable without enabling
+    * a family-wide guarantee. Actual shader types gate the preparation walks. */
+   key |= BITFIELD_BIT(KK_FEAT_LAYERED_BLOCK_VIEWS);
    if (feats->maintenance11)
       key |= BITFIELD_BIT(KK_FEAT_IMAGE_ARRAY_ALIAS);
    if (feats->sparseBinding)
@@ -867,14 +864,14 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
               const struct vk_pipeline_robustness_state *rs,
               uint32_t set_layout_count,
               struct vk_descriptor_set_layout *const *set_layouts,
-              kk_feature_key features)
+              kk_feature_key features, bool descriptor_heap)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
    if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
       NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
 
    if (features & BITFIELD_BIT(KK_FEAT_LAYERED_BLOCK_VIEWS))
-      NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts);
+      NIR_PASS(_, nir, kk_nir_prepare_layered_bc, rs, set_layout_count, set_layouts, descriptor_heap);
    if (features & BITFIELD_BIT(KK_FEAT_STANDARD_3D))
       NIR_PASS(_, nir, kk_nir_lower_standard_3d_samples, set_layout_count, set_layouts);
 
@@ -1007,7 +1004,7 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
    /* Common msl texture lowering needs to happen after ycbcr lowering and
     * before descriptor lowering. */
    if (features & BITFIELD_BIT(KK_FEAT_LAYERED_BLOCK_VIEWS))
-      NIR_PASS(_, nir, kk_nir_prepare_layered_bc_cubes, rs, set_layout_count, set_layouts);
+      NIR_PASS(_, nir, kk_nir_prepare_layered_bc_cubes, rs, set_layout_count, set_layouts, descriptor_heap);
    if (features & BITFIELD_BIT(KK_FEAT_NON_SEAMLESS_CUBE))
       NIR_PASS(_, nir, kk_nir_lower_non_seamless_cube, set_layout_count, set_layouts);
 
@@ -1085,7 +1082,7 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
    }
 
    if (nir->info.stage != MESA_SHADER_FRAGMENT)
-      kk_finish_nir(dev, nir, rs, set_layout_count, set_layouts, features);
+      kk_finish_nir(dev, nir, rs, set_layout_count, set_layouts, features, descriptor_heap);
 }
 
 static void
@@ -2654,7 +2651,8 @@ kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
       kk_nir_vrs_split_application(fs);
    kk_lower_fs(dev, fs, state);
    kk_finish_nir(dev, fs, info ? info->robustness : &rs_none,
-      info ? info->set_layout_count : 0, info ? info->set_layouts : NULL, features);
+      info ? info->set_layout_count : 0, info ? info->set_layouts : NULL, features,
+      info && (info->flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT));
    /* The shared embedded schema carries original-stage root loads; its
     * canonical sampler lifetime remains with the owning fine shader. */
    static_assert(KK_EMBEDDED_SAMPLER_BINDING_SCHEMA == 1u,

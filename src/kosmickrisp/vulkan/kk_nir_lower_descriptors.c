@@ -1162,8 +1162,11 @@ bool
 kk_nir_prepare_layered_bc_cubes(nir_shader *nir,
                          const struct vk_pipeline_robustness_state *rs,
                          uint32_t set_layout_count,
-                         struct vk_descriptor_set_layout *const *set_layouts)
+                         struct vk_descriptor_set_layout *const *set_layouts,
+                         bool descriptor_heap)
 {
+   if (!kk_layered_bc_descriptors_possible(nir, descriptor_heap, true))
+      return false;
    struct lower_descriptors_ctx ctx = kk_descriptor_context(rs, set_layout_count, set_layouts);
    return nir_shader_tex_pass(nir, kk_layered_bc_cube, nir_metadata_none, &ctx);
 }
@@ -1172,8 +1175,11 @@ bool
 kk_nir_prepare_layered_bc(nir_shader *nir,
                          const struct vk_pipeline_robustness_state *rs,
                          uint32_t set_layout_count,
-                         struct vk_descriptor_set_layout *const *set_layouts)
+                         struct vk_descriptor_set_layout *const *set_layouts,
+                         bool descriptor_heap)
 {
+   if (!kk_layered_bc_descriptors_possible(nir, descriptor_heap, false))
+      return false;
    struct lower_descriptors_ctx ctx = kk_descriptor_context(rs, set_layout_count, set_layouts);
    return nir_shader_instructions_pass(nir, kk_layered_bc_instruction,
                                        nir_metadata_none, &ctx);

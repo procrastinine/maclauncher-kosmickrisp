@@ -3,6 +3,46 @@
  * descriptor is routed once, before any sparse/native/alias/null reader. */
 #include "kk_layered_bc.h"
 
+/* Family-wide compression features are format guarantees, not admission
+ * gates. Classify the actual shader types; heap/bindless descriptors remain
+ * conservative because their image types need not have global variables. */
+static bool
+kk_layered_bc_type_possible(const struct glsl_type *type, bool cube)
+{
+   type = glsl_without_array(type);
+   if (glsl_type_is_struct_or_ifc(type)) {
+      for (unsigned i = 0; i < glsl_get_length(type); ++i)
+         if (kk_layered_bc_type_possible(glsl_get_struct_field(type, i), cube))
+            return true;
+      return false;
+   }
+   if (!glsl_type_is_sampler(type) && !glsl_type_is_texture(type) &&
+       !glsl_type_is_image(type))
+      return false;
+   if (glsl_type_is_sampler(type) && glsl_sampler_type_is_shadow(type))
+      return false;
+   enum glsl_sampler_dim dim = glsl_get_sampler_dim(type);
+   if (cube)
+      return dim == GLSL_SAMPLER_DIM_CUBE && !glsl_type_is_image(type);
+   /* Input-attachment lowering supplies the effective array coordinate. */
+   return dim == GLSL_SAMPLER_DIM_SUBPASS ||
+          (glsl_sampler_type_is_array(type) &&
+           (dim == GLSL_SAMPLER_DIM_1D || dim == GLSL_SAMPLER_DIM_2D));
+}
+
+static bool
+kk_layered_bc_descriptors_possible(nir_shader *nir, bool descriptor_heap,
+                                    bool cube)
+{
+   if (descriptor_heap || nir->info.uses_bindless)
+      return true;
+   nir_foreach_variable_with_modes(var, nir, nir_var_uniform | nir_var_image) {
+      if (kk_layered_bc_type_possible(var->type, cube))
+         return true;
+   }
+   return false;
+}
+
 static nir_def *
 kk_layered_bc_route(nir_builder *b, nir_def *original, nir_def *record,
                     nir_def *layer, bool sampled, bool integer_layer)
