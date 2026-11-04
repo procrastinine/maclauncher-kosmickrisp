@@ -197,9 +197,117 @@ kk_soft_fp64_subgroup(const nir_intrinsic_instr *intrin, UNUSED const void *data
    }
 }
 
+/* Operations whose binary64 lowering is a few integer instructions stay
+ * inline. Every other scalar operation on 32- or 64-bit values is called. */
+static bool
+kk_soft_fp64_outline_op(const nir_alu_instr *alu)
+{
+   switch (alu->op) {
+   case nir_op_fneg: case nir_op_fabs: case nir_op_feq: case nir_op_fneu:
+   case nir_op_fcanonicalize: case nir_op_fisnormal: case nir_op_b2f64:
+      return false;
+   default:
+      break;
+   }
+   if (!kk_soft_fp64_scalarize(&alu->instr, NULL) || alu->def.num_components != 1 ||
+       (alu->def.bit_size != 1 && alu->def.bit_size != 32 && alu->def.bit_size != 64))
+      return false;
+   for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; ++i) {
+      unsigned bits = alu->src[i].src.ssa->bit_size;
+      if (nir_src_num_components(alu->src[i].src) != 1 || (bits != 32 && bits != 64))
+         return false;
+   }
+   return true;
+}
+
+static const struct glsl_type *
+kk_soft_fp64_helper_return(unsigned bit_size)
+{
+   return bit_size == 64 ? glsl_uint64_t_type() : glsl_uint_type();
+}
+
+/* One noinline helper per operation, operand sizes and math controls. Its
+ * body is the operation itself on the parameters; the loop in
+ * kk_soft_fp64_lower lowers it there once. A boolean result travels as a
+ * 32-bit integer. The calling convention is the one nir_to_msl emits for
+ * dont_inline functions (sparse buffer accesses use it too). */
+static nir_function *
+kk_soft_fp64_helper(nir_shader *shader, const nir_alu_instr *alu)
+{
+   const nir_op_info *info = &nir_op_infos[alu->op];
+   char *name = ralloc_asprintf(shader, "__kk_fp64_%s_%u", info->name, alu->def.bit_size);
+   for (unsigned i = 0; i < info->num_inputs; ++i)
+      ralloc_asprintf_append(&name, "_%u", alu->src[i].src.ssa->bit_size);
+   ralloc_asprintf_append(&name, "_%x", (unsigned)alu->fp_math_ctrl);
+   nir_function *helper = nir_shader_get_function_for_name(shader, name);
+   if (helper) {
+      ralloc_free(name);
+      return helper;
+   }
+   const struct glsl_type *ret = kk_soft_fp64_helper_return(alu->def.bit_size);
+   helper = nir_function_create(shader, name);
+   ralloc_free(name);
+   helper->dont_inline = true;
+   helper->num_params = 1 + info->num_inputs;
+   helper->params = rzalloc_array(helper, nir_parameter, helper->num_params);
+   helper->params[0] = (nir_parameter) {
+      .num_components = 1, .bit_size = nir_get_ptr_bitsize(shader),
+      .mode = nir_parameter_out, .is_return = true, .type = ret,
+   };
+   for (unsigned i = 0; i < info->num_inputs; ++i)
+      helper->params[i + 1] = (nir_parameter) {
+         .num_components = 1, .bit_size = alu->src[i].src.ssa->bit_size,
+      };
+   nir_builder h = nir_builder_create(nir_function_impl_create(helper));
+   h.cursor = nir_before_impl(h.impl);
+   h.fp_math_ctrl = alu->fp_math_ctrl;
+   nir_def *srcs[NIR_ALU_MAX_INPUTS];
+   for (unsigned i = 0; i < info->num_inputs; ++i)
+      srcs[i] = nir_load_param(&h, i + 1);
+   nir_def *value = nir_build_alu_src_arr(&h, alu->op, srcs);
+   if (value->bit_size == 1)
+      value = nir_b2i32(&h, value);
+   nir_deref_instr *out = nir_build_deref_cast(&h, nir_load_param(&h, 0),
+      nir_var_function_temp, ret, 0);
+   nir_store_deref(&h, out, value, 1);
+   return helper;
+}
+
+static bool
+kk_soft_fp64_outline(nir_builder *b, nir_instr *instr, UNUSED void *data)
+{
+   if (instr->type != nir_instr_type_alu)
+      return false;
+   nir_alu_instr *alu = nir_instr_as_alu(instr);
+   if (!kk_soft_fp64_outline_op(alu))
+      return false;
+   nir_function *helper = kk_soft_fp64_helper(b->shader, alu);
+   b->cursor = nir_before_instr(instr);
+   nir_variable *result = nir_local_variable_create(b->impl,
+      kk_soft_fp64_helper_return(alu->def.bit_size), "fp64_result");
+   nir_deref_instr *out = nir_build_deref_var(b, result);
+   nir_def *args[1 + NIR_ALU_MAX_INPUTS] = {&out->def};
+   for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; ++i)
+      args[i + 1] = nir_mov_alu(b, alu->src[i], 1);
+   nir_build_call(b, helper, helper->num_params, args);
+   nir_def *value = nir_load_deref(b, out);
+   if (alu->def.bit_size == 1)
+      value = nir_ine_imm(b, value, 0);
+   nir_def_replace(&alu->def, value);
+   return true;
+}
+
 /* The pinned Mesa library represents doubles as integer bits. Its functions
  * are inlined into the same shader, then consumed by the ordinary optimizer.
  * No shader variant or additional GPU resource is needed.
+ *
+ * Application stages call the lowered operations as noinline helpers, so
+ * each library routine appears once per shader instead of once per scalar
+ * operation (a vec8 double reduction otherwise produced a 10 MB kernel).
+ * Ray tracing stages keep their temporaries in continuation frames, which
+ * cannot be passed as a helper's thread pointer, and keep the inline form.
+ * Binary64 is a conformance-only feature, so performance-mode shaders never
+ * contain these operations.
  */
 static void
 kk_soft_fp64_lower(nir_shader *nir)
@@ -222,6 +330,13 @@ kk_soft_fp64_lower(nir_shader *nir)
    assert(library);
 
    NIR_PASS(_, nir, nir_lower_alu_to_scalar, kk_soft_fp64_scalarize, NULL);
+   if (!mesa_shader_stage_is_rt(nir->info.stage) &&
+       nir->info.stage != MESA_SHADER_KERNEL && !nir->info.internal) {
+      nir_function_impl *entry = nir_shader_get_entrypoint(nir);
+      if (nir_function_instructions_pass(entry, kk_soft_fp64_outline,
+                                         nir_metadata_control_flow, NULL))
+         nir_index_ssa_defs(entry);
+   }
    bool progress;
    do {
       progress = false;
