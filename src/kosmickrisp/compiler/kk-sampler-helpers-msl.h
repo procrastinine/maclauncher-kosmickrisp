@@ -872,7 +872,12 @@ kk_sample_emit_call(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
    struct hash_entry *entry = _mesa_hash_table_search(ctx->sampler_helpers, &key);assert(entry);
    struct kk_msl_sample_helper *helper = entry->data;
    bool sparse = tex->backend_flags & KK_SAMPLE_SPARSE;
-   bool guarded = !sparse && tex->op != nir_texop_lod;
+   /* Descriptor-aware lowering marks calls reached only by an emulating
+    * sampler. Its outer dispatch already tests FC10 and the bound metadata;
+    * immutable emulating samplers publish activation before pipeline use.
+    * Keep the one noinline helper boundary, without another native clone. */
+   bool guarded = !sparse && tex->op != nir_texop_lod &&
+                  !(tex->backend_flags & KK_SAMPLE_EMULATION_ONLY);
    if (guarded) {
       P_IND(ctx, "if (kk_sampler_emulation_active) {\n");
       ctx->indentlevel++;
