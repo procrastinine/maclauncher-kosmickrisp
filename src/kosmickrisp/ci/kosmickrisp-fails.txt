@@ -3,7 +3,3 @@
 
 # Software binary64 graphics subgroup reduction: arm64 and x86_64.
 dEQP-VK.subgroups.arithmetic.graphics.subgroupadd_dvec3,Fail
-
-# Explicit texture gradients and mipmap selection: observed on arm64.
-# The corresponding x86_64 case has not been executed on the affected source.
-dEQP-VK.texture.explicit_lod.2d.derivatives.linear_linear_mipmap_linear,Fail
