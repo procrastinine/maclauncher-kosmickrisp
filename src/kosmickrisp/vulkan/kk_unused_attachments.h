@@ -53,6 +53,7 @@ struct kk_compute_variant {
    mtl_function_descriptor *function;
    uint32_t threads;
    bool indirect;
+   bool emulated_failed;
 };
 
 struct kk_attachment_pipelines {
@@ -222,10 +223,12 @@ kk_sampler_compute_pipeline(struct kk_device *device, struct kk_shader *shader,
    if (!variant) return base ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
    *out = p_atomic_read(&variant->emulated);
    if (*out) return VK_SUCCESS;
+   if (p_atomic_read(&variant->emulated_failed)) return VK_ERROR_INVALID_SHADER_NV;
    simple_mtx_lock(&cache->mutex);
    mtl_compute_pipeline_state *pipeline = p_atomic_read(&variant->emulated);
-   VkResult result = VK_SUCCESS;
-   if (!pipeline) {
+   VkResult result = p_atomic_read(&variant->emulated_failed) ?
+      VK_ERROR_INVALID_SHADER_NV : VK_SUCCESS;
+   if (!pipeline && result == VK_SUCCESS) {
       mtl_function_descriptor *function =
          mtl_specialize_sampler_emulation(variant->function, true);
       if (!function) {
@@ -240,7 +243,10 @@ kk_sampler_compute_pipeline(struct kk_device *device, struct kk_shader *shader,
                   function, variant->threads));
          mtl_release(function);
          if (pipeline) p_atomic_set(&variant->emulated, pipeline);
-         else result = VK_ERROR_INVALID_SHADER_NV;
+         else {
+            result = VK_ERROR_INVALID_SHADER_NV;
+            p_atomic_set(&variant->emulated_failed, true);
+         }
       }
    }
    *out = pipeline;
@@ -354,7 +360,7 @@ kk_attachment_pipelines_finish(struct kk_shader *shader)
 }
 
 /* Variants are immutable and remain alive until their shader is destroyed. */
-static mtl_render_pipeline_state *
+static struct kk_attachment_variant *
 kk_attachment_find_variant(struct kk_attachment_pipelines *cache,
    unsigned kind, const enum mtl_pixel_format *formats, bool indirect,
    uint32_t samples, enum mtl_primitive_topology_class topology, bool statistics, uint8_t sampler_emulation)
@@ -366,7 +372,7 @@ kk_attachment_find_variant(struct kk_attachment_pipelines *cache,
           v->samples == samples &&
           v->topology == topology &&
           !memcmp(v->formats, formats, sizeof(v->formats)))
-         return v->pipeline;
+         return v;
    }
    return NULL;
 }
@@ -416,16 +422,19 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
        !memcmp(formats, shader->info.vs.rt_formats, sizeof(shader->info.vs.rt_formats)))
       return original;
 
-   mtl_render_pipeline_state *cached = kk_attachment_find_variant(
+   struct kk_attachment_variant *cached = kk_attachment_find_variant(
       cache, kind, formats, indirect, samples, topology, statistics, sampler_emulation);
-   if (cached)
-      return cached;
+   if (cached) {
+      *error = cached->pipeline ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
+      return cached->pipeline;
+   }
    simple_mtx_lock(&cache->mutex);
    cached = kk_attachment_find_variant(cache, kind, formats, indirect,
                                        samples, topology, statistics, sampler_emulation);
    if (cached) {
       simple_mtx_unlock(&cache->mutex);
-      return cached;
+      *error = cached->pipeline ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
+      return cached->pipeline;
    }
    struct kk_attachment_variant *variant = calloc(1, sizeof(*variant));
    VkResult result = VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -463,21 +472,21 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
          descriptor, formats, MAX_DRAW_BUFFERS, disabled, samples,
          shader->info.framebuffer_read_mask != 0, topology));
       mtl_release(descriptor);
-      result = VK_ERROR_INVALID_SHADER_NV;
-      if (variant->pipeline) {
-         memcpy(variant->formats, formats, sizeof(shader->info.vs.rt_formats));
-         variant->kind = kind;
-         variant->topology = topology;
-         variant->indirect = indirect;
-         variant->statistics = statistics;
-         variant->sampler_emulation = sampler_emulation;
-         variant->samples = samples;
-         variant->next = p_atomic_read(&cache->variants);
-         p_atomic_set(&cache->variants, variant);
-         simple_mtx_unlock(&cache->mutex);
-         return variant->pipeline;
-      }
-      free(variant);
+      result = variant->pipeline ? VK_SUCCESS : VK_ERROR_INVALID_SHADER_NV;
+      /* Publish the full key even on native failure. A NULL pipeline alone
+       * cannot distinguish a failed key from an unattempted one. */
+      memcpy(variant->formats, formats, sizeof(shader->info.vs.rt_formats));
+      variant->kind = kind;
+      variant->topology = topology;
+      variant->indirect = indirect;
+      variant->statistics = statistics;
+      variant->sampler_emulation = sampler_emulation;
+      variant->samples = samples;
+      variant->next = p_atomic_read(&cache->variants);
+      p_atomic_set(&cache->variants, variant);
+      simple_mtx_unlock(&cache->mutex);
+      *error = result;
+      return variant->pipeline;
    }
    simple_mtx_unlock(&cache->mutex);
    *error = result;

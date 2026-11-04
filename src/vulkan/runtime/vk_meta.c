@@ -100,8 +100,11 @@ vk_meta_device_finish(struct vk_device *device,
                       struct vk_meta_device *meta)
 {
    hash_table_foreach(meta->cache, entry) {
-      free((void *)entry->key);
-      vk_meta_destroy_object(device, entry->data);
+      const struct cache_key *key = entry->key;
+      /* UNKNOWN is a private failed-pipeline result, never a Vulkan object. */
+      if (key->obj_type != VK_OBJECT_TYPE_UNKNOWN)
+         vk_meta_destroy_object(device, entry->data);
+      free((void *)key);
    }
    _mesa_hash_table_destroy(meta->cache, NULL);
    simple_mtx_destroy(&meta->cache_mtx);
@@ -171,6 +174,73 @@ vk_meta_cache_object(struct vk_device *device,
       /* Return the newly inserted object */
       return (uint64_t)(uintptr_t)obj;
    }
+}
+
+/* Share the existing exact meta key and table. Failure entries allocate only
+ * after a deterministic native shader error; ordinary warm lookups stay on
+ * their original object path. Never expose a fake or NULL successful handle. */
+struct meta_pipeline_failure {
+   struct cache_key key;
+   VkResult result;
+   unsigned char data[];
+};
+
+static bool
+meta_lookup_pipeline_result(struct vk_meta_device *meta,
+                           const void *key_data, size_t key_size,
+                           VkPipeline *pipeline, VkResult *result)
+{
+   struct cache_key key = {
+      .obj_type = VK_OBJECT_TYPE_PIPELINE,
+      .key_size = key_size,
+      .key_data = key_data,
+   };
+   simple_mtx_lock(&meta->cache_mtx);
+   struct hash_entry *entry = _mesa_hash_table_search(meta->cache, &key);
+   if (entry) {
+      *pipeline = (VkPipeline)(uintptr_t)entry->data;
+      *result = VK_SUCCESS;
+   } else {
+      key.obj_type = VK_OBJECT_TYPE_UNKNOWN;
+      entry = _mesa_hash_table_search(meta->cache, &key);
+      if (entry) {
+         *pipeline = VK_NULL_HANDLE;
+         *result = ((const struct meta_pipeline_failure *)entry->data)->result;
+      }
+   }
+   simple_mtx_unlock(&meta->cache_mtx);
+   return entry != NULL;
+}
+
+static void
+meta_cache_pipeline_failure(struct vk_meta_device *meta,
+                            const void *key_data, size_t key_size,
+                            VkResult result)
+{
+   /* OOM and other transient failures remain retryable. This is the error
+    * returned by a rejected native shader/function specialization. */
+   if (result != VK_ERROR_INVALID_SHADER_NV) return;
+   assert(key_size <= UINT32_MAX);
+   if (key_size > SIZE_MAX - sizeof(struct meta_pipeline_failure)) return;
+   struct meta_pipeline_failure *failure = malloc(sizeof(*failure) + key_size);
+   if (!failure) return; /* Memoization must not replace the original error. */
+   failure->key = (struct cache_key) {
+      .obj_type = VK_OBJECT_TYPE_UNKNOWN,
+      .key_size = key_size,
+      .key_data = failure->data,
+   };
+   failure->result = result;
+   memcpy(failure->data, key_data, key_size);
+   simple_mtx_lock(&meta->cache_mtx);
+   struct cache_key valid = failure->key;
+   valid.obj_type = VK_OBJECT_TYPE_PIPELINE;
+   if (_mesa_hash_table_search(meta->cache, &valid) ||
+       _mesa_hash_table_search(meta->cache, &failure->key)) {
+      free(failure);
+   } else {
+      _mesa_hash_table_insert(meta->cache, &failure->key, failure);
+   }
+   simple_mtx_unlock(&meta->cache_mtx);
 }
 
 VkResult
@@ -406,6 +476,11 @@ vk_meta_create_graphics_pipeline(struct vk_device *device,
                                  const void *key_data, size_t key_size,
                                  VkPipeline *pipeline_out)
 {
+   VkResult cached_result;
+   if (meta_lookup_pipeline_result(meta, key_data, key_size, pipeline_out,
+                                   &cached_result))
+      return cached_result;
+
    const struct vk_device_dispatch_table *disp = &device->dispatch_table;
    VkDevice _device = vk_device_to_handle(device);
    VkResult result;
@@ -470,8 +545,11 @@ vk_meta_create_graphics_pipeline(struct vk_device *device,
                                              1, &info_local,
                                              NULL, &pipeline);
    }
-   if (unlikely(result != VK_SUCCESS))
+   if (unlikely(result != VK_SUCCESS)) {
+      *pipeline_out = VK_NULL_HANDLE;
+      meta_cache_pipeline_failure(meta, key_data, key_size, result);
       return result;
+   }
 
    *pipeline_out = (VkPipeline)vk_meta_cache_object(device, meta,
                                                     key_data, key_size,
@@ -487,14 +565,22 @@ vk_meta_create_compute_pipeline(struct vk_device *device,
                                 const void *key_data, size_t key_size,
                                 VkPipeline *pipeline_out)
 {
+   VkResult cached_result;
+   if (meta_lookup_pipeline_result(meta, key_data, key_size, pipeline_out,
+                                   &cached_result))
+      return cached_result;
+
    const struct vk_device_dispatch_table *disp = &device->dispatch_table;
    VkDevice _device = vk_device_to_handle(device);
 
    VkPipeline pipeline;
    VkResult result = disp->CreateComputePipelines(_device, meta->pipeline_cache,
                                                   1, info, NULL, &pipeline);
-   if (result != VK_SUCCESS)
+   if (result != VK_SUCCESS) {
+      *pipeline_out = VK_NULL_HANDLE;
+      meta_cache_pipeline_failure(meta, key_data, key_size, result);
       return result;
+   }
 
    *pipeline_out = (VkPipeline)vk_meta_cache_object(device, meta,
                                                     key_data, key_size,
