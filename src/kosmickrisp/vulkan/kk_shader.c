@@ -3149,6 +3149,8 @@ kk_record_render_descriptor(struct kk_device *device, struct kk_shader *shader,
 struct kk_lazy_polygon {
    bool gs_mesh;
    bool fsr_coarse;
+   /* Release-stored as the build's last write; see kk_lazy_polygon_run. */
+   bool published;
    util_once_flag once;
    VkResult result;
    struct kk_device *device;
@@ -3161,33 +3163,36 @@ kk_compile_graphics_prerender(struct kk_device *device, struct kk_shader *vs,
 {
    struct kk_pipeline_handles *pipe = &vs->pipeline;
    mesa_shader_stage vs_stage = MESA_SHADER_VERTEX;
-   VkResult result;
+   VkResult result = VK_SUCCESS;
    uint32_t stages_bits = vs->info.vs.additional_stages_bits;
-   pipe->gfx.pre_render_count = util_bitcount(stages_bits) - 1u;
-   for (uint32_t i = 0u; i < pipe->gfx.pre_render_count; ++i) {
+   /* Built into locals and published whole, so the shader's pre-render slots
+    * and count only ever hold a complete set (or the empty one on failure). */
+   mtl_compute_pipeline_state *built[ARRAY_SIZE(pipe->gfx.pre_render)] = {0};
+   uint32_t count = util_bitcount(stages_bits) - 1u;
+   for (uint32_t i = 0u; i < count && result == VK_SUCCESS; ++i) {
       uint32_t local_thread_size = vs_stage == MESA_SHADER_TESS_CTRL
                                       ? vs->info.vs.tess_local_thread_size
                                       : KK_POLY_WG_SIZE;
       result = kk_compile_compute_pipeline(device, vs, &vs->msl_data[vs_stage],
-                                           local_thread_size,
-                                           &pipe->gfx.pre_render[i]);
-
-      if (result != VK_SUCCESS)
-         return VK_ERROR_INVALID_SHADER_NV;
+                                           local_thread_size, &built[i]);
       vs_stage = u_bit_scan(&stages_bits);
    }
 
    /* The GS compute pass is the last pre-render pipeline, its rasterization VS
     * pairs with the FS. */
-   if (vs->info.vs.additional_stages_bits &
-       BITFIELD_BIT(MESA_SHADER_GEOMETRY)) {
-      result = kk_compile_compute_pipeline(
-         device, vs, &vs->gs_main, KK_POLY_WG_SIZE,
-         &pipe->gfx.pre_render[pipe->gfx.pre_render_count++]);
-      if (result != VK_SUCCESS)
-         return VK_ERROR_INVALID_SHADER_NV;
-   }
+   if (result == VK_SUCCESS &&
+       (vs->info.vs.additional_stages_bits & BITFIELD_BIT(MESA_SHADER_GEOMETRY)))
+      result = kk_compile_compute_pipeline(device, vs, &vs->gs_main, KK_POLY_WG_SIZE,
+                                           &built[count++]);
 
+   if (result != VK_SUCCESS) {
+      for (uint32_t i = 0u; i < ARRAY_SIZE(built); ++i)
+         if (built[i]) mtl_release(built[i]);
+      return VK_ERROR_INVALID_SHADER_NV;
+   }
+   for (uint32_t i = 0u; i < count; ++i)
+      pipe->gfx.pre_render[i] = built[i];
+   pipe->gfx.pre_render_count = count;
    *raster_stage = vs_stage;
    return VK_SUCCESS;
 }
@@ -3399,6 +3404,22 @@ kk_compile_polygon_once(const void *data)
                                             &lazy->shader->pipeline);
    else
       lazy->result = kk_compile_polygon_siblings(lazy->device, lazy->shader);
+   p_atomic_set(&lazy->published, true);
+}
+
+/* Command buffers on any thread run a shader's lazy build through its once
+ * and then read the handles that build wrote. util_call_once_data's fast path
+ * reads its flag with relaxed ordering, which on arm64 does not order those
+ * later reads after the build's writes. The acquire load of published does;
+ * reading it unset after the once is a stale read, and the C11 call_once on
+ * the completed flag returns at once and synchronizes with the build. */
+static VkResult
+kk_lazy_polygon_run(struct kk_lazy_polygon *lazy)
+{
+   util_call_once_data(&lazy->once, kk_compile_polygon_once, lazy);
+   if (unlikely(!p_atomic_read(&lazy->published)))
+      util_call_once_data_slow(&lazy->once.flag, kk_compile_polygon_once, lazy);
+   return lazy->result;
 }
 
 VkResult
@@ -3408,8 +3429,7 @@ kk_shader_ensure_fsr_coarse(struct kk_device *dev, struct kk_shader *shader)
    if (!lazy)
       return VK_ERROR_INVALID_SHADER_NV;
    assert(lazy->device == dev);
-   util_call_once_data(&lazy->once, kk_compile_polygon_once, lazy);
-   return lazy->result;
+   return kk_lazy_polygon_run(lazy);
 }
 
 VkResult
@@ -3419,8 +3439,7 @@ kk_shader_ensure_polygon(struct kk_device *dev, struct kk_shader *shader)
    if (!lazy)
       return VK_SUCCESS;
    assert(lazy->device == dev);
-   util_call_once_data(&lazy->once, kk_compile_polygon_once, lazy);
-   return lazy->result;
+   return kk_lazy_polygon_run(lazy);
 }
 
 static VkResult
