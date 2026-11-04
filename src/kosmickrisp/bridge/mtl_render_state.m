@@ -54,6 +54,8 @@ mtl_render_pass_descriptor_get_info(mtl_render_pass_descriptor *descriptor,
       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
       *info = (struct mtl_render_pass_info) {
          .default_samples = (uint32_t)desc.defaultRasterSampleCount,
+         .width = (uint32_t)desc.renderTargetWidth,
+         .height = (uint32_t)desc.renderTargetHeight,
       };
       for (uint32_t i = 0; i < 8; i++)
          info->attachments[i] =

@@ -11,6 +11,7 @@ struct vk_queue_submit;
 struct kk_perf;
 struct kk_image;
 struct VkImageCreateInfo;
+struct VkRect2D;
 enum kk_perf_metric {
    KK_PERF_RECORD, KK_PERF_REPLAY, KK_PERF_ENCODE, KK_PERF_SUBMIT,
    KK_PERF_ACQUIRE, KK_PERF_PRESENT, KK_PERF_PRESENT_WAIT,
@@ -80,7 +81,8 @@ uint64_t kk_perf_commit_trace(struct kk_perf *, const char *phase, uint64_t id,
 void kk_perf_cache_lookup(struct vk_device *, bool hit);
 /* Physical native pass counters are CPU recording observations, not GPU
  * presentation counts. No bridge snapshot is made when tracking is disabled. */
-void kk_perf_render_begin(struct kk_perf *, const void *encoder, void *descriptor);
+void kk_perf_render_begin(struct kk_perf *, const void *encoder, void *descriptor,
+                           const struct VkRect2D *render_area);
 void kk_perf_render_stores(struct kk_perf *, const void *encoder,
                             const uint32_t stores[10]);
 void kk_perf_render_end(struct kk_perf *, const void *encoder);

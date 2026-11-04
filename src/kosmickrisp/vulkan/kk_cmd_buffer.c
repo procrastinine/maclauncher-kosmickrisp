@@ -518,7 +518,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
    if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL)) {
       kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_RENDER_ENCODER_BEGIN, 0);
       kk_perf_render_begin(kk_cmd_buffer_device(cmd)->perf, cmd->metal.render,
-                            state->render_pass_descriptor);
+                            state->render_pass_descriptor, &state->render.area);
    }
 
    apply_pending_barrier(cmd, cmd->metal.render);

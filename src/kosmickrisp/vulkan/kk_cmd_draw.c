@@ -284,6 +284,19 @@ kk_set_color_attachments(mtl_render_pass_descriptor *pass_descriptor,
 
 #include "kk_layered_bc_render.h"
 
+/* Native extents include the render area's far corner. Keep partial-attachment
+ * load/store preservation independent of this raster/tile bound. */
+static VkExtent2D
+kk_render_target_extent(VkExtent2D framebuffer, const VkRect2D *area)
+{
+   return (VkExtent2D) {
+      .width = MAX2(MIN2((uint64_t)area->offset.x + area->extent.width,
+                         framebuffer.width), 1u),
+      .height = MAX2(MIN2((uint64_t)area->offset.y + area->extent.height,
+                          framebuffer.height), 1u),
+   };
+}
+
 VKAPI_ATTR void VKAPI_CALL
 kk_begin_rendering(VkCommandBuffer commandBuffer,
                      const VkRenderingInfo *pRenderingInfo)
@@ -393,10 +406,12 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
       mtl_render_pass_descriptor_set_default_raster_sample_count(
          pass_descriptor, 1u);
    } else {
-      mtl_render_pass_descriptor_set_render_target_width(
-         pass_descriptor, render->area.extent.width + render->area.offset.x);
-      mtl_render_pass_descriptor_set_render_target_height(
-         pass_descriptor, render->area.extent.height + render->area.offset.y);
+      const VkExtent2D target =
+         kk_render_target_extent(framebuffer_extent, &render->area);
+      mtl_render_pass_descriptor_set_render_target_width(pass_descriptor,
+                                                          target.width);
+      mtl_render_pass_descriptor_set_render_target_height(pass_descriptor,
+                                                           target.height);
 
       /* Render targets are always arrays */
       mtl_render_pass_descriptor_set_render_target_array_length(

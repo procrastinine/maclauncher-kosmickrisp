@@ -36,6 +36,7 @@ struct mtl_render_pass_info {
    uint32_t default_samples;
    struct mtl_render_pass_attachment_info
       attachments[MTL_RENDER_PASS_INFO_ATTACHMENTS];
+   uint32_t width, height;
 };
 
 /* Read-only snapshot; callers opt in before requesting native properties. */

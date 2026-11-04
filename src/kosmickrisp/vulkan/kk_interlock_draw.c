@@ -171,7 +171,8 @@ kk_interlock_render_batch(struct kk_interlock_draw *p, unsigned program,
    mtl_render_encoder *enc =
       mtl_new_render_command_encoder_with_descriptor(p->command, pass);
    if (unlikely(p->device->perf != NULL))
-      kk_perf_render_begin(p->device->perf, enc, pass);
+      /* This internal tiled pass is not an application rendering scope. */
+      kk_perf_render_begin(p->device->perf, enc, pass, NULL);
    mtl_release(pass);
    mtl_barrier_after_queue_stages(enc, MTL_STAGE_ALL,
       MTL_STAGE_VERTEX | MTL_STAGE_FRAGMENT);

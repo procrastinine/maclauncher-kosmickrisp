@@ -31,11 +31,16 @@ struct kk_perf_gpu_stat {
 struct kk_perf_render_pass {
    const void *encoder;
    struct mtl_render_pass_info info;
+   VkRect2D area;
+   bool area_known;
 };
 struct kk_perf_attachment_stat {
    uint32_t aspect, format, samples, load, store;
    uint64_t count;
    const void *texture, *base_texture;
+   VkRect2D area;
+   uint32_t width, height;
+   bool area_known;
 };
 
 struct kk_perf {
@@ -339,9 +344,18 @@ render_flush_locked(struct kk_perf *p)
       const struct kk_perf_attachment_stat *a = &p->render_attachments[i];
       fprintf(p->log, "%s{\"aspect\":\"%s\",\"metal_format\":%u,\"samples\":%u,"
               "\"load_action\":%u,\"store_action\":%u,\"count\":%"PRIu64
-              ",\"texture\":\"%p\",\"base_texture\":\"%p\"}",
+              ",\"texture\":\"%p\",\"base_texture\":\"%p\","
+              "\"target_extent\":[%u,%u],\"render_area\":",
               i ? "," : "", aspects[a->aspect], a->format, a->samples,
-              a->load, a->store, a->count, a->texture, a->base_texture);
+              a->load, a->store, a->count, a->texture, a->base_texture,
+              a->width, a->height);
+      if (a->area_known)
+         fprintf(p->log, "{\"offset\":[%d,%d],\"extent\":[%u,%u]}",
+                 a->area.offset.x, a->area.offset.y,
+                 a->area.extent.width, a->area.extent.height);
+      else
+         fprintf(p->log, "null");
+      fprintf(p->log, "}");
    }
    fprintf(p->log, "]}");
    p->render_count = p->render_dropped_passes = p->render_dropped_attachments = 0;
@@ -350,7 +364,8 @@ render_flush_locked(struct kk_perf *p)
 }
 
 void
-kk_perf_render_begin(struct kk_perf *p, const void *encoder, void *descriptor)
+kk_perf_render_begin(struct kk_perf *p, const void *encoder, void *descriptor,
+                     const VkRect2D *render_area)
 {
    if (!encoder) {
       pthread_mutex_lock(&p->mutex);
@@ -374,7 +389,11 @@ kk_perf_render_begin(struct kk_perf *p, const void *encoder, void *descriptor)
    if (free_slot == ARRAY_SIZE(p->render_active))
       p->render_dropped_passes++;
    else
-      p->render_active[free_slot] = (struct kk_perf_render_pass){encoder, info};
+      p->render_active[free_slot] = (struct kk_perf_render_pass) {
+         .encoder = encoder, .info = info,
+         .area = render_area ? *render_area : (VkRect2D){0},
+         .area_known = render_area != NULL,
+      };
    pthread_mutex_unlock(&p->mutex);
 }
 
@@ -421,7 +440,13 @@ kk_perf_render_end(struct kk_perf *p, const void *encoder)
             if (s->aspect == aspect && s->format == info->format &&
                 s->samples == info->samples && s->load == (uint32_t)info->load &&
                 s->store == (uint32_t)info->store &&
-                s->texture == info->texture && s->base_texture == info->base_texture) {
+                s->texture == info->texture && s->base_texture == info->base_texture &&
+                s->width == pass->info.width && s->height == pass->info.height &&
+                s->area_known == pass->area_known &&
+                s->area.offset.x == pass->area.offset.x &&
+                s->area.offset.y == pass->area.offset.y &&
+                s->area.extent.width == pass->area.extent.width &&
+                s->area.extent.height == pass->area.extent.height) {
                s->count++;
                break;
             }
@@ -431,8 +456,12 @@ kk_perf_render_end(struct kk_perf *p, const void *encoder)
                p->render_dropped_attachments++;
             else {
                p->render_attachments[k] = (struct kk_perf_attachment_stat){
-                  aspect, info->format, info->samples, info->load, info->store, 1,
-                  info->texture, info->base_texture};
+                  .aspect = aspect, .format = info->format,
+                  .samples = info->samples, .load = info->load, .store = info->store,
+                  .count = 1, .texture = info->texture,
+                  .base_texture = info->base_texture, .area = pass->area,
+                  .width = pass->info.width, .height = pass->info.height,
+                  .area_known = pass->area_known};
                p->render_attachment_count++;
             }
          }
