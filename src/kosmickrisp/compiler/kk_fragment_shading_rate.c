@@ -6,6 +6,7 @@
 #include "nir_control_flow.h"
 #include "util/set.h"
 #include "msl_compute_derivatives.h"
+#include "msl_virtual_subgroups.h"
 
 struct coarse_values {
    nir_def *mask, *helper, *position, *rate, *primitive, *result;
@@ -37,6 +38,17 @@ lower_application(nir_builder *b, nir_intrinsic_instr *intr, void *data)
       nir_pop_if(b, NULL);
       nir_instr_remove(&intr->instr);
       return true;
+   case nir_intrinsic_ballot:
+   case nir_intrinsic_vote_any:
+   case nir_intrinsic_vote_all:
+   case nir_intrinsic_reduce:
+   case nir_intrinsic_inclusive_scan:
+   case nir_intrinsic_exclusive_scan:
+   case nir_intrinsic_elect:
+   case nir_intrinsic_read_first_invocation:
+   case nir_intrinsic_vote_feq:
+   case nir_intrinsic_vote_ieq:
+      return msl_lower_virtual_subgroup(b, intr, v->helper);
    case nir_intrinsic_load_sample_mask_in: replace = v->mask; break;
    case nir_intrinsic_load_primitive_id: replace = v->primitive; break;
    case nir_intrinsic_store_output: {
@@ -379,6 +391,18 @@ lower_native_application(nir_builder *b, nir_instr *instr, void *data)
       nir_pop_if(b, NULL);
       nir_instr_remove(instr);
       return true;
+   case nir_intrinsic_ballot:
+   case nir_intrinsic_vote_any:
+   case nir_intrinsic_vote_all:
+   case nir_intrinsic_reduce:
+   case nir_intrinsic_inclusive_scan:
+   case nir_intrinsic_exclusive_scan:
+   case nir_intrinsic_elect:
+   case nir_intrinsic_read_first_invocation:
+   case nir_intrinsic_vote_feq:
+   case nir_intrinsic_vote_ieq:
+      return msl_lower_virtual_subgroup(b, intr,
+         nir_ior(b, v->helper, nir_is_helper_invocation(b, 1)));
    case nir_intrinsic_is_helper_invocation:
       /* Dynamic queries (including the shared helper-write guards) must
        * continue to observe native demotion at this application point. */
