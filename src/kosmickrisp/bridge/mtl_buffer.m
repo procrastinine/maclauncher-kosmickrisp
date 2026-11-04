@@ -9,8 +9,42 @@
 /* TODO_KOSMICKRISP Remove */
 #include "kk_image_layout.h"
 
-#include <Metal/MTLBuffer.h>
+#include <Metal/Metal.h>
 #include <Metal/MTLTexture.h>
+
+/* A private allocation is not visible to any Vulkan queue until this
+ * independent fill has completed. No queue state or pending BO clear is kept.
+ * The temporary queue exists only for allocations requesting zero contents.
+ */
+enum mtl_command_queue_error
+mtl_buffer_zero_sync(mtl_device *device, mtl_buffer *buffer)
+{
+   @autoreleasepool {
+      id<MTLCommandQueue> queue = [(id<MTLDevice>)device newCommandQueue];
+      if (!queue)
+         return MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY;
+
+      id<MTLCommandBuffer> commands = [queue commandBuffer];
+      id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
+      if (!blit) {
+         [queue release];
+         return MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY;
+      }
+      id<MTLBuffer> target = (id<MTLBuffer>)buffer;
+      [blit fillBuffer:target range:NSMakeRange(0, target.length) value:0];
+      [blit endEncoding];
+      [commands commit];
+      [commands waitUntilCompleted];
+
+      enum mtl_command_queue_error result = MTL_COMMAND_QUEUE_ERROR_NONE;
+      if (commands.status != MTLCommandBufferStatusCompleted)
+         result = commands.error.code == MTLCommandBufferErrorOutOfMemory
+                     ? MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY
+                     : MTL_COMMAND_QUEUE_ERROR_INTERNAL;
+      [queue release];
+      return result;
+   }
+}
 
 uint64_t
 mtl_buffer_get_length(mtl_buffer *buffer)

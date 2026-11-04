@@ -19,6 +19,10 @@ uint64_t mtl_buffer_get_gpu_address(mtl_buffer *buffer);
 /* Gets CPU address */
 void *mtl_get_contents(mtl_buffer *buffer);
 
+/* Zero the complete buffer and wait before exposing the allocation. */
+enum mtl_command_queue_error
+mtl_buffer_zero_sync(mtl_device *device, mtl_buffer *buffer);
+
 /* Allocation from buffer */
 mtl_texture *mtl_new_texture_with_descriptor_linear(
    mtl_buffer *buffer, const struct kk_image_layout *layout, uint64_t offset);

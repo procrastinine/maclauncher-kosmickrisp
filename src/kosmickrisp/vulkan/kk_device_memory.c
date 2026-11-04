@@ -20,6 +20,7 @@
 #include "util/u_memory.h"
 
 #include <inttypes.h>
+#include <string.h>
 #include <sys/mman.h>
 
 /* Supports mtlheap only */
@@ -185,6 +186,27 @@ fail_import:
          kk_alloc_bo_options(dev, &dev->vk.base, aligned_size, alignment, options, &mem->bo);
       if (result != VK_SUCCESS)
          goto fail_alloc;
+
+      /* Imports never enter this branch. VUID-flags-10760 forbids the zero
+       * allocation flag on an import; supplied contents must be preserved.
+       */
+      if (mem->vk.alloc_flags & VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT) {
+         if (mem->bo->cpu) {
+            memset(mem->bo->cpu, 0, mem->bo->size_B);
+         } else {
+            enum mtl_command_queue_error error =
+               mtl_buffer_zero_sync(dev->mtl_handle, mem->bo->map);
+            if (error != MTL_COMMAND_QUEUE_ERROR_NONE) {
+               kk_destroy_bo(dev, mem->bo);
+               if (error == MTL_COMMAND_QUEUE_ERROR_OUT_OF_MEMORY)
+                  result = vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+               else
+                  result = vk_device_set_lost(&dev->vk,
+                                             "Device memory zero fill failed");
+               goto fail_alloc;
+            }
+         }
+      }
    }
 
    *pMem = kk_device_memory_to_handle(mem);
