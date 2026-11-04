@@ -345,6 +345,12 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       _mesa_blake3_update(&blake3_ctx, &mesh_provoking_key, sizeof(mesh_provoking_key));
    }
 
+   if (state && state->mv && state->mv->view_mask &&
+       (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT)) {
+      const uint32_t mesh_view_transport = 0x4d565750u;
+      _mesa_blake3_update(&blake3_ctx, &mesh_view_transport, sizeof(mesh_view_transport));
+   }
+
    /* Pre-raster multiview also changes shaders without an FS. Keep
     * ordinary no-multiview keys unchanged. */
    if (!(stages & VK_SHADER_STAGE_FRAGMENT_BIT) && state && state->mv &&
@@ -1283,7 +1289,12 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
       NIR_PASS(_, nir, kk_nir_lower_poly_multiview, poly_multiview,
                last_preraster);
 
-   if ((nir->info.stage == MESA_SHADER_TASK || nir->info.stage == MESA_SHADER_MESH) &&
+   /* Mesh replay supplies one original view through per-draw data. Fragment
+    * ViewIndex must not depend on an application Layer output that is only
+    * synthesized later by the Mesh MSL emitter. */
+   if ((nir->info.stage == MESA_SHADER_TASK || nir->info.stage == MESA_SHADER_MESH ||
+        (nir->info.stage == MESA_SHADER_FRAGMENT && state &&
+         (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT))) &&
        state && state->mv && state->mv->view_mask)
       NIR_PASS(_, nir, kk_nir_lower_poly_multiview, true, false);
 

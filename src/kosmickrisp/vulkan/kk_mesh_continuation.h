@@ -15,6 +15,7 @@ struct kk_mesh_continuation {
    __typeof__(((struct kk_cmd_buffer *)0)->state) state;
    struct vk_dynamic_graphics_state dynamic;
    struct kk_ptr snapshot;
+   mtl_render_pass_descriptor *render_pass;
    uint64_t indirect, count;
    uint32_t maximum, recorded_maximum, stride, draw, base, total, chunk;
    bool force_virtual, snapshot_pending;
@@ -28,6 +29,7 @@ kk_mesh_continuation_finish(struct kk_device *dev, void *data)
 {
    struct kk_mesh_continuation *p = data;
    if (p->pool) kk_DestroyCommandPool(kk_device_to_handle(dev), p->pool, NULL);
+   mtl_release(p->render_pass);
    for (unsigned i = 0; i < KK_MAX_SETS; ++i)
       free(p->state.gfx.descriptors.push[i]);
    free(p);
@@ -98,7 +100,7 @@ kk_mesh_continuation_step(struct kk_mesh_continuation *p)
    cmd->state.rt = NULL;
    cmd->state.gfx.depth_stencil_state = NULL;
    cmd->state.gfx.is_depth_stencil_dynamic = false;
-   cmd->state.gfx.render_pass_descriptor = NULL;
+   cmd->state.gfx.render_pass_descriptor = mtl_retain(p->render_pass);
    cmd->state.gfx.need_to_start_render_pass = true;
    cmd->state.gfx.mesh_payloads = cmd->state.gfx.mesh_records = 0;
    cmd->state.gfx.mesh_batch = cmd->state.gfx.mesh_slices = 0;
@@ -172,6 +174,8 @@ kk_mesh_continue_indirect(struct kk_cmd_buffer *cmd, uint64_t indirect,
    if (!p) return VK_ERROR_OUT_OF_HOST_MEMORY;
    struct kk_device *dev = p->device = kk_cmd_buffer_device(cmd);
    kk_flush_gfx_state(cmd);
+   p->render_pass = mtl_copy_render_pass_descriptor_for_resume(cmd->state.gfx.render_pass_descriptor);
+   if (!p->render_pass) goto fail;
    p->state = cmd->state;
    memset(p->state.gfx.descriptors.push, 0, sizeof(p->state.gfx.descriptors.push));
    for (unsigned i = 0; i < KK_MAX_SETS; ++i) {

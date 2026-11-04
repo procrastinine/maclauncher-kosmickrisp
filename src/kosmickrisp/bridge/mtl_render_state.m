@@ -28,6 +28,28 @@ mtl_new_render_pass_descriptor(void)
    });
 }
 
+/* Own the native attachment views and full array extent across a deferred
+ * draw. The capture applies clears/resolves; auxiliary chunks only load/store. */
+mtl_render_pass_descriptor *
+mtl_copy_render_pass_descriptor_for_resume(mtl_render_pass_descriptor *source)
+{
+   KK_MTL_REPLAY_POOL({
+      MTL4RenderPassDescriptor *copy = [(MTL4RenderPassDescriptor *)source copy];
+      for (unsigned i = 0; i < 8; ++i) {
+         copy.colorAttachments[i].loadAction = MTLLoadActionLoad;
+         copy.colorAttachments[i].storeAction = MTLStoreActionStore;
+         copy.colorAttachments[i].resolveTexture = nil;
+      }
+      copy.depthAttachment.loadAction = MTLLoadActionLoad;
+      copy.depthAttachment.storeAction = MTLStoreActionStore;
+      copy.depthAttachment.resolveTexture = nil;
+      copy.stencilAttachment.loadAction = MTLLoadActionLoad;
+      copy.stencilAttachment.storeAction = MTLStoreActionStore;
+      copy.stencilAttachment.resolveTexture = nil;
+      return copy;
+   });
+}
+
 static void
 mtl_clear_recycled_attachment(MTLRenderPassAttachmentDescriptor *attachment)
 {

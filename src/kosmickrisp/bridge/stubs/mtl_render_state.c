@@ -18,6 +18,12 @@ mtl_new_render_pass_descriptor(void)
    return NULL;
 }
 
+mtl_render_pass_descriptor *
+mtl_copy_render_pass_descriptor_for_resume(mtl_render_pass_descriptor *source)
+{
+   return NULL;
+}
+
 void
 mtl_render_pass_descriptor_get_info(mtl_render_pass_descriptor *descriptor,
                                      struct mtl_render_pass_info *info)
