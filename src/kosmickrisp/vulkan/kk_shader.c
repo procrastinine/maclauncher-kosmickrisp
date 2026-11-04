@@ -488,6 +488,10 @@ kk_lower_fs_blend(nir_shader *nir,
          &state->cb->attachments[i];
       rt->format =
          vk_format_to_pipe_format(state->rp->color_attachment_formats[i]);
+      /* Blend equations operate on logical RGBA. Trimming an A8 target to
+       * one component would retain red and discard alpha. */
+      if (rt->format == PIPE_FORMAT_A8_UNORM)
+         rt->format = PIPE_FORMAT_R8G8B8A8_UNORM;
       rt->colormask = att->write_mask;
 
       if (!att->blend_enable) {
@@ -1098,6 +1102,7 @@ kk_compile_msl(struct kk_physical_device *pdev, nir_shader *nir,
             vk_format_to_pipe_format(state->rp->color_attachment_formats[i]);
          if (format != PIPE_FORMAT_NONE) {
             translate_options.rts_component_count[logical_index] =
+               format == PIPE_FORMAT_A8_UNORM ? 4 :
                util_format_get_nr_components(format);
          }
       }

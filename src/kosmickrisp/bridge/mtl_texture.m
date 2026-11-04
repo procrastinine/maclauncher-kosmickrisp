@@ -78,7 +78,9 @@ mtl_new_texture_view_with(mtl_texture *texture, const struct kk_view_layout *lay
 {
    @autoreleasepool {
       id<MTLTexture> tex = (id<MTLTexture>)texture;
-      MTLTextureType type = mtl_texture_view_type(layout->view_type, layout->sample_count_sa);
+      MTLTextureType type = tex.textureType == MTLTextureTypeTextureBuffer ?
+         MTLTextureTypeTextureBuffer :
+         mtl_texture_view_type(layout->view_type, layout->sample_count_sa);
       NSRange levels = NSMakeRange(layout->base_level, layout->num_levels);
       NSRange slices = NSMakeRange(layout->base_array_layer, layout->array_len);
       MTLTextureSwizzleChannels swizzle = MTLTextureSwizzleChannelsMake(mtl_texture_swizzle(layout->swizzle.red),

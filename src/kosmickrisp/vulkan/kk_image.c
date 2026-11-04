@@ -71,9 +71,7 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
       features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT;
    }
 
-   /* We disable A8 format due to lower blend pass issues */
-   if (va_format->color && tiling != VK_IMAGE_TILING_LINEAR &&
-       vk_format != VK_FORMAT_A8_UNORM) {
+   if (va_format->color && tiling != VK_IMAGE_TILING_LINEAR) {
       features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT;
       features |= VK_FORMAT_FEATURE_2_BLIT_DST_BIT;
       // TODO_KOSMICKRISP Support snorm formats once the following spec issue is

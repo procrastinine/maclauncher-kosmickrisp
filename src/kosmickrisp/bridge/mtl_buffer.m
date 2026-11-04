@@ -5,6 +5,7 @@
  */
 
 #include "mtl_buffer.h"
+#include "mtl_texture.h"
 
 /* TODO_KOSMICKRISP Remove */
 #include "kk_image_layout.h"
@@ -74,6 +75,16 @@ mtl_get_contents(mtl_buffer *buffer)
 }
 
 /* TODO_KOSMICKRISP This is a duplicate, but both should be removed once we move kk_image_layout to the bridge. */
+static bool
+mtl_buffer_needs_swizzle(const struct kk_image_layout *layout)
+{
+   return layout->type == MTL_TEXTURE_TYPE_TEXTURE_BUFFER &&
+          (layout->swizzle.red != PIPE_SWIZZLE_X ||
+           layout->swizzle.green != PIPE_SWIZZLE_Y ||
+           layout->swizzle.blue != PIPE_SWIZZLE_Z ||
+           layout->swizzle.alpha != PIPE_SWIZZLE_W);
+}
+
 static MTLTextureDescriptor *
 mtl_new_texture_descriptor(const struct kk_image_layout *layout)
 {
@@ -89,6 +100,8 @@ mtl_new_texture_descriptor(const struct kk_image_layout *layout)
       descriptor.arrayLength = layout->layers;
       descriptor.allowGPUOptimizedContents = layout->optimized_layout;
       descriptor.usage = (MTLTextureUsage)layout->usage;
+      if (mtl_buffer_needs_swizzle(layout))
+         descriptor.usage |= MTLTextureUsagePixelFormatView;
       /* We don't set the swizzle because Metal complains when the usage has store or render target with swizzle... */
       
       return descriptor;
@@ -106,6 +119,19 @@ mtl_new_texture_with_descriptor_linear(mtl_buffer *buffer,
       descriptor.resourceOptions = buf.resourceOptions;
       id<MTLTexture> texture = [buf newTextureWithDescriptor:descriptor offset:offset bytesPerRow:layout->linear_stride_B];
 
+      if (texture && mtl_buffer_needs_swizzle(layout)) {
+         struct kk_view_layout view = {
+            .sample_count_sa = 1,
+            .format = {.pipe = layout->format.pipe, .mtl = layout->format.mtl},
+            .num_levels = 1,
+            .array_len = 1,
+            .swizzle = {.red = layout->swizzle.red, .green = layout->swizzle.green,
+                        .blue = layout->swizzle.blue, .alpha = layout->swizzle.alpha},
+         };
+         mtl_texture *swizzled = mtl_new_texture_view_with(texture, &view);
+         [texture release];
+         return swizzled;
+      }
       return texture;
    }
 }
