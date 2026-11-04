@@ -175,7 +175,39 @@ kk_sample_mark(nir_builder *b, nir_tex_instr *tex, void *data)
        ((flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_MINMAX | KK_SAMPLE_SPARSE)) ||
         tex->op == nir_texop_lod ||
         (tex->backend_flags & KK_SAMPLE_NATIVE_CUBE_LOD))) {
+      /* Ordinary native sampling does not consume the software LOD. Keep
+       * derivatives outside the descriptor-dependent branch, but defer size
+       * queries and gradient math until the same virtual/reduction predicate
+       * used by the sampling helper. Sparse/query/cube-native paths consume
+       * LOD independently and explicit scalar LOD needs no gradient work. */
+      bool conditional_lod = !tex->is_sparse && tex->op != nir_texop_lod &&
+         !(tex->backend_flags & KK_SAMPLE_NATIVE_CUBE_LOD) &&
+         !nir_get_tex_src(tex, nir_tex_src_lod) &&
+         !(known && known->is_virtual) &&
+         !((flags & KK_SAMPLE_MINMAX) && known_mode > 0);
+      nir_if *lod_if = NULL;
+      if (conditional_lod) {
+         nir_def *plane = nir_get_tex_src(tex, nir_tex_src_plane);
+         unsigned plane_offset = plane ? nir_src_as_uint(nir_src_for_ssa(plane)) *
+            sizeof(struct kk_sampled_image_descriptor) : 0;
+         nir_def *metadata = load_resource_deref_desc(b, 2, 16, deref,
+            plane_offset + offsetof(struct kk_sampled_image_descriptor,
+                                    sampler_reduction_mode), &ctx->descriptors);
+         nir_def *emulated = (flags & KK_SAMPLE_VIRTUAL) ? nir_ine_imm(b,
+            nir_iand_imm(b, nir_channel(b, metadata, 1), KK_SAMPLER_FILTER_VIRTUAL), 0) :
+            nir_imm_bool(b, false);
+         if (flags & KK_SAMPLE_MINMAX)
+            emulated = nir_ior(b, emulated,
+               nir_ine_imm(b, nir_channel(b, metadata, 0), 0));
+         lod_if = nir_push_if(b, emulated);
+      }
       nir_def *lod = kk_minmax_lod(b, tex, dx, dy);
+      if (lod_if) {
+         nir_push_else(b, lod_if);
+         nir_def *unused = nir_imm_float(b, 0);
+         nir_pop_if(b, lod_if);
+         lod = nir_if_phi(b, lod, unused);
+      }
       nir_tex_instr_add_src(tex, nir_tex_src_backend2, nir_pad_vec4(b, lod));
    }
    if (implicit) {

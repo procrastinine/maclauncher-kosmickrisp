@@ -99,6 +99,7 @@ struct kk_precompiled_cache {
 
 struct kk_device {
    struct vk_device vk;
+   simple_mtx_t pipeline_cache_init_mutex;
    struct kk_perf *perf;
    simple_mtx_t depth_stencil_cache_mutex;
    struct hash_table *depth_stencil_cache;

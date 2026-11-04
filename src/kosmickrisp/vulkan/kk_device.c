@@ -423,6 +423,78 @@ kk_get_timestamp(struct vk_device *device, uint64_t *timestamp)
    return VK_SUCCESS;
 }
 
+/* The common runtime consults its implicit cache before calling the driver
+ * compiler. Initialize at the API boundary so the very first lookup, binary
+ * restore and meta pipeline share the same weak cache. Failed allocation can
+ * be retried; warm callers never take the initialization mutex. */
+static VkResult
+kk_ensure_pipeline_cache(struct kk_device *dev)
+{
+   if (p_atomic_read(&dev->vk.mem_cache))
+      return VK_SUCCESS;
+
+   simple_mtx_lock(&dev->pipeline_cache_init_mutex);
+   struct vk_pipeline_cache *cache = p_atomic_read(&dev->vk.mem_cache);
+   if (!cache) {
+      struct vk_pipeline_cache_create_info info = {.weak_ref = true};
+      cache = vk_pipeline_cache_create(&dev->vk, &info, NULL);
+      if (cache)
+         p_atomic_set(&dev->vk.mem_cache, cache);
+   }
+   simple_mtx_unlock(&dev->pipeline_cache_init_mutex);
+   return cache ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+kk_CreateGraphicsPipelines(VkDevice device, VkPipelineCache cache,
+                          uint32_t count,
+                          const VkGraphicsPipelineCreateInfo *infos,
+                          const VkAllocationCallbacks *allocator,
+                          VkPipeline *pipelines)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   VkResult result = count ? kk_ensure_pipeline_cache(dev) : VK_SUCCESS;
+   if (result != VK_SUCCESS) {
+      memset(pipelines, 0, count * sizeof(*pipelines));
+      return result;
+   }
+   return vk_common_CreateGraphicsPipelines(device, cache, count, infos,
+                                            allocator, pipelines);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+kk_CreateComputePipelines(VkDevice device, VkPipelineCache cache,
+                         uint32_t count,
+                         const VkComputePipelineCreateInfo *infos,
+                         const VkAllocationCallbacks *allocator,
+                         VkPipeline *pipelines)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   VkResult result = count ? kk_ensure_pipeline_cache(dev) : VK_SUCCESS;
+   if (result != VK_SUCCESS) {
+      memset(pipelines, 0, count * sizeof(*pipelines));
+      return result;
+   }
+   return vk_common_CreateComputePipelines(device, cache, count, infos,
+                                           allocator, pipelines);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+kk_CreatePipelineBinariesKHR(VkDevice device,
+                            const VkPipelineBinaryCreateInfoKHR *info,
+                            const VkAllocationCallbacks *allocator,
+                            VkPipelineBinaryHandlesInfoKHR *binaries)
+{
+   VK_FROM_HANDLE(kk_device, dev, device);
+   if (info->pPipelineCreateInfo &&
+       dev->vk.physical->properties.pipelineBinaryInternalCache) {
+      VkResult result = kk_ensure_pipeline_cache(dev);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+   return vk_common_CreatePipelineBinariesKHR(device, info, allocator, binaries);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 kk_CreateDevice(VkPhysicalDevice physicalDevice,
                 const VkDeviceCreateInfo *pCreateInfo,
@@ -523,13 +595,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       mtl_residency_set_request_residency(dev->residency_set.priority_handle);
    }
 
-   /* Weak entries reuse live shaders and their native Metal pipelines. */
-   struct vk_pipeline_cache_create_info cache_info = {.weak_ref = true};
-   dev->vk.mem_cache = vk_pipeline_cache_create(&dev->vk, &cache_info, NULL);
-   if (dev->vk.mem_cache == NULL) {
-      result = VK_ERROR_OUT_OF_HOST_MEMORY;
-      goto fail_mem_cache;
-   }
+   /* No cache allocation until the first pipeline operation. */
+   simple_mtx_init(&dev->pipeline_cache_init_mutex, mtx_plain);
 
    for (uint32_t i = 0; i < pCreateInfo->queueCreateInfoCount; ++i) {
       const VkDeviceQueueCreateInfo *info = &pCreateInfo->pQueueCreateInfos[i];
@@ -606,6 +673,7 @@ fail_meta:
    kk_device_finish_meta(dev);
 fail_mem_cache:
    vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
+   simple_mtx_destroy(&dev->pipeline_cache_init_mutex);
    while (dev->queue_count > 0)
       kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
 fail_vab_memory:
@@ -696,6 +764,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    simple_mtx_destroy(&dev->residency_set.mutex);
 
    vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
+   simple_mtx_destroy(&dev->pipeline_cache_init_mutex);
    kk_release_compiler(dev);
    kk_interlock_submission_finish(dev);
 
