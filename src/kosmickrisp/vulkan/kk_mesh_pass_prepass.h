@@ -98,6 +98,24 @@ kk_mesh_pass_state_command(enum vk_cmd_type type)
    }
 }
 
+/* Raster work stays at its original position. Any dependency publishing a
+ * later Mesh input is classified separately; these draws are never advanced. */
+static bool
+kk_mesh_pass_raster_command(enum vk_cmd_type type)
+{
+   switch (type) {
+   case VK_CMD_DRAW: case VK_CMD_DRAW_INDEXED:
+   case VK_CMD_DRAW_MULTI_EXT: case VK_CMD_DRAW_MULTI_INDEXED_EXT:
+   case VK_CMD_DRAW_INDIRECT: case VK_CMD_DRAW_INDEXED_INDIRECT:
+   case VK_CMD_DRAW_INDIRECT_COUNT: case VK_CMD_DRAW_INDEXED_INDIRECT_COUNT:
+   case VK_CMD_DRAW_INDIRECT_BYTE_COUNT_EXT: case VK_CMD_DRAW_INDIRECT_BYTE_COUNT2_EXT:
+   case VK_CMD_DRAW_INDIRECT2_KHR: case VK_CMD_DRAW_INDEXED_INDIRECT2_KHR:
+   case VK_CMD_DRAW_INDIRECT_COUNT2_KHR: case VK_CMD_DRAW_INDEXED_INDIRECT_COUNT2_KHR:
+      return true;
+   default: return false;
+   }
+}
+
 static bool
 kk_mesh_pass_call_info(const struct vk_cmd_queue_entry *entry,
    struct kk_mesh_pass_call *call)
@@ -404,6 +422,8 @@ kk_mesh_pass_eligible(struct kk_cmd_buffer *cmd, struct kk_mesh_pass *p)
          only_mesh &= !mesh->mesh->info.has_task;
          direct_conditional |= !call.grid && conditional.enabled;
 
+      } else if (kk_mesh_pass_raster_command(e->type)) {
+         /* Keep regular and Mesh draws in their recorded relative order. */
       } else if (kk_mesh_pass_boundary(e) || e->type == VK_CMD_BEGIN_RENDERING ||
                  e->type == VK_CMD_END_RENDERING || e->type == VK_CMD_END_RENDERING2_KHR) {
          /* Complete chains were checked before scanning their draws. */
