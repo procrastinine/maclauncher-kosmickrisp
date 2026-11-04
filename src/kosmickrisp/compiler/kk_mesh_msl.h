@@ -274,8 +274,11 @@ kk_mesh_emit_functions(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
    /* Function temporaries, such as sparse-access residency results, are
     * declared in the body as in the ordinary entry points. */
    msl_helper_locals(ctx, impl);
+   /* The statistics count invocations: one atomic per workgroup adds its
+    * local invocation count. */
    if (ctx->mesh.queries)
-      P_IND(ctx, "if (gl_LocalInvocationIndex == 0) kk_mesh_stat(params.%s_statistic, 1);\n", task ? "task" : "mesh");
+      P_IND(ctx, "if (gl_LocalInvocationIndex == 0) kk_mesh_stat(params.%s_statistic, %uu);\n",
+            task ? "task" : "mesh", MAX2(threads, 1u));
    predeclare_ssa_values(ctx, impl);
    foreach_list_typed(nir_cf_node, node, node, &impl->body)
       cf_node_to_metal(ctx, node);
