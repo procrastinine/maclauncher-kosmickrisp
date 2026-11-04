@@ -19,4 +19,17 @@ uint32_t kk_nir_vrs_result_stride(nir_shader *nir);
 bool kk_nir_vrs_uses_per_draw(nir_shader *nir);
 void kk_nir_vrs_lower_fine_rate(nir_shader *nir);
 bool kk_nir_lower_linked_replay_fragment(nir_shader *nir, unsigned samples);
+struct nir_builder;
+/* Compilation clone only. Keep the actual named body and typed globals;
+ * remove its sole call from the existing fine wrapper without inlining or
+ * repeating any finishing pass. The caller later selects its transaction
+ * entry and calls application once, fine epilogue per original sample. */
+bool kk_nir_vrs_take_fine_epilogue(nir_shader *, nir_function **application,
+   nir_function **epilogue);
+/* Caller owns liveness/coverage, pointer validity and ordered packet lifetime.
+ * Load restores every typed application output before the fine callable and
+ * slices SampleMask by its original coarse-pixel/sample bit position. */
+bool kk_nir_vrs_store_payload(struct nir_builder *, nir_def *result);
+bool kk_nir_vrs_load_payload(struct nir_builder *, nir_def *result,
+   nir_def *sample_shift, unsigned samples);
 #endif

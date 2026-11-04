@@ -559,6 +559,54 @@ vrs_payload_layout(nir_shader *nir, struct vrs_payload_layout *layout)
    return true;
 }
 
+static void
+vrs_store_payload(nir_builder *b, const struct vrs_payload_layout *layout,
+                   nir_def *result)
+{
+   for (unsigned i = 0; i < layout->count; i++) {
+      const struct vrs_payload_output *o = &layout->outputs[i];
+      nir_store_global(b, nir_load_var(b, o->variable),
+         nir_iadd_imm(b, result, o->offset),
+         .write_mask = BITFIELD_MASK(o->components), .align_mul = o->bits / 8);
+   }
+}
+
+static void
+vrs_load_payload(nir_builder *b, const struct vrs_payload_layout *layout,
+                  nir_def *result, nir_def *sample_shift, unsigned samples)
+{
+   for (unsigned i = 0; i < layout->count; i++) {
+      const struct vrs_payload_output *o = &layout->outputs[i];
+      nir_def *value = nir_load_global(b, o->components, o->bits,
+         nir_iadd_imm(b, result, o->offset), .align_mul = o->bits / 8);
+      if (o->variable->data.location == FRAG_RESULT_SAMPLE_MASK)
+         value = nir_iand_imm(b, nir_ushr(b, value, sample_shift), BITFIELD_MASK(samples));
+      nir_store_var(b, o->variable, value, BITFIELD_MASK(o->components));
+   }
+}
+
+bool
+kk_nir_vrs_store_payload(nir_builder *b, nir_def *result)
+{
+   struct vrs_payload_layout layout;
+   if (!vrs_payload_layout(b->shader, &layout))
+      return false;
+   vrs_store_payload(b, &layout, result);
+   return true;
+}
+
+bool
+kk_nir_vrs_load_payload(nir_builder *b, nir_def *result,
+                        nir_def *sample_shift, unsigned samples)
+{
+   struct vrs_payload_layout layout;
+   if ((samples != 1 && samples != 2 && samples != 4) ||
+       !vrs_payload_layout(b->shader, &layout))
+      return false;
+   vrs_load_payload(b, &layout, result, sample_shift, samples);
+   return true;
+}
+
 bool
 kk_nir_vrs_uses_per_draw(nir_shader *nir)
 {
@@ -884,12 +932,7 @@ lower_native_coarse_fragment(nir_shader *nir, const struct vrs_payload_layout *l
     * publish application results. Termination leaves the earlier empty mask. */
    nir_push_if(&b, nir_inot(&b, nir_ior(&b, v.helper, nir_is_helper_invocation(&b, 1))));
    if (linked) {
-      for (unsigned i = 0; i < linked->count; i++) {
-         const struct vrs_payload_output *o = &linked->outputs[i];
-         nir_store_global(&b, nir_load_var(&b, o->variable),
-            nir_iadd_imm(&b, result, o->offset),
-            .write_mask = BITFIELD_MASK(o->components), .align_mul = o->bits / 8);
-      }
+      vrs_store_payload(&b, linked, result);
    } else {
       nir_store_global(&b, nir_load_var(&b, temporary), nir_iadd_imm(&b, result,
          offsetof(struct kk_vrs_result, color)), .write_mask = 15, .align_mul = 4);
@@ -1074,6 +1117,45 @@ kk_nir_vrs_lower_fine_rate(nir_shader *nir)
                                  nir_metadata_control_flow, NULL);
 }
 
+static nir_call_instr *
+vrs_application_call(nir_shader *nir)
+{
+   nir_call_instr *call = NULL;
+   nir_foreach_block(block, nir_shader_get_entrypoint(nir)) nir_foreach_instr(instr, block) {
+      if (instr->type != nir_instr_type_call)
+         continue;
+      nir_call_instr *candidate = nir_instr_as_call(instr);
+      if (call || strcmp(candidate->callee->name, "kk_vrs_application") ||
+          !candidate->callee->impl || candidate->callee->num_params)
+         return NULL;
+      call = candidate;
+   }
+   return call;
+}
+
+bool
+kk_nir_vrs_take_fine_epilogue(nir_shader *nir, nir_function **application,
+                              nir_function **epilogue)
+{
+   if (!application || !epilogue)
+      return false;
+   *application = NULL;
+   *epilogue = NULL;
+   if (nir->info.stage != MESA_SHADER_FRAGMENT || !nir->info.io_lowered)
+      return false;
+   nir_call_instr *call = vrs_application_call(nir);
+   if (!call)
+      return false;
+   *application = call->callee;
+   nir_function_impl *fine = nir_shader_get_entrypoint(nir);
+   *epilogue = fine->function;
+   nir_instr_remove(&call->instr);
+   /* Both functions and their actual typed globals remain owned by this
+    * compilation clone. The transaction chooses its new entry point later. */
+   nir_progress(true, fine, nir_metadata_none);
+   return true;
+}
+
 /* Replay executes the original once-lowered fine epilogue after substituting
  * captured application results. The application function is removed, so its
  * external effects cannot run again. Typed exports use the declared payload;
@@ -1087,15 +1169,7 @@ kk_nir_lower_linked_replay_fragment(nir_shader *nir, unsigned samples)
    struct vrs_payload_layout layout;
    if (!vrs_payload_layout(nir, &layout)) return false;
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
-   nir_call_instr *call = NULL;
-   nir_foreach_block(block, impl) nir_foreach_instr(instr, block) {
-      if (instr->type == nir_instr_type_call) {
-         if (call || strcmp(nir_instr_as_call(instr)->callee->name,
-                            "kk_vrs_application")) return false;
-         call = nir_instr_as_call(instr);
-      }
-
-   }
+   nir_call_instr *call = vrs_application_call(nir);
    if (!call) return false;
    nir_builder b = nir_builder_create(impl);
    b.cursor = nir_before_cf_list(&impl->body);
@@ -1144,17 +1218,9 @@ kk_nir_lower_linked_replay_fragment(nir_shader *nir, unsigned samples)
          BITFIELD_MASK(o->components));
    }
    nir_push_if(&b, nir_ine_imm(&b, coverage, 0));
-   for (unsigned i = 0; i < layout.count; i++) {
-      const struct vrs_payload_output *o = &layout.outputs[i];
-      nir_def *value = nir_load_global(&b, o->components, o->bits,
-         nir_iadd_imm(&b, result, o->offset), .align_mul = o->bits / 8);
-      /* Application SampleMask uses the coarse pixel/sample bit order.
-       * Slice it before the once-lowered fine epilogue combines static masks
-       * or alpha coverage. Intersecting every pixel with bit zero is wrong. */
-      if (o->variable->data.location == FRAG_RESULT_SAMPLE_MASK)
-         value = nir_iand_imm(&b, nir_ushr(&b, value, shift), sample_bits);
-      nir_store_var(&b, o->variable, value, BITFIELD_MASK(o->components));
-   }
+   /* The same typed load/slicing is used by the software DS output callback;
+    * the original fine epilogue never calls the application again. */
+   vrs_load_payload(&b, &layout, result, shift, samples);
    nir_pop_if(&b, NULL);
    nir_pop_if(&b, NULL);
    coverage = nir_if_phi(&b, coverage, zero_mask);
