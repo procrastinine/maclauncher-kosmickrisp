@@ -3,6 +3,7 @@
 #define KK_FRAGMENT_SHADING_RATE_RESOURCES_H
 #include "kk_cmd_buffer.h"
 #include "kosmickrisp/libkk/kk_fragment_shading_rate_types.h"
+#include "kk_fragment_shading_rate_workspace.h"
 
 /* Origins align to complete logical quads for every supported rate. A final
  * window may extend past the render area; native scissors clip its actual
@@ -58,4 +59,29 @@ VkResult kk_vrs_cmd_prepare_next_mesh_job(struct kk_cmd_buffer *,
    const struct kk_mesh_retained_batch *, const struct kk_vrs_mesh_jobs *,
    const struct mtl_vrs_pipelines *, mtl_argument_table *private_table,
    const struct kk_vrs_prepared *);
+/* Storage is caller-owned and must be fresh or fully retired before CPU init.
+ * Each concurrently executing submission needs independent storage or the
+ * existing completion-ordering owner. No resource is allocated/cached here.
+ * Packet contains the actual DS/input state and retained typed array read
+ * views (single/MSAA as samples requires); their owner holds them to retirement.
+ * GPU reuse/clear/continuation and all producer reads remain caller-owned. */
+struct kk_vrs_transaction_workspace {
+   struct kk_ptr storage;
+   struct kk_vrs_workspace_layout layout;
+   const struct kk_depth_bounds_envelope *envelope;
+   const struct kk_vrs_transaction_context *contexts;
+   uint64_t envelope_gpu, job_records_gpu, cursor_gpu;
+};
+struct kk_vrs_shadow_programs;
+VkResult kk_vrs_workspace_initialize(const struct kk_vrs_shadow_programs *,
+   const struct kk_vrs_workspace_layout *, struct kk_ptr storage, uint32_t storage_size,
+   const struct kk_vrs_context *parameters, const struct kk_depth_bounds_envelope *packet,
+   bool mesh_source, struct kk_vrs_transaction_workspace *out);
+/* Only PER_DRAW on the caller's separate private table changes. A row has an
+ * immutable region_base (0/4/8/12); application/root/sampler tables stay with
+ * their existing owner. No slot is interpreted as shader PrimitiveID. */
+VkResult kk_vrs_cmd_bind_workspace(struct kk_cmd_buffer *,
+   const struct kk_vrs_transaction_workspace *, mtl_argument_table *original,
+   mtl_argument_table *private_table, uint32_t job, uint32_t row);
+
 #endif

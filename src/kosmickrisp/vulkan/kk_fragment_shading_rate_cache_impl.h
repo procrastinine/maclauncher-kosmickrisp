@@ -898,6 +898,9 @@ kk_vrs_shadow_programs_get(struct kk_device *dev, struct kk_vrs_source *source,
    result = kk_vrs_artifact_compute(dev, p->transaction, p->statistics, &p->transaction_pipeline);
    if (result != VK_SUCCESS) goto fail;
    p->samples = state->samples;
+   p->uses_per_draw = source->data.uses_per_draw;
+   p->has_depth = state->depth_format != VK_FORMAT_UNDEFINED;
+   p->has_stencil = state->stencil_format != VK_FORMAT_UNDEFINED;
    for (unsigned physical = 0; physical < state->color_count; physical++) {
       unsigned logical = state->color_map[physical];
       if (logical != MESA_VK_ATTACHMENT_UNUSED &&

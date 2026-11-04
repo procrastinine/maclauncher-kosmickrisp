@@ -123,7 +123,7 @@ struct kk_vrs_shadow_programs {
    mtl_compute_pipeline_state *load_pipeline, *transaction_pipeline;
    enum mtl_pixel_format formats[8];
    uint32_t input_stride, samples;
-   bool statistics;
+   bool statistics, uses_per_draw, has_depth, has_stencil;
 };
 struct mtl_vrs_shadow_pipelines;
 VkResult kk_vrs_shadow_programs_get(struct kk_device *, struct kk_vrs_source *,
