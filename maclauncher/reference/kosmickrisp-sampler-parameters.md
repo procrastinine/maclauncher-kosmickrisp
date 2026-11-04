@@ -1,6 +1,6 @@
 # Immutable sampler parameter storage
 
-Sampler parameter records use the shared kk-sampler-params.h declaration and occupy 32 bytes with 16-byte alignment. The allocation API stores the complete record in the same resident 64 KiB pages used for 192-byte sampler metadata. Pages remain allocated until valid device teardown, preserving addresses referenced by copied and embedded metadata.
+Sampler parameter records use the shared kk-sampler-params.h declaration and occupy 32 bytes with 16-byte alignment. The allocation API stores the complete record in the same resident 64 KiB pages used for 192-byte sampler metadata. Pages remain allocated until valid device teardown, preserving addresses referenced by copied and embedded metadata. The optional CPU allocation result and host sampler params_cpu field alias the same initialized arena bytes as params_gpu_address. The CPU alias remains NULL until finalization succeeds and shares the record's device lifetime.
 
 kk_sampler_params_alloc_locked requires descriptor_heap_lock to be held by its caller. kk_sampler_params_alloc acquires and releases that lock. Both allocation entries require the native sampler mutex to be released. Sampler constructors carry an explicit kk_sampler_params_lock_context independent of native sampler indexing.
 

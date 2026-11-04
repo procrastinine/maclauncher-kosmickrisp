@@ -22,7 +22,7 @@ struct kk_buffer {
    struct vk_buffer vk;
    mtl_buffer *sparse_residency;
    uint32_t sparse_record;
-   struct kk_heap_buffer_view *heap_views;
+   struct kk_heap_cache *heap_views;
    struct kk_buffer *heap_next;
    bool heap_registered;
 

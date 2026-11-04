@@ -4,6 +4,7 @@
 #include "kk_image.h"
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "vk_sampler.h"
+#include "util/hash_table.h"
 
 #define KK_HEAP_SAMPLER_DESCRIPTOR_SIZE sizeof(uint64_t)
 #define KK_HEAP_IMAGE_DESCRIPTOR_SIZE sizeof(struct kk_sampled_image_descriptor)
@@ -15,8 +16,15 @@ struct kk_heap_metadata_page {
    uint32_t used;
 };
 
+/* The common case repeats one view/state. Keep that hit as a direct equality
+ * check; the Mesa hash index bounds lookup work when a cache has many entries. */
+struct kk_heap_cache {
+   struct hash_table table;
+   const void *last_key;
+   void *last_data;
+};
+
 struct kk_heap_sampler {
-   struct kk_heap_sampler *next;
    struct vk_sampler_state state;
    VkSampler sampler;
    struct kk_sampled_image_descriptor descriptor[3];
@@ -24,25 +32,115 @@ struct kk_heap_sampler {
 };
 
 struct kk_heap_border {
-   struct kk_heap_border *next;
-   uint32_t index;
    VkClearColorValue value;
    VkFormat format;
+   bool used;
+};
+
+/* Existing public border indices are dense and bounded by the device limit.
+ * Grow only as needed; lookup/reuse needs no per-entry allocation or scan. */
+struct kk_heap_border_registry {
+   uint32_t capacity, first_free;
+   struct kk_heap_border entries[];
 };
 
 struct kk_heap_image_view {
-   struct kk_heap_image_view *next;
    uint8_t key[sizeof(struct vk_image_view) -
                offsetof(struct vk_image_view, create_flags)];
    struct kk_image_view view;
 };
 
-struct kk_heap_buffer_view {
-   struct kk_heap_buffer_view *next;
-   VkFormat format;
+struct kk_heap_buffer_view_key {
    uint64_t offset, size;
+   VkFormat format;
+};
+
+struct kk_heap_buffer_view {
+   struct kk_heap_buffer_view_key key;
    VkBufferView view;
 };
+
+static uint32_t
+kk_heap_sampler_hash(const void *key)
+{
+   return _mesa_hash_data(key, sizeof(struct vk_sampler_state));
+}
+
+static bool
+kk_heap_sampler_equal(const void *a, const void *b)
+{
+   return memcmp(a, b, sizeof(struct vk_sampler_state)) == 0;
+}
+
+static uint32_t
+kk_heap_image_view_hash(const void *key)
+{
+   return _mesa_hash_data(key, sizeof(((struct kk_heap_image_view *)0)->key));
+}
+
+static bool
+kk_heap_image_view_equal(const void *a, const void *b)
+{
+   return memcmp(a, b, sizeof(((struct kk_heap_image_view *)0)->key)) == 0;
+}
+
+static uint32_t
+kk_heap_buffer_view_hash(const void *data)
+{
+   const struct kk_heap_buffer_view_key *key = data;
+   /* Do not hash structure padding. */
+   uint32_t hash = _mesa_hash_data(&key->offset, sizeof(key->offset));
+   hash = _mesa_hash_data_with_seed(&key->size, sizeof(key->size), hash);
+   return _mesa_hash_data_with_seed(&key->format, sizeof(key->format), hash);
+}
+
+static bool
+kk_heap_buffer_view_equal(const void *a, const void *b)
+{
+   const struct kk_heap_buffer_view_key *x = a, *y = b;
+   return x->offset == y->offset && x->size == y->size && x->format == y->format;
+}
+
+/* Only an actual heap descriptor/embedded-sampler request creates a cache.
+ * The unused device, image and buffer keep their existing single NULL slot. */
+static VkResult
+kk_heap_cache_init(struct kk_device *dev, struct kk_heap_cache **cache,
+                   uint32_t (*hash)(const void *),
+                   bool (*equal)(const void *, const void *))
+{
+   if (*cache)
+      return VK_SUCCESS;
+   *cache = vk_zalloc(&dev->vk.alloc, sizeof(**cache), 8,
+                      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+   if (!*cache)
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   _mesa_hash_table_init(&(*cache)->table, NULL, hash, equal);
+   return VK_SUCCESS;
+}
+
+static void *
+kk_heap_cache_lookup(struct kk_heap_cache *cache, const void *key,
+                     bool (*equal)(const void *, const void *))
+{
+   if (cache->last_key && equal(cache->last_key, key))
+      return cache->last_data;
+   struct hash_entry *entry = _mesa_hash_table_search(&cache->table, key);
+   if (!entry)
+      return NULL;
+   cache->last_key = entry->key;
+   cache->last_data = entry->data;
+   return entry->data;
+}
+
+static bool
+kk_heap_cache_insert(struct kk_heap_cache *cache, const void *key, void *data)
+{
+   if (!_mesa_hash_table_insert(&cache->table, key, data))
+      return false;
+   cache->last_key = key;
+   cache->last_data = data;
+   return true;
+}
 
 void
 kk_descriptor_heap_init(struct kk_device *dev)
@@ -53,12 +151,14 @@ kk_descriptor_heap_init(struct kk_device *dev)
 void
 kk_descriptor_heap_finish(struct kk_device *dev)
 {
-   struct kk_heap_sampler *sampler = dev->heap_samplers;
-   while (sampler) {
-      struct kk_heap_sampler *next = sampler->next;
-      kk_DestroySampler(kk_device_to_handle(dev), sampler->sampler, NULL);
-      vk_free(&dev->vk.alloc, sampler);
-      sampler = next;
+   if (dev->heap_samplers) {
+      hash_table_foreach(&dev->heap_samplers->table, entry) {
+         struct kk_heap_sampler *sampler = entry->data;
+         kk_DestroySampler(kk_device_to_handle(dev), sampler->sampler, NULL);
+         vk_free(&dev->vk.alloc, sampler);
+      }
+      _mesa_hash_table_fini(&dev->heap_samplers->table, NULL);
+      vk_free(&dev->vk.alloc, dev->heap_samplers);
    }
    struct kk_heap_metadata_page *page = dev->heap_metadata_pages;
    while (page) {
@@ -67,24 +167,21 @@ kk_descriptor_heap_finish(struct kk_device *dev)
       vk_free(&dev->vk.alloc, page);
       page = next;
    }
-   struct kk_heap_border *border = dev->heap_borders;
-   while (border) {
-      struct kk_heap_border *next = border->next;
-      vk_free(&dev->vk.alloc, border);
-      border = next;
-   }
+   vk_free(&dev->vk.alloc, dev->heap_borders);
    simple_mtx_destroy(&dev->descriptor_heap_lock);
 }
 
 void
 kk_descriptor_heap_image_finish(struct kk_device *dev, struct kk_image *image)
 {
-   struct kk_heap_image_view *view = image->heap_views;
-   while (view) {
-      struct kk_heap_image_view *next = view->next;
-      kk_image_view_finish(dev, &view->view);
-      vk_free(&dev->vk.alloc, view);
-      view = next;
+   if (image->heap_views) {
+      hash_table_foreach(&image->heap_views->table, entry) {
+         struct kk_heap_image_view *view = entry->data;
+         kk_image_view_finish(dev, &view->view);
+         vk_free(&dev->vk.alloc, view);
+      }
+      _mesa_hash_table_fini(&image->heap_views->table, NULL);
+      vk_free(&dev->vk.alloc, image->heap_views);
    }
    image->heap_views = NULL;
 }
@@ -115,12 +212,14 @@ kk_descriptor_heap_buffer_finish(struct kk_device *dev, struct kk_buffer *buffer
    if (*link)
       *link = buffer->heap_next;
    simple_mtx_unlock(&dev->descriptor_heap_lock);
-   struct kk_heap_buffer_view *view = buffer->heap_views;
-   while (view) {
-      struct kk_heap_buffer_view *next = view->next;
-      kk_DestroyBufferView(kk_device_to_handle(dev), view->view, NULL);
-      vk_free(&dev->vk.alloc, view);
-      view = next;
+   if (buffer->heap_views) {
+      hash_table_foreach(&buffer->heap_views->table, entry) {
+         struct kk_heap_buffer_view *view = entry->data;
+         kk_DestroyBufferView(kk_device_to_handle(dev), view->view, NULL);
+         vk_free(&dev->vk.alloc, view);
+      }
+      _mesa_hash_table_fini(&buffer->heap_views->table, NULL);
+      vk_free(&dev->vk.alloc, buffer->heap_views);
    }
    buffer->heap_views = NULL;
    buffer->heap_registered = false;
@@ -134,12 +233,15 @@ kk_heap_sampler_locked(struct kk_device *dev,
                         const struct vk_sampler_state *state,
                         struct kk_heap_sampler **out)
 {
-   for (struct kk_heap_sampler *entry = dev->heap_samplers; entry;
-        entry = entry->next) {
-      if (!memcmp(&entry->state, state, sizeof(*state))) {
-         *out = entry;
-         return VK_SUCCESS;
-      }
+   VkResult result = kk_heap_cache_init(dev, &dev->heap_samplers,
+                                        kk_heap_sampler_hash, kk_heap_sampler_equal);
+   if (result != VK_SUCCESS)
+      return result;
+   struct kk_heap_sampler *cached = kk_heap_cache_lookup(dev->heap_samplers,
+                                                          state, kk_heap_sampler_equal);
+   if (cached) {
+      *out = cached;
+      return VK_SUCCESS;
    }
    struct kk_heap_sampler *entry = vk_zalloc(&dev->vk.alloc, sizeof(*entry), 8,
                                               VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
@@ -190,7 +292,7 @@ kk_heap_sampler_locked(struct kk_device *dev,
       .borderColor = state->border_color,
       .unnormalizedCoordinates = state->unnormalized_coordinates,
    };
-   VkResult result = kk_create_heap_sampler(dev, &info, &entry->sampler,
+   result = kk_create_heap_sampler(dev, &info, &entry->sampler,
                                              KK_SAMPLER_PARAMS_HEAP_LOCK_HELD);
    if (result == VK_SUCCESS) {
       VkDescriptorImageInfo descriptor = {.sampler = entry->sampler};
@@ -217,9 +319,13 @@ kk_heap_sampler_locked(struct kk_device *dev,
       }
       sampler->vk.ycbcr_conversion = NULL;
       entry->state = *state;
-      entry->next = dev->heap_samplers;
-      dev->heap_samplers = entry;
-      *out = entry;
+      if (!kk_heap_cache_insert(dev->heap_samplers, &entry->state, entry)) {
+         kk_DestroySampler(kk_device_to_handle(dev), entry->sampler, NULL);
+         vk_free(&dev->vk.alloc, entry);
+         result = vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      } else {
+         *out = entry;
+      }
    } else {
       vk_free(&dev->vk.alloc, entry);
    }
@@ -267,11 +373,20 @@ kk_heap_embedded_sampler_table(struct kk_device *dev, uint32_t count,
    if (!states || count > dev->vk.physical->properties.maxDescriptorHeapEmbeddedSamplers ||
        count > KK_HEAP_METADATA_PAGE_SIZE / sizeof(uint64_t))
       return vk_error(dev, VK_ERROR_UNKNOWN);
-   uint64_t *addresses = vk_alloc(&dev->vk.alloc, count * sizeof(*addresses), 8,
-                                 VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-   if (!addresses) return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   uint64_t single_address = 0, table = 0;
+   uint64_t *addresses = &single_address;
    simple_mtx_lock(&dev->descriptor_heap_lock);
    VkResult result = VK_SUCCESS;
+   if (count > 1) {
+      void *cpu;
+      result = kk_heap_metadata_reserve_locked(dev, count * sizeof(*addresses),
+                                               8, &cpu, &table);
+      if (result != VK_SUCCESS) {
+         simple_mtx_unlock(&dev->descriptor_heap_lock);
+         return result;
+      }
+      addresses = cpu;
+   }
    for (uint32_t i = 0; i < count; ++i) {
       struct kk_heap_sampler *sampler;
       result = kk_heap_sampler_locked(dev, &states[i], &sampler);
@@ -280,15 +395,11 @@ kk_heap_embedded_sampler_table(struct kk_device *dev, uint32_t count,
       if (result != VK_SUCCESS) break;
       addresses[i] = sampler->gpu_address;
    }
-   if (result == VK_SUCCESS) {
-      if (count == 1)
-         *gpu_address = addresses[0];
-      else
-         result = kk_heap_metadata_alloc_locked(dev, addresses,
-            count * sizeof(*addresses), 8, gpu_address);
-   }
+   /* Publish only a complete immutable table. Each slot was initialized in
+    * its final resident allocation; no host temporary/copy/free is needed. */
+   if (result == VK_SUCCESS)
+      *gpu_address = count == 1 ? single_address : table;
    simple_mtx_unlock(&dev->descriptor_heap_lock);
-   vk_free(&dev->vk.alloc, addresses);
    return result;
 }
 
@@ -298,41 +409,52 @@ kk_RegisterCustomBorderColorEXT(VkDevice _device,
    VkBool32 requestIndex, uint32_t *pIndex)
 {
    VK_FROM_HANDLE(kk_device, dev, _device);
-   struct kk_heap_border *entry = vk_zalloc(&dev->vk.alloc, sizeof(*entry), 8,
-                                            VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-   if (!entry)
-      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    simple_mtx_lock(&dev->descriptor_heap_lock);
-   uint32_t index = requestIndex ? *pIndex : 0;
    const uint32_t limit = kk_device_physical(dev)->vk.properties.maxCustomBorderColorSamplers;
-   for (;;) {
-      if (index >= limit) {
-         simple_mtx_unlock(&dev->descriptor_heap_lock);
-         vk_free(&dev->vk.alloc, entry);
-         return vk_error(dev, requestIndex ? VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS
-                                           : VK_ERROR_TOO_MANY_OBJECTS);
-      }
-      bool occupied = false;
-      for (struct kk_heap_border *other = dev->heap_borders; other;
-           other = other->next)
-         occupied |= other->index == index;
-      if (!occupied)
-         break;
-      if (requestIndex) {
-         simple_mtx_unlock(&dev->descriptor_heap_lock);
-         vk_free(&dev->vk.alloc, entry);
-         return vk_error(dev, VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS);
-      }
-      ++index;
+   uint32_t index = requestIndex ? *pIndex :
+      (dev->heap_borders ? dev->heap_borders->first_free : 0);
+   VkResult result = VK_SUCCESS;
+   if (index >= limit) {
+      result = vk_error(dev, requestIndex ? VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS
+                                         : VK_ERROR_TOO_MANY_OBJECTS);
+      goto out;
    }
-   entry->index = index;
-   entry->value = pBorderColor->customBorderColor;
-   entry->format = pBorderColor->format;
-   entry->next = dev->heap_borders;
-   dev->heap_borders = entry;
+   struct kk_heap_border_registry *registry = dev->heap_borders;
+   const uint32_t old_capacity = registry ? registry->capacity : 0;
+   if (index >= old_capacity) {
+      const uint32_t capacity = MIN2(limit, MAX2(index + 1u,
+                                                old_capacity ? old_capacity * 2u : 16u));
+      const size_t size = sizeof(*registry) + capacity * sizeof(registry->entries[0]);
+      registry = vk_realloc(&dev->vk.alloc, registry, size, 8,
+                              VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+      if (!registry) {
+         result = vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+         goto out;
+      }
+      if (!old_capacity)
+         registry->first_free = 0;
+      memset(&registry->entries[old_capacity], 0,
+             (capacity - old_capacity) * sizeof(registry->entries[0]));
+      registry->capacity = capacity;
+      dev->heap_borders = registry;
+   }
+   if (registry->entries[index].used) {
+      result = vk_error(dev, VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS);
+      goto out;
+   }
+   registry->entries[index] = (struct kk_heap_border){
+      .value = pBorderColor->customBorderColor, .format = pBorderColor->format, .used = true,
+   };
+   if (index == registry->first_free) {
+      do {
+         registry->first_free++;
+      } while (registry->first_free < registry->capacity &&
+               registry->entries[registry->first_free].used);
+   }
    *pIndex = index;
+out:
    simple_mtx_unlock(&dev->descriptor_heap_lock);
-   return VK_SUCCESS;
+   return result;
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -340,13 +462,10 @@ kk_UnregisterCustomBorderColorEXT(VkDevice _device, uint32_t index)
 {
    VK_FROM_HANDLE(kk_device, dev, _device);
    simple_mtx_lock(&dev->descriptor_heap_lock);
-   struct kk_heap_border **link = &dev->heap_borders;
-   while (*link && (*link)->index != index)
-      link = &(*link)->next;
-   if (*link) {
-      struct kk_heap_border *entry = *link;
-      *link = entry->next;
-      vk_free(&dev->vk.alloc, entry);
+   struct kk_heap_border_registry *registry = dev->heap_borders;
+   if (registry && index < registry->capacity && registry->entries[index].used) {
+      registry->entries[index].used = false;
+      registry->first_free = MIN2(registry->first_free, index);
    }
    simple_mtx_unlock(&dev->descriptor_heap_lock);
 }
@@ -367,16 +486,16 @@ kk_WriteSamplerDescriptorsEXT(VkDevice _device, uint32_t samplerCount,
       const VkSamplerCustomBorderColorIndexCreateInfoEXT *indexed =
          vk_find_struct_const(info.pNext, SAMPLER_CUSTOM_BORDER_COLOR_INDEX_CREATE_INFO_EXT);
       if (indexed) {
-         struct kk_heap_border *entry = dev->heap_borders;
-         while (entry && entry->index != indexed->index)
-            entry = entry->next;
-         assert(entry);
-         if (!entry) {
+         struct kk_heap_border_registry *registry = dev->heap_borders;
+         const bool valid = registry && indexed->index < registry->capacity &&
+                            registry->entries[indexed->index].used;
+         assert(valid);
+         if (!valid) {
             result = vk_error(dev, VK_ERROR_UNKNOWN);
             break;
          }
-         border.customBorderColor = entry->value;
-         border.format = entry->format;
+         border.customBorderColor = registry->entries[indexed->index].value;
+         border.format = registry->entries[indexed->index].format;
          info.pNext = &border;
       }
       struct vk_sampler_state state;
@@ -409,14 +528,18 @@ kk_heap_image_view_locked(struct kk_device *dev,
    vk_image_view_init(&dev->vk, &key, info);
    const size_t offset = offsetof(struct vk_image_view, create_flags);
    const size_t size = sizeof(key) - offset;
-   for (struct kk_heap_image_view *entry = image->heap_views; entry;
-        entry = entry->next) {
-      if (!memcmp((const char *)&key + offset,
-                   entry->key, size)) {
-         vk_image_view_finish(&key);
-         *out = &entry->view;
-         return VK_SUCCESS;
-      }
+   VkResult result = kk_heap_cache_init(dev, &image->heap_views,
+                                        kk_heap_image_view_hash, kk_heap_image_view_equal);
+   if (result != VK_SUCCESS) {
+      vk_image_view_finish(&key);
+      return result;
+   }
+   struct kk_heap_image_view *cached = kk_heap_cache_lookup(image->heap_views,
+      (const char *)&key + offset, kk_heap_image_view_equal);
+   if (cached) {
+      vk_image_view_finish(&key);
+      *out = &cached->view;
+      return VK_SUCCESS;
    }
    struct kk_heap_image_view *entry = vk_zalloc(&dev->vk.alloc, sizeof(*entry), 8,
                                                  VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -426,13 +549,16 @@ kk_heap_image_view_locked(struct kk_device *dev,
    }
    memcpy(entry->key, (const char *)&key + offset, size);
    vk_image_view_finish(&key);
-   VkResult result = kk_image_view_init(dev, &entry->view, info);
+   result = kk_image_view_init(dev, &entry->view, info);
    if (result != VK_SUCCESS) {
       vk_free(&dev->vk.alloc, entry);
       return result;
    }
-   entry->next = image->heap_views;
-   image->heap_views = entry;
+   if (!kk_heap_cache_insert(image->heap_views, entry->key, entry)) {
+      kk_image_view_finish(dev, &entry->view);
+      vk_free(&dev->vk.alloc, entry);
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
    *out = &entry->view;
    return VK_SUCCESS;
 }
@@ -463,10 +589,15 @@ kk_heap_texel_view_locked(struct kk_device *dev,
    if (!buffer)
       return vk_error(dev, VK_ERROR_UNKNOWN);
    const uint64_t offset = address - buffer->vk.device_address;
-   struct kk_heap_buffer_view *entry = buffer->heap_views;
-   while (entry && (entry->format != info->format ||
-                    entry->offset != offset || entry->size != size))
-      entry = entry->next;
+   VkResult result = kk_heap_cache_init(dev, &buffer->heap_views,
+                                        kk_heap_buffer_view_hash, kk_heap_buffer_view_equal);
+   if (result != VK_SUCCESS)
+      return result;
+   const struct kk_heap_buffer_view_key key = {
+      .offset = offset, .size = size, .format = info->format,
+   };
+   struct kk_heap_buffer_view *entry = kk_heap_cache_lookup(buffer->heap_views,
+                                                           &key, kk_heap_buffer_view_equal);
    if (!entry) {
       entry = vk_zalloc(&dev->vk.alloc, sizeof(*entry), 8,
                         VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -485,11 +616,12 @@ kk_heap_texel_view_locked(struct kk_device *dev,
          vk_free(&dev->vk.alloc, entry);
          return result;
       }
-      entry->format = info->format;
-      entry->offset = offset;
-      entry->size = size;
-      entry->next = buffer->heap_views;
-      buffer->heap_views = entry;
+      entry->key = key;
+      if (!kk_heap_cache_insert(buffer->heap_views, &entry->key, entry)) {
+         kk_DestroyBufferView(kk_device_to_handle(dev), entry->view, NULL);
+         vk_free(&dev->vk.alloc, entry);
+         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      }
    }
    /* Use the ordinary writer and its declared stride, including any metadata
     * appended by another capability. The local target describes one entry. */
@@ -628,10 +760,13 @@ kk_CmdBindSamplerHeapEXT(VkCommandBuffer commandBuffer,
                           const VkBindHeapInfoEXT *info)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
-   cmd->state.gfx.descriptors.heap_sampler = info->heapRange.address;
-   cmd->state.cs.descriptors.heap_sampler = info->heapRange.address;
-   cmd->state.gfx.descriptors.root_dirty = true;
-   cmd->state.cs.descriptors.root_dirty = true;
+   struct kk_descriptor_state *graphics = &cmd->state.gfx.descriptors;
+   struct kk_descriptor_state *compute = &cmd->state.cs.descriptors;
+   const uint64_t address = info->heapRange.address;
+   graphics->root_dirty |= graphics->descriptor_heap && graphics->heap_sampler != address;
+   compute->root_dirty |= compute->descriptor_heap && compute->heap_sampler != address;
+   graphics->heap_sampler = address;
+   compute->heap_sampler = address;
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -639,10 +774,13 @@ kk_CmdBindResourceHeapEXT(VkCommandBuffer commandBuffer,
                            const VkBindHeapInfoEXT *info)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
-   cmd->state.gfx.descriptors.heap_resource = info->heapRange.address;
-   cmd->state.cs.descriptors.heap_resource = info->heapRange.address;
-   cmd->state.gfx.descriptors.root_dirty = true;
-   cmd->state.cs.descriptors.root_dirty = true;
+   struct kk_descriptor_state *graphics = &cmd->state.gfx.descriptors;
+   struct kk_descriptor_state *compute = &cmd->state.cs.descriptors;
+   const uint64_t address = info->heapRange.address;
+   graphics->root_dirty |= graphics->descriptor_heap && graphics->heap_resource != address;
+   compute->root_dirty |= compute->descriptor_heap && compute->heap_resource != address;
+   graphics->heap_resource = address;
+   compute->heap_resource = address;
 }
 
 VKAPI_ATTR void VKAPI_CALL

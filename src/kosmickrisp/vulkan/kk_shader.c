@@ -927,7 +927,9 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
    NIR_PASS(_, nir, nir_vk_lower_ycbcr_tex, lookup_ycbcr_conversion,
             &ycbcr_state);
 
-   if (compile_info && (compile_info->flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT))
+   const bool descriptor_heap = compile_info &&
+      (compile_info->flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT);
+   if (descriptor_heap)
       NIR_PASS(_, nir, kk_nir_prepare_descriptor_heaps,
                compile_info->embedded_sampler_count, embedded, features & BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER));
 
@@ -991,7 +993,8 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
 
    if (features & BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER)) {
       NIR_PASS(_, nir, kk_nir_lower_sparse_buffer_io, rs, set_layout_count, set_layouts);
-      NIR_PASS(_, nir, kk_nir_finish_sparse_heap_buffers);
+      if (descriptor_heap)
+         NIR_PASS(_, nir, kk_nir_finish_sparse_heap_buffers);
    }
 
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,

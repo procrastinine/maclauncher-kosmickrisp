@@ -27,7 +27,7 @@
 
 struct kk_heap_sampler;
 struct kk_heap_metadata_page;
-struct kk_heap_border;
+struct kk_heap_border_registry;
 struct kk_buffer;
 struct kk_bo;
 struct kk_physical_device;
@@ -108,9 +108,9 @@ struct kk_device {
    uint32_t sparse_residency_used;
    struct kk_sparse_sample_row *sparse_sample_rows;
    simple_mtx_t descriptor_heap_lock;
-   struct kk_heap_sampler *heap_samplers;
+   struct kk_heap_cache *heap_samplers;
    struct kk_heap_metadata_page *heap_metadata_pages;
-   struct kk_heap_border *heap_borders;
+   struct kk_heap_border_registry *heap_borders;
    struct kk_buffer *heap_buffers;
 
    struct kk_vrs_device *vrs;

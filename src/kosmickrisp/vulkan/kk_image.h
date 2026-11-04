@@ -51,7 +51,7 @@ struct kk_image {
    struct vk_image vk;
    struct kk_writable_msaa_image *writable_msaa;
    struct kk_sparse_image *sparse;
-   struct kk_heap_image_view *heap_views;
+   struct kk_heap_cache *heap_views;
 
    /** True if the planes are bound separately
     * * This is set based on VK_IMAGE_CREATE_DISJOINT_BIT

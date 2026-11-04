@@ -50,7 +50,6 @@ kk_CreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
    if (!buffer)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   kk_descriptor_heap_buffer_bind(dev, buffer);
    if (pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) {
       VkResult result = kk_sparse_buffer_init(dev, buffer);
       if (result != VK_SUCCESS) {
@@ -58,6 +57,8 @@ kk_CreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
          return result;
       }
    }
+   /* Publish only after sparse setup succeeds; failure destroys the object. */
+   kk_descriptor_heap_buffer_bind(dev, buffer);
    *pBuffer = kk_buffer_to_handle(buffer);
 
    return VK_SUCCESS;
