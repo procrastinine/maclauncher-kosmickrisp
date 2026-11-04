@@ -2506,8 +2506,13 @@ predeclare_ssa_values(struct nir_to_msl_ctx *ctx, nir_function_impl *impl)
                continue;
             if (msl_def_is_sampler(ctx, def)) {
                P_IND(ctx, "%s t%u;\n", type, def->index);
-            } else
+            } else if (instr->type == nir_instr_type_alu) {
+               /* instr_to_msl assigns every ALU destination in full. */
+               P_IND(ctx, "%s t%u;\n", type, def->index);
+            } else {
+               /* Guarded intrinsic and texture reads retain their zero. */
                P_IND(ctx, "%s t%u = %s(0);\n", type, def->index, type);
+            }
          }
       }
    }
