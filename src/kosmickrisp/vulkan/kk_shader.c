@@ -1789,6 +1789,16 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
                kk_line_effects_for_primitive(state,
                   shader->info.polygon.primitive_vertices), state);
          if (opts->poly_layer_replay) kk_poly_layer_lower_vs(point_vs);
+         /* This reader shares the already linked fragment interface with the
+          * ordinary GS raster VS, including generated barycentric slots. */
+         if (per_vertex_map &&
+             (per_vertex_map->active || per_vertex_map->canonical_heap)) {
+            bool progress = false;
+            NIR_PASS(progress, point_vs, kk_nir_lower_vs_per_vertex_outputs,
+                     per_vertex_map);
+            if (progress)
+               shader->info.uses_per_draw_data = true;
+         }
          NIR_PASS(_, point_vs, kk_nir_lower_polygon_scalar_outputs,
                   shader->info.polygon.outputs);
          if (pixel_envelope)

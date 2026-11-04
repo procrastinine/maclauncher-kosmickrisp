@@ -152,19 +152,35 @@ kk_prepare_per_vertex_draw(struct kk_cmd_buffer *cmd,
    }
 }
 
+static enum mesa_prim
+kk_gs_raster_primitive(enum mtl_primitive_type primitive)
+{
+   switch (primitive) {
+   case MTL_PRIMITIVE_TYPE_POINT: return MESA_PRIM_POINTS;
+   case MTL_PRIMITIVE_TYPE_LINE: return MESA_PRIM_LINES;
+   case MTL_PRIMITIVE_TYPE_LINE_STRIP: return MESA_PRIM_LINE_STRIP;
+   case MTL_PRIMITIVE_TYPE_TRIANGLE: return MESA_PRIM_TRIANGLES;
+   case MTL_PRIMITIVE_TYPE_TRIANGLE_STRIP: return MESA_PRIM_TRIANGLE_STRIP;
+   default: UNREACHABLE("Invalid GS raster primitive");
+   }
+}
+
+
 /* The PerVertexKHR emulation of a GS runs on its rasterization VS. That draw
  * is set up like an application draw of the GS output topology: restarts
  * between output strips are unrolled to lists, then each primitive corner
  * gets its own vertex shader invocation. The per-draw data is uploaded again
  * for the rasterization draw. */
+
 static bool
 kk_prepare_gs_per_vertex_draw(struct kk_cmd_buffer *cmd,
                               const struct kk_draw_command *data,
                               struct kk_draw_data *rast)
 {
-   struct kk_shader *gs = kk_geometry_shader(cmd);
    struct kk_draw_command gs_draw = {
-      .prim = gs->info.gs.mode,
+      /* Clipping and polygon expansion can change a GS strip into a list.
+       * Match the reader's actual primitive, not the pre-expansion GS mode. */
+      .prim = kk_gs_raster_primitive(rast->primitive_type),
       .index_buffer = rast->index.gpu,
       .index_buffer_el_size_B = rast->index.el_size_B,
       .indexed = rast->index.el_size_B != 0u,
