@@ -20,6 +20,7 @@ static MTL4SpecializedFunctionDescriptor *
 kk_new_function_specialization(MTL4FunctionDescriptor *function)
 {
    MTLFunctionConstantValues *values = nil;
+   MTL4FunctionDescriptor *previous_function = function;
    if ([function isKindOfClass:[MTL4SpecializedFunctionDescriptor class]]) {
       MTL4SpecializedFunctionDescriptor *previous = (id)function;
       function = previous.functionDescriptor;
@@ -29,6 +30,7 @@ kk_new_function_specialization(MTL4FunctionDescriptor *function)
    if (!kk_named_library_function(function)) return nil;
    MTL4SpecializedFunctionDescriptor *specialized =
       [MTL4SpecializedFunctionDescriptor new];
+   kk_set_constant_record(specialized, kk_constant_record(values ? previous_function : nil));
    specialized.functionDescriptor = function;
    /* The SDK copy property gives each caller independent mutable storage. */
    specialized.constantValues = values ?: [[MTLFunctionConstantValues new] autorelease];
@@ -119,7 +121,10 @@ kk_prepare_render_function_constants(MTL4PipelineDescriptor *descriptor)
    MTL4FunctionDescriptor *function = kk_prepare_function_constants(original, &valid); \
    if (!valid) return nil; \
    if (function != original) { \
-      if (prepared == descriptor) prepared = [[descriptor copy] autorelease]; \
+      if (prepared == descriptor) { \
+         prepared = [[descriptor copy] autorelease]; \
+         kk_carry_constant_record(prepared, descriptor); \
+      } \
       ((type *)prepared).field = function; \
    } \
 } while (0)

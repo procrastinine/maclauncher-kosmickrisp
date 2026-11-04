@@ -3,6 +3,7 @@
 #include <Metal/MTL4Archive.h>
 #include <Metal/MTL4MeshRenderPipeline.h>
 #include <Metal/MTL4PipelineDataSetSerializer.h>
+#include <Metal/MTL4SpecializedFunctionDescriptor.h>
 #include <Metal/MTL4TileRenderPipeline.h>
 #include <dispatch/dispatch.h>
 #include <objc/runtime.h>
@@ -12,10 +13,71 @@
 #include <unistd.h>
 
 static char kk_archive_association, kk_library_hint_association;
+static char kk_constant_hint_association;
+
+/* Function constant values set through this bridge, for the search key below.
+ * Metal copies a function descriptor when a pipeline descriptor stores it, so
+ * values are recorded on each specialization this bridge creates ("index"
+ * keys) and, once it is stored in a stage, on the pipeline descriptor
+ * ("stage/index" keys). Pipeline descriptor copies made here carry the record.
+ * A missing record only widens the key; Metal verifies every descriptor. */
+static NSDictionary *
+kk_constant_record(id object)
+{
+   return object ? objc_getAssociatedObject(object, &kk_constant_hint_association) : nil;
+}
+
+static void
+kk_set_constant_record(id object, NSDictionary *record)
+{
+   if (!object) return;
+   objc_setAssociatedObject(object, &kk_constant_hint_association,
+                            record.count ? [[record copy] autorelease] : nil,
+                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+/* Sets one constant on a specialization this bridge owns and records it. */
+static void
+kk_set_function_constant(MTL4SpecializedFunctionDescriptor *function,
+                         const void *value, MTLDataType type, size_t size,
+                         NSUInteger index)
+{
+   [function.constantValues setConstantValue:value type:type atIndex:index];
+   NSMutableDictionary *record = [[kk_constant_record(function) mutableCopy] autorelease];
+   if (!record) record = [NSMutableDictionary dictionary];
+   uint32_t native_type = (uint32_t)type;
+   NSMutableData *entry = [NSMutableData dataWithBytes:&native_type length:sizeof(native_type)];
+   [entry appendBytes:value length:size];
+   record[[NSString stringWithFormat:@"%lu", (unsigned long)index]] = entry;
+   kk_set_constant_record(function, record);
+}
+
+/* Records the constants of the function just stored in stage. A
+ * specialization derived from the function stored there before keeps the
+ * stage's earlier values; any other function replaces them. */
+static void
+kk_record_stage_constants(id pipeline, NSString *stage, id function, bool derived)
+{
+   NSMutableDictionary *record = [NSMutableDictionary dictionary];
+   NSString *prefix = [stage stringByAppendingString:@"/"];
+   NSDictionary *previous = kk_constant_record(pipeline);
+   for (NSString *key in previous)
+      if (derived || ![key hasPrefix:prefix]) record[key] = previous[key];
+   NSDictionary *values = kk_constant_record(function);
+   for (NSString *key in values)
+      record[[prefix stringByAppendingString:key]] = values[key];
+   kk_set_constant_record(pipeline, record);
+}
+
+static void
+kk_carry_constant_record(id copy, id original)
+{
+   kk_set_constant_record(copy, kk_constant_record(original));
+}
 
 /* This is only a search key. Metal still verifies every descriptor, including
- * constants and state not represented here. Pipelines that share a key are
- * recorded under it once per piece, and a lookup tries each of those pieces. */
+ * state not represented here. Pipelines that share a key are recorded under it
+ * once per piece, and a lookup tries each of those pieces. */
 static void
 kk_remember_library_hint(id library, MTL4LibraryDescriptor *descriptor)
 {
@@ -96,6 +158,14 @@ kk_pipeline_hint(MTL4PipelineDescriptor *descriptor)
          [fields addObject:@(tile.colorAttachments[i].pixelFormat)];
    } else {
       return nil;
+   }
+   /* Constant-free pipelines keep the key they had before constants joined it. */
+   NSDictionary *constants = kk_constant_record(descriptor);
+   if (constants.count) {
+      NSMutableArray *entries = [NSMutableArray arrayWithCapacity:constants.count];
+      for (NSString *key in [constants.allKeys sortedArrayUsingSelector:@selector(compare:)])
+         [entries addObject:@[key, constants[key]]];
+      [fields addObject:@[@"constants", entries]];
    }
    NSData *bytes = [NSPropertyListSerialization dataWithPropertyList:fields
       format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];

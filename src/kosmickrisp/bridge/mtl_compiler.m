@@ -594,7 +594,7 @@ mtl_specialize_function_uint64(mtl_function_descriptor *function,
    @autoreleasepool {
       MTL4SpecializedFunctionDescriptor *desc =
          kk_new_function_specialization((id)function);
-      [desc.constantValues setConstantValue:&value type:MTLDataTypeULong atIndex:index];
+      kk_set_function_constant(desc, &value, MTLDataTypeULong, sizeof(value), index);
       return (mtl_function_descriptor *)desc;
    }
 }
@@ -606,8 +606,8 @@ mtl_specialize_pipeline_statistics(mtl_function_descriptor *function)
       bool enabled = true;
       MTL4SpecializedFunctionDescriptor *specialized =
          kk_new_function_specialization((id)function);
-      [specialized.constantValues setConstantValue:&enabled type:MTLDataTypeBool
-                       atIndex:KK_FUNCTION_CONSTANT_PIPELINE_STATISTICS];
+      kk_set_function_constant(specialized, &enabled, MTLDataTypeBool, sizeof(enabled),
+                               KK_FUNCTION_CONSTANT_PIPELINE_STATISTICS);
       return specialized;
    }
 }
@@ -621,7 +621,9 @@ mtl_statistics_render_descriptor(mtl_render_pipeline_descriptor *descriptor)
       mtl_function_descriptor *fragment = mtl_specialize_pipeline_statistics(
          (mtl_function_descriptor *)copy.fragmentFunctionDescriptor);
       if (!fragment) { [copy release]; return NULL; }
+      kk_carry_constant_record(copy, (id)descriptor);
       copy.fragmentFunctionDescriptor = (MTL4FunctionDescriptor *)fragment;
+      kk_record_stage_constants(copy, @"fragmentFunctionDescriptor", (id)fragment, true);
       [(id)fragment release];
       return copy;
    }
@@ -633,8 +635,8 @@ mtl_specialize_sampler_emulation(mtl_function_descriptor *function, bool enabled
    @autoreleasepool {
       MTL4SpecializedFunctionDescriptor *desc =
          kk_new_function_specialization((id)function);
-      [desc.constantValues setConstantValue:&enabled type:MTLDataTypeBool
-                       atIndex:KK_FUNCTION_CONSTANT_SAMPLER_EMULATION];
+      kk_set_function_constant(desc, &enabled, MTLDataTypeBool, sizeof(enabled),
+                               KK_FUNCTION_CONSTANT_SAMPLER_EMULATION);
       return (void *)desc;
    }
 }
@@ -646,12 +648,14 @@ mtl_sampler_emulation_render_descriptor(mtl_render_pipeline_descriptor *descript
    @autoreleasepool {
       MTL4PipelineDescriptor *copy = [(id)descriptor copy];
       if (!copy) return NULL;
+      kk_carry_constant_record(copy, (id)descriptor);
 #define KK_SAMPLER_STAGE(type, field, bit) do { \
    if (stages & (bit)) { \
       mtl_function_descriptor *function = mtl_specialize_sampler_emulation( \
          (void *)((type *)copy).field, (enabled_stages & (bit)) != 0); \
       if (!function) { [copy release]; return NULL; } \
       ((type *)copy).field = (id)function; \
+      kk_record_stage_constants(copy, @#field, (id)function, true); \
       [(id)function release]; \
    } \
 } while (0)
@@ -691,6 +695,7 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
       if (!valid) return NULL;
       MTL4ComputePipelineDescriptor *desc = [[MTL4ComputePipelineDescriptor new] autorelease];
       desc.computeFunctionDescriptor = prepared;
+      kk_record_stage_constants(desc, @"computeFunctionDescriptor", prepared, false);
       desc.maxTotalThreadsPerThreadgroup = max_total_threads_per_threadgroup;
 
       if (kk_current_operation.cancelled) return NULL;
@@ -732,6 +737,7 @@ mtl_render_pipeline_descriptor_set_vertex_shader(mtl_render_pipeline_descriptor 
    @autoreleasepool {
       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
       desc.vertexFunctionDescriptor = (MTL4FunctionDescriptor *)shader;
+      kk_record_stage_constants(desc, @"vertexFunctionDescriptor", (id)shader, false);
    }
 }
 
@@ -742,6 +748,7 @@ mtl_render_pipeline_descriptor_set_fragment_shader(mtl_render_pipeline_descripto
    @autoreleasepool {
       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
       desc.fragmentFunctionDescriptor = (MTL4FunctionDescriptor *)shader;
+      kk_record_stage_constants(desc, @"fragmentFunctionDescriptor", (id)shader, false);
    }
 }
 
@@ -831,6 +838,7 @@ mtl_new_render_pipeline_for_raster_attachments(mtl_compiler *compiler,
 {
    @autoreleasepool {
       MTL4RenderPipelineDescriptor *copy = [(MTL4RenderPipelineDescriptor *)descriptor copy];
+      kk_carry_constant_record(copy, (id)descriptor);
       copy.rasterSampleCount = samples;
       /* Mesh pipeline descriptors have no input primitive topology. */
       if (topology != MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED &&
@@ -842,9 +850,10 @@ mtl_new_render_pipeline_for_raster_attachments(mtl_compiler *compiler,
          if (!fragment) { [copy release]; return NULL; }
          for (uint32_t i = 0; i < count; ++i) {
             bool active = formats[i] != MTL_PIXEL_FORMAT_INVALID;
-            [fragment.constantValues setConstantValue:&active type:MTLDataTypeBool atIndex:i];
+            kk_set_function_constant(fragment, &active, MTLDataTypeBool, sizeof(active), i);
          }
          copy.fragmentFunctionDescriptor = fragment;
+         kk_record_stage_constants(copy, @"fragmentFunctionDescriptor", fragment, true);
          [fragment release];
       }
       for (uint32_t i = 0; i < count; ++i) {
