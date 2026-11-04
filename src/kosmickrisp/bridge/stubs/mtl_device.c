@@ -14,13 +14,14 @@ mtl_device_create(void)
 }
 
 /* Device operations */
-void
+bool
 mtl_start_gpu_capture(mtl_device *mtl_dev_handle, const char *directory)
 {
+   return false;
 }
 
 void
-mtl_stop_gpu_capture(void)
+mtl_stop_gpu_capture(mtl_device *device)
 {
 }
 

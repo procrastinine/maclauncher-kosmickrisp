@@ -20,8 +20,8 @@ struct kk_image_layout;
 mtl_device *mtl_device_create(void);
 
 /* Device operations */
-void mtl_start_gpu_capture(mtl_device *mtl_dev_handle, const char *directory);
-void mtl_stop_gpu_capture(void);
+bool mtl_start_gpu_capture(mtl_device *mtl_dev_handle, const char *directory);
+void mtl_stop_gpu_capture(mtl_device *device);
 
 /* Device feature query */
 void mtl_device_get_name(mtl_device *dev, char buffer[256]);

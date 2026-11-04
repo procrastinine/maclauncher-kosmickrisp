@@ -13,6 +13,28 @@
 #include <Metal/MTL4Counters.h>
 #include <Metal/MTLCaptureManager.h>
 #include <Metal/MTLDevice.h>
+#include <objc/runtime.h>
+#include <assert.h>
+
+/* Metal captures and counter heaps cannot coexist. Track actual heap
+ * lifetime across every arena; capture diagnostics never replace query data. */
+static uint32_t kk_live_timestamp_heaps;
+static mtl_device *kk_capture_owner;
+static char kk_counter_heap_lifetime_key;
+@interface KKCounterHeapLifetime : NSObject
+@end
+@implementation KKCounterHeapLifetime
+- (void)dealloc
+{
+   @autoreleasepool {
+      @synchronized ([MTLCaptureManager sharedCaptureManager]) {
+         assert(kk_live_timestamp_heaps > 0);
+         --kk_live_timestamp_heaps;
+      }
+   }
+   [super dealloc];
+}
+@end
 
 /* Device creation */
 mtl_device *
@@ -36,38 +58,47 @@ mtl_device_create()
 }
 
 /* Device operations */
-void
-mtl_start_gpu_capture(mtl_device *mtl_dev_handle, const char *directory)
+bool
+mtl_start_gpu_capture(mtl_device *device, const char *directory)
 {
    @autoreleasepool {
-      id<MTLDevice> mtl_dev = (id<MTLDevice>)mtl_dev_handle;
-      MTLCaptureManager *captureMgr = [MTLCaptureManager sharedCaptureManager];
-
-      MTLCaptureDescriptor *captureDesc = [[MTLCaptureDescriptor new] autorelease];
-      captureDesc.captureObject = mtl_dev;
-      captureDesc.destination = MTLCaptureDestinationDeveloperTools;
-
-      if (directory && [captureMgr supportsDestination: MTLCaptureDestinationGPUTraceDocument]) {
-         NSString *dir = [NSString stringWithUTF8String:directory];
-         NSString *pname = [[NSProcessInfo processInfo] processName];
-         NSString *capture_path = [NSString stringWithFormat:@"%@/%@.gputrace", dir, pname];
-         captureDesc.destination = MTLCaptureDestinationGPUTraceDocument;
-         captureDesc.outputURL = [NSURL fileURLWithPath: capture_path];
-      }
-
-      NSError *err = nil;
-      if (![captureMgr startCaptureWithDescriptor:captureDesc error:&err]) {
-         fprintf(stderr, "Failed to automatically start GPU capture session (Error code %li) using startCaptureWithDescriptor: %s\n",
-                 (long)err.code, err.localizedDescription.UTF8String);
+      MTLCaptureManager *manager = [MTLCaptureManager sharedCaptureManager];
+      @synchronized (manager) {
+         if (kk_live_timestamp_heaps) {
+            fprintf(stderr, "KosmicKrisp: Metal GPU capture unavailable while timestamp counter heaps are live\n");
+            return false;
+         }
+         if (manager.isCapturing) return kk_capture_owner == device;
+         MTLCaptureDescriptor *desc = [[MTLCaptureDescriptor new] autorelease];
+         desc.captureObject = (id<MTLDevice>)device;
+         desc.destination = MTLCaptureDestinationDeveloperTools;
+         if (directory && [manager supportsDestination:MTLCaptureDestinationGPUTraceDocument]) {
+            NSString *name = [[NSProcessInfo processInfo] processName];
+            NSString *file = [NSString stringWithFormat:@"%@/%@.gputrace", [NSString stringWithUTF8String:directory], name];
+            desc.destination = MTLCaptureDestinationGPUTraceDocument;
+            desc.outputURL = [NSURL fileURLWithPath:file];
+         }
+         NSError *error = nil;
+         if (![manager startCaptureWithDescriptor:desc error:&error]) {
+            fprintf(stderr, "KosmicKrisp: Metal GPU capture failed: %s\n", error.localizedDescription.UTF8String);
+            return false;
+         }
+         kk_capture_owner = device;
+         return true;
       }
    }
 }
 
 void
-mtl_stop_gpu_capture()
+mtl_stop_gpu_capture(mtl_device *device)
 {
    @autoreleasepool {
-      [[MTLCaptureManager sharedCaptureManager] stopCapture];
+      MTLCaptureManager *manager = [MTLCaptureManager sharedCaptureManager];
+      @synchronized (manager) {
+         if (kk_capture_owner != device) return;
+         [manager stopCapture];
+         kk_capture_owner = NULL;
+      }
    }
 }
 
@@ -254,24 +285,31 @@ mtl_counter_heap *
 mtl_new_timestamp_counter_heap(mtl_device *dev, uint32_t count)
 {
    @autoreleasepool {
-      id<MTLDevice> device = (id<MTLDevice>)dev;
-      MTL4CounterHeapDescriptor *desc =
-         [[MTL4CounterHeapDescriptor alloc] init];
-      desc.type = MTL4CounterHeapTypeTimestamp;
-      desc.count = count;
-
-      NSError *error = nil;
-      id<MTL4CounterHeap> heap = [device newCounterHeapWithDescriptor:desc
-                                                                error:&error];
-      [desc release];
-
-      if (heap == nil) {
-         fprintf(stderr, "Failed to create timestamp counter heap: %s\n",
-                 error ? error.localizedDescription.UTF8String : "unknown");
-         return NULL;
+      MTLCaptureManager *manager = [MTLCaptureManager sharedCaptureManager];
+      @synchronized (manager) {
+         if (manager.isCapturing) {
+            [manager stopCapture];
+            kk_capture_owner = NULL;
+            fprintf(stderr, "KosmicKrisp: Metal GPU capture ended to preserve timestamp queries\n");
+         }
+         MTL4CounterHeapDescriptor *desc = [[MTL4CounterHeapDescriptor alloc] init];
+         desc.type = MTL4CounterHeapTypeTimestamp;
+         desc.count = count;
+         NSError *error = nil;
+         id<MTL4CounterHeap> heap = [(id<MTLDevice>)dev newCounterHeapWithDescriptor:desc error:&error];
+         [desc release];
+         if (!heap) {
+            fprintf(stderr, "Failed to create timestamp counter heap: %s\n",
+                    error ? error.localizedDescription.UTF8String : "unknown");
+            return NULL;
+         }
+         KKCounterHeapLifetime *lifetime = [[KKCounterHeapLifetime alloc] init];
+         if (!lifetime) { [heap release]; return NULL; }
+         ++kk_live_timestamp_heaps;
+         objc_setAssociatedObject(heap, &kk_counter_heap_lifetime_key, lifetime, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+         [lifetime release];
+         return (mtl_counter_heap *)heap;
       }
-
-      return (mtl_counter_heap *)heap;
    }
 }
 

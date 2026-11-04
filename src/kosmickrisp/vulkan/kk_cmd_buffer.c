@@ -1880,17 +1880,13 @@ kk_CmdInsertDebugUtilsLabelEXT(VkCommandBuffer _commandBuffer,
 
    if (pdev->settings.gpu_capture_enabled &&
        !pdev->settings.gpu_capture_immediately) {
-      if (!dev->gpu_capture_active &&
-          strcmp(pLabelInfo->pLabelName, "capture-marker,begin_capture") == 0) {
-         dev->gpu_capture_active = true;
+      if (strcmp(pLabelInfo->pLabelName, "capture-marker,begin_capture") == 0) {
          mtl_start_gpu_capture(dev->mtl_handle, pdev->settings.gpu_capture_dir);
          return;
       }
 
-      if (dev->gpu_capture_active &&
-          strcmp(pLabelInfo->pLabelName, "capture-marker,end_capture") == 0) {
-         mtl_stop_gpu_capture();
-         dev->gpu_capture_active = false;
+      if (strcmp(pLabelInfo->pLabelName, "capture-marker,end_capture") == 0) {
+         mtl_stop_gpu_capture(dev->mtl_handle);
          return;
       }
    }

@@ -797,7 +797,6 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
 
    if (pdev->settings.gpu_capture_immediately) {
       mtl_start_gpu_capture(dev->mtl_handle, pdev->settings.gpu_capture_dir);
-      dev->gpu_capture_active = true;
    }
 
    kk_frame_capture_init(dev);
@@ -867,9 +866,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    /* End capture before we start releasing resources. Otherwise, Metal capture
     * may run into issues. */
-   if (dev->gpu_capture_active) {
-      mtl_stop_gpu_capture();
-   }
+   mtl_stop_gpu_capture(dev->mtl_handle);
 
    /* Each private zero fill completed synchronously at allocation. */
    if (dev->zero_fill_queue)

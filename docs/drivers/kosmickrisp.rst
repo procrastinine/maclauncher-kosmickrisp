@@ -764,3 +764,12 @@ Native image-view minimum LOD
 On Apple11 and later with macOS 27 and an SDK providing texture-view minimum
 LOD, views apply their floating-point LOD clamp natively. Earlier families,
 systems and SDKs retain the shader implementation.
+
+GPU captures and timestamps
+---------------------------
+
+Metal GPU captures cannot contain timestamp counter heaps. A capture requested
+while such a heap is live is declined with a diagnostic. Allocating a timestamp
+heap ends an active capture before creating the heap. Vulkan timestamp queries
+and encoder timing retain their real counter values. Each device ends only
+its own capture.
