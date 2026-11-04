@@ -561,6 +561,7 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
 }
 
 #include "kk_sampler_minmax.h"
+#include "kk-sampler-helpers-nir.h"
 
 static bool
 lower_tex(nir_builder *b, nir_tex_instr *tex,
@@ -580,6 +581,8 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       plane_ssa ? nir_src_as_uint(nir_src_for_ssa(plane_ssa)) : 0;
    const uint64_t plane_offset_B =
       plane * sizeof(struct kk_sampled_image_descriptor);
+
+   kk_sample_descriptor(b, tex, sampler, plane_offset_B, ctx);
 
    if (tex->sampler_dim == GLSL_SAMPLER_DIM_BUF) {
       nir_def *metadata = load_resource_deref_desc(

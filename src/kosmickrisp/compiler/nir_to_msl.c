@@ -1840,9 +1840,12 @@ tex_coord_swizzle(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
                              tex->coord_components, false, tex->is_array);
 }
 
+#include "kk-sampler-helpers-msl.h"
+
 static void
 tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
 {
+   if (kk_sample_emit_call(ctx, tex)) return;
    nir_src *texhandle = nir_tex_get_src(tex, nir_tex_src_texture_handle);
    nir_src *sampler = nir_tex_get_src(tex, nir_tex_src_sampler_handle);
    // Projectors have to be lowered away to regular arithmetic
@@ -2569,6 +2572,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    msl_emit_constant_data(&ctx, shader);
 
    msl_emit_io_blocks(&ctx, shader);
+   kk_sample_emit_helpers(&ctx);
    if (shader->info.stage == MESA_SHADER_FRAGMENT &&
        shader->info.fs.early_fragment_tests)
       P(&ctx, "[[early_fragment_tests]]\n");
@@ -2602,6 +2606,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    ctx.indentlevel--;
    P(&ctx, "}\n");
    char *ret = ctx.text->buf;
+   if (ctx.sampler_helpers) _mesa_hash_table_destroy(ctx.sampler_helpers, NULL);
    _mesa_hash_table_destroy(ctx.types, NULL);
    ralloc_steal(options->mem_ctx, ctx.text->buf);
    ralloc_free(ctx.text);

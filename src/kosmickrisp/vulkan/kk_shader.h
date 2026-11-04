@@ -202,6 +202,9 @@ kk_buffer_addr_format(VkPipelineRobustnessBufferBehaviorEXT robustness)
    }
 }
 
+bool kk_nir_lower_sampler_helpers(nir_shader *nir, uint32_t set_layout_count,
+   struct vk_descriptor_set_layout *const *set_layouts, bool minmax, bool custom);
+
 bool kk_nir_lower_sampler_minmax(nir_shader *nir,
       uint32_t set_layout_count,
       struct vk_descriptor_set_layout *const *set_layouts);

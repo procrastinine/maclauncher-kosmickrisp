@@ -849,11 +849,9 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
    if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
       NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
 
-   if ((features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10)
-      NIR_PASS(_, nir, kk_nir_lower_sampler_minmax, set_layout_count, set_layouts);
-
-   /* Fixed opaque-black borders also use this shared lowering. */
-   NIR_PASS(_, nir, kk_nir_lower_custom_border);
+   NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
+      (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10,
+      features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER));
 
 
    /* Descriptor lowering needs to happen after lowering blend since we will

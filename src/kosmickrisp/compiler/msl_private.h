@@ -21,6 +21,7 @@ struct io_slot_info {
 struct nir_to_msl_ctx {
    FILE *output;
    struct hash_table *types;
+   struct hash_table *sampler_helpers;
    nir_shader *shader;
    struct _mesa_string_buffer *text;
    uint64_t disabled_workarounds;
