@@ -58,11 +58,11 @@ Feature table
    * - ``VK_EXT_mesh_shader``
      - Native with emulated cases: object and mesh shaders run natively.
        Task grids above the native bound run as compute batches, and
-       oversized outputs are sliced.
-     - Apple7 for mesh shading. Apple's table lists Apple9 for indirect
-       mesh arguments and mesh draws in indirect command buffers. The
-       Metal 4 encoder-level indirect path also runs on M2; this does not
-       enable mesh draws in indirect command buffers.
+       oversized outputs are sliced. Apple7 and Apple8 batch native indirect
+       inputs before complete rendering scopes.
+     - Apple7 for object and mesh shading. Apple9 for mesh draws in indirect
+       command buffers. The Metal 4 encoder-level indirect path also runs
+       on M2.
      - ``mesh_shader``
      - On
      - D3D12 mesh shader tier 1 and feature level 12_2 are unavailable.

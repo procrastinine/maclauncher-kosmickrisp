@@ -60,12 +60,12 @@
      - On
      - On Apple7-11: An active fragment query adds a counter-address load and one 32-bit atomic increment, plus a carry atomic when the low word wraps. Other stages use draw data or instrumented execution. Inactive queries specialize the counter region away.
    * - ``mesh_shader``
-     - Off
-     - Off
      - On
      - On
      - On
-     - On Apple9-11: ordinary direct Mesh and bounded direct Task use one native render call; unbounded Task uses prepare, Task compute and exact prefix/ICB expansion per real batch. Off Apple7-8: ordinary direct draws are also native, but unbounded Task still uses three compute dispatches per real batch plus a snapshot per indirect logical draw; the real overflow continuation bounds storage without removing that work.
+     - On
+     - On
+     - On Apple7-11: ordinary direct Mesh and bounded direct Task are native. Apple7-8 batch native indirect inputs before complete render scopes; small mesh-only scopes use one compute dispatch, while larger or bounded-Task scopes complete bounded snapshots before native rendering. Apple9-11 retain selected indirect filtering and GPU ICB expansion where eligible. Unbounded Task and requested retained-output or layered-view emulation keep their feature-local work on all families.
    * - ``polygon_points``
      - On
      - On
