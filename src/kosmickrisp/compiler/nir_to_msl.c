@@ -2341,6 +2341,8 @@ kk_scalarize_filter(const nir_instr *instr, const void *data)
    return true;
 }
 
+#include "kk_cull_distance_indirect.h"
+
 void
 msl_preprocess_nir(struct nir_shader *nir)
 {
@@ -2417,7 +2419,7 @@ msl_preprocess_nir(struct nir_shader *nir)
     * dEQP-VK.graphicsfuzz.stable-binarysearch-tree-nested-if-and-conditional */
    NIR_PASS(_, nir, nir_lower_vars_to_scratch, 32,
             glsl_get_natural_size_align_bytes, glsl_get_word_size_align_bytes);
-   NIR_PASS(_, nir, nir_lower_indirect_derefs_to_if_else_trees,
+   NIR_PASS(_, nir, kk_cull_nir_lower_indirect_derefs_to_if_else_trees,
             nir_var_function_temp | nir_var_shader_in | nir_var_shader_out,
             UINT32_MAX);
 

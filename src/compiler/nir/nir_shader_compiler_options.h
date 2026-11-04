@@ -291,6 +291,8 @@ typedef enum {
 MESA_DEFINE_CPP_ENUM_BITFIELD_OPERATORS(nir_float_muladd_support)
 
 typedef struct nir_shader_compiler_options {
+   /* Keep clip/cull IO in built-in slots for primitive assembly. */
+   bool preserve_clip_cull_io;
    bool lower_fdiv;
    nir_float_muladd_support float_mul_add16;
    nir_float_muladd_support float_mul_add32;

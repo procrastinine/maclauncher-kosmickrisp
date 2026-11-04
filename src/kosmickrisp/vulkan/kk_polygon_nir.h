@@ -25,7 +25,7 @@ static bool
 kk_polygon_regular_possible(const struct kk_device *dev, const struct vk_graphics_pipeline_state *state)
 {
    return state && state->rs &&
-      (kk_wide_line_possible(state) || state->rs->polygon_mode == VK_POLYGON_MODE_POINT ||
+      ((!(state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT) && dev->vk.enabled_features.shaderCullDistance) || kk_wide_line_possible(state) || state->rs->polygon_mode == VK_POLYGON_MODE_POINT ||
        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE) ||
        (dev->vk.enabled_features.depthBiasControl &&
         (state->rs->depth_bias.enable ||
@@ -120,6 +120,25 @@ kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
                                                   "Poly polygon points");
    nir_shader *nir = b.shader;
    nir->info.io_lowered = true;
+   if (info->primitive_vertices == 1) {
+      nir->info.outputs_written = info->outputs;
+      nir_def *id = nir_load_vertex_id(&b);
+      nir_def *address = nir_iadd(&b,
+         kk_polygon_load(&b, 1, 64, offsetof(struct poly_geometry_capture, output), 8),
+         nir_u2u64(&b, nir_imul_imm(&b, id, (util_bitcount64(info->outputs) + 1) * 16)));
+      unsigned packed = 0;
+      u_foreach_bit64(slot, info->outputs) {
+         nir_def *value = nir_load_global_constant(&b, 4, 32,
+            nir_iadd_imm(&b, address, packed++ * 16), .align_mul = 16);
+         value = nir_convert_to_bit_size(&b, value,
+            nir_alu_type_get_base_type(info->output_types[slot]),
+            nir_alu_type_get_type_size(info->output_types[slot]));
+         nir_store_output(&b, nir_trim_vector(&b, value, info->output_components[slot]),
+            nir_imm_int(&b, 0), .src_type = info->output_types[slot],
+            .io_semantics.location = slot, .io_semantics.num_slots = 1);
+      }
+      return nir;
+   }
    nir->info.outputs_written = (info->outputs & ~VARYING_BIT_PSIZ) | VARYING_BIT_PNTC;
    if (line_effects) nir->info.outputs_written |= VARYING_BIT_FOGC;
    nir_def *id = nir_load_vertex_id(&b);

@@ -95,21 +95,21 @@ capture_gs_intrinsic(nir_builder *b, nir_intrinsic_instr *intr, void *data)
          b, CAPTURE_PARAM(b, strips), nir_u2u64(b, nir_imul_imm(b, index, 16)));
       nir_store_global(b, nir_vec4(b, first, length, intr->src[3].ssa, id), address);
       unsigned primitive_vertices =
-         u_reduced_prim(b->shader->info.gs.output_primitive) == MESA_PRIM_LINES ? 2 : 3;
+         mesa_vertices_per_prim(u_reduced_prim(b->shader->info.gs.output_primitive));
       nir_push_if(b, nir_uge_imm(b, id, primitive_vertices - 1));
       {
          nir_def *primitive = nir_iadd_imm(b, id, 1 - primitive_vertices);
-         if (primitive_vertices == 2) {
+         if (primitive_vertices <= 2) {
             nir_def *base = nir_iadd(b,
                nir_imul(b, calc_unrolled_id(b), CAPTURE_PARAM(b, streams)),
                nir_imm_int(b, nir_intrinsic_stream_id(intr)));
             nir_def *index = nir_iadd(b,
-               nir_imul(b, base, nir_iadd_imm(b, CAPTURE_PARAM(b, vertices_out), -1)),
+               nir_imul(b, base, nir_iadd_imm(b, CAPTURE_PARAM(b, vertices_out), 1 - primitive_vertices)),
                nir_iadd(b, intr->src[3].ssa, primitive));
             nir_def *address = nir_iadd(b, CAPTURE_PARAM(b, triangles),
                nir_u2u64(b, nir_imul_imm(b, index, 16)));
             nir_def *a = nir_iadd(b, first, primitive);
-            nir_def *c = nir_iadd_imm(b, a, 1);
+            nir_def *c = nir_iadd_imm(b, a, primitive_vertices - 1);
             nir_store_global(b, nir_vec4(b, a, c, c, intr->src[3].ssa), address);
          } else {
          nir_def *odd = nir_ine_imm(b, nir_iand_imm(b, primitive, 1), 0);
@@ -172,7 +172,7 @@ create_gs_capture_shader(const nir_shader *gs, struct lower_gs_state *gs_state,
    *info = (struct poly_gs_capture_info){
       .outputs = gs->info.outputs_written,
       .vertices_out = gs->info.gs.vertices_out,
-      .primitive_vertices = u_reduced_prim(gs->info.gs.output_primitive) == MESA_PRIM_LINES ? 2 : 3,
+      .primitive_vertices = mesa_vertices_per_prim(u_reduced_prim(gs->info.gs.output_primitive)),
       .streams = stream_multiplier(gs),
       .clip_count = gs->info.clip_distance_array_size,
       .cull_count = gs->info.cull_distance_array_size,
@@ -200,6 +200,19 @@ create_gs_capture_shader(const nir_shader *gs, struct lower_gs_state *gs_state,
    nir_shader_intrinsics_pass(shader, capture_gs_intrinsic,
                               nir_metadata_control_flow, &state);
    nir_shader_intrinsics_pass(shader, lower_id, nir_metadata_control_flow, NULL);
+   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+   nir_cf_list body;
+   nir_cf_extract(&body, nir_before_block(nir_start_block(impl)),
+                  nir_after_block(nir_impl_last_block(impl)));
+   nir_builder guard = nir_builder_at(nir_before_impl(impl));
+   nir_def *id = nir_load_global_invocation_id(&guard, 32);
+   nir_def *valid = nir_iand(&guard,
+      nir_ult(&guard, nir_channel(&guard, id, 0), load_geometry_param(&guard, grid[0])),
+      nir_ult(&guard, nir_channel(&guard, id, 1), load_geometry_param(&guard, grid[1])));
+   nir_push_if(&guard, valid);
+   guard.cursor = nir_cf_reinsert(&body, guard.cursor);
+   nir_pop_if(&guard, NULL);
+   nir_progress(true, impl, nir_metadata_none);
    return shader;
 }
 

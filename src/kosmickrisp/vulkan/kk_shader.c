@@ -66,6 +66,7 @@ kk_get_spirv_options(struct vk_physical_device *vk_pdev,
       rs = &rs_all_supported;
    return (struct spirv_to_nir_options){
       .environment = NIR_SPIRV_VULKAN,
+      .separate_clip_cull_distance_arrays = true,
       .ssbo_addr_format = kk_buffer_addr_format(rs->storage_buffers),
       .phys_ssbo_addr_format = nir_address_format_64bit_global,
       .ubo_addr_format = kk_buffer_addr_format(rs->uniform_buffers),
@@ -1332,6 +1333,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE) ||
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_STIPPLE_ENABLE);
       if (!opts->poly_layer_replay || (prev_stage && prev_stage->info.polygon_point))
+      if (!prev_stage || prev_stage->info.polygon.primitive_vertices != 1)
       nir_shader_intrinsics_pass(point_fs, kk_polygon_point_coord,
                                  nir_metadata_control_flow, point_line_effects ? (void *)1 : NULL);
       kk_line_fragment(point_fs, true, state);
@@ -1355,7 +1357,9 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       prev_stage ? prev_stage->info.num_cull_distances : 0;
    /* A GS lowers clip and cull distances on its rasterization VS instead; the
     * stage feeding it has none after linking */
-   if (stage != MESA_SHADER_GEOMETRY && stage != MESA_SHADER_MESH)
+   if (stage == MESA_SHADER_FRAGMENT ||
+       (stage == MESA_SHADER_VERTEX && nir->info.next_stage == MESA_SHADER_FRAGMENT) ||
+       (stage == MESA_SHADER_TESS_EVAL && nir->info.next_stage == MESA_SHADER_FRAGMENT))
       msl_nir_lower_clip_cull_distance(nir, num_cull_distances);
 
    /* When using poly to emulate tessellation or GS, the VS and TCS are turned
@@ -1448,7 +1452,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
       nir_shader *capture = NULL, *capture_xfb = NULL;
       bool polygon = (kk_polygon_possible(dev, state) || opts->poly_layer_replay) &&
          (u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_TRIANGLES ||
-          u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_LINES);
+          u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_LINES ||
+          u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_POINTS);
       NIR_PASS(_, nir, poly_nir_lower_gs_capture, &count, &rast, &pre_gs,
                &shader->info.gs, &shader->info.polygon,
                polygon ? &capture : NULL, polygon ? &capture_xfb : NULL);
@@ -2289,7 +2294,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    uint32_t total_shaders = shader_count;
    nir_shader *native_pair[2] = {NULL, NULL};
    bool native_passthrough = !explicit_geometry && !xfb && !tess &&
-      (kk_wide_line_possible(state) || poly_layer_replay);
+      (kk_wide_line_possible(state) || poly_layer_replay || dev->vk.enabled_features.shaderCullDistance);
    nir_shader *native_vs = NULL, *native_fs = NULL;
    for (unsigned i = 0; i < shader_count; ++i) {
       nir_shader *n = nir_shaders[i];
@@ -2300,7 +2305,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
             native_passthrough = false;
       }
    }
-   if (native_passthrough && native_vs) {
+   if (native_passthrough && native_vs && !native_vs->info.cull_distance_array_size) {
       native_pair[0] = nir_shader_clone(NULL, native_vs);
       native_pair[1] = native_fs ? nir_shader_clone(NULL, native_fs) :
          get_empty_nir(dev, MESA_SHADER_FRAGMENT, state, features);
@@ -2495,6 +2500,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    } else {
       gather_graphics_pipeline_create_info(state, shaders, total_shaders);
       if (native_pair[0]) {
+         NIR_PASS(_, native_pair[0], kk_nir_lower_polygon_scalar_outputs);
          kk_compile_msl(pdev, native_pair[0], state, &shaders[0]->polygon_native);
          kk_line_fragment(native_pair[1], false, state);
          kk_compile_msl(pdev, native_pair[1], state, &shaders[0]->polygon_native_fs);

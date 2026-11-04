@@ -112,6 +112,7 @@ bool msl_nir_lower_multisample_alpha(nir_shader *s, bool alpha_to_coverage,
 bool msl_gather_uses_per_draw_data(nir_shader *nir);
 
 static const nir_shader_compiler_options kk_nir_options = {
+   .preserve_clip_cull_io = true,
    .lower_fdph = true,
    .has_fsub = true,
    .has_isub = true,

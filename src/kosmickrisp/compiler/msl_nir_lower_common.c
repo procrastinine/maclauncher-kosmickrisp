@@ -759,7 +759,6 @@ msl_nir_lower_clip_cull_distance(nir_shader *nir, unsigned num_cull_distances)
 {
    NIR_PASS(_, nir, nir_lower_io_to_scalar, nir_var_shader_out,
             scalarize_clip_cull_distance_filter, NULL);
-   NIR_PASS(_, nir, nir_separate_merged_clip_cull_io);
    if (nir->info.stage == MESA_SHADER_FRAGMENT)
       NIR_PASS(_, nir, msl_nir_lower_cull_distance_fs, num_cull_distances);
    else

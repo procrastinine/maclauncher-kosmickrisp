@@ -53,6 +53,7 @@ libkk_conservative_prepare(global struct poly_geometry_params *geometry,
    global struct kk_conservative_params *config =
       (global struct kk_conservative_params *)p;
    uint id = cl_global_id.x;
+   if (id >= p->clip_grid[0]) return;
    global uint *counts = (global uint *)p->clip_counts;
    uint written = counts[id];
    counts[id] = 0;
@@ -209,6 +210,7 @@ libkk_conservative_output(global struct poly_geometry_params *geometry)
 {
    global struct poly_geometry_capture *p = polygon_capture(geometry);
    uint id = cl_global_id.x;
+   if (id >= p->clip_grid[0]) return;
    global uint *counts = (global uint *)p->clip_counts;
    uint first = id ? counts[id - 1] : 0;
    if (counts[id] == first)

@@ -80,7 +80,8 @@ poly_nir_passthrough_gs(nir_builder *b, const void *key_)
          if (adjusted_loc == VARYING_SLOT_CLIP_DIST0 ||
              adjusted_loc == VARYING_SLOT_CULL_DIST0) {
             num_slots =
-               key->cull_distance_array_size + key->clip_distance_array_size;
+               adjusted_loc == VARYING_SLOT_CULL_DIST0 ?
+               key->cull_distance_array_size : key->clip_distance_array_size;
 
             if (loc > adjusted_loc)
                comps = num_slots - 4;

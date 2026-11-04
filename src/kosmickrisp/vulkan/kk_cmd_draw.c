@@ -873,7 +873,7 @@ kk_polygon_expansion_active(struct kk_cmd_buffer *cmd)
          VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
    bool lines = vs->info.polygon.primitive_vertices == 2 ||
       dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE;
-   return (vs->info.conservative && dyn->rs.conservative_mode ==
+   return vs->info.polygon.cull_count || (vs->info.conservative && dyn->rs.conservative_mode ==
       VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT) ||
       dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT || controlled_bias ||
       (lines && (dyn->rs.line.width != 1.0f ||
@@ -1489,7 +1489,7 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          .streams = capture->streams,
          .clip_count = capture->clip_count,
          .cull_count = capture->cull_count,
-         .cull_mode = capture->primitive_vertices == 2 ? 0 : dyn->rs.cull_mode,
+         .cull_mode = capture->primitive_vertices <= 2 ? 0 : dyn->rs.cull_mode,
          .front_ccw = dyn->rs.front_face != VK_FRONT_FACE_CLOCKWISE,
          .depth_clip = vk_rasterization_state_depth_clip_enable(&dyn->rs),
          .depth_clamp = dyn->rs.depth_clamp_enable,
@@ -1501,7 +1501,7 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          .depth_bias_clamp = dyn->rs.depth_bias.clamp,
          .depth_bias_enable = dyn->rs.depth_bias.enable,
          .depth_bias_representation = dyn->rs.depth_bias.representation,
-         .polygon_mode = dyn->rs.polygon_mode,
+         .polygon_mode = capture->primitive_vertices == 1 ? VK_POLYGON_MODE_FILL : dyn->rs.polygon_mode,
          .depth_mantissa_bits = 23, .depth_is_float = true,
          .render_size = {
             MAX2(gfx->render.area.offset.x + gfx->render.area.extent.width, 1),

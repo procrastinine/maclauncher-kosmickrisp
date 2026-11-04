@@ -155,7 +155,7 @@ kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
             /* Staging carries only shader-visible values. Native position and
              * clip/cull attributes are materialized when copying outputs. */
          } else if (location == VARYING_SLOT_CULL_PRIMITIVE) {
-            P(ctx, "[[cull_primitive]]");
+            P(ctx, "[[primitive_culled]]");
          } else {
             varying_slot_semantic(ctx, location, c);
          }
@@ -167,14 +167,14 @@ kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
             ctx->shader->info.clip_distance_array_size);
    if (!storage && !vertex && ctx->shader->info.cull_distance_array_size &&
        !(mask & BITFIELD64_BIT(VARYING_SLOT_CULL_PRIMITIVE)))
-      P_IND(ctx, "bool kk_culled [[cull_primitive]];\n");
+      P_IND(ctx, "bool kk_culled [[primitive_culled]];\n");
    if (!storage && !vertex && ctx->mesh_view_mask && !(mask & VARYING_BIT_LAYER))
       P_IND(ctx, "uint kk_mesh_view_layer [[render_target_array_index]];\n");
    if (!storage && !vertex &&
        !(mask & BITFIELD64_BIT(VARYING_SLOT_CULL_PRIMITIVE)) &&
        !ctx->shader->info.cull_distance_array_size) {
       P(ctx, "#ifdef KK_MESH_RETAINED\n");
-      P_IND(ctx, "bool kk_retained_culled [[cull_primitive]];\n");
+      P_IND(ctx, "bool kk_retained_culled [[primitive_culled]];\n");
       P(ctx, "#endif\n");
    }
    ctx->indentlevel--;

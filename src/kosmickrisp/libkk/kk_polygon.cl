@@ -18,8 +18,11 @@ polygon_capture(global struct poly_geometry_params *p)
 }
 
 static void
-polygon_grid(global uint *grid, uint x, uint y)
+polygon_grid(global uint *grid, global uint *groups, uint x, uint y)
 {
+   groups[0] = x / 64 + (x % 64 != 0);
+   groups[1] = y;
+   groups[2] = 1;
    grid[0] = x;
    grid[1] = y;
    grid[2] = 1;
@@ -62,6 +65,9 @@ libkk_polygon_capture_setup(global struct poly_geometry_params *geometry,
    uint vertices = streams * p->vertices_out;
    uint triangles = streams * sub_sat(p->vertices_out, p->primitive_vertices - 1u);
    p->invocations = geometry->input_primitives;
+   p->dispatch_groups[0] = geometry->grid[0] / 64 + (geometry->grid[0] % 64 != 0);
+   p->dispatch_groups[1] = geometry->grid[1];
+   p->dispatch_groups[2] = 1;
    p->line_phases = p->line_stipple_flags && p->primitive_vertices == 2 ?
       (uintptr_t)poly_heap_alloc(heap, triangles * 8, 8) : 0;
    p->vertices = (uintptr_t)poly_heap_alloc(heap, vertices * p->vertex_stride, 16);
@@ -71,8 +77,8 @@ libkk_polygon_capture_setup(global struct poly_geometry_params *geometry,
    p->triangles = (uintptr_t)poly_heap_alloc(heap, triangles * 16, 16);
    p->clipped = (uintptr_t)poly_heap_alloc(heap, triangles * 8, 8);
    p->clip_counts = (uintptr_t)poly_heap_alloc(heap, triangles * 4, 4);
-   polygon_grid(p->capture_grid, p->vertices_out * p->streams, p->invocations);
-   polygon_grid(p->clip_grid, triangles, 1);
+   polygon_grid(p->capture_grid, p->capture_groups, p->vertices_out * p->streams, p->invocations);
+   polygon_grid(p->clip_grid, p->clip_groups, triangles, 1);
    p->draw[0] = 0;
    p->draw[1] = 1;
    p->draw[2] = 0;
@@ -102,6 +108,7 @@ polygon_clip_primitive(global struct poly_geometry_params *geometry,
    global struct poly_geometry_capture *p = polygon_capture(geometry);
    global uint *counts = (global uint *)p->clip_counts;
    global uint64_t *clipped = (global uint64_t *)p->clipped;
+   if (id >= p->clip_grid[0]) return;
    counts[id] = 0;
    clipped[id] = 0;
    if (p->line_phases) ((global uint64_t *)p->line_phases)[id] = 0;
@@ -128,12 +135,15 @@ polygon_clip_primitive(global struct poly_geometry_params *geometry,
       }
    }
    struct kk_polygon_vertex output[KK_POLYGON_MAX_VERTICES];
-   uint count = p->primitive_vertices == 2 ?
+   uint count = p->primitive_vertices == 1 ?
+      kk_polygon_clip_point(positions, clip, cull, p->clip_count, p->cull_count,
+                            p->depth_clip, p->negative_one_to_one, output) :
+      p->primitive_vertices == 2 ?
       kk_polygon_clip_line(positions, clip, cull, p->clip_count, p->cull_count,
                            p->depth_clip, p->negative_one_to_one, output) :
       kk_polygon_clip(positions, clip, cull, p->clip_count, p->cull_count,
                       p->depth_clip, p->negative_one_to_one, output);
-   if (count < (p->primitive_vertices == 2 ? 2u : 3u))
+   if (count < p->primitive_vertices)
       return;
 
    uint provoking = p->provoking_last ? p->primitive_vertices - 1 : 0;
@@ -151,8 +161,8 @@ polygon_clip_primitive(global struct poly_geometry_params *geometry,
    }
    /* Vulkan's signed framebuffer area has a leading minus sign. */
    area *= -p->viewport[viewport][2] * p->viewport[viewport][3];
-   bool front = p->primitive_vertices == 2 || (p->front_ccw ? area > 0 : area < 0);
-   if (p->primitive_vertices != 2 && !defer_facing &&
+   bool front = p->primitive_vertices <= 2 || (p->front_ccw ? area > 0 : area < 0);
+   if (p->primitive_vertices > 2 && !defer_facing &&
        ((front && (p->cull_mode & 1)) || (!front && (p->cull_mode & 2))))
       return;
 
@@ -184,7 +194,7 @@ polygon_clip_primitive(global struct poly_geometry_params *geometry,
                           kk_line_screen(p, viewport, &output[1]), p->line_mode, p->line_width) :
             (uint64_t)ceil(length);
    }
-   counts[id] = p->primitive_vertices == 2 ? count :
+   counts[id] = p->primitive_vertices <= 2 ? count :
       p->polygon_mode == 2 ? count :
       p->polygon_mode == 1 ? count * 2 : (count - 2) * 3;
 }
@@ -214,6 +224,7 @@ libkk_polygon_dash_counts(global struct poly_geometry_params *geometry,
 {
    global struct poly_geometry_capture *p = polygon_capture(geometry);
    uint id = cl_global_id.x;
+   if (id >= p->clip_grid[0]) return;
    global uint *counts = (global uint *)p->clip_counts;
    counts[id] = 0;
    uint64_t clipped = ((global uint64_t *)p->clipped)[id];
@@ -381,10 +392,11 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
 {
    global struct poly_geometry_capture *p = polygon_capture(geometry);
    uint id = cl_global_id.x;
+   if (id >= p->clip_grid[0]) return;
    global uint *counts = (global uint *)p->clip_counts;
    uint first = id ? counts[id - 1] : 0;
    uint output_count = counts[id] - first;
-   uint count = p->primitive_vertices == 2 ? output_count :
+   uint count = p->primitive_vertices <= 2 ? output_count :
       p->polygon_mode == 2 ? output_count :
       p->polygon_mode == 1 ? output_count / 2 : output_count / 3 + 2;
    if (!output_count)
@@ -436,7 +448,7 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
    for (uint i = 0; i < output_count; ++i) {
       /* Triangle fan or boundary line list. No internal fan edges are drawn
        * in LINE mode, and original flat/provoking values remain unchanged. */
-      uint vertex_index = p->primitive_vertices == 2 ? i :
+      uint vertex_index = p->primitive_vertices <= 2 ? i :
          p->polygon_mode == 2 ? i :
          p->polygon_mode == 1 ? (i / 2 + i % 2) % count :
          i % 3 == 0 ? 0 : i / 3 + i % 3;

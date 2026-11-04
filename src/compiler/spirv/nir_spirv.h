@@ -42,6 +42,7 @@ enum nir_spirv_execution_environment {
 };
 
 struct spirv_to_nir_options {
+   bool separate_clip_cull_distance_arrays;
    enum nir_spirv_execution_environment environment;
 
    /* Create a nir library. */

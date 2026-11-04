@@ -164,4 +164,24 @@ kk_polygon_varying(const struct kk_polygon_vertex *vertex,
    return value;
 }
 
+
+static inline unsigned
+kk_polygon_clip_point(const float position[3][4],
+                      const float clip[3][KK_POLYGON_CLIP_DISTANCES],
+                      const float cull[3][KK_POLYGON_CLIP_DISTANCES],
+                      unsigned clip_count, unsigned cull_count,
+                      bool depth_clip, bool negative_one_to_one,
+                      struct kk_polygon_vertex out[KK_POLYGON_MAX_VERTICES])
+{
+   for (unsigned c = 0; c < cull_count; ++c)
+      if (cull[0][c] < 0) return 0;
+   for (unsigned c = 0; c < 4; ++c) out[0].position[c] = position[0][c];
+   for (unsigned c = 0; c < 3; ++c) out[0].weight[c] = c == 0 ? 1.0f : 0.0f;
+   for (unsigned plane = 0; plane < 6 + clip_count; ++plane) {
+      if (!depth_clip && (plane == 4 || plane == 5)) continue;
+      if (kk_polygon_plane_distance(&out[0], plane, clip, negative_one_to_one) < 0)
+         return 0;
+   }
+   return 1;
+}
 #endif

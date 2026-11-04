@@ -38,6 +38,9 @@ struct poly_geometry_capture {
    uint32_t rasterization_stream;
    uint32_t capture_grid[6];
    uint32_t clip_grid[6];
+   uint32_t dispatch_groups[3];
+   uint32_t capture_groups[3];
+   uint32_t clip_groups[3];
    uint32_t draw[4];
    float viewport[16][6];
    float render_size[2];

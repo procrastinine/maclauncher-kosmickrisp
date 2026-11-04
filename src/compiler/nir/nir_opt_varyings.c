@@ -1170,6 +1170,10 @@ is_sz_sysval(struct linkage_info *linkage, unsigned slot,
 static bool
 can_remove_varying(struct linkage_info *linkage, gl_varying_slot location)
 {
+   if (linkage->producer_builder.shader->options->preserve_clip_cull_io &&
+       (location == VARYING_SLOT_CLIP_DIST0 || location == VARYING_SLOT_CLIP_DIST1 ||
+        location == VARYING_SLOT_CULL_DIST0 || location == VARYING_SLOT_CULL_DIST1))
+      return false;
    if (linkage->consumer_stage == MESA_SHADER_FRAGMENT) {
       /* User-defined varyings and fog coordinates can always be removed. */
       if (location >= VARYING_SLOT_VAR0 ||
@@ -6144,7 +6148,8 @@ nir_opt_varyings(nir_shader *producer, nir_shader *consumer, bool spirv,
    /* Compaction moves CLIP_DIST and CULL_DIST outputs to VARn if the next
     * shader is not FS. Clear those fields in shader_info.
     */
-   if (consumer->info.stage <= MESA_SHADER_GEOMETRY) {
+   if (consumer->info.stage <= MESA_SHADER_GEOMETRY &&
+       !producer->options->preserve_clip_cull_io) {
       producer->info.clip_distance_array_size = 0;
       producer->info.cull_distance_array_size = 0;
    }
