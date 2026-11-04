@@ -390,7 +390,6 @@ struct kk_cmd_buffer {
    struct kk_scene_flight *scene_flights;
    struct kk_depth_stencil_record *depth_stencil_records;
    struct kk_interlock_segment *interlock_segments;
-   struct kk_interlock_segment *interlock_segments_tail;
    struct kk_interlock_heap *interlock_heap;
    bool interlock_heap_active;
    bool interlock_heap_used;

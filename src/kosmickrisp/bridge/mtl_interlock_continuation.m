@@ -7,13 +7,6 @@
 #include <string.h>
 #include <stdio.h>
 
-static bool
-mtl_interlock_trace(void)
-{
-   const char *value = getenv("MESA_KK_DEBUG");
-   return value && strstr(value, "msl");
-}
-
 bool
 mtl_interlock_default_sample_positions(mtl_device *handle,
    struct mtl_sample_position *positions, uint32_t count)
@@ -36,6 +29,7 @@ struct mtl_interlock_context {
    dispatch_group_t pending;
    dispatch_queue_t completion_queue;
    bool residency_attached;
+   bool trace;
    atomic_bool cancelled;
    uint64_t next_capture;
    void (*lost)(void *, const char *);
@@ -61,6 +55,8 @@ mtl_interlock_context_create(mtl_device *device, mtl_command_queue *application,
    struct mtl_interlock_context *c = calloc(1, sizeof(*c));
    if (!c)
       return NULL;
+   const char *debug = getenv("MESA_KK_DEBUG");
+   c->trace = debug && strstr(debug, "msl");
    c->application = [(id<MTL4CommandQueue>)application retain];
    c->auxiliary = [(id<MTLDevice>)device newMTL4CommandQueue];
    c->residency = [(id<MTLResidencySet>)residency retain];
@@ -138,7 +134,7 @@ static void
 mtl_interlock_auxiliary_done(struct mtl_feedback_data *feedback)
 {
    struct mtl_interlock_packet *p = feedback->user_data;
-   if (mtl_interlock_trace())
+   if (p->context->trace)
       fprintf(stderr, "interlock aux final error=%u capture=%llu\n",
          feedback->error, (unsigned long long)p->capture_value);
    if (feedback->error)
@@ -150,7 +146,7 @@ static void
 mtl_interlock_capture_ready(struct mtl_interlock_packet *p)
 {
    @autoreleasepool {
-      if (mtl_interlock_trace())
+      if (p->context->trace)
          fprintf(stderr, "interlock capture ready value=%llu\n",
             (unsigned long long)p->capture_value);
       if (!atomic_load(&p->context->cancelled)) {

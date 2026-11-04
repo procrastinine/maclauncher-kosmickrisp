@@ -47,7 +47,7 @@ kk_interlock_compile_program(struct kk_device *dev,
    msl_preprocess_nir(nir);
    /* Application descriptors were lowered before constructing these internal
     * programs. Match the shared auxiliary-program lowering convention. */
-   kk_nir_lower_descriptors(nir, false, robustness, 0, NULL);
+   kk_nir_lower_descriptors(nir, 0, robustness, 0, NULL);
    /* Track reads remaining in the compiled native program. Source fetch and
     * blend read the transaction shadow; replay only writes attachments. */
    bool *framebuffer_reads = program <= KK_INTERLOCK_REPLAY ?

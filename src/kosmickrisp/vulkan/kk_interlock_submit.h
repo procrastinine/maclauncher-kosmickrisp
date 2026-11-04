@@ -18,6 +18,8 @@ struct kk_interlock_heap;
  * commit callback. Reset releases it only after every continuation callback. */
 struct kk_interlock_segment {
    struct kk_interlock_segment *next;
+   /* Only the recording head uses tail; ordinary command buffers need no slot. */
+   struct kk_interlock_segment *tail;
    struct kk_device *device;
    uint32_t references;
    struct kk_interlock_heap *heap;
@@ -43,6 +45,5 @@ VkResult kk_interlock_split(struct kk_cmd_buffer *cmd, void *data,
    void (*finish)(struct kk_device *, void *));
 void kk_interlock_sync_init(struct kk_device *dev, struct kk_sync_timeline *sync);
 void kk_interlock_sync_finish(struct kk_device *dev, struct kk_sync_timeline *sync);
-VkResult kk_interlock_sync_result(struct vk_device *dev, VkResult result);
 
 #endif

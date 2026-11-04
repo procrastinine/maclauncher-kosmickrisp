@@ -1192,15 +1192,13 @@ kk_draw_heap(struct kk_cmd_buffer *cmd)
 static uint64_t
 kk_heap(struct kk_cmd_buffer *cmd)
 {
-   struct kk_device *dev = kk_cmd_buffer_device(cmd);
-
-   kk_draw_heap(cmd);
+   struct kk_bo *heap = kk_draw_heap(cmd);
 
    /* We need to free all allocations after each command buffer execution */
    bool *uses_heap = cmd->interlock_heap_active ?
       &cmd->interlock_heap_used : &cmd->uses_heap;
    if (!*uses_heap) {
-      uint64_t addr = kk_draw_heap(cmd)->gpu;
+      uint64_t addr = heap->gpu;
 
       /* Zeroing the allocated index frees everything. Force compute encoder
        * since this path is only taken by tessellation, GS and unroll, which
@@ -1219,7 +1217,7 @@ kk_heap(struct kk_cmd_buffer *cmd)
       *uses_heap = true;
    }
 
-   return kk_draw_heap(cmd)->gpu;
+   return heap->gpu;
 }
 
 /* GPU-generated indices are allocated from the heap, past its header */

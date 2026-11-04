@@ -57,7 +57,7 @@ kk_timeline_signal(struct vk_device *device, struct vk_sync *sync,
    mtl_shared_event_set_signaled_value(timeline->mtl_handle, value);
    kk_sync_mark_pending(timeline, value);
    mtx_unlock(&timeline->publish_mutex);
-   return kk_interlock_sync_result(device, VK_SUCCESS);
+   return vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
 }
 
 static VkResult
@@ -69,7 +69,7 @@ kk_timeline_get_value(struct vk_device *device, struct vk_sync *sync,
    mtx_lock(&timeline->publish_mutex);
    *value = mtl_shared_event_get_signaled_value(timeline->mtl_handle);
    mtx_unlock(&timeline->publish_mutex);
-   return kk_interlock_sync_result(device, vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS);
+   return vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
 }
 
 static VkResult
@@ -117,7 +117,7 @@ kk_timeline_wait_impl(struct vk_device *device, struct vk_sync *sync,
       if (completed) {
          mtx_lock(&timeline->publish_mutex);
          mtx_unlock(&timeline->publish_mutex);
-         return kk_interlock_sync_result(device, vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS);
+         return vk_device_is_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
       }
       if (abs_timeout_ns != OS_TIMEOUT_INFINITE) {
          uint64_t now = os_time_get_nano();

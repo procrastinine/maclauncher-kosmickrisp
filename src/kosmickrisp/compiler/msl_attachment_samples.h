@@ -13,6 +13,8 @@ msl_attachment_sample_fetch(nir_builder *b, nir_intrinsic_instr *intr,
    const bool multisample =
       nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_SUBPASS_MS;
    const bool constant = nir_src_is_const(intr->src[3]);
+   const bool direct = constant &&
+      (!multisample || state->interlock_shadow_samples);
    if (!multisample &&
        nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_SUBPASS)
       return false;
@@ -46,6 +48,11 @@ msl_attachment_sample_fetch(nir_builder *b, nir_intrinsic_instr *intr,
          nir_load_output(b, intr->def.num_components,
             intr->def.bit_size, nir_imm_int(b, 0),
             .dest_type = nir_intrinsic_dest_type(intr), .io_semantics = semantics);
+      if (direct) {
+         /* Preserve the existing last-matching-slot selection. */
+         result = current;
+         continue;
+      }
       nir_def *matches = constant ? nir_imm_true(b) :
          nir_ieq_imm(b, nir_iadd_imm(b, intr->src[3].ssa, index), attachment);
       if (multisample && !state->interlock_shadow_samples) {
@@ -57,6 +64,12 @@ msl_attachment_sample_fetch(nir_builder *b, nir_intrinsic_instr *intr,
    }
    if (result == &intr->def)
       return false;
+   if (direct) {
+      /* Remove a known native read before generic lowering can construct its
+       * unused texture read and descriptor fallback. */
+      nir_def_replace(&intr->def, result);
+      return true;
+   }
    /* The implicit dependency covers this invocation's framebuffer sample.
     * Other samples and unmapped inputs retain their original texture read. */
    nir_def_rewrite_uses_after(&intr->def, result);

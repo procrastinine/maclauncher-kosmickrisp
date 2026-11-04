@@ -82,7 +82,8 @@ kk_interlock_function(struct kk_device *dev, const struct msl_compile_data *sour
       return NULL;
    struct kk_physical_device *pdev = kk_device_physical(dev);
    mtl_library *library = mtl_new_library(dev->mtl_compiler_handle, source->code,
-      pdev->info.msl_version, MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
+      kk_msl_language_version(source, pdev->info.msl_version),
+      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
    if (!library)
       return NULL;
    mtl_function_descriptor *function =
@@ -124,7 +125,8 @@ kk_interlock_pipeline_compile(struct kk_device *dev, struct kk_shader *shader)
    const struct msl_compile_data *load = &source->program[KK_INTERLOCK_LOAD];
    struct kk_physical_device *pdev = kk_device_physical(dev);
    mtl_library *library = mtl_new_library(dev->mtl_compiler_handle, load->code,
-      pdev->info.msl_version, MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
+      kk_msl_language_version(load, pdev->info.msl_version),
+      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);
    if (!library)
       return VK_ERROR_INVALID_SHADER_NV;
    mtl_function_descriptor *function =
