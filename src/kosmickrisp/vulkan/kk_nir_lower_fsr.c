@@ -652,6 +652,7 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
                nir_store_var(b, slot, addr, 1);
                nir_jump(b, nir_jump_break);
             }
+            nir_pop_if(b, NULL);
             /* Another lane of this fragment claimed it first. */
             nir_push_if(b, nir_ieq(b, seen, ctx->tag));
             {
@@ -659,7 +660,6 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
                nir_store_var(b, slot, addr, 1);
                nir_jump(b, nir_jump_break);
             }
-            nir_pop_if(b, NULL);
             nir_pop_if(b, NULL);
             /* Lost the race to another fragment: examine the same slot again. */
          }
