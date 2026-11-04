@@ -215,9 +215,9 @@ unlock:
 VkResult
 kk_sparse_prepare_pipeline(struct kk_device *dev, uint32_t modes)
 {
-   /* GPU-written heap descriptors and physical pointers can introduce a first
-    * sparse buffer after submission. Their native code and stable root must
-    * already exist. Texture-only standard3D needs no buffer directory. */
+   /* Base code with buffer guards (standalone stages, and pipelines created
+    * after the device's first residency buffer) reads the stable root from
+    * its first submission. Texture-only standard3D needs no buffer directory. */
    return kk_sparse_device_ensure(dev, modes & KK_SPARSE_BUFFER, false);
 }
 

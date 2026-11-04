@@ -64,6 +64,17 @@ Metal path where that family provides one:
   require Apple7 or later; Apple's Metal Feature Set Tables list placement
   sparse buffers and textures for every Apple7 macOS device and for all
   Apple8 and later GPUs.
+- Shader residency guards for a residency class (buffers, 2D images, 3D
+  images) are compiled after the device creates its first residency resource
+  of that class, for every descriptor model, including descriptor heaps,
+  descriptor buffers and buffer device addresses. A pipeline created before
+  then compiles its guarded variant when a command buffer recorded after then
+  binds it, and a command buffer recorded before then is recorded again when
+  it is submitted after then. Work submitted before then runs without the
+  guards of that class. Pipelines created after then compile the guards at
+  creation. Shaders compiled without a vertex or compute stage compile buffer
+  and 3D image guards at creation whenever the device enables those residency
+  features.
 - Apple10 and later:
 
   - report ``depthBounds`` and use Metal depth bounds testing. Earlier

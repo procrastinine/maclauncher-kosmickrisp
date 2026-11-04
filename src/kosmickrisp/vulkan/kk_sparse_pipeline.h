@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: MIT
  * Sparse buffer variants share the normal compiler and pipeline serializer.
- * Only the compact compiler input is retained; Metal compilation is deferred
- * until the device creates a residency resource. GPU-updated heaps and physical
- * pointers require guards before submission, including before first resource use.
+ * Only the compact compiler input is retained; Metal compilation of a guarded
+ * variant is deferred until the device creates a residency resource. Every
+ * descriptor model, descriptor heaps and physical pointers included, compiles
+ * without guards until then.
  */
 #ifndef KK_SPARSE_PIPELINE_H
 #define KK_SPARSE_PIPELINE_H
@@ -192,7 +193,7 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
    *always_modes = 0;
    if (!enabled) return 0;
    for (unsigned i = 0; i < count; ++i) {
-      uint32_t stage_modes = 0, physical_modes = 0;
+      uint32_t stage_modes = 0;
       nir_foreach_function_impl(impl, infos[i].nir) {
          nir_foreach_block(block, impl) {
             nir_foreach_instr(instr, block) {
@@ -243,7 +244,6 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                   case nir_intrinsic_global_atomic:
                   case nir_intrinsic_global_atomic_swap:
                      stage_modes |= KK_SPARSE_BUFFER;
-                     physical_modes |= KK_SPARSE_BUFFER;
                      break;
                   default: break;
                   }
@@ -253,8 +253,6 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
                          nir_deref_mode_is_one_of(nir_instr_as_deref(parent),
                             nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_mem_global)) {
                         stage_modes |= KK_SPARSE_BUFFER;
-                        if (nir_deref_mode_is(nir_instr_as_deref(parent), nir_var_mem_global))
-                           physical_modes |= KK_SPARSE_BUFFER;
                      }
                   }
 
@@ -263,10 +261,6 @@ kk_sparse_pipeline_modes(uint32_t count, const struct vk_shader_compile_info *in
          }
       }
       modes |= stage_modes;
-      *always_modes |= physical_modes;
-      if (infos[i].flags & (VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT |
-                            VK_SHADER_CREATE_DESCRIPTOR_BUFFER_BIT_MESA))
-         *always_modes |= stage_modes & ~KK_SPARSE_STANDARD_2D;
    }
    /* The lazy native object represents a linked VS/CS pipeline. Standalone
     * stages and task/mesh groups retain their own native ownership. Standard
@@ -517,6 +511,9 @@ kk_compile_shaders_sparse(struct vk_device *device, uint32_t count,
    uint32_t always_modes;
    uint32_t modes = kk_sparse_pipeline_modes(count, infos, features, &always_modes);
    struct kk_device *dev = container_of(device, struct kk_device, vk);
+   /* Binds on a device that already has a residency resource of a class
+    * select that class's guards, so new pipelines compile them directly. */
+   always_modes |= modes & kk_sparse_residency_used(dev);
    VkResult result = kk_sparse_prepare_pipeline(dev, always_modes);
    if (result != VK_SUCCESS) {
       for (unsigned i = 0; i < count; ++i) ralloc_free(infos[i].nir);
