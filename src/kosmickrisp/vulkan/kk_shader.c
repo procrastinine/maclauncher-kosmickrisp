@@ -445,9 +445,25 @@ kk_is_possible_both_depth_clip_clamp(
    return (dyn_clamp || static_clamp_match) && (dyn_clip || static_clip_match);
 }
 
+static bool
+kk_native_vbo_input_slot(UNUSED nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_input)
+      return false;
+   const uint64_t mask = *(const uint64_t *)data;
+   const unsigned location = nir_intrinsic_io_semantics(intr).location - VERT_ATTRIB_GENERIC0;
+   assert(location < KK_MAX_ATTRIBS && (mask & BITFIELD64_BIT(location)));
+   const unsigned slot = util_bitcount64(mask & BITFIELD64_MASK(location));
+   if (nir_intrinsic_base(intr) == slot)
+      return false;
+   nir_intrinsic_set_base(intr, slot);
+   return true;
+}
+
 static void
-kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
-                const struct vk_pipeline_robustness_state *rs)
+kk_lower_vs_vbo_mask(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
+                     const struct vk_pipeline_robustness_state *rs,
+                     uint64_t attribs_read)
 {
    assert(!(nir->info.inputs_read & BITFIELD64_MASK(VERT_ATTRIB_GENERIC0)) &&
           "Fixed-function attributes not used in Vulkan");
@@ -460,7 +476,13 @@ kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
       rs->vertex_inputs ==
       VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2;
    struct kk_attribute attributes[KK_MAX_ATTRIBS] = {};
-   uint64_t attribs_read = nir->info.inputs_read >> VERT_ATTRIB_GENERIC0;
+   uint64_t stage_inputs = nir->info.inputs_read >> VERT_ATTRIB_GENERIC0;
+   assert((stage_inputs & ~attribs_read) == 0);
+   /* Root entries are packed using the owning linked shader's mask. A native
+    * alternative can use fewer inputs, but must keep those same root slots. */
+   if (stage_inputs != attribs_read)
+      nir_shader_intrinsics_pass(nir, kk_native_vbo_input_slot,
+                                 nir_metadata_all, &attribs_read);
    u_foreach_bit(i, kk_vi_is_static(state) ? (state->vi->attributes_valid & attribs_read) : 0) {
       const struct vk_vertex_attribute_state *attr = &state->vi->attributes[i];
       assert(state->vi->bindings_valid & BITFIELD_BIT(attr->binding));
@@ -480,6 +502,14 @@ kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
    }
    NIR_PASS(_, nir, kk_nir_lower_vbo,
             kk_vi_is_static(state) ? attributes : NULL, robustness2);
+}
+
+static void
+kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
+                const struct vk_pipeline_robustness_state *rs)
+{
+   kk_lower_vs_vbo_mask(nir, state, rs,
+      nir->info.inputs_read >> VERT_ATTRIB_GENERIC0);
 }
 
 /* Lowering for the stage which ends up as the vertex stage on hardware */
@@ -2533,8 +2563,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       native_pair[0]->info.next_stage = MESA_SHADER_FRAGMENT;
       kk_lower_hw_vs(native_pair[0], state, false);
       msl_nir_lower_clip_cull_distance(native_pair[0], 0);
-      kk_lower_vs_vbo(native_pair[0], state, vertex_robustness);
-      NIR_PASS(_, native_pair[0], msl_nir_lower_instance_id);
+      /* VBO lowering waits until linking establishes the owning root mask. */
       /* The first descriptor pass rewrites uses but keeps dead resource
        * descriptors until DCE. Remove those before lowering only new sysvals. */
       NIR_PASS(_, native_pair[0], nir_opt_dce);
@@ -2774,6 +2803,14 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
    } else {
       gather_graphics_pipeline_create_info(state, shaders, total_shaders);
       if (native_pair[0]) {
+         NIR_PASS(_, native_pair[0], nir_opt_dce);
+         nir_shader_gather_info(native_pair[0], nir_shader_get_entrypoint(native_pair[0]));
+         kk_lower_vs_vbo_mask(native_pair[0], state, vertex_robustness,
+                              shaders[0]->info.vs.attribs_read);
+         NIR_PASS(_, native_pair[0], msl_nir_lower_instance_id);
+         NIR_PASS(_, native_pair[0], nir_opt_dce);
+         NIR_PASS(_, native_pair[0], kk_nir_lower_descriptors, false,
+                  vertex_robustness, 0, NULL);
          NIR_PASS(_, native_pair[0], kk_nir_lower_polygon_scalar_outputs);
          kk_compile_msl(pdev, native_pair[0], state, &shaders[0]->polygon_native);
          kk_line_fragment(native_pair[1], false, state);
