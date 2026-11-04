@@ -1,1 +1,2 @@
-# No stable flake expectation is established for this source profile.
+# No intermittent result is established for this macOS profile.
+# A pass after a source correction does not establish an intermittent failure.
