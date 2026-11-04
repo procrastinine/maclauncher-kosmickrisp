@@ -402,6 +402,8 @@ struct kk_cmd_buffer {
    struct kk_queue *scene_queue;
    struct kk_scene_record *scene_records;
    struct kk_scene_flight *scene_flights;
+   struct kk_scene_flight *scene_storage_flights;
+   struct kk_scene_submission *scene_reserved_submission;
    struct kk_depth_stencil_record *depth_stencil_records;
    struct kk_interlock_segment *interlock_segments;
    struct kk_interlock_heap *interlock_heap;
@@ -481,6 +483,8 @@ struct kk_cmd_buffer {
    bool uses_heap;
    /* Set at vkBeginCommandBuffer. One-time-submit buffers skip command
     * enqueueing in the trampolines since they can never be replayed. */
+   const struct vk_device_dispatch_table *record_dispatch;
+   bool scene_native_tail;
    bool enqueue_commands;
    bool one_time_submit;
    uint32_t sparse_guarded;
@@ -534,6 +538,8 @@ void cs_end_unordered(struct kk_cmd_buffer *cmd);
 void kk_cmd_pipeline_barriers(struct kk_cmd_buffer *cmd, uint32_t count,
                               const VkDependencyInfo *dependencies);
 bool kk_mesh_split_command_buffer(struct kk_cmd_buffer *cmd);
+VkResult kk_cmd_buffer_defer_native_recording(struct kk_cmd_buffer *cmd);
+VkResult kk_cmd_buffer_resume_native_recording(struct kk_cmd_buffer *cmd);
 void kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd,
                                         uint64_t addr);
 

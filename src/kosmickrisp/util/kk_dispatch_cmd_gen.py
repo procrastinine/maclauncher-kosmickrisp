@@ -28,6 +28,7 @@ COPYRIGHT = """\
 
 import argparse
 import os
+import sys
 
 from mako.template import Template
 
@@ -48,6 +49,7 @@ extern "C" {
 #endif
 
 extern struct vk_device_dispatch_table kk_device_cmd_trampolines;
+extern const struct vk_device_dispatch_table kk_cmd_enqueue_dispatch;
 
 #ifdef __cplusplus
 }
@@ -64,7 +66,9 @@ TEMPLATE_C = Template(COPYRIGHT + """\
 #include "kk_perf.h"
 #include "kk_query_pool.h"
 #include "kk_dispatch_cmd.h"
+#define VK_ENTRY_USE_WEAK 1
 #include "vk_cmd_enqueue_entrypoints.h"
+#undef VK_ENTRY_USE_WEAK
 
 % for e in entrypoints:
   % if not e.is_device_entrypoint() or e.alias or e.params[0].type != 'VkCommandBuffer' or not e.name.startswith('Cmd'):
@@ -91,17 +95,19 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
          (!cmd->deferred_render_chain || !cmd->transient_candidate ||
           !cmd->uses_occlusion_queries); i++) {
         VK_FROM_HANDLE(kk_cmd_buffer, secondary, pCommandBuffers[i]);
-        cmd->deferred_render_chain |= secondary->deferred_render_chain;
         cmd->transient_candidate |= secondary->transient_candidate;
         cmd->uses_occlusion_queries |= secondary->uses_occlusion_queries;
+        if (secondary->deferred_render_chain &&
+            kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
+            return;
     }
     % endif
     % if e.return_type == 'void':
     KK_PERF_VOID(dev, KK_PERF_RECORD,
-        vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()}));
+        cmd->record_dispatch->${e.name}(${e.call_params()}));
     % else:
     return KK_PERF_CALL(dev, KK_PERF_RECORD,
-        vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()}));
+        cmd->record_dispatch->${e.name}(${e.call_params()}));
     % endif
   % endif
 }
@@ -109,6 +115,23 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
 #endif
   % endif
 % endfor
+
+/* The enqueue entrypoint table has a different layout from a dispatch table.
+ * Use the actual enqueue symbols in the same typed, read-only dispatch shape. */
+const struct vk_device_dispatch_table kk_cmd_enqueue_dispatch = {
+% for e in entrypoints:
+  % if not e.is_device_entrypoint() or e.alias or e.params[0].type != 'VkCommandBuffer' or not e.name.startswith('Cmd') or e.name in no_enqueue_commands:
+    <% continue %>
+  % endif
+  % if e.guard is not None:
+#ifdef ${e.guard}
+  % endif
+    .${e.name} = ${e.prefixed_name('vk_cmd_enqueue')},
+  % if e.guard is not None:
+#endif
+  % endif
+% endfor
+};
 
 struct vk_device_dispatch_table kk_device_cmd_trampolines = {
 % for e in entrypoints:
@@ -128,6 +151,8 @@ struct vk_device_dispatch_table kk_device_cmd_trampolines = {
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--import-path', required=True,
+                        help='Path to the Vulkan utility generators.')
     parser.add_argument('--out-c', help='Output C file.')
     parser.add_argument('--out-h', help='Output H file.')
     parser.add_argument('--beta', required=True, help='Enable beta extensions.')
@@ -137,6 +162,9 @@ def main():
                         action='append',
                         dest='xml_files')
     args = parser.parse_args()
+
+    sys.path.insert(0, args.import_path)
+    from vk_cmd_queue_gen import NO_ENQUEUE_COMMANDS
 
     entrypoints = get_entrypoints_from_xml(args.xml_files, args.beta)
 
@@ -150,6 +178,7 @@ def main():
         if args.out_c:
             with open(args.out_c, 'w', encoding='utf-8') as f:
                 f.write(TEMPLATE_C.render(entrypoints=entrypoints,
+                                          no_enqueue_commands=NO_ENQUEUE_COMMANDS,
                                           filename=os.path.basename(__file__)))
     except Exception:
         # In the event there's an error, this imports some helpers from mako
@@ -157,7 +186,6 @@ def main():
         # status 1, if python is run with debug; otherwise it just raises
         # the exception
         if __debug__:
-            import sys
             from mako import exceptions
             sys.stderr.write(exceptions.text_error_template().render() + '\n')
             sys.exit(1)

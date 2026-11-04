@@ -182,6 +182,35 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
                                 uint32_t count, uint32_t *consumed, bool *committed)
 {
    struct kk_device *dev = kk_queue_device(queue);
+   struct kk_cmd_buffer *source = container_of(commands[0], struct kk_cmd_buffer, vk);
+   if (source->scene_native_tail) {
+      /* A one-time direct prefix has no IR to replay into a private command.
+       * Continue its own retained state, then commit all its native parts. */
+      *consumed = 1;
+      *committed = false;
+      if (!source->metal.cmd_buf) {
+         VkResult result = kk_scene_submission_reserve(queue, source);
+         if (result != VK_SUCCESS) return result;
+         result = kk_cmd_buffer_resume_native_recording(source);
+         if (result != VK_SUCCESS) {
+            kk_scene_recording_failed(source);
+            return result;
+         }
+         source->scene_queue = queue;
+         KK_PERF_VOID(dev, KK_PERF_REPLAY,
+            mtl_execute_command_queue(&source->vk.cmd_queue,
+               kk_cmd_buffer_to_handle(source), &dev->vk.dispatch_table));
+         kk_cmd_buffer_end_native_recording(source);
+      }
+      if (source->vk.record_result != VK_SUCCESS) {
+         kk_scene_recording_failed(source);
+         return source->vk.record_result;
+      }
+      kk_device_make_resources_resident(dev);
+      VkResult result = kk_sparse_commit_first(queue, source);
+      *committed = result == VK_SUCCESS;
+      return result;
+   }
    struct vk_command_buffer *vk_cmd = NULL;
    *committed = false;
    struct kk_cmd_buffer *rerecord;

@@ -23,8 +23,9 @@ kk_dispatch_cmd = custom_target(
   output : ['kk_dispatch_cmd.c', 'kk_dispatch_cmd.h'],
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@',
+    '--import-path', meson.project_source_root() / 'src/vulkan/util',
     '--out-c', '@OUTPUT0@', '--out-h', '@OUTPUT1@',
     '--beta', with_vulkan_beta.to_string()
   ],
-  depend_files : vk_dispatch_trampolines_gen_depend_files,
+  depend_files : [vk_cmd_queue_gen, vk_cmd_queue_gen_depend_files],
 )

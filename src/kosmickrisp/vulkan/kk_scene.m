@@ -33,12 +33,14 @@ struct kk_scene_record {
    mtl_residency_set *residency;
 };
 struct kk_scene_flight {
-   struct kk_scene_flight *next;
+   struct kk_scene_flight *next, *storage_next;
    struct kk_scene_lifetime life;
-   unsigned submitted;
+   unsigned submitted, storage_closed;
+   mtx_t storage_mutex;
    struct kk_scene_record *record;
    RSTemporalResult result;
    id queue, commands, allocator, residency;
+   NSMutableArray *prefix_storage;
 };
 struct kk_scene_submission {
    unsigned references;
@@ -48,6 +50,7 @@ struct kk_scene_submission {
    struct mtl_feedback_data feedback;
    char error_message[512];
    id queue, event;
+   NSMutableArray *prefix_storage;
    struct kk_scene_flight *flights;
    mtl_feedback_handler_callback callback;
    void *data;
@@ -72,11 +75,25 @@ static void record_unref(struct kk_scene_record *r)
 }
 static void flight_ref(void *data)
 { kk_scene_lifetime_retain(&((struct kk_scene_flight *)data)->life); }
+/* Native storage may retire at a legal command reset before delayed CPU
+ * completion, while common still retains stable result/output ownership. */
+static void flight_close_storage(struct kk_scene_flight *f)
+{
+   mtx_lock(&f->storage_mutex);
+   if (!f->storage_closed) {
+      [f->commands release]; f->commands = nil;
+      [f->allocator release]; f->allocator = nil;
+      [f->prefix_storage release]; f->prefix_storage = nil;
+      f->storage_closed = 1;
+   }
+   mtx_unlock(&f->storage_mutex);
+}
 static void flight_unref(void *data)
 {
    struct kk_scene_flight *f = data;
    if (!kk_scene_lifetime_release(&f->life)) return;
-   [f->commands release]; [f->allocator release];
+   flight_close_storage(f);
+   mtx_destroy(&f->storage_mutex);
    [f->queue release]; [f->residency release]; record_unref(f->record); free(f);
 }
 static void flight_submitted(struct kk_scene_flight *f, bool accepted, void *event, uint64_t value)
@@ -89,6 +106,7 @@ static void flight_submitted(struct kk_scene_flight *f, bool accepted, void *eve
 static void flight_finish(struct kk_scene_flight *f, uint32_t completion)
 {
    if (!kk_scene_lifetime_finish(&f->life)) return;
+   flight_close_storage(f);
    if (completion != RS_VULKAN_SCENE_GPU_COMPLETED) {
       f->result.status = completion == RS_VULKAN_SCENE_GPU_FAILED ?
          RS_TEMPORAL_FAILED : RS_TEMPORAL_UNAVAILABLE;
@@ -107,7 +125,15 @@ static void finish_list(struct kk_scene_flight *f, uint32_t completion)
 }
 void kk_scene_reset(struct kk_cmd_buffer *cmd)
 {
+   struct kk_scene_flight *storage = cmd->scene_storage_flights;
+   cmd->scene_storage_flights = NULL;
+   while (storage) {
+      struct kk_scene_flight *next = storage->storage_next;
+      flight_close_storage(storage); flight_unref(storage); storage = next;
+   }
    struct kk_scene_flight *flights = cmd->scene_flights;
+   kk_scene_submission_release(cmd->scene_reserved_submission);
+   cmd->scene_reserved_submission = NULL;
    cmd->scene_flights = NULL; cmd->scene_queue = NULL;
    finish_list(flights, RS_VULKAN_SCENE_ABANDONED);
    struct kk_scene_record *r = cmd->scene_records; cmd->scene_records = NULL;
@@ -155,11 +181,15 @@ static void scene_execute(VkCommandBuffer handle, void *data)
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, handle);
    struct kk_scene_record *r = data;
    struct kk_scene_flight *f = calloc(1, sizeof(*f));
-   if (!f) { vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY); return; }
+   if (!f || mtx_init(&f->storage_mutex, mtx_plain) != thrd_success) {
+      free(f); vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY); return;
+   }
    kk_scene_lifetime_init(&f->life); record_ref(r); f->record = r;
    f->result = (RSTemporalResult){ .size = sizeof(f->result), .version = 1,
       .status = RS_TEMPORAL_UNAVAILABLE, .method = r->operation.frame.method };
    f->next = cmd->scene_flights; cmd->scene_flights = f;
+   f->storage_next = cmd->scene_storage_flights;
+   cmd->scene_storage_flights = f; flight_ref(f);
    if (!cmd->scene_queue || cmd->state.gfx.render_pass_descriptor || cmd->whole_pass.suspended) {
       strncpy(f->result.reason, "Scene encoding needs a submitting queue outside rendering", sizeof(f->result.reason)-1);
       return;
@@ -195,18 +225,13 @@ static void scene_execute(VkCommandBuffer handle, void *data)
     * encoder waits on all preceding queue stages using its existing path. */
 }
 
-bool kk_scene_needs_submit(struct kk_cmd_buffer *cmd)
+void kk_scene_recording_failed(struct kk_cmd_buffer *cmd)
 {
-   list_for_each_entry(struct vk_cmd_queue_entry, e, &cmd->vk.cmd_queue.cmds, cmd_link) {
-      if (e->type == VK_CMD_DRIVER && e->u.driver.execute == scene_execute) return true;
-      if (e->type == VK_CMD_EXECUTE_COMMANDS) {
-         for (unsigned i=0; i<e->u.execute_commands.command_buffer_count; ++i) {
-            VK_FROM_HANDLE(kk_cmd_buffer, secondary, e->u.execute_commands.command_buffers[i]);
-            if (kk_scene_needs_submit(secondary)) return true;
-         }
-      }
-   }
-   return false;
+   kk_scene_submission_release(cmd->scene_reserved_submission);
+   cmd->scene_reserved_submission = NULL;
+   struct kk_scene_flight *flights = cmd->scene_flights;
+   cmd->scene_flights = NULL;
+   finish_list(flights, RS_VULKAN_SCENE_GPU_FAILED);
 }
 
 static VkResult resolve(struct kk_device *dev, struct kk_scene_record *r,
@@ -512,6 +537,8 @@ PUBLIC VkResult rsVulkanRecordSceneOperation(VkCommandBuffer handle,
    if (result != VK_SUCCESS) return result;
    struct vk_cmd_queue_entry *entry = linear_zalloc_child(cmd->vk.cmd_queue.ctx, sizeof(*entry));
    if (!entry) { record_unref(r); return VK_ERROR_OUT_OF_HOST_MEMORY; }
+   result = kk_cmd_buffer_defer_native_recording(cmd);
+   if (result != VK_SUCCESS) { record_unref(r); return result; }
    entry->type = VK_CMD_DRIVER; entry->u.driver.data = r; entry->u.driver.execute = scene_execute;
    r->next = cmd->scene_records; cmd->scene_records = r;
    list_addtail(&entry->cmd_link, &cmd->vk.cmd_queue.cmds);
@@ -523,7 +550,7 @@ static void submission_ref(struct kk_scene_submission *s)
 void kk_scene_submission_release(struct kk_scene_submission *s)
 {
    if (!s || __atomic_sub_fetch(&s->references, 1, __ATOMIC_ACQ_REL)) return;
-   [(id)s->event release]; [(id)s->queue release]; cnd_destroy(&s->publication); mtx_destroy(&s->mutex); free(s);
+   [s->prefix_storage release]; [(id)s->event release]; [(id)s->queue release]; cnd_destroy(&s->publication); mtx_destroy(&s->mutex); free(s);
 }
 struct kk_scene_submission *kk_scene_submission_acquire(mtl_feedback_handler_callback callback, void *data)
 {
@@ -541,6 +568,7 @@ static void submission_deliver(struct kk_scene_submission *s)
    mtx_unlock(&s->mutex);
    finish_list(flights, feedback.error == MTL_COMMAND_QUEUE_ERROR_NONE ?
       RS_VULKAN_SCENE_GPU_COMPLETED : RS_VULKAN_SCENE_GPU_FAILED);
+   [s->prefix_storage release]; s->prefix_storage = nil;
    if (!suppress) s->callback(&feedback);
    kk_scene_submission_release(s); /* native-feedback reservation */
 }
@@ -566,35 +594,72 @@ static void submission_notify(struct kk_scene_submission *s, struct kk_queue *qu
 }
 void kk_scene_submission_committed(struct kk_scene_submission *s, struct kk_queue *queue)
 { if (s) submission_notify(s, queue, true); }
+static VkResult submission_create(struct kk_queue *queue, bool event,
+   struct kk_scene_submission **output)
+{
+   *output = NULL;
+   struct kk_scene_submission *s = calloc(1, sizeof(*s));
+   if (!s || mtx_init(&s->mutex, mtx_plain) != thrd_success) {
+      free(s); return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+   if (cnd_init(&s->publication) != thrd_success) {
+      mtx_destroy(&s->mutex); free(s); return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+   s->references = 1;
+   s->queue = [(id)queue->mtl_handle retain];
+   s->needs_event = event;
+   if (event) {
+      @try { s->event = (id)mtl_new_shared_event(kk_queue_device(queue)->mtl_handle); }
+      @catch (NSException *exception) { (void)exception; }
+      if (!s->event) { kk_scene_submission_release(s); return VK_ERROR_OUT_OF_HOST_MEMORY; }
+   } else s->notified = true;
+   *output = s;
+   return VK_SUCCESS;
+}
+VkResult kk_scene_submission_reserve(struct kk_queue *queue, struct kk_cmd_buffer *cmd)
+{
+   assert(!cmd->scene_reserved_submission);
+   /* Reserve the existing flight wrapper/event before appending any suffix
+    * commands. A retry after allocation failure still owns its intact prefix. */
+   VkResult result = submission_create(queue, true, &cmd->scene_reserved_submission);
+   if (result != VK_SUCCESS) return result;
+   struct kk_scene_submission *s = cmd->scene_reserved_submission;
+   @try {
+      s->prefix_storage = [[NSMutableArray alloc] init];
+      if (!s->prefix_storage) @throw [NSException exceptionWithName:@"SceneStorage" reason:nil userInfo:nil];
+      util_dynarray_foreach(&cmd->mesh_command_buffers, mtl_command_buffer *, part)
+         [s->prefix_storage addObject:(id)*part];
+      util_dynarray_foreach(&cmd->mesh_allocators, mtl_command_allocator *, allocator)
+         [s->prefix_storage addObject:(id)*allocator];
+   } @catch (NSException *exception) {
+      (void)exception; kk_scene_submission_release(s);
+      cmd->scene_reserved_submission = NULL;
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+   return VK_SUCCESS;
+}
 VkResult kk_scene_submission_begin(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
    mtl_feedback_handler_callback callback, void *data,
    struct kk_scene_submission **submission)
 {
    *submission = NULL;
-   if (!cmd->scene_flights) return VK_SUCCESS;
-   struct kk_scene_submission *s = calloc(1, sizeof(*s));
-   if (!s || mtx_init(&s->mutex, mtx_plain) != thrd_success) {
-      free(s); struct kk_scene_flight *flights = cmd->scene_flights; cmd->scene_flights = NULL;
-      finish_list(flights, RS_VULKAN_SCENE_GPU_FAILED); return VK_ERROR_OUT_OF_HOST_MEMORY;
+   struct kk_scene_submission *s = cmd->scene_reserved_submission;
+   cmd->scene_reserved_submission = NULL;
+   if (!cmd->scene_flights) { kk_scene_submission_release(s); return VK_SUCCESS; }
+   if (!s) {
+      bool event = false;
+      for (struct kk_scene_flight *f=cmd->scene_flights; f; f=f->next)
+         event |= f->record->submitted != NULL;
+      VkResult result = submission_create(queue, event, &s);
+      if (result != VK_SUCCESS) { kk_scene_recording_failed(cmd); return result; }
    }
-   if (cnd_init(&s->publication) != thrd_success) {
-      mtx_destroy(&s->mutex); free(s);
-      struct kk_scene_flight *flights = cmd->scene_flights; cmd->scene_flights = NULL;
-      finish_list(flights, RS_VULKAN_SCENE_GPU_FAILED); return VK_ERROR_OUT_OF_HOST_MEMORY;
-   }
-   s->references = 2; /* caller handoff + one eventual native feedback */
+   assert(s->queue == (id)queue->mtl_handle);
+   submission_ref(s); /* eventual native feedback, besides caller handoff */
    s->callback = callback; s->data = data; s->flights = cmd->scene_flights;
-   s->queue = [(id)queue->mtl_handle retain];
-   for (struct kk_scene_flight *f=s->flights; f; f=f->next) s->needs_event |= f->record->submitted != NULL;
-   if (s->needs_event) {
-      @try { s->event = (id)mtl_new_shared_event((void *)s->flights->record->device); }
-      @catch (NSException *exception) { (void)exception; }
-      if (!s->event) {
-         s->flights = NULL; kk_scene_submission_release(s); kk_scene_submission_release(s);
-         struct kk_scene_flight *flights = cmd->scene_flights; cmd->scene_flights = NULL;
-         finish_list(flights, RS_VULKAN_SCENE_GPU_FAILED); return VK_ERROR_OUT_OF_HOST_MEMORY;
-      }
-   } else s->notified = true; /* API2 needs no publication notification */
+   if (s->prefix_storage) {
+      s->flights->prefix_storage = s->prefix_storage;
+      s->prefix_storage = nil;
+   }
    cmd->scene_flights = NULL; *submission = s; return VK_SUCCESS;
 }
 void kk_scene_submission_feedback(struct mtl_feedback_data *data)

@@ -8,7 +8,8 @@ struct kk_cmd_buffer;
 struct kk_queue;
 struct kk_scene_record;
 struct kk_scene_flight;
-bool kk_scene_needs_submit(struct kk_cmd_buffer *cmd);
+void kk_scene_recording_failed(struct kk_cmd_buffer *cmd);
+VkResult kk_scene_submission_reserve(struct kk_queue *, struct kk_cmd_buffer *);
 void kk_scene_reset(struct kk_cmd_buffer *cmd);
 struct kk_scene_submission;
 VkResult kk_scene_submission_begin(struct kk_queue *queue, struct kk_cmd_buffer *cmd,

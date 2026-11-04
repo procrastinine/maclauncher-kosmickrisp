@@ -6,6 +6,7 @@
  */
 
 #include "kk_cmd_buffer.h"
+#include "kk_dispatch_cmd.h"
 #include "kk_perf.h"
 #include "kk_scene.h"
 #include "kosmickrisp-rt-commands.h"
@@ -34,6 +35,7 @@
 #include "vk_alloc.h"
 #include "vk_common_entrypoints.h"
 #include "vk_cmd_queue.h"
+#include "vk_cmd_enqueue_entrypoints.h"
 #include "vk_format.h"
 #include "vk_pipeline_layout.h"
 
@@ -308,6 +310,7 @@ kk_reset_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer,
    vk_command_buffer_reset(&cmd->vk);
    cmd->submitted = false;
    cmd->one_time_submit = false;
+   cmd->scene_native_tail = false;
    cmd->enqueue_commands = false;
 }
 
@@ -397,9 +400,11 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    uint64_t sparse_root = cmd->sparse_guarded ? kk_sparse_device_address(sparse_dev) : 0;
    cmd->state.gfx.descriptors.root.sparse_state = sparse_root;
    cmd->state.cs.descriptors.root.sparse_state = sparse_root;
-   cmd->one_time_submit = !cmd->enqueue_commands &&
-      (pBeginInfo->flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT) &&
-      !(kk_sparse_enabled_modes(sparse_dev) & ~cmd->sparse_guarded);
+   /* Native dispatch is enabled only by the paired Perf Begin selector. */
+   cmd->one_time_submit = false;
+
+   /* Perf selects native dispatch here for its eligible one-time mode. */
+   cmd->record_dispatch = &kk_cmd_enqueue_dispatch;
 
    /* vk_command_buffer_begin will reset the command buffer meaning the
     * allocator may be returned to the pool. Request a new one. */
@@ -442,12 +447,8 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
 
-   /* Native scene callbacks need the actual submission queue. The
-    * existing replay pool preserves order and owns each execution's storage. */
-   if (kk_scene_needs_submit(cmd))
-      cmd->enqueue_commands = true;
    if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY &&
-       cmd->vk.record_result == VK_SUCCESS) {
+       !cmd->one_time_submit && cmd->vk.record_result == VK_SUCCESS) {
       if (!cmd->transient_preflight_done) {
          struct vk_command_buffer *source = &cmd->vk;
          cmd->transient_safe = cmd->transient_candidate &&
@@ -740,6 +741,60 @@ kk_mesh_split_command_buffer(struct kk_cmd_buffer *cmd)
    cmd->state.gfx.need_to_start_render_pass = true;
    kk_cmd_buffer_dirty_all_gfx(cmd);
    return true;
+}
+
+/* First submit-owned operation may arrive after arbitrary native commands.
+ * Preserve the same command's CPU state and ordinary part/allocator ownership;
+ * only its remaining suffix becomes IR. No callback runs while recording. */
+VkResult
+kk_cmd_buffer_defer_native_recording(struct kk_cmd_buffer *cmd)
+{
+   cmd->deferred_render_chain = true;
+   if (cmd->record_dispatch != &kk_cmd_buffer_device(cmd)->vk.dispatch_table)
+      return VK_SUCCESS;
+   assert(cmd->one_time_submit);
+   if (!util_dynarray_ensure_cap(&cmd->mesh_command_buffers,
+          cmd->mesh_command_buffers.size + sizeof(mtl_command_buffer *)) ||
+       !util_dynarray_ensure_cap(&cmd->mesh_allocators,
+          cmd->mesh_allocators.size + sizeof(mtl_command_allocator *))) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+   if (cmd->metal.render)
+      kk_apply_attachment_store_ops(cmd, true);
+   cs_end(cmd);
+   mtl_end_command_buffer(cmd->metal.cmd_buf);
+   util_dynarray_append(&cmd->mesh_command_buffers, cmd->metal.cmd_buf);
+   util_dynarray_append(&cmd->mesh_allocators, cmd->metal.allocator);
+   cmd->metal.cmd_buf = NULL;
+   cmd->metal.allocator = NULL;
+   cmd->state.gfx.need_to_start_render_pass = true;
+   kk_cmd_buffer_dirty_all_gfx(cmd);
+   cmd->transient_safe = false;
+   cmd->scene_native_tail = true;
+   cmd->record_dispatch = &kk_cmd_enqueue_dispatch;
+   return VK_SUCCESS;
+}
+
+VkResult
+kk_cmd_buffer_resume_native_recording(struct kk_cmd_buffer *cmd)
+{
+   assert(cmd->scene_native_tail && !cmd->metal.cmd_buf);
+   struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+   mtl_command_buffer *next = kk_cmd_pool_get_cmd_buf(pool);
+   if (!next) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   mtl_command_allocator *allocator = kk_cmd_pool_get_allocator(pool);
+   if (!allocator) {
+      kk_cmd_pool_return_cmd_buf(pool, next);
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   }
+   cmd->metal.cmd_buf = next;
+   cmd->metal.allocator = allocator;
+   cmd->mesh_batches_in_part = cmd->mesh_draws_in_part = 0;
+   mtl_begin_command_buffer(next, allocator);
+   if (cmd->vk.base.object_name)
+      mtl_command_buffer_set_label(next, cmd->vk.base.object_name);
+   return VK_SUCCESS;
 }
 
 void
