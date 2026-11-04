@@ -461,6 +461,10 @@ struct kk_cmd_buffer {
    struct kk_whole_pass_state whole_pass;
    /* Recorded at rendering/secondary enqueue, consumed without an End scan. */
    bool deferred_render_chain;
+   bool uses_indirect_mesh;
+   struct kk_mesh_pass *mesh_pass;
+   const uint32_t *mesh_prepared_grid;
+   uint32_t mesh_prepared_draw;
    /* Complete recording, including secondary queries, before native replay. */
    bool uses_occlusion_queries;
    bool transient_candidate;
@@ -589,6 +593,8 @@ kk_get_descriptors_state(struct kk_cmd_buffer *cmd,
 void cs_start_render(struct kk_cmd_buffer *cmd);
 mtl_render_encoder *cs_get_render(struct kk_cmd_buffer *cmd);
 void kk_cmd_buffer_apply_view_mask(struct kk_cmd_buffer *cmd);
+void kk_mesh_execute_command_queue(struct vk_cmd_queue *, VkCommandBuffer,
+   const struct vk_device_dispatch_table *);
 mtl_compute_encoder *cs_get_compute(struct kk_cmd_buffer *cmd);
 mtl_compute_encoder *cs_get_compute_for_dispatch(struct kk_cmd_buffer *cmd);
 /* Internal implementation boundaries retain their ordering contract. */

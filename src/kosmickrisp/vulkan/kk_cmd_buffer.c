@@ -293,6 +293,10 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
    /* Snapshot fields are read only while a saved scope is suspended. */
    cmd->whole_pass.suspended = false;
    cmd->deferred_render_chain = false;
+   cmd->uses_indirect_mesh = false;
+   cmd->mesh_pass = NULL;
+   cmd->mesh_prepared_grid = NULL;
+   cmd->mesh_prepared_draw = 0;
    cmd->uses_occlusion_queries = false;
    cmd->pending_barrier = (struct kk_barrier_scope){0};
    cmd->closed_encoder_stages = 0;
@@ -467,7 +471,7 @@ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
       }
       if (!cmd->enqueue_commands && !cmd->deferred_render_chain)
          KK_PERF_VOID(kk_cmd_buffer_device(cmd), KK_PERF_REPLAY,
-            mtl_execute_command_queue(&cmd->vk.cmd_queue, commandBuffer,
+            kk_mesh_execute_command_queue(&cmd->vk.cmd_queue, commandBuffer,
                               &kk_cmd_buffer_device(cmd)->vk.dispatch_table));
    }
    KK_PERF_VOID(kk_cmd_buffer_device(cmd), KK_PERF_ENCODE, end_recording(cmd));

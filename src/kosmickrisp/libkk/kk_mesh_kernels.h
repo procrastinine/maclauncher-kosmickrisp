@@ -37,10 +37,13 @@ static inline void
 kk_mesh_snapshot_grid(KK_MESH_GLOBAL const struct kk_mesh_params *p,
    KK_MESH_GLOBAL uint32_t *out)
 {
-   uint32_t count = p->indirect_count ?
-      *(KK_MESH_GLOBAL const uint32_t *)p->indirect_count : p->max_draw_count;
+   bool predicate = !p->predicate ||
+      ((*(KK_MESH_GLOBAL const uint32_t *)p->predicate != 0) !=
+       (p->predicate_inverted != 0));
+   uint32_t count = predicate && p->max_draw_count ? (p->indirect_count ?
+      *(KK_MESH_GLOBAL const uint32_t *)p->indirect_count : p->max_draw_count) : 0;
    out[3] = count < p->max_draw_count ? count : p->max_draw_count;
-   bool active = p->draw_id < out[3] && kk_mesh_draw_enabled(p);
+   bool active = p->draw_id < out[3];
    KK_MESH_GLOBAL const uint32_t *grid =
       (KK_MESH_GLOBAL const uint32_t *)p->indirect_grid;
    out[0] = active ? grid[0] : 0;

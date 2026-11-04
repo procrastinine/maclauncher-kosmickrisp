@@ -326,6 +326,7 @@ kk_mesh_bind_draw(struct kk_cmd_buffer *cmd, mtl_argument_table *table,
 {
    struct kk_shader *s = cmd->state.gfx.shader;
    if (cmd->mesh_chunk.active) draw_id = cmd->mesh_chunk.draw;
+   if (cmd->mesh_prepared_grid) draw_id = cmd->mesh_prepared_draw;
    if (s->mesh->info.flat_heap) {
       cmd->state.gfx.per_draw_data.per_vertex_heap = kk_heap(cmd);
       cmd->state.gfx.per_draw_data.per_vertex_topology = s->mesh->info.primitive;
@@ -884,6 +885,7 @@ finish:
 }
 
 #include "kk_mesh_virtual_exact.h"
+#include "kk_mesh_prepared.h"
 
 static void
 kk_draw_mesh_one_view(struct kk_cmd_buffer *cmd, struct mtl_size direct,
@@ -902,6 +904,11 @@ kk_draw_mesh_one_view(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    uint64_t groups = indirect ? (cmd->mesh_chunk.active ? cmd->mesh_chunk.groups : KK_MESH_MAX_GROUPS) : (uint64_t)direct.x * direct.y * direct.z;
    uint32_t span = physical_span;
    uint32_t slices;
+   if (!virtual && cmd->mesh_prepared_grid && !retained &&
+       groups > span / MAX2(info->has_task ? info->task_grid_bound : 1u, 1u)) {
+      kk_mesh_prepared_slices(cmd, direct);
+      return;
+   }
    if (virtual && cmd->mesh_chunk.active && !retained) {
       kk_draw_mesh_virtual_exact(cmd, indirect, count);
       return;
@@ -952,6 +959,10 @@ kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    uint64_t indirect, uint64_t count, uint32_t draw_count,
    uint32_t stride, bool force_virtual)
 {
+   if (cmd->mesh_pass && !cmd->mesh_prepared_grid) {
+      kk_mesh_pass_draw(cmd, direct, indirect, count, draw_count, stride, force_virtual);
+      return;
+   }
    const struct kk_mesh_shader_info *mesh_info = &cmd->state.gfx.shader->mesh->info;
    bool virtual_task = mesh_info->has_task &&
       (force_virtual || mesh_info->task_grid_bound > KK_MESH_NATIVE_GROUPS ||
@@ -1202,5 +1213,7 @@ kk_depth_bounds_init_dispatch(struct kk_device *dev)
    dev->vk.dispatch_table.CmdDrawMeshTasksIndirect2EXT = kk_depth_bounds_draw_mesh_indirect2;
    dev->vk.dispatch_table.CmdDrawMeshTasksIndirectCount2EXT = kk_depth_bounds_draw_mesh_indirect_count2;
 }
+
+#include "kk_mesh_pass_prepass.h"
 
 #endif

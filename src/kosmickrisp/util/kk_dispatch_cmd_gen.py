@@ -114,12 +114,21 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
     if (pGeneratedCommandsInfo->maxSequenceCount && pGeneratedCommandsInfo->indirectExecutionSet &&
         kk_cmd_buffer_defer_native_recording(cmd) != VK_SUCCESS)
         return;
+    % elif e.name == 'CmdDrawMeshTasksIndirectEXT':
+    cmd->uses_indirect_mesh |= drawCount != 0;
+    % elif e.name == 'CmdDrawMeshTasksIndirectCountEXT':
+    cmd->uses_indirect_mesh |= maxDrawCount != 0;
+    % elif e.name == 'CmdDrawMeshTasksIndirect2EXT':
+    cmd->uses_indirect_mesh |= pInfo->drawCount != 0;
+    % elif e.name == 'CmdDrawMeshTasksIndirectCount2EXT':
+    cmd->uses_indirect_mesh |= pInfo->maxDrawCount != 0;
     % elif e.name == 'CmdExecuteCommands':
     for (uint32_t i = 0; i < commandBufferCount &&
          (!cmd->deferred_render_chain || !cmd->transient_candidate ||
-          !cmd->uses_occlusion_queries); i++) {
+          !cmd->uses_occlusion_queries || !cmd->uses_indirect_mesh); i++) {
         VK_FROM_HANDLE(kk_cmd_buffer, secondary, pCommandBuffers[i]);
         cmd->transient_candidate |= secondary->transient_candidate;
+        cmd->uses_indirect_mesh |= secondary->uses_indirect_mesh;
         if (secondary->uses_occlusion_queries &&
             kk_cmd_buffer_record_occlusion_query(cmd) != VK_SUCCESS)
             return;

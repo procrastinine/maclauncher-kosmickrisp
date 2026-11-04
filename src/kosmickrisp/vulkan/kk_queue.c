@@ -221,7 +221,7 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
          }
          source->scene_queue = queue;
          KK_PERF_VOID(dev, KK_PERF_REPLAY,
-            mtl_execute_command_queue(&source->vk.cmd_queue,
+            kk_mesh_execute_command_queue(&source->vk.cmd_queue,
                kk_cmd_buffer_to_handle(source), &dev->vk.dispatch_table));
          kk_cmd_buffer_end_native_recording(source);
       }
@@ -296,8 +296,9 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
             *drawable = mtl_retain(source->drawable);
          }
       }
+      rerecord->uses_indirect_mesh |= source->uses_indirect_mesh;
       KK_PERF_VOID(dev, KK_PERF_REPLAY,
-         mtl_execute_command_queue(&source->vk.cmd_queue, rerecord_handle,
+         kk_mesh_execute_command_queue(&source->vk.cmd_queue, rerecord_handle,
                                     &dev->vk.dispatch_table));
       if (!rerecord->whole_pass.suspended) {
          (*consumed)++;
