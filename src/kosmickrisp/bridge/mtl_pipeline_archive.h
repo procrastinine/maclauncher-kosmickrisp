@@ -57,8 +57,9 @@ kk_pipeline_hint(MTL4PipelineDescriptor *descriptor)
       if (!vertex || !fragment) return nil;
       [fields addObjectsFromArray:@[@"render", vertex, fragment,
          @(render.rasterSampleCount), @(render.inputPrimitiveTopology),
-         @(render.rasterizationEnabled), @(render.maxVertexAmplificationCount),
-         @(render.depthAttachmentPixelFormat), @(render.stencilAttachmentPixelFormat)]];
+         @(render.rasterizationEnabled), @(render.maxVertexAmplificationCount)]];
+      /* MTL4 has no depth/stencil-format fields on this descriptor. This
+       * advisory key never replaces Metal's complete descriptor verification. */
       for (unsigned i = 0; i < 8; ++i)
          [fields addObject:@[@(render.colorAttachments[i].pixelFormat),
                              @(render.colorAttachments[i].writeMask)]];
