@@ -482,5 +482,36 @@
     "performance": true,
     "performance_reason": "DXVK uses min/max filtering for tiled-resource tier 2, which is required for D3D feature level 12_0; only samplers selecting reduction perform software taps.",
     "off_consequence": "Disabling min/max filtering can lower DXVK tiled-resource support below tier 2 and remove D3D feature level 12_0."
+  },
+  {
+    "name": "descriptor_heap",
+    "description": "Descriptor heap addressing and shared image, buffer and sampler metadata.",
+    "cost_class": "native resource handles / descriptor indirection",
+    "cost_note": "In emitted non-sparse, unrobust signatures, a buffer access uses one 8-byte heap-root load and one 16-byte packet load; a sampled texture/sampler pair uses two 8-byte heap-root loads plus one 8-byte sampler-metadata pointer load before shared decoding. Unused set shaders emit no heap access. GPU latency and relative speed are unmeasured.",
+    "extensions": [
+      "VK_EXT_descriptor_heap"
+    ],
+    "features": [
+      "descriptorHeap",
+      "descriptorHeapCaptureReplay"
+    ],
+    "properties": [
+      "samplerHeapAlignment",
+      "resourceHeapAlignment",
+      "maxSamplerHeapSize",
+      "maxResourceHeapSize",
+      "samplerDescriptorSize",
+      "imageDescriptorSize",
+      "bufferDescriptorSize",
+      "samplerDescriptorAlignment",
+      "imageDescriptorAlignment",
+      "bufferDescriptorAlignment",
+      "maxPushDataSize",
+      "maxDescriptorHeapEmbeddedSamplers",
+      "samplerYcbcrConversionCount"
+    ],
+    "performance": false,
+    "performance_reason": "Pinned DXVK and vkd3d-proton retain conventional descriptor binding, device creation and D3D SM/FL without this optional interface; no relative speedup is claimed.",
+    "off_consequence": "Pinned DXVK/vkd3d-proton device creation and D3D SM/FL are unchanged; the Vulkan heap interface and vkd3d experimental work graphs are unavailable, and byte-offset views require descriptor-buffer support."
   }
 ]
