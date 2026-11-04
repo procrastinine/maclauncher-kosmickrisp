@@ -338,6 +338,12 @@ kk_CmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
    if (util_dynarray_num_elements(&cmd->ts_resolves, struct kk_ts_resolve) > 0)
       cs_end(cmd);
 
+   /* Resolves can already be encoded while their BLIT writes are still in
+    * flight. Reset must happen after them even when ts_resolves is now empty. */
+   if (kk_pool_is_ts(pool) && (cmd->closed_encoder_stages & MTL_STAGE_BLIT))
+      mtl_barrier_after_queue_stages(cs_get_compute(cmd), MTL_STAGE_BLIT,
+                                     MTL_STAGE_DISPATCH);
+
    emit_zero_queries(cmd, pool, firstQuery, queryCount, false);
 }
 
