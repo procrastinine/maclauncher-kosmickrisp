@@ -1944,9 +1944,15 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
    struct kk_shader *rate_fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
    if ((rate_fs && rate_fs->info.fs.fsr_slots) ||
        (gfx->fsr_coarse && gfx->shader->info.vs.fsr_coarse_slots)) {
-      /* Sample invocations of one fragment find each other by draw. */
+      /* Sample invocations of one fragment find each other by draw. The low
+       * byte is the render pass epoch: Metal runs the fragments of all draws
+       * of a pass tile by tile, so a slot stays claimed for its whole pass. */
       util_call_once_data(&dev->fsr_slots_once, kk_init_fsr_slots, dev);
-      desc->root.fsr.serial = p_atomic_inc_return(&dev->fsr_serial);
+      struct kk_rendering_state *render = &cmd->state.gfx.render;
+      if (!render->fsr_epoch)
+         render->fsr_epoch = 0x100u | (p_atomic_inc_return(&dev->fsr_pass) & 0xffu);
+      desc->root.fsr.serial = (p_atomic_inc_return(&dev->fsr_serial) << 8) |
+                              (render->fsr_epoch & 0xffu);
       desc->root.fsr.slots = dev->fsr_slots ? dev->fsr_slots->gpu : 0;
       desc->root_dirty = true;
    }

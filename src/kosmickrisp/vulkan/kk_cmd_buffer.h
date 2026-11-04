@@ -260,6 +260,9 @@ struct kk_rendering_state {
    uint32_t writable_msaa_attachments;
    bool writable_msaa_inputs;
    bool rendering_to_whole_framebuffer;
+   /* Shading-rate slot epoch of this render pass in the low byte; bit 8
+    * marks it as assigned. */
+   uint32_t fsr_epoch;
 };
 
 /* Dirty tracking bits for state not tracked by vk_dynamic_graphics_state or

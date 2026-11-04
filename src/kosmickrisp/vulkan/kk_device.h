@@ -170,6 +170,7 @@ struct kk_device {
    struct kk_bo *fsr_slots;
    util_once_flag fsr_slots_once;
    uint32_t fsr_serial;
+   uint32_t fsr_pass;
    struct kk_interlock_registry *interlock_registry;
    util_once_flag heap_init_once;
    struct kk_frame_capture *frame_capture;

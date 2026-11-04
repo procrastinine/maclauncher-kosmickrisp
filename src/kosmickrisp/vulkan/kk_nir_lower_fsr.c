@@ -455,18 +455,20 @@ fsr_lower_inputs(nir_builder *b, struct fsr_ctx *ctx, nir_function_impl *impl)
  * other sample invocations wait for them.
  *
  * The tag identifies the draw, the rasterized primitive and the fragment, and
- * its low byte is the draw serial's. A slot is free when it is zero or holds
- * the tag of a draw at least FSR_SLOT_AGE serials older; the slot index is a
- * hash of the tag, probed linearly. Metal overlaps the fragment work of
- * consecutive draws, so a claim never replaces a slot of the current or the
- * seven previous draws: a waiting invocation of an earlier draw still finds
- * its own publication. A fragment that finds no free slot within the probe
- * limit runs on its own, as without the slots, and an invocation whose
+ * its low byte is the render pass epoch (the low byte of the draw serial). A
+ * slot is free when it is zero or holds the tag of a pass at least
+ * FSR_SLOT_AGE epochs older; the slot index is a hash of the tag, probed
+ * linearly. Metal runs the fragments of all draws of a pass tile by tile, so
+ * a fragment of the last draw can run before one of the first draw in
+ * another tile: a claim never replaces a slot of the current or the seven
+ * previous passes, and a waiting invocation always finds its own
+ * publication. A fragment that finds no free slot within the probe limit
+ * runs on its own, as without the slots, and an invocation whose
  * publication does not arrive within the wait limit keeps its own results. */
 #define FSR_SLOT_READY 4
 #define FSR_SLOT_DISCARD 8
 #define FSR_SLOT_DATA 12
-#define FSR_SLOT_PROBES 16
+#define FSR_SLOT_PROBES 64
 #define FSR_SLOT_AGE 8
 #define FSR_SLOT_TRIES (1u << 12)
 
@@ -554,7 +556,7 @@ fsr_claim(nir_builder *b, struct fsr_ctx *ctx, unsigned stride)
          nir_pop_if(b, NULL);
          nir_def *age = nir_iand_imm(b, nir_isub(b, serial8, old), 0xff);
          nir_def *free_slot = nir_ior(b, nir_ieq_imm(b, old, 0),
-            nir_iand(b, nir_uge_imm(b, age, FSR_SLOT_AGE), nir_ult_imm(b, age, 128)));
+                                      nir_uge_imm(b, age, FSR_SLOT_AGE));
          nir_push_if(b, free_slot);
          {
             nir_def *seen = nir_global_atomic_swap(b, 32, addr, old, ctx->tag,
