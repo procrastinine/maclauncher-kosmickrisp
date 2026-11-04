@@ -260,6 +260,35 @@ bound_store(struct kk_async_compute_owner *owner, struct disk_cache *disk,
    return ready;
 }
 
+/* Builds submitted before the set was published start on a predicted-build
+ * worker now. A build submitted after publication read the set itself. */
+static void
+bound_promote(struct kk_async_compute_owner *owner, const struct kk_predicted *loaded)
+{
+   pthread_mutex_lock(&owner->mutex);
+   unsigned capacity = owner->active, count = 0;
+   struct kk_async_compute **jobs = capacity ? malloc(capacity * sizeof(*jobs)) : NULL;
+   for (struct kk_async_compute *job = owner->jobs; job && jobs && count < capacity;
+        job = job->active_next) {
+      if (!p_atomic_read(&job->task) || p_atomic_read(&job->predicted) ||
+          p_atomic_read(&job->ready) || !job->has_id ||
+          !bsearch(&job->id, loaded->ids, loaded->count, sizeof(loaded->ids[0]), bound_id_compare))
+         continue;
+      p_atomic_set(&job->predicted, true);
+      p_atomic_inc(&job->refs);
+      jobs[count++] = job;
+   }
+   pthread_mutex_unlock(&owner->mutex);
+   for (unsigned i = 0; i < count; ++i) {
+      struct kk_async_compute *job = jobs[i];
+      if (job->build_id)
+         kk_perf_build_event(job->dev->perf, job->build_id, "predicted", NULL, 0);
+      mtl_compiler_task_prestart(job->dev->mtl_compiler_handle, job->task);
+      job_unref(job);
+   }
+   free(jobs);
+}
+
 static void *
 bound_thread_main(void *data)
 {
@@ -288,6 +317,7 @@ bound_thread_main(void *data)
          memcpy(loaded->ids, blob, size);
          qsort(loaded->ids, count, sizeof(loaded->ids[0]), bound_id_compare);
          p_atomic_set(&owner->predicted, loaded);
+         bound_promote(owner, loaded);
       }
       free(blob);
    }
@@ -309,9 +339,9 @@ bound_thread_main(void *data)
 }
 #endif
 
-bool
-kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
-                        VkResult (*compile)(struct kk_device *, struct kk_shader *))
+/* The device's build owner, created once; its bound-set thread starts with it. */
+static struct kk_async_compute_owner *
+owner_get(struct kk_device *dev)
 {
    struct kk_async_compute_owner *owner = p_atomic_read(&dev->async_compute);
    if (!owner) {
@@ -339,6 +369,22 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
       }
       simple_mtx_unlock(&dev->pipeline_cache_init_mutex);
    }
+   return owner;
+}
+
+/* At device creation, so the bound set is usually published before the first
+ * pipeline; builds submitted before that are promoted when it publishes. */
+void
+kk_async_compute_device_init(struct kk_device *dev)
+{
+   owner_get(dev);
+}
+
+bool
+kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
+                        VkResult (*compile)(struct kk_device *, struct kk_shader *))
+{
+   struct kk_async_compute_owner *owner = owner_get(dev);
    if (!owner) return false;
    struct kk_async_compute *job = calloc(1, sizeof(*job));
    if (!job) return false;
@@ -346,6 +392,8 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
    job->refs = 2; /* shader and queued operation cleanup */
    job->result = VK_NOT_READY;
    job->dev = dev; job->shader = shader; job->owner = owner; job->compile = compile;
+   /* Identified before it is visible to the bound-set thread's promotion. */
+   job_identify(job);
    if (dev->perf) {
       kk_perf_compile_parent(dev->perf, &job->request_id, &job->parent_id);
       job->build_id = kk_perf_build_queued(dev->perf,
@@ -358,17 +406,19 @@ kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
    owner->jobs = job;
    pthread_mutex_unlock(&owner->mutex);
    shader->pipeline.compute.pending = job;
+   /* Read after linking: a set published later promotes this build once its
+    * task is visible. */
    const struct kk_predicted *predicted = p_atomic_read(&owner->predicted);
-   if (predicted) {
-      job_identify(job);
-      job->predicted = job->has_id && bsearch(&job->id, predicted->ids, predicted->count,
-         sizeof(predicted->ids[0]), bound_id_compare);
-      if (job->predicted && job->build_id)
+   bool is_predicted = predicted && job->has_id && bsearch(&job->id, predicted->ids,
+      predicted->count, sizeof(predicted->ids[0]), bound_id_compare);
+   if (is_predicted) {
+      p_atomic_set(&job->predicted, true);
+      if (job->build_id)
          kk_perf_build_event(dev->perf, job->build_id, "predicted", NULL, 0);
    }
    if (dev->perf) kk_perf_async_compute(dev->perf, 1, 0);
-   job->task = (job->predicted ? mtl_compiler_submit_predicted : mtl_compiler_submit)(
-      dev->mtl_compiler_handle, job, job_execute, job_failed, job_cleanup);
+   p_atomic_set(&job->task, (is_predicted ? mtl_compiler_submit_predicted : mtl_compiler_submit)(
+      dev->mtl_compiler_handle, job, job_execute, job_failed, job_cleanup));
    if (job->task) return true;
    /* Queue allocation is best effort; ordinary synchronous compilation remains
     * available with no published pending shader on this failure path. */

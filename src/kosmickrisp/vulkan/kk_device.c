@@ -800,6 +800,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       kk_device_make_resources_resident(dev);
       mtl_residency_set_request_residency(dev->residency_set.handle);
    }
+   /* Loads the application's bound compute builds off this thread. */
+   kk_async_compute_device_init(dev);
    *pDevice = kk_device_to_handle(dev);
 
    return VK_SUCCESS;

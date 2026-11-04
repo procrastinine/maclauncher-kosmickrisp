@@ -135,6 +135,9 @@ void *mtl_compiler_submit(mtl_compiler *compiler, void *data,
 void *mtl_compiler_submit_predicted(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),
    void (*cleanup)(void *));
+/* Runs a task submitted with mtl_compiler_submit on a predicted-build worker
+ * unless a worker or waiter has entered it. */
+void mtl_compiler_task_prestart(mtl_compiler *compiler, void *task);
 void mtl_compiler_task_wait(void *task);
 void mtl_compiler_task_cancel(void *task);
 /* How a wait completed a task: no wait, ran an unentered payload on the

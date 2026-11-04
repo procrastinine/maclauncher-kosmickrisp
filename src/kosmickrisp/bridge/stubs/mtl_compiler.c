@@ -202,6 +202,7 @@ void *mtl_compiler_submit_predicted(mtl_compiler *compiler, void *data,
    void (*cleanup)(void *)) { return NULL; }
 void mtl_compiler_task_wait(void *task) {}
 void mtl_compiler_task_cancel(void *task) {}
+void mtl_compiler_task_prestart(mtl_compiler *compiler, void *task) {}
 enum mtl_compiler_join mtl_compiler_task_join(void *task) { return MTL_COMPILER_JOIN_NONE; }
 void *mtl_compiler_task_raise(void *task) { return NULL; }
 void mtl_compiler_task_raise_end(void *raised) {}

@@ -261,6 +261,11 @@ kk_pin_worker_image(void)
 - (void)main
 {
    @autoreleasepool {
+      /* A prestarted or joined payload already ran elsewhere. */
+      pthread_mutex_lock(&state);
+      bool taken = payload_claimed || callback_entered;
+      pthread_mutex_unlock(&state);
+      if (taken) return;
       pthread_mutex_lock(&kk_compile_queue_lock);
       /* A deferred build waits while demand compiles run and until they have
        * been quiet for KK_BACKGROUND_QUIET_NS. A waiter needing a build runs
@@ -346,6 +351,25 @@ kk_foreground_cleanup(void **token)
  * second queue of two utility workers that demand compiles never suspend, so
  * they are ready before their first bind instead of compiling on the binding
  * thread. */
+/* Called with kk_compile_queue_lock held. */
+static KKCompileQueue *
+kk_compile_queue(mtl_compiler *compiler, bool predicted)
+{
+   void *association = predicted ? &kk_predicted_queue_association : &kk_compile_queue_association;
+   KKCompileQueue *queue = objc_getAssociatedObject((id)compiler, association);
+   if (queue || !kk_pin_worker_image()) return queue;
+   queue = [[KKCompileQueue alloc] init];
+   if (!queue) return nil;
+   NSUInteger cores = MIN((NSUInteger)8, [NSProcessInfo processInfo].activeProcessorCount);
+   queue.maxConcurrentOperationCount = predicted ? MIN((NSUInteger)2, cores) : cores > 1 ? cores - 1 : 1;
+   /* A queue's service level is also the floor for its operations. */
+   queue.qualityOfService = predicted ? NSQualityOfServiceUtility : NSQualityOfServiceBackground;
+   queue.name = predicted ? @"KosmicKrisp predicted builds" : @"KosmicKrisp compiler";
+   objc_setAssociatedObject((id)compiler, association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+   [queue release];
+   return queue;
+}
+
 static void *
 kk_compiler_submit(mtl_compiler *compiler, void *data,
    void (*execute)(void *), void (*failed)(void *, const char *),
@@ -353,21 +377,7 @@ kk_compiler_submit(mtl_compiler *compiler, void *data,
 {
    @autoreleasepool {
       pthread_mutex_lock(&kk_compile_queue_lock);
-      void *association = predicted ? &kk_predicted_queue_association : &kk_compile_queue_association;
-      KKCompileQueue *queue = objc_getAssociatedObject((id)compiler, association);
-      if (!queue) {
-         if (!kk_pin_worker_image()) { pthread_mutex_unlock(&kk_compile_queue_lock); return NULL; }
-         queue = [[KKCompileQueue alloc] init];
-         if (queue) {
-            NSUInteger cores = MIN((NSUInteger)8, [NSProcessInfo processInfo].activeProcessorCount);
-            queue.maxConcurrentOperationCount = predicted ? MIN((NSUInteger)2, cores) : cores > 1 ? cores - 1 : 1;
-            /* A queue's service level is also the floor for its operations. */
-            queue.qualityOfService = predicted ? NSQualityOfServiceUtility : NSQualityOfServiceBackground;
-            queue.name = predicted ? @"KosmicKrisp predicted builds" : @"KosmicKrisp compiler";
-            objc_setAssociatedObject((id)compiler, association, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            [queue release];
-         }
-      }
+      KKCompileQueue *queue = kk_compile_queue(compiler, predicted);
       /* A pair never queues behind unrelated jobs. Its caller can compile both
        * stages synchronously when this same bounded queue is already occupied. */
       if (!queue || (frontend && (queue->background_tasks || queue.operationCount >= queue.maxConcurrentOperationCount))) {
@@ -416,6 +426,28 @@ mtl_compiler_submit_predicted(mtl_compiler *compiler, void *data,
    void (*cleanup)(void *))
 {
    return kk_compiler_submit(compiler, data, execute, failed, cleanup, false, true);
+}
+
+/* A deferred build queued before it was known to be predicted runs on a
+ * predicted-build worker if no worker or waiter has entered it yet. */
+void
+mtl_compiler_task_prestart(mtl_compiler *compiler, void *task)
+{
+   @autoreleasepool {
+      KKCompileOperation *operation = (KKCompileOperation *)task;
+      if (!operation || operation->frontend || operation.payloadRetired) return;
+      pthread_mutex_lock(&kk_compile_queue_lock);
+      KKCompileQueue *queue = kk_compile_queue(compiler, true);
+      pthread_mutex_unlock(&kk_compile_queue_lock);
+      if (!queue) return;
+      [operation retain];
+      NSBlockOperation *runner = [NSBlockOperation blockOperationWithBlock:^{
+         [operation runHere];
+         [operation release];
+      }];
+      runner.qualityOfService = NSQualityOfServiceUtility;
+      [queue addOperation:runner];
+   }
 }
 
 void

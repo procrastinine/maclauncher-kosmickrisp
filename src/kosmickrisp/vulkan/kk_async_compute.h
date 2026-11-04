@@ -20,6 +20,7 @@ bool kk_async_compute_defer_destroy(struct kk_shader *shader,
    void (*destroy)(struct vk_device *, struct kk_shader *, const VkAllocationCallbacks *));
 void kk_async_compute_shader_finish(struct kk_shader *shader);
 void kk_async_compute_drain(struct kk_device *dev);
+void kk_async_compute_device_init(struct kk_device *dev);
 void kk_async_compute_device_finish(struct kk_device *dev);
 VkResult kk_async_compute_finish_creation(struct kk_device *dev, uint32_t count,
    const VkComputePipelineCreateInfo *infos, const VkAllocationCallbacks *allocator,
