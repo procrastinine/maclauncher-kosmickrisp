@@ -65,7 +65,7 @@ libkk_mesh_snapshot(global struct kk_mesh_params *p, global uint32_t *out)
 
 KERNEL(1)
 libkk_mesh_prefix_expand(global struct kk_mesh_params *p,
-   global uint32_t *grids, global uint32_t *range, uint32_t span)
+   global uint32_t *grids, global uint32_t *range, uint32_t span, uint32_t capacity)
 {
-   kk_mesh_prefix_expand(p, grids, range, span);
+   kk_mesh_prefix_expand(p, grids, range, span, capacity);
 }

@@ -5,6 +5,9 @@
 #include "kosmickrisp/libkk/kk_argument_table.h"
 #include "kosmickrisp/libkk/kk_canonical_layout.h"
 #include "kk_debug.h"
+#define KK_MESH_GLOBAL
+#include "kosmickrisp/libkk/kk_mesh_kernels.h"
+#undef KK_MESH_GLOBAL
 #include "kk_interlock_heap.h"
 #include <stdio.h>
 
@@ -322,6 +325,7 @@ kk_mesh_bind_draw(struct kk_cmd_buffer *cmd, mtl_argument_table *table,
                     uint32_t draw_id)
 {
    struct kk_shader *s = cmd->state.gfx.shader;
+   if (cmd->mesh_chunk.active) draw_id = cmd->mesh_chunk.draw;
    if (s->mesh->info.flat_heap) {
       cmd->state.gfx.per_draw_data.per_vertex_heap = kk_heap(cmd);
       cmd->state.gfx.per_draw_data.per_vertex_topology = s->mesh->info.primitive;
@@ -380,20 +384,34 @@ kk_mesh_render(struct kk_cmd_buffer *cmd, struct kk_pipeline_handles *pipe,
 
 /* One arena is reused in submission order. Its size is independent of the
  * task draw's workgroup count, including indirect and generated draws. */
+static uint32_t
+kk_mesh_payload_stride(const struct kk_mesh_shader_info *info)
+{
+   return ALIGN_POT(MAX2(info->task_payload_size, 1u), 16u);
+}
+
 static bool
 kk_mesh_scratch(struct kk_cmd_buffer *cmd)
 {
-   if (cmd->state.gfx.mesh_batch)
+   uint32_t stride = kk_mesh_payload_stride(&cmd->state.gfx.shader->mesh->info);
+   if (cmd->state.gfx.mesh_batch && cmd->state.gfx.mesh_payload_capacity >= stride)
       return true;
+   uint32_t payload_bytes = KK_MESH_BATCH_SIZE * stride;
    struct kk_ptr p = kk_pool_alloc(cmd,
-      KK_MESH_BATCH_SIZE * 16384u + KK_MESH_BATCH_SIZE * sizeof(struct kk_mesh_task_record) +
+      payload_bytes + KK_MESH_BATCH_SIZE * sizeof(struct kk_mesh_task_record) +
       sizeof(struct kk_mesh_batch), 16);
    if (!p.gpu)
       return false;
+   cmd->state.gfx.mesh_payload_capacity = stride;
    cmd->state.gfx.mesh_payloads = p.gpu;
-   cmd->state.gfx.mesh_records = p.gpu + KK_MESH_BATCH_SIZE * 16384u;
+   cmd->state.gfx.mesh_records = p.gpu + payload_bytes;
    cmd->state.gfx.mesh_batch = cmd->state.gfx.mesh_records +
       KK_MESH_BATCH_SIZE * sizeof(struct kk_mesh_task_record);
+   uint32_t batch_offset = payload_bytes + KK_MESH_BATCH_SIZE * sizeof(struct kk_mesh_task_record);
+   cmd->mesh_chunk.exact.batch = (struct kk_ptr){
+      .cpu = (char *)p.cpu + batch_offset, .gpu = p.gpu + batch_offset,
+      .buffer = p.buffer, .offset = p.offset + batch_offset,
+   };
    return true;
 }
 
@@ -472,7 +490,7 @@ kk_draw_mesh_unsliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
       p.batch = cmd->state.gfx.mesh_batch;
       p.records = cmd->state.gfx.mesh_records;
       p.payloads = cmd->state.gfx.mesh_payloads;
-      p.payload_stride = 16384;
+      p.payload_stride = kk_mesh_payload_stride(&shader->mesh->info);
       uint64_t groups = cmd->mesh_chunk.active ? cmd->mesh_chunk.groups :
          (direct.x ? (uint64_t)direct.x * direct.y * direct.z : KK_MESH_MAX_GROUPS);
       uint32_t batches = DIV_ROUND_UP(groups, task_limit);
@@ -797,7 +815,7 @@ kk_draw_mesh_sliced(struct kk_cmd_buffer *cmd, struct mtl_size direct,
       p.batch = virtual ? cmd->state.gfx.mesh_batch : cmd->state.gfx.mesh_native_batch;
       p.records = cmd->state.gfx.mesh_records;
       p.payloads = cmd->state.gfx.mesh_payloads;
-      p.payload_stride = virtual ? 16384u :
+      p.payload_stride = virtual ? kk_mesh_payload_stride(&shader->mesh->info) :
          (cmd->mesh_chunk.active ? MIN2(span, cmd->mesh_chunk.groups) : span);
       if ((canonical || retained) && virtual) {
          p.pad = span;
@@ -865,6 +883,8 @@ finish:
       free(parameters);
 }
 
+#include "kk_mesh_virtual_exact.h"
+
 static void
 kk_draw_mesh_one_view(struct kk_cmd_buffer *cmd, struct mtl_size direct,
                 uint64_t indirect, uint64_t count, uint32_t draw_count,
@@ -882,6 +902,10 @@ kk_draw_mesh_one_view(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    uint64_t groups = indirect ? (cmd->mesh_chunk.active ? cmd->mesh_chunk.groups : KK_MESH_MAX_GROUPS) : (uint64_t)direct.x * direct.y * direct.z;
    uint32_t span = physical_span;
    uint32_t slices;
+   if (virtual && cmd->mesh_chunk.active && !retained) {
+      kk_draw_mesh_virtual_exact(cmd, indirect, count);
+      return;
+   }
    if (virtual) {
       uint32_t tasks = MIN2(groups, kk_mesh_canonical_task_limit(info, retained));
       uint32_t maximum = tasks * info->task_grid_bound;
@@ -928,11 +952,20 @@ kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct,
    uint64_t indirect, uint64_t count, uint32_t draw_count,
    uint32_t stride, bool force_virtual)
 {
-   if (indirect && !cmd->mesh_chunk.active &&
-       cmd->state.gfx.shader->mesh->info.has_task &&
+   const struct kk_mesh_shader_info *mesh_info = &cmd->state.gfx.shader->mesh->info;
+   bool virtual_task = mesh_info->has_task &&
+      (force_virtual || mesh_info->task_grid_bound > KK_MESH_NATIVE_GROUPS ||
+       (mesh_info->flat_heap && mesh_info->task_grid_bound > kk_mesh_canonical_span(cmd)));
+   if (!cmd->mesh_chunk.active && mesh_info->has_task && (indirect || virtual_task) &&
        !kk_mesh_retained_active(cmd) && !cmd->state.gfx.render.layered_bc) {
+      bool known_direct = !indirect && !cmd->state.cond_render.enabled;
+      if (!indirect) {
+         uint32_t grid[] = {direct.x, direct.y, direct.z};
+         indirect = kk_pool_upload(cmd, grid, sizeof(grid), 4).gpu;
+         if (!indirect) return;
+      }
       VkResult result = kk_mesh_continue_indirect(cmd, indirect, count,
-         draw_count, stride, force_virtual);
+         draw_count, stride, force_virtual, known_direct ? &direct : NULL);
       if (result != VK_SUCCESS) vk_command_buffer_set_error(&cmd->vk, result);
       return;
    }

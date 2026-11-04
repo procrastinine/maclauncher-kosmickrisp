@@ -154,7 +154,7 @@ kk_mesh_filter_slices(KK_MESH_GLOBAL struct kk_mesh_params *p,
 static inline void
 kk_mesh_prefix_expand(KK_MESH_GLOBAL struct kk_mesh_params *p,
    KK_MESH_GLOBAL uint32_t *grids, KK_MESH_GLOBAL uint32_t *range,
-   uint32_t span)
+   uint32_t span, uint32_t capacity)
 {
    kk_mesh_prefix_batch(p);
    KK_MESH_GLOBAL struct kk_mesh_batch *batch =
@@ -165,7 +165,7 @@ kk_mesh_prefix_expand(KK_MESH_GLOBAL struct kk_mesh_params *p,
    range[1] = needed;
    batch->pad = needed > 1;
    if (!needed) grids[0] = 0, grids[1] = grids[2] = 1;
-   for (uint32_t i = 0; i < needed; ++i) {
+   for (uint32_t i = 0; i < needed && i < capacity; ++i) {
       uint32_t left = total - i * span;
       kk_mesh_slice_grid(grids + 3u * i, left < span ? left : span);
    }

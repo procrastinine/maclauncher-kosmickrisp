@@ -289,6 +289,7 @@ struct kk_graphics_state {
    struct kk_shader *shader;
    uint64_t mesh_primitives_query;
    uint64_t mesh_payloads, mesh_records, mesh_batch, mesh_slices;
+   uint32_t mesh_payload_capacity;
    uint64_t mesh_native_batch, mesh_native_slices;
    uint64_t mesh_retained_outputs, mesh_retained_output_bytes;
    uint64_t mesh_per_draw_address;

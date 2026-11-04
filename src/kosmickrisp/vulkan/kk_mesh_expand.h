@@ -16,6 +16,9 @@ struct kk_mesh_expand_params {
 struct kk_mesh_exact_batch {
    struct kk_ptr batch;
    uint64_t parameters, grids, range;
+   struct kk_mesh_params mesh;
+   struct kk_mesh_params *host_parameters;
+   uint32_t *host_grids;
    uint32_t capacity, span;
    void *icb;
 };

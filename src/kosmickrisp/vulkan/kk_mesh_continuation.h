@@ -7,7 +7,7 @@
 
 /* One live auxiliary command and allocator, independent of the indirect grid.
  * The existing ordered queue continuation gates the application tail. */
-#define KK_MESH_CONTINUATION_GROUPS 32u
+#define KK_MESH_CONTINUATION_GROUPS KK_MESH_BATCH_SIZE
 struct kk_mesh_continuation {
    struct kk_device *device;
    VkCommandPool pool;
@@ -19,6 +19,8 @@ struct kk_mesh_continuation {
    uint64_t indirect, count;
    uint32_t maximum, recorded_maximum, stride, draw, base, total, chunk;
    bool force_virtual, snapshot_pending;
+   uint32_t views, overflow_first, overflow_count, overflow_needed;
+   bool overflow_pending;
    mtl_command_queue *queue;
    mtl_feedback_handler_callback completed;
    void *completed_data;
@@ -51,6 +53,32 @@ kk_mesh_continuation_complete(struct mtl_feedback_data *feedback)
          p->base = 0;
          p->snapshot_pending = false;
       } else {
+         if (p->overflow_pending) {
+            p->overflow_first += p->overflow_count;
+            if (p->overflow_first < p->overflow_needed) {
+               kk_mesh_continuation_step(p);
+               return;
+            }
+            p->overflow_pending = false;
+         } else if (p->cmd->mesh_chunk.exact.batch.cpu &&
+                    !p->cmd->mesh_chunk.exact.icb) {
+            const struct kk_mesh_exact_batch *batch = &p->cmd->mesh_chunk.exact;
+            uint32_t total = ((const struct kk_mesh_batch *)batch->batch.cpu)->mesh_count;
+            p->overflow_needed = total / batch->span + (total % batch->span != 0);
+            if (p->overflow_needed > 1) {
+               p->overflow_first = 1;
+               p->overflow_pending = true;
+               kk_mesh_continuation_step(p);
+               return;
+            }
+         }
+         /* Preserve each original logical view through all of its overflow
+          * draws before reusing the Task payload for the next view. */
+         if (p->views && (p->views &= p->views - 1u)) {
+            kk_mesh_continuation_step(p);
+            return;
+         }
+         p->views = p->state.gfx.render.view_mask;
          p->base += p->chunk;
          if (p->base >= p->total) {
             ++p->draw;
@@ -73,11 +101,42 @@ static void
 kk_mesh_continuation_step(struct kk_mesh_continuation *p)
 {
    struct kk_cmd_buffer *cmd = p->cmd;
+   if (p->overflow_pending) {
+      struct kk_mesh_exact_batch *batch = &cmd->mesh_chunk.exact;
+      uint32_t total = ((const struct kk_mesh_batch *)batch->batch.cpu)->mesh_count;
+      p->overflow_count = MIN2(batch->capacity, p->overflow_needed - p->overflow_first);
+      /* GPU completion owns this transition. Keep payload/records/roots, but
+       * release native command storage before resetting its allocator. */
+      mtl_release(cmd->metal.cmd_buf);
+      cmd->metal.cmd_buf = kk_cmd_pool_get_cmd_buf(kk_cmd_buffer_pool(cmd));
+      if (!cmd->metal.cmd_buf) goto fail;
+      mtl_command_allocator_reset(cmd->metal.allocator);
+      mtl_begin_command_buffer(cmd->metal.cmd_buf, cmd->metal.allocator);
+      cmd->mesh_batches_in_part = cmd->mesh_draws_in_part = 0;
+      cmd->state.gfx.need_to_start_render_pass = true;
+      kk_cmd_buffer_dirty_all_gfx(cmd);
+      for (uint32_t i = 0; i < p->overflow_count; ++i) {
+         uint32_t base = (p->overflow_first + i) * batch->span;
+         batch->host_parameters[i] = batch->mesh;
+         batch->host_parameters[i].pad = base;
+         kk_mesh_slice_grid(batch->host_grids + i * 3u, MIN2(total - base, batch->span));
+      }
+      struct kk_pipeline_handles *pipe;
+      if (kk_mesh_get_sliced_pipeline(p->device, cmd->state.gfx.shader, true, &pipe) != VK_SUCCESS)
+         goto fail;
+      mtl_argument_table *table = kk_mesh_table(cmd);
+      if (!table) goto fail;
+      kk_mesh_render_slices(cmd, pipe, table, batch->grids, batch->parameters,
+         p->overflow_count, true, p->draw, p->base, batch->span, total);
+      if (cmd->vk.record_result != VK_SUCCESS) goto fail;
+      kk_cmd_buffer_end_native_recording(cmd);
+      goto commit;
+   }
    VkResult result = kk_BeginCommandBuffer(kk_cmd_buffer_to_handle(cmd),
       &(VkCommandBufferBeginInfo){.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                  .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT});
    if (result != VK_SUCCESS) goto fail;
-   cmd->mesh_chunk.active = false;
+   memset(&cmd->mesh_chunk, 0, sizeof(cmd->mesh_chunk));
    cmd->state = p->state;
    memset(&cmd->state.cs, 0, sizeof(cmd->state.cs));
    cmd->state.rt = NULL;
@@ -109,6 +168,11 @@ kk_mesh_continuation_step(struct kk_mesh_continuation *p)
    cmd->vk.dynamic_graphics_state.vi = &cmd->state.gfx._dynamic_vi;
    cmd->vk.dynamic_graphics_state.ms.sample_locations = &cmd->state.gfx._dynamic_sl;
    vk_dynamic_graphics_state_copy(&cmd->vk.dynamic_graphics_state, &p->dynamic);
+   if (p->views) {
+      unsigned view = __builtin_ctz(p->views);
+      cmd->state.gfx.render.view_mask = 1u << view;
+      cmd->state.gfx.per_draw_data.multiview_index = view;
+   }
    kk_cmd_buffer_dirty_all_gfx(cmd);
    uint64_t grid = p->indirect + (uint64_t)p->draw * p->stride;
    if (p->snapshot_pending) {
@@ -133,6 +197,7 @@ kk_mesh_continuation_step(struct kk_mesh_continuation *p)
    /* Store every partial attachment before the next chunk reloads it. */
    if (cmd->metal.render) kk_apply_attachment_store_ops(cmd, true);
    if (kk_EndCommandBuffer(kk_cmd_buffer_to_handle(cmd)) != VK_SUCCESS) goto fail;
+commit:
    kk_device_make_resources_resident(p->device);
    mtl_commit_options *options = mtl_new_commit_options();
    if (!options) goto fail;
@@ -158,6 +223,8 @@ kk_mesh_continuation_encode(void *data, mtl_command_queue *queue,
    p->completed = completed;
    p->completed_data = completed_data;
    p->draw = p->base = 0;
+   p->views = p->state.gfx.render.view_mask;
+   p->overflow_pending = false;
    const uint32_t *g = p->snapshot.cpu;
    p->maximum = MIN2(p->recorded_maximum, g[3]);
    p->total = (uint64_t)g[0] * g[1] * g[2];
@@ -168,7 +235,8 @@ kk_mesh_continuation_encode(void *data, mtl_command_queue *queue,
 
 static VkResult
 kk_mesh_continue_indirect(struct kk_cmd_buffer *cmd, uint64_t indirect,
-   uint64_t count, uint32_t maximum, uint32_t stride, bool force_virtual)
+   uint64_t count, uint32_t maximum, uint32_t stride, bool force_virtual,
+   const struct mtl_size *direct)
 {
    struct kk_mesh_continuation *p = calloc(1, sizeof(*p));
    if (!p) return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -214,7 +282,12 @@ kk_mesh_continue_indirect(struct kk_cmd_buffer *cmd, uint64_t indirect,
    uint64_t address = kk_pool_upload(cmd, &params, sizeof(params), 8).gpu;
    if (!address) goto fail;
    if (cmd->metal.render) kk_apply_attachment_store_ops(cmd, true);
-   libkk_mesh_snapshot(cmd, kk_grid_1d(1), true, address, p->snapshot.gpu);
+   if (direct) {
+      uint32_t *g = p->snapshot.cpu;
+      g[0] = direct->x; g[1] = direct->y; g[2] = direct->z; g[3] = maximum;
+   } else {
+      libkk_mesh_snapshot(cmd, kk_grid_1d(1), true, address, p->snapshot.gpu);
+   }
    result = kk_interlock_split(cmd, p, kk_mesh_continuation_encode,
       kk_mesh_continuation_finish);
    if (result == VK_SUCCESS) return result;

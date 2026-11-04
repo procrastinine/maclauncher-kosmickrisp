@@ -433,6 +433,23 @@ Stage durations are nested elapsed wall times on the calling thread. They do
 not measure compiler-service CPU usage or attribute asynchronous callback work
 on other threads. Diagnostic logging, source hashing and timing add overhead.
 
+Mesh dispatch
+*************
+
+Task shaders whose child grids exceed the native object-stage bound execute
+as compute kernels. A batch retains at most 256 Task groups, with payload slots
+sized from the shader declaration. Prefix sums of the actual child grids map
+Mesh groups back to their parent Task group.
+
+On Apple9 and later, pipelines without captured flat outputs expand the real
+Mesh count into native indirect commands and execute a GPU-written range.
+Other pipelines use indirect Mesh draws. A completed batch publishes its real
+overflow count before any additional slices are recorded. The continuation
+retains the payload and records until every slice has consumed them, then
+reuses storage for the next batch. At most 32 overflow draws are recorded at a
+time. Indirect Task inputs are captured on the GPU in submission order;
+command recording does not read application indirect buffers on the CPU.
+
 Shader compilation
 ******************
 
