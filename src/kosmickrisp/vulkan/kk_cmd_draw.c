@@ -1017,22 +1017,31 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
        (IS_DIRTY(DS_DEPTH_TEST_ENABLE) | IS_DIRTY(DS_DEPTH_WRITE_ENABLE) |
         IS_DIRTY(DS_DEPTH_COMPARE_OP) | IS_DIRTY(DS_STENCIL_TEST_ENABLE) |
         IS_DIRTY(DS_STENCIL_OP) | IS_DIRTY(DS_STENCIL_COMPARE_MASK) |
-        IS_DIRTY(DS_STENCIL_WRITE_MASK))) {
+        IS_DIRTY(DS_STENCIL_WRITE_MASK) || IS_SHADER_DIRTY(VERTEX))) {
       kk_cmd_release_dynamic_ds_state(cmd);
 
-      bool has_depth = dyn->rp.attachments & MESA_VK_RP_ATTACHMENT_DEPTH_BIT;
-      bool has_stencil =
-         dyn->rp.attachments & MESA_VK_RP_ATTACHMENT_STENCIL_BIT;
+      struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+      bool has_depth = gfx->render.depth_att.iview &&
+         vs->info.vs.d_format != MTL_PIXEL_FORMAT_INVALID;
+      bool has_stencil = gfx->render.stencil_att.iview &&
+         vs->info.vs.s_format != MTL_PIXEL_FORMAT_INVALID;
       gfx->depth_stencil_state = kk_compile_depth_stencil_state(
          device, &dyn->ds, has_depth, has_stencil);
       mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
    }
 
-   if (IS_SHADER_DIRTY(VERTEX) || IS_DIRTY(RS_POLYGON_MODE)) {
+   if (IS_SHADER_DIRTY(VERTEX) || IS_DIRTY(RS_POLYGON_MODE) ||
+       IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(COLOR_ATTACHMENT_MAP)) {
       struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
-      mtl_render_set_pipeline_state(enc, gfx->polygon_points ? vs->pipeline.gfx.polygon_render : vs->pipeline.gfx.render);
-      if (gfx->depth_stencil_state)
-         mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
+      mtl_render_pipeline_state *pipeline =
+         kk_attachment_pipeline(cmd, vs, gfx->polygon_points);
+      if (!pipeline)
+         return;
+      mtl_render_set_pipeline_state(enc, pipeline);
+      mtl_depth_stencil_state *ds = gfx->is_depth_stencil_dynamic
+         ? gfx->depth_stencil_state : kk_attachment_depth_stencil(cmd, vs);
+      if (ds)
+         mtl_set_depth_stencil_state(enc, ds);
    }
 
    /* Merge tess info before GS construction since that depends on

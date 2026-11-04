@@ -33,6 +33,8 @@
 #include "vk_graphics_state.h"
 #include "vk_nir_convert_ycbcr.h"
 #include "vk_pipeline.h"
+#include "kk_image_view.h"
+#include "kk_unused_attachments.h"
 
 static const nir_shader_compiler_options *
 kk_get_nir_options(struct vk_physical_device *vk_pdev, mesa_shader_stage stage,
@@ -467,6 +469,10 @@ kk_lower_fs_blend(nir_shader *nir,
          rt->alpha.func = vk_blend_op_to_pipe(att->alpha_blend_op);
       }
    }
+   /* Undefined pipeline formats discard stores even when a pass binds a
+    * real attachment there. Remove them before Metal types the outputs. */
+   nir_shader_intrinsics_pass(nir, kk_discard_unused_color,
+                              nir_metadata_control_flow, &opts);
    /* Fold constant offset srcs for IO. */
    NIR_PASS(_, nir, nir_opt_constant_folding);
    NIR_PASS(_, nir, nir_lower_blend, &opts);
@@ -829,6 +835,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
 {
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
+   kk_attachment_pipelines_finish(shader);
    struct kk_pipeline_handles *pipe = &shader->pipeline;
 
    if (shader->info.stage == MESA_SHADER_COMPUTE) {
@@ -1686,6 +1693,17 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
    if (render == NULL)
       result = VK_ERROR_INVALID_SHADER_NV;
 
+   if (render && device->vk.enabled_features.dynamicRenderingUnusedAttachments) {
+      if (!vs->attachment_pipelines) {
+         vs->attachment_pipelines = calloc(1, sizeof(*vs->attachment_pipelines));
+         if (!vs->attachment_pipelines)
+            result = VK_ERROR_OUT_OF_HOST_MEMORY;
+         else
+            simple_mtx_init(&vs->attachment_pipelines->mutex, mtx_plain);
+      }
+      if (vs->attachment_pipelines)
+         vs->attachment_pipelines->descriptor[polygon] = mtl_retain(pipeline_descriptor);
+   }
    mtl_release(pipeline_descriptor);
    mtl_release(fragment_function);
    mtl_release(fragment_library);

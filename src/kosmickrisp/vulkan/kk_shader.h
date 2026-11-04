@@ -168,6 +168,7 @@ struct msl_compile_data {
 struct kk_shader {
    struct vk_shader vk;
 
+   struct kk_attachment_pipelines *attachment_pipelines;
    struct kk_pipeline_handles pipeline;
    struct kk_shader_info info;
    struct msl_compile_data msl_data[MESA_SHADER_STAGES];
@@ -223,6 +224,11 @@ bool kk_nir_lower_image_view_min_lod(nir_shader *nir);
 VkResult kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
                                const VkAllocationCallbacks *alloc,
                                struct kk_shader **shader_out);
+
+mtl_render_pipeline_state *kk_attachment_pipeline(struct kk_cmd_buffer *cmd,
+   struct kk_shader *shader, bool polygon);
+mtl_depth_stencil_state *kk_attachment_depth_stencil(struct kk_cmd_buffer *cmd,
+   struct kk_shader *shader);
 
 void kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd,
                                 struct kk_shader *shader);

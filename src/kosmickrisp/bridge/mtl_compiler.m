@@ -202,3 +202,22 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
       return pipeline;
    }
 }
+
+/* Copy only Metal state; shader functions and pre-raster programs are shared. */
+mtl_render_pipeline_state *
+mtl_new_render_pipeline_for_attachments(mtl_compiler *compiler,
+   mtl_render_pipeline_descriptor *descriptor,
+   const enum mtl_pixel_format *formats, uint32_t count, uint32_t disabled)
+{
+   @autoreleasepool {
+      MTL4RenderPipelineDescriptor *copy = [(MTL4RenderPipelineDescriptor *)descriptor copy];
+      for (uint32_t i = 0; i < count; ++i) {
+         copy.colorAttachments[i].pixelFormat = (MTLPixelFormat)formats[i];
+         if (disabled & (1u << i))
+            copy.colorAttachments[i].writeMask = MTLColorWriteMaskNone;
+      }
+      mtl_render_pipeline_state *pipeline = mtl_new_render_pipeline(compiler, (void *)copy);
+      [copy release];
+      return pipeline;
+   }
+}
