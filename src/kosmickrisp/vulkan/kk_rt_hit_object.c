@@ -181,13 +181,26 @@ lower(nir_builder *b, nir_intrinsic_instr *in, void *unused)
       store_words(b, h, KK_HO_CUSTOM_INDEX, RQ(intersection_instance_custom_index, 1));
       store_words(b, h, KK_HO_PRIMITIVE, RQ(intersection_primitive_index, 1));
       store_words(b, h, KK_HO_GEOMETRY, RQ(intersection_geometry_index, 1));
-      store_words(b, h, KK_HO_HIT_KIND, in->src[4].ssa);
+      /* A triangle hit takes its facing hit kind and its barycentrics;
+       * a procedural hit takes the given hit kind and the attribute
+       * variable. */
+      nir_def *triangle = nir_ieq_imm(b, type, 1);
+      nir_def *front = nir_rq_load(b, 1, 1, q, .ray_query_value = nir_ray_query_value_intersection_front_face,
+                                   .committed = true);
+      store_words(b, h, KK_HO_HIT_KIND,
+                  nir_bcsel(b, triangle, nir_bcsel(b, front, nir_imm_int(b, 0xfe), nir_imm_int(b, 0xff)),
+                            in->src[4].ssa));
       store_words(b, h, KK_HO_SBT_INDEX, in->src[2].ssa);
       for (unsigned v = 0; v < 3; v++)
          store_words(b, h, KK_HO_VERTICES + 3 * v,
                      RQ(intersection_triangle_vertex_positions, 3, .column = v));
+      nir_def *barycentrics = RQ(intersection_barycentrics, 2);
 #undef RQ
+      nir_push_if(b, triangle);
+      store_words(b, h, KK_HO_ATTRIBUTES, barycentrics);
+      nir_push_else(b, NULL);
       copy_attributes(b, h, KK_HO_ATTRIBUTES, in->src[3].ssa, ~0u);
+      nir_pop_if(b, NULL);
       break;
    }
    case nir_intrinsic_hit_object_get_attributes:
@@ -203,5 +216,5 @@ lower(nir_builder *b, nir_intrinsic_instr *in, void *unused)
 bool
 kk_nir_lower_hit_objects(nir_shader *shader)
 {
-   return nir_shader_intrinsics_pass(shader, lower, nir_metadata_control_flow, NULL);
+   return nir_shader_intrinsics_pass(shader, lower, nir_metadata_none, NULL);
 }
