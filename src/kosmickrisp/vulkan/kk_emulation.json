@@ -302,5 +302,22 @@
     "performance": false,
     "performance_reason": "Disabling has no established D3D shader-model, feature-level or translator device-creation loss; content requiring legacy non-seamless cube sampling can opt in.",
     "off_consequence": "No established D3D shader-model or feature-level reduction or translator device-creation loss; DXVK rejects content requesting non-seamless cube sampling."
+  },
+  {
+    "name": "sparse_translation",
+    "description": "Sparse-buffer residency checks and standard-shaped 3D sparse image adaptation.",
+    "cost_class": "native placement / software address and volume translation",
+    "cost_note": "Native placement and mapping remain native. The scalar buffer page-status helper emits three 64-bit metadata loads, two byte-status loads, bounds checks and a conditional branch, in addition to directory/range lookup and the resource access. Standard-shaped 3D accesses translate coordinates and select page storage, with copies or blits on relevant operations. Unused shader operations emit no translation. Per-use GPU time is unmeasured.",
+    "extensions": [],
+    "features": [
+      "sparseResidencyBuffer",
+      "sparseResidencyImage3D"
+    ],
+    "properties": [
+      "sparseResidencyStandard3DBlockShape"
+    ],
+    "performance": true,
+    "performance_reason": "DXVK requires sparse buffer residency for tiled resources; removing it can lower the D3D feature-level ceiling. Translation is selected by actual sparse resources and shader interfaces.",
+    "off_consequence": "Sparse buffer residency and sparse 3D image residency are unavailable, including standard-shaped 3D blocks; DXVK tiled-resource tiers and feature levels requiring them are unavailable. Native sparse binding, aliasing, 2D residency and native texture residency status remain available when supported."
   }
 ]

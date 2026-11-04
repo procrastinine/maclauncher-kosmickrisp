@@ -350,12 +350,16 @@ fail:
    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
-bool
-kk_sparse_format_properties(struct kk_physical_device *pdev, VkFormat format,
+static bool
+kk_sparse_format_properties_impl(struct kk_physical_device *pdev, VkFormat format,
    VkImageType type, VkSampleCountFlagBits samples, VkImageUsageFlags usage,
-   VkImageTiling tiling, VkSparseImageFormatProperties *props)
+   VkImageTiling tiling, VkSparseImageFormatProperties *props, bool residency)
 {
-   if (!pdev->info.placement_sparse || samples != VK_SAMPLE_COUNT_1_BIT ||
+   /* Partial 3D residency requires the selected volume adaptation. Native
+    * binding-only placement remains available without it. */
+   if ((residency && type == VK_IMAGE_TYPE_3D &&
+        !pdev->vk.supported_features.sparseResidencyImage3D) ||
+       !pdev->info.placement_sparse || samples != VK_SAMPLE_COUNT_1_BIT ||
        tiling != VK_IMAGE_TILING_OPTIMAL ||
        (type != VK_IMAGE_TYPE_2D && type != VK_IMAGE_TYPE_3D) ||
        vk_format_get_plane_count(format) != 1 || vk_format_has_stencil(format))
@@ -406,6 +410,15 @@ kk_sparse_format_properties(struct kk_physical_device *pdev, VkFormat format,
 }
 
 bool
+kk_sparse_format_properties(struct kk_physical_device *pdev, VkFormat format,
+   VkImageType type, VkSampleCountFlagBits samples, VkImageUsageFlags usage,
+   VkImageTiling tiling, VkSparseImageFormatProperties *props)
+{
+   return kk_sparse_format_properties_impl(pdev, format, type, samples, usage,
+                                          tiling, props, true);
+}
+
+bool
 kk_sparse_image_format_properties(struct kk_physical_device *pdev, VkFormat format,
    VkImageType type, VkSampleCountFlagBits samples, VkImageUsageFlags2KHR usage,
    VkImageTiling tiling, VkImageCreateFlags flags,
@@ -426,8 +439,9 @@ kk_sparse_image_format_properties(struct kk_physical_device *pdev, VkFormat form
       if (usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT) return false;
       usage = 0;
    }
-   if (!kk_sparse_format_properties(pdev, format,
-       kk_sparse_binding_image_type(type, flags), samples, usage, tiling, props))
+   if (!kk_sparse_format_properties_impl(pdev, format,
+       kk_sparse_binding_image_type(type, flags), samples, usage, tiling, props,
+       flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))
       return false;
    /* Only the standard-shaped 3D backend supplies block-texel aliases. */
    return !block_view ||
