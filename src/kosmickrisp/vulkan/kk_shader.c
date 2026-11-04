@@ -1304,6 +1304,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    }
 
    shader->info.conservative = kk_conservative_possible(state);
+   shader->cache_uses_embedded_samplers = nir->info.uses_embedded_samplers;
    gather_shader_info(shader, nir, state);
    shader->info.poly_layer_replay = opts->poly_layer_replay;
    if (stage == MESA_SHADER_FRAGMENT)
@@ -2586,12 +2587,16 @@ kk_msl_serialize(const struct msl_compile_data *data, struct blob *blob)
    blob_write_bytes(blob, data->code, code_length);
 }
 
+#include "kk_shader_cache_bindings.h"
+
 static bool
 kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_shader,
                     struct blob *blob)
 {
    struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
 
+   if (!kk_shader_cache_write_bindings(shader, blob))
+      return false;
    blob_write_bytes(blob, &shader->info, sizeof(shader->info));
    kk_msl_serialize(&shader->msl_data[shader->info.stage], blob);
    if ((shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH)) {
@@ -2648,6 +2653,10 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
 {
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
+   struct kk_shader_cache_bindings bindings;
+   VkResult result = kk_shader_cache_read_bindings(dev, blob, &bindings);
+   if (result != VK_SUCCESS)
+      return result;
    struct kk_shader_info info;
    blob_copy_bytes(blob, &info, sizeof(info));
    if (blob->overrun)
@@ -2658,7 +2667,10 @@ kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
    if (shader == NULL)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   VkResult result = kk_msl_deserialize(blob, &shader->msl_data[info.stage]);
+   result = kk_shader_cache_restore_bindings(dev, shader, &bindings);
+   if (result != VK_SUCCESS)
+      goto fail;
+   result = kk_msl_deserialize(blob, &shader->msl_data[info.stage]);
    if (result != VK_SUCCESS)
       goto fail;
 

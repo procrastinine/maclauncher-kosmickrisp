@@ -241,6 +241,7 @@ struct vk_sampler_state;
 struct kk_shader {
    struct vk_shader vk;
    /* Canonical states may be serialized; these CPU/GPU pointers never are. */
+   bool cache_uses_embedded_samplers;
    uint32_t embedded_sampler_count;
    struct vk_sampler_state *embedded_sampler_states;
    uint64_t embedded_sampler_table;
