@@ -1300,6 +1300,11 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
       .queue_flags = VK_QUEUE_TRANSFER_BIT,
       .queue_count = 1,
    };
+   pdev->queue_families[pdev->queue_family_count++] = (struct kk_queue_family){
+      .queue_flags =
+         VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
+      .queue_count = 1,
+   };
    assert(pdev->queue_family_count <= ARRAY_SIZE(pdev->queue_families));
 
    pdev->sync_binary_type = vk_sync_binary_get_type(&kk_sync_type);

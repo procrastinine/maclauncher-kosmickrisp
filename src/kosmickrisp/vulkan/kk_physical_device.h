@@ -76,7 +76,7 @@ struct kk_physical_device {
    struct vk_sync_binary_type sync_binary_type;
    const struct vk_sync_type *sync_types[3];
 
-   struct kk_queue_family queue_families[3];
+   struct kk_queue_family queue_families[4];
    uint8_t queue_family_count;
 };
 
