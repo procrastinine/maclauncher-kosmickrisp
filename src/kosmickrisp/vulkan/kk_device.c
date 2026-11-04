@@ -125,8 +125,58 @@ static void
 kk_compiler_cache_store(void *data, const void *bytes, size_t size)
 {
    struct kk_compiler_cache *cache = data;
-   if (size && kk_compiler_cache_init(cache))
+   if (size && kk_compiler_cache_init(cache)) {
       disk_cache_put(cache->disk, cache->key, bytes, size, NULL);
+      disk_cache_wait_for_idle(cache->disk);
+   }
+}
+
+static bool
+kk_compiler_cache_available(void *data)
+{
+   return kk_compiler_cache_init(data);
+}
+
+static void
+kk_compiler_piece_key(struct kk_compiler_cache *cache, const uint8_t id[32],
+                      cache_key key)
+{
+   struct {
+      cache_key parent;
+      uint8_t content[32];
+   } input = {0};
+   memcpy(input.parent, cache->key, sizeof(input.parent));
+   memcpy(input.content, id, sizeof(input.content));
+   disk_cache_compute_key(cache->disk, &input, sizeof(input), key);
+}
+
+static void *
+kk_compiler_cache_load_piece(void *data, const uint8_t id[32], size_t *size)
+{
+   struct kk_compiler_cache *cache = data;
+   *size = 0;
+   if (!kk_compiler_cache_init(cache)) return NULL;
+   cache_key key;
+   kk_compiler_piece_key(cache, id, key);
+   return disk_cache_get(cache->disk, key, size);
+}
+
+static bool
+kk_compiler_cache_store_piece(void *data, const void *bytes, size_t size,
+                              uint8_t id[32])
+{
+   struct kk_compiler_cache *cache = data;
+   if (!size || !kk_compiler_cache_init(cache)) return false;
+   _mesa_blake3_compute(bytes, size, id);
+   cache_key key;
+   kk_compiler_piece_key(cache, id, key);
+   disk_cache_put(cache->disk, key, bytes, size, NULL);
+   disk_cache_wait_for_idle(cache->disk);
+   size_t stored_size = 0;
+   void *stored = disk_cache_get(cache->disk, key, &stored_size);
+   bool complete = stored && stored_size == size && !memcmp(stored, bytes, size);
+   free(stored);
+   return complete;
 }
 
 static void
@@ -163,8 +213,11 @@ kk_new_compiler(struct kk_device *dev)
    if (!uname(&os))
       memcpy(cache->identity.os_version, os.version, sizeof(os.version));
    static const struct mtl_compiler_cache_ops ops = {
+      .available = kk_compiler_cache_available,
       .load = kk_compiler_cache_load,
       .store = kk_compiler_cache_store,
+      .load_piece = kk_compiler_cache_load_piece,
+      .store_piece = kk_compiler_cache_store_piece,
       .destroy = kk_compiler_cache_destroy,
    };
    return mtl_new_cached_compiler(dev->mtl_handle, &ops, cache);
@@ -223,6 +276,7 @@ kk_acquire_compiler(struct kk_device *dev)
 static void
 kk_release_compiler(struct kk_device *dev)
 {
+   kk_perf_bind_metal_compiler(dev->perf, NULL);
    /* KK_WORKAROUND_11 */
    struct kk_physical_device *pdev = kk_device_physical(dev);
    if (pdev->settings.disabled_workarounds & BITFIELD64_BIT(11)) {
@@ -747,6 +801,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
    dev->mtl_compiler_handle = kk_acquire_compiler(dev);
    if (dev->mtl_compiler_handle == NULL)
       goto fail_init;
+   kk_perf_bind_metal_compiler(dev->perf, dev->mtl_compiler_handle);
 
    /* We need to initialize the device residency set before any bo is created. */
    simple_mtx_init(&dev->residency_set.mutex, mtx_plain);

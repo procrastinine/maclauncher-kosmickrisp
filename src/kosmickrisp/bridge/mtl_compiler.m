@@ -79,7 +79,7 @@ mtl_new_cached_compiler(mtl_device *device,
 void
 mtl_compiler_finish_cache(mtl_compiler *compiler)
 {
-   @autoreleasepool { [kk_compiler_archive(compiler) finish:(id<MTL4Compiler>)compiler]; }
+   @autoreleasepool { [kk_compiler_archive(compiler) finish]; }
 }
 
 /* Library */
@@ -247,8 +247,8 @@ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
       NSError *error;
       id<MTLComputePipelineState> pipeline = kk_archive_compute(compiler, desc);
       if (!pipeline) {
-         pipeline = [comp newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error];
-         if (pipeline) [kk_compiler_archive(compiler) recordCompile];
+         pipeline = MTL_COMPILER_PIPELINE_CALL(compiler,
+            [comp newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
       }
 
       if (pipeline == nil) {
@@ -352,8 +352,8 @@ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *desc
       NSError *error = nil;
       id<MTLRenderPipelineState> pipeline = kk_archive_render(compiler, desc);
       if (!pipeline) {
-         pipeline = [comp newRenderPipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error];
-         if (pipeline) [kk_compiler_archive(compiler) recordCompile];
+         pipeline = MTL_COMPILER_PIPELINE_CALL(compiler,
+            [comp newRenderPipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
       }
 
       if (pipeline == nil) {

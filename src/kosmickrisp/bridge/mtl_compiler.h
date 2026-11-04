@@ -28,14 +28,19 @@ mtl_compiler *mtl_new_compiler(mtl_device *device);
 /* The cached constructor owns data, including on compiler creation failure.
  * load returns malloc-owned bytes; store copies them before returning. */
 struct mtl_compiler_cache_ops {
+   bool (*available)(void *data);
    void *(*load)(void *data, size_t *size);
    void (*store)(void *data, const void *bytes, size_t size);
+   void *(*load_piece)(void *data, const uint8_t id[32], size_t *size);
+   /* Complete the piece write before allowing an index to reference it. */
+   bool (*store_piece)(void *data, const void *bytes, size_t size, uint8_t id[32]);
    void (*destroy)(void *data);
 };
 mtl_compiler *mtl_new_cached_compiler(mtl_device *device,
    const struct mtl_compiler_cache_ops *ops, void *data);
 struct mtl_compiler_cache_stats {
    uint64_t lookups, hits, native_compiles, stored_bytes;
+   uint64_t checkpoints, snapshot_ns, capture_wait_ns;
    bool archive_loaded;
 };
 /* Lifetime totals for this shared native compiler, not one Vulkan device. */
@@ -43,6 +48,24 @@ bool mtl_compiler_get_cache_stats(mtl_compiler *compiler,
    struct mtl_compiler_cache_stats *stats);
 /* Call only after the final compiler client has drained its queues. */
 void mtl_compiler_finish_cache(mtl_compiler *compiler);
+
+/* Capture publication shares read access; only background serializer snapshots
+ * take exclusive access. The token is borrowed until the native call returns. */
+void *mtl_compiler_cache_begin(mtl_compiler *compiler);
+void mtl_compiler_cache_end(void *token);
+void mtl_compiler_cache_record_pipeline(mtl_compiler *compiler);
+#ifdef __OBJC__
+#define MTL_COMPILER_PIPELINE_CALL(compiler, expression) ({ \
+   mtl_compiler *_kk_native_compiler = (mtl_compiler *)(compiler); \
+   void *_kk_capture = mtl_compiler_cache_begin(_kk_native_compiler); \
+   __typeof__(expression) _kk_pipeline = nil; \
+   @try { \
+      _kk_pipeline = (expression); \
+      if (_kk_pipeline) mtl_compiler_cache_record_pipeline(_kk_native_compiler); \
+   } @finally { mtl_compiler_cache_end(_kk_capture); } \
+   _kk_pipeline; \
+})
+#endif
 
 /* Library */
 mtl_library *

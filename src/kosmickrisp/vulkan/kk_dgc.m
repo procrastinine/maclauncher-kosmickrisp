@@ -120,8 +120,9 @@ kk_dgc_phase_pipeline(struct kk_device *dev, unsigned phase)
       MTL4ComputePipelineDescriptor *pd = [MTL4ComputePipelineDescriptor new];
       pd.computeFunctionDescriptor = fn;
       NSError *error = nil;
-      pipeline = [(id<MTL4Compiler>)dev->mtl_compiler_handle
-         newComputePipelineStateWithDescriptor:pd compilerTaskOptions:nil error:&error];
+      pipeline = MTL_COMPILER_PIPELINE_CALL(dev->mtl_compiler_handle,
+         [(id<MTL4Compiler>)dev->mtl_compiler_handle
+            newComputePipelineStateWithDescriptor:pd compilerTaskOptions:nil error:&error]);
       [pd release];
       [fn release];
       if (pipeline)
@@ -198,7 +199,8 @@ mtl_compute_pipeline_state *kk_dgc_new_compute_pipeline_state(mtl_compiler *comp
       desc.maxTotalThreadsPerThreadgroup = threads;
       desc.supportIndirectCommandBuffers = MTL4IndirectCommandBufferSupportStateEnabled;
       NSError *error = nil;
-      id<MTLComputePipelineState> pipeline = [(id<MTL4Compiler>)compiler newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error];
+      id<MTLComputePipelineState> pipeline = MTL_COMPILER_PIPELINE_CALL(compiler,
+         [(id<MTL4Compiler>)compiler newComputePipelineStateWithDescriptor:desc compilerTaskOptions:nil error:&error]);
       [desc release];
       if (!pipeline) fprintf(stderr,"DGC compute pipeline: %s\n",error.description.UTF8String);
       return (void *)pipeline;

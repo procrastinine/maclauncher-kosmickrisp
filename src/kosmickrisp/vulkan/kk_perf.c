@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "kk_perf.h"
 #include "kosmickrisp/bridge/mtl_compiler.h"
+#include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kk_device.h"
 #include "kk_cmd_buffer.h"
 #include "kosmickrisp/bridge/mtl_render_state.h"
@@ -34,6 +35,7 @@ struct kk_perf_attachment_stat {
 struct kk_perf {
    pthread_mutex_t mutex;
    FILE *log;
+   void *metal_compiler;
    bool close_log, compile_details;
    bool device_features_known;
    bool pipeline_statistics_query, writable_msaa, dynamic_rendering;
@@ -140,6 +142,16 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
            ",\"compiler_active\":%"PRId64",\"compiler_peak\":%"PRIu64
            ",\"gpu_unavailable\":%"PRIu64,
            p->pending, p->pending_peak, p->compiler_active, p->compiler_peak, p->invalid_gpu);
+   struct mtl_compiler_cache_stats archive;
+   if (p->metal_compiler && mtl_compiler_get_cache_stats(p->metal_compiler, &archive))
+      fprintf(p->log, ",\"metal_archive\":{\"scope\":\"shared_compiler_lifetime\","
+         "\"compiler\":\"%p\",\"archive_loaded\":%s,\"lookups\":%"PRIu64
+         ",\"hits\":%"PRIu64",\"native_pipeline_successes\":%"PRIu64
+         ",\"checkpoints\":%"PRIu64",\"store_requested_bytes\":%"PRIu64
+         ",\"snapshot_ms\":%.6f,\"capture_wait_ms\":%.6f}",
+         p->metal_compiler, archive.archive_loaded ? "true" : "false",
+         archive.lookups, archive.hits, archive.native_compiles, archive.checkpoints,
+         archive.stored_bytes, archive.snapshot_ns / 1e6, archive.capture_wait_ns / 1e6);
    fprintf(p->log, ",\"submit_pending\":%"PRId64",\"submit_peak\":%"PRIu64
            ",\"submit_scope\":\"common_submit_list_including_worker_head\","
            "\"compiler_scope\":\"in_progress_calls_not_queued_jobs\","
@@ -526,6 +538,7 @@ kk_perf_destroy(struct kk_perf *p)
    pthread_mutex_lock(&p->mutex);
    flush_locked(p, kk_perf_now(), true);
    pthread_mutex_unlock(&p->mutex);
+   mtl_release(p->metal_compiler);
    if (p->close_log) fclose(p->log);
    pthread_mutex_destroy(&p->mutex);
    free(p);
@@ -669,4 +682,17 @@ kk_perf_metal_archive(struct kk_perf *p, void *compiler)
       stats.lookups, stats.hits, stats.native_compiles, stats.stored_bytes);
    fflush(p->log);
    pthread_mutex_unlock(&p->mutex);
+}
+
+/* A tracker owns its native reference only while this Vulkan device is live.
+ * Unbind before compiler-table release so workaround11 sees no hidden client. */
+void
+kk_perf_bind_metal_compiler(struct kk_perf *p, void *compiler)
+{
+   if (!p) return;
+   pthread_mutex_lock(&p->mutex);
+   void *old = p->metal_compiler;
+   p->metal_compiler = compiler ? mtl_retain(compiler) : NULL;
+   pthread_mutex_unlock(&p->mutex);
+   mtl_release(old);
 }
