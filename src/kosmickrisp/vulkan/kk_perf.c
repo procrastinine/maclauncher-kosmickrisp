@@ -66,7 +66,9 @@ static const char *const names[KK_PERF_METRIC_COUNT] = {
    "cache_hit", "cache_miss", "cache_binary_hit", "metal_library_pair",
    "command_bo_allocate", "command_bo_reuse", "execution_residency_commit",
    "command_begin", "command_end", "command_reset", "command_pool_reset",
-   "sampled_view_create", "sampled_view_get"
+   "sampled_view_create", "sampled_view_get",
+   "encoder_setup", "encoder_state", "encoder_draw", "encoder_end",
+   "render_encoder_begin", "compute_encoder_begin"
 };
 
 uint64_t kk_perf_now(void) { return os_time_get_nano(); }
@@ -168,7 +170,7 @@ flush_locked(struct kk_perf *p, uint64_t now, bool final)
               ",\"command_buffers\":%"PRIu64",\"sum_ms\":%.6f,\"max_ms\":%.6f}",
               i ? "," : "", g->frame, g->count, g->commands, g->total/1e6, g->max/1e6);
    }
-   fprintf(p->log, "]");
+   fprintf(p->log, "],\"encoder_stage_scope\":\"exclusive_nested_recording_wall_ms\"");
    render_flush_locked(p);
    fprintf(p->log, "}\n");
    fflush(p->log);
@@ -427,6 +429,29 @@ kk_perf_render_end(struct kk_perf *p, const void *encoder)
       break;
    }
    pthread_mutex_unlock(&p->mutex);
+}
+
+static _Thread_local struct kk_perf_encoder_scope *encoder_scope;
+
+void
+kk_perf_encoder_scope_begin(struct kk_perf_encoder_scope *scope,
+                             enum kk_perf_metric metric)
+{
+   scope->previous = encoder_scope;
+   scope->metric = metric;
+   scope->nested = 0;
+   scope->start = kk_perf_now();
+   encoder_scope = scope;
+}
+
+void
+kk_perf_encoder_scope_end(struct kk_perf_encoder_scope *scope)
+{
+   uint64_t elapsed = kk_perf_now() - scope->start;
+   encoder_scope = scope->previous;
+   kk_perf_add(scope->perf, scope->metric, elapsed - scope->nested);
+   if (scope->previous)
+      scope->previous->nested += kk_perf_now() - scope->start;
 }
 
 static _Thread_local struct kk_perf_compile_scope *compile_scope;

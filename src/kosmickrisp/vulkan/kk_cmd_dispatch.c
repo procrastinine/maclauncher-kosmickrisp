@@ -11,6 +11,7 @@
 #include "kk_descriptor_set_layout.h"
 #include "kk_device.h"
 #include "kk_entrypoints.h"
+#include "kk_perf.h"
 #include "kk_shader.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -20,6 +21,7 @@
 static void
 kk_flush_compute_state(struct kk_cmd_buffer *cmd)
 {
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_STATE, state);
    mtl_compute_encoder *encoder = cs_get_compute_for_dispatch(cmd);
 
    // Fill Metal argument buffer with descriptor set addresses
@@ -86,6 +88,7 @@ kk_CmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX,
       return;
 
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_DRAW, draw);
 
    struct kk_descriptor_state *desc = &cmd->state.cs.descriptors;
    desc->root_dirty |= desc->root.cs.base_group[0] != baseGroupX;
@@ -134,6 +137,7 @@ kk_CmdDispatchIndirect2KHR(VkCommandBuffer commandBuffer,
                            const VkDispatchIndirect2InfoKHR *pInfo)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_DRAW, draw);
 
    struct kk_descriptor_state *desc = &cmd->state.cs.descriptors;
    desc->root_dirty |= desc->root.cs.base_group[0] != 0;

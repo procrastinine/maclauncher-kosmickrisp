@@ -24,6 +24,9 @@ enum kk_perf_metric {
    KK_PERF_COMMAND_BEGIN, KK_PERF_COMMAND_END,
    KK_PERF_COMMAND_RESET, KK_PERF_COMMAND_POOL_RESET,
    KK_PERF_SAMPLED_VIEW_CREATE, KK_PERF_SAMPLED_VIEW_GET,
+   KK_PERF_ENCODER_SETUP, KK_PERF_ENCODER_STATE,
+   KK_PERF_ENCODER_DRAW, KK_PERF_ENCODER_END,
+   KK_PERF_RENDER_ENCODER_BEGIN, KK_PERF_COMPUTE_ENCODER_BEGIN,
    KK_PERF_METRIC_COUNT
 };
 
@@ -68,6 +71,32 @@ void kk_perf_image_bind(struct kk_perf *, const struct kk_image *, uint32_t plan
 void kk_perf_init_dispatch(struct kk_device *);
 void kk_perf_init_wait_dispatch(struct kk_device *);
 void kk_perf_init_wsi_dispatch(struct kk_device *);
+
+/* Exclusive encoder-recording scopes. Children (including nested scopes of
+ * the same stage) are excluded, as is their diagnostic delivery overhead.
+ * Scope counts are entries; encoder counts use the separate BEGIN metrics.
+ * Disabled scopes do not touch clocks, TLS, locks or the collector. */
+struct kk_perf_encoder_scope {
+   struct kk_perf *perf;
+   struct kk_perf_encoder_scope *previous;
+   uint64_t start, nested;
+   enum kk_perf_metric metric;
+};
+void kk_perf_encoder_scope_begin(struct kk_perf_encoder_scope *,
+                                  enum kk_perf_metric);
+void kk_perf_encoder_scope_end(struct kk_perf_encoder_scope *);
+static inline void
+kk_perf_encoder_scope_cleanup(struct kk_perf_encoder_scope *scope)
+{
+   if (unlikely(scope->perf != NULL))
+      kk_perf_encoder_scope_end(scope);
+}
+#define KK_PERF_ENCODER_SCOPE(dev, stage, name) \
+   struct kk_perf_encoder_scope name \
+      __attribute__((cleanup(kk_perf_encoder_scope_cleanup))); \
+   name.perf = (dev)->perf; \
+   if (unlikely(name.perf != NULL)) \
+      kk_perf_encoder_scope_begin(&name, stage)
 
 /* The expression runs once. Disabled tracking has one branch and no clock,
  * lock, atomic operation or allocation. Both sides preserve return values. */

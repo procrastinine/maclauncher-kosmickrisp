@@ -8,6 +8,7 @@
  */
 
 #include "kk_entrypoints.h"
+#include "kk_perf.h"
 
 #include "kk_buffer.h"
 #include "kk_cmd_buffer.h"
@@ -289,6 +290,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   KK_PERF_ENCODER_SCOPE(dev, KK_PERF_ENCODER_SETUP, setup);
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
 
    struct kk_rendering_state *render = &cmd->state.gfx.render;
@@ -520,7 +522,7 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
    }
    cmd->state.gfx.need_to_start_render_pass = no_framebuffer || render->layered_bc;
 
-   kk_cmd_buffer_dirty_all_gfx(cmd);
+   kk_cmd_buffer_invalidate_gfx_encoder(cmd);
 
    if (render->flags & VK_RENDERING_RESUMING_BIT)
       return;
@@ -584,6 +586,7 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
                        UNUSED const VkRenderingEndInfoKHR *pRenderingEndInfo)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_END, end);
    struct kk_rendering_state *render = &cmd->state.gfx.render;
    bool need_meta_resolve = false;
 
@@ -960,7 +963,8 @@ kk_flush_sample_locations(struct kk_cmd_buffer *cmd)
    bool needs_update = false;
 
    /* Determine if the user-provided custom sample locations have changed */
-   if (IS_DIRTY(MS_SAMPLE_LOCATIONS_ENABLE) || IS_DIRTY(MS_SAMPLE_LOCATIONS)) {
+   if (IS_DIRTY(MS_SAMPLE_LOCATIONS_ENABLE) || IS_DIRTY(MS_SAMPLE_LOCATIONS) ||
+       IS_DIRTY(MS_RASTERIZATION_SAMPLES)) {
       needs_update |=
          render->sample_locations_enable != dyn->ms.sample_locations_enable;
       render->sample_locations_enable = dyn->ms.sample_locations_enable;
@@ -1074,7 +1078,7 @@ kk_flush_render_pass(struct kk_cmd_buffer *cmd)
       }
 
       cs_end(cmd);
-      kk_cmd_buffer_dirty_all_gfx(cmd);
+      kk_cmd_buffer_invalidate_gfx_encoder(cmd);
       cmd->state.gfx.need_to_start_render_pass = true;
    }
 }
@@ -1091,7 +1095,8 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
 
    /* Depth/stencil state may be dynamic, handle it as part of the pipeline. */
    if (cmd->state.gfx.is_depth_stencil_dynamic &&
-       (IS_DIRTY(DS_DEPTH_TEST_ENABLE) | IS_DIRTY(DS_DEPTH_WRITE_ENABLE) |
+       (gfx->encoder_dirty ||
+        IS_DIRTY(DS_DEPTH_TEST_ENABLE) | IS_DIRTY(DS_DEPTH_WRITE_ENABLE) |
         IS_DIRTY(DS_DEPTH_COMPARE_OP) | IS_DIRTY(DS_STENCIL_TEST_ENABLE) |
         IS_DIRTY(DS_STENCIL_OP) | IS_DIRTY(DS_STENCIL_COMPARE_MASK) |
         IS_DIRTY(DS_STENCIL_WRITE_MASK) || (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)))) {
@@ -1106,7 +1111,7 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
       bind_dynamic_ds = true;
    }
 
-   if ((gfx->dirty & KK_DIRTY_FRAGMENT_STATISTICS) ||
+   if (gfx->encoder_dirty || (gfx->dirty & KK_DIRTY_FRAGMENT_STATISTICS) ||
        (IS_SHADER_DIRTY(VERTEX) || IS_SHADER_DIRTY(MESH)) || IS_DIRTY(RS_POLYGON_MODE) ||
        IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(COLOR_ATTACHMENT_MAP) ||
        IS_DIRTY(MS_RASTERIZATION_SAMPLES) || IS_DIRTY(RS_LINE_MODE)) {
@@ -1644,6 +1649,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
    struct kk_descriptor_state *desc = &gfx->descriptors;
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    mtl_render_encoder *enc = cs_get_render(cmd);
+   bool flush_scissors = gfx->encoder_dirty;
 
    if (IS_DIRTY(VI_BINDING_STRIDES)) {
       u_foreach_bit(ndx, dyn->vi->bindings_valid) {
@@ -1660,13 +1666,10 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
          (dyn->rs.rasterization_stream != 0 &&
           !(gs && gs->info.geometry.multistream));
       gfx->per_draw_data.rasterization_stream = dyn->rs.rasterization_stream;
-      if (gfx->rasterizer_discard) {
-         set_empty_scissor(enc);
-      } else {
-         /* Enforce setting the correct scissors */
-         BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORT_COUNT);
-      }
+      flush_scissors = true;
    }
+   if (flush_scissors && gfx->rasterizer_discard)
+      set_empty_scissor(enc);
 
    if (IS_DIRTY(RS_CULL_MODE) || IS_DIRTY(IA_PRIMITIVE_TOPOLOGY) ||
        IS_SHADER_DIRTY(GEOMETRY)) {
@@ -1674,19 +1677,22 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       gfx->is_cull_front_and_back =
          dyn->rs.cull_mode == VK_CULL_MODE_FRONT_AND_BACK &&
          u_reduced_prim(kk_rast_prim(cmd)) == MESA_PRIM_TRIANGLES;
+      flush_scissors = true;
+   }
+   if (gfx->encoder_dirty || IS_DIRTY(RS_CULL_MODE) ||
+       IS_DIRTY(IA_PRIMITIVE_TOPOLOGY) || IS_SHADER_DIRTY(GEOMETRY)) {
       if (gfx->is_cull_front_and_back) {
          set_empty_scissor(enc);
       } else {
          mtl_set_cull_mode(enc,
                            gfx->polygon_points ? MTL_CULL_MODE_NONE : vk_front_face_to_mtl_cull_mode(dyn->rs.cull_mode));
-         /* Enforce setting the correct scissors */
-         BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORT_COUNT);
+         flush_scissors = true;
       }
    }
 
    /* We enable raster discard by setting scissor to size (0, 0) */
    if (!(gfx->rasterizer_discard || gfx->is_cull_front_and_back) &&
-       (IS_DIRTY(VP_VIEWPORT_COUNT) || IS_DIRTY(VP_VIEWPORTS) ||
+       (flush_scissors || IS_DIRTY(VP_VIEWPORT_COUNT) || IS_DIRTY(VP_VIEWPORTS) ||
         IS_DIRTY(VP_SCISSOR_COUNT) || IS_DIRTY(VP_SCISSORS) ||
         IS_DIRTY(RS_DEPTH_CLAMP_ENABLE) || IS_DIRTY(RS_DEPTH_CLIP_ENABLE)))
       kk_flush_vp_state(cmd);
@@ -1697,7 +1703,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       desc->root_dirty = true;
    }
 
-   if (IS_DIRTY(RS_FRONT_FACE) || IS_DIRTY(TS_DOMAIN_ORIGIN) ||
+   if (gfx->encoder_dirty || IS_DIRTY(RS_FRONT_FACE) || IS_DIRTY(TS_DOMAIN_ORIGIN) ||
        IS_SHADER_DIRTY(TESS_CTRL) || IS_SHADER_DIRTY(TESS_EVAL)) {
       bool front_face_ccw = dyn->rs.front_face != VK_FRONT_FACE_CLOCKWISE;
       if (cmd->state.shaders[MESA_SHADER_TESS_EVAL]) {
@@ -1710,10 +1716,11 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
                                          : MTL_WINDING_CLOCKWISE);
    }
 
-   if (IS_DIRTY(RS_POLYGON_MODE))
+   if (gfx->encoder_dirty || IS_DIRTY(RS_POLYGON_MODE))
       mtl_set_triangle_fill_lines(enc, !gfx->polygon_points && dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE);
 
-   if (IS_DIRTY(RS_DEPTH_BIAS_FACTORS) || IS_DIRTY(RS_DEPTH_BIAS_ENABLE)) {
+   if (gfx->encoder_dirty || IS_DIRTY(RS_DEPTH_BIAS_FACTORS) ||
+       IS_DIRTY(RS_DEPTH_BIAS_ENABLE)) {
       if (dyn->rs.depth_bias.enable && !gfx->polygon_points)
          mtl_set_depth_bias(enc, dyn->rs.depth_bias.constant_factor,
                             dyn->rs.depth_bias.slope_factor,
@@ -1722,8 +1729,9 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
          mtl_set_depth_bias(enc, 0.0f, 0.0f, 0.0f);
    }
 
-   if (IS_DIRTY(RS_DEPTH_CLAMP_ENABLE) || IS_DIRTY(RS_DEPTH_CLIP_ENABLE) ||
-       IS_DIRTY(VP_VIEWPORT_COUNT) || IS_DIRTY(VP_VIEWPORTS)) {
+   if (gfx->encoder_dirty || IS_DIRTY(RS_DEPTH_CLAMP_ENABLE) ||
+       IS_DIRTY(RS_DEPTH_CLIP_ENABLE) || IS_DIRTY(VP_VIEWPORT_COUNT) ||
+       IS_DIRTY(VP_VIEWPORTS)) {
       /* Mapping of Vulkan clamp/clip combinations to Metal:
        * - Clamp Off, Clip Off:
        *     Use Metal's clamp mode with the viewport depth range set to [0, 1],
@@ -1742,7 +1750,12 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       enum mtl_depth_clip_mode mode =
          clip && !gfx->polygon_points ? MTL_DEPTH_CLIP_MODE_CLIP : MTL_DEPTH_CLIP_MODE_CLAMP;
       mtl_set_depth_clip_mode(enc, mode);
+   }
 
+   if (IS_DIRTY(RS_DEPTH_CLAMP_ENABLE) || IS_DIRTY(RS_DEPTH_CLIP_ENABLE) ||
+       IS_DIRTY(VP_VIEWPORT_COUNT) || IS_DIRTY(VP_VIEWPORTS)) {
+      bool clamp = dyn->rs.depth_clamp_enable;
+      bool clip = vk_rasterization_state_depth_clip_enable(&dyn->rs);
       desc->root.draw.emulate_depth_clamp = clamp && clip;
       desc->root.draw.emulate_viewport_z = !clamp && !clip;
       if (desc->root.draw.emulate_depth_clamp ||
@@ -1768,7 +1781,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       desc->root_dirty = true;
    }
 
-   if ((IS_DIRTY(DS_DEPTH_BOUNDS_TEST_ENABLE) ||
+   if ((gfx->encoder_dirty || IS_DIRTY(DS_DEPTH_BOUNDS_TEST_ENABLE) ||
         IS_DIRTY(DS_DEPTH_BOUNDS_TEST_BOUNDS)) &&
        kk_depth_bounds_native(pdev)) {
       /* Metal does not expose a separate flag for enabling the depth bounds
@@ -1779,7 +1792,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       mtl_set_depth_test_bounds(enc, bounds_min, bounds_max);
    }
 
-   if (IS_DIRTY(DS_STENCIL_REFERENCE))
+   if (gfx->encoder_dirty || IS_DIRTY(DS_STENCIL_REFERENCE))
       mtl_set_stencil_references(
          enc, cmd->vk.dynamic_graphics_state.ds.stencil.front.reference,
          cmd->vk.dynamic_graphics_state.ds.stencil.back.reference);
@@ -1817,7 +1830,8 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       kk_cmd_bind_root_to_argument_table(cmd, desc->root.addr);
    }
 
-   if ((gfx->dirty & KK_DIRTY_OCCLUSION) && cmd->uses_occlusion_queries) {
+   if (cmd->uses_occlusion_queries &&
+       (gfx->encoder_dirty || (gfx->dirty & KK_DIRTY_OCCLUSION))) {
       if (gfx->occlusion.mode != MTL_VISIBILITY_RESULT_MODE_DISABLED)
          cmd->encoder_occlusion = true;
       mtl_set_visibility_result_mode(enc, gfx->occlusion.mode,
@@ -1828,6 +1842,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
 static void
 kk_flush_gfx_state(struct kk_cmd_buffer *cmd)
 {
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_STATE, state);
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_descriptor_state *desc = &gfx->descriptors;
@@ -1842,7 +1857,7 @@ kk_flush_gfx_state(struct kk_cmd_buffer *cmd)
     * Physical encoder creation dirties this state through the existing path.
     */
    if (cmd->writable_msaa_render_attachments &&
-       (IS_SHADER_DIRTY(FRAGMENT) || IS_DIRTY(COLOR_ATTACHMENT_MAP) ||
+       (gfx->encoder_dirty || IS_SHADER_DIRTY(FRAGMENT) || IS_DIRTY(COLOR_ATTACHMENT_MAP) ||
         IS_DIRTY(CB_COLOR_WRITE_ENABLES) || IS_DIRTY(CB_WRITE_MASKS) ||
         IS_DIRTY(RS_RASTERIZER_DISCARD_ENABLE)))
       kk_writable_msaa_update_draw(cmd);
@@ -1851,6 +1866,7 @@ kk_flush_gfx_state(struct kk_cmd_buffer *cmd)
 
    cmd->state.dirty_shaders = 0u;
    cmd->state.gfx.dirty = 0u;
+   cmd->state.gfx.encoder_dirty = false;
    vk_dynamic_graphics_state_clear_dirty(&cmd->vk.dynamic_graphics_state);
 }
 #undef IS_SHADER_DIRTY
@@ -2977,6 +2993,7 @@ layered_bc_done:
 static void
 kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_DRAW, draw);
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_shader *vs = cmd->state.gfx.shader;
    uint32_t view_mask = gfx->render.view_mask;

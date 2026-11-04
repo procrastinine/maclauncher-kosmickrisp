@@ -370,6 +370,8 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    /* Implicit reset must discard old native storage before acquiring the
     * next recording, as explicit reset and destruction already do. */
    vk_command_buffer_begin(&cmd->vk, pBeginInfo);
+   /* Initialize derived values once per Vulkan recording, including defaults. */
+   kk_cmd_buffer_dirty_all_gfx(cmd);
 
    cmd->uses_occlusion_queries =
       cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY &&
@@ -494,6 +496,7 @@ apply_pending_barrier(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
 void
 cs_start_render(struct kk_cmd_buffer *cmd)
 {
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_SETUP, setup);
    struct kk_graphics_state *state = &cmd->state.gfx;
    uint32_t view_mask = state->render.view_mask;
    struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
@@ -512,9 +515,11 @@ cs_start_render(struct kk_cmd_buffer *cmd)
 
    cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
       cmd->metal.cmd_buf, state->render_pass_descriptor);
-   if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL))
+   if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL)) {
+      kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_RENDER_ENCODER_BEGIN, 0);
       kk_perf_render_begin(kk_cmd_buffer_device(cmd)->perf, cmd->metal.render,
                             state->render_pass_descriptor);
+   }
 
    apply_pending_barrier(cmd, cmd->metal.render);
    kk_encoder_update_debug(cmd, cmd->metal.render);
@@ -537,7 +542,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
       cmd->metal.render, cmd->argument_table,
       MTL_RENDER_STAGE_VERTEX | MTL_RENDER_STAGE_FRAGMENT);
 
-   kk_cmd_buffer_dirty_all_gfx(cmd);
+   kk_cmd_buffer_invalidate_gfx_encoder(cmd);
 }
 
 mtl_render_encoder *
@@ -559,17 +564,20 @@ cs_get_render(struct kk_cmd_buffer *cmd)
 static mtl_compute_encoder *
 cs_get_compute_internal(struct kk_cmd_buffer *cmd, bool preserve_pipeline)
 {
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_SETUP, setup);
    /* If we are inside render, we need to force a restart later */
    if (cmd->metal.render) {
       kk_apply_attachment_store_ops(cmd, true);
       cs_end(cmd);
-      kk_cmd_buffer_dirty_all_gfx(cmd);
+      kk_cmd_buffer_invalidate_gfx_encoder(cmd);
       cmd->state.gfx.need_to_start_render_pass = true;
    }
 
    if (cmd->metal.compute == NULL) {
       cmd->state.cs.bound_pipeline = NULL;
       cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
+      if (unlikely(kk_cmd_buffer_device(cmd)->perf != NULL))
+         kk_perf_add(kk_cmd_buffer_device(cmd)->perf, KK_PERF_COMPUTE_ENCODER_BEGIN, 0);
       apply_pending_barrier(cmd, cmd->metal.compute);
       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
       kk_encoder_update_debug(cmd, cmd->metal.compute);
@@ -597,6 +605,7 @@ static void
 end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
             enum mtl_stages stages, bool ordered)
 {
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_END, end);
    const bool resolves =
       util_dynarray_num_elements(&cmd->ts_resolves, struct kk_ts_resolve) > 0;
    const bool occlusion =
@@ -1391,6 +1400,7 @@ kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
                     size_t data_size)
 {
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   KK_PERF_ENCODER_SCOPE(dev, KK_PERF_ENCODER_STATE, state);
    struct kk_precompiled_shader *prog = kk_device_get_precompiled(dev, idx);
    if (unlikely(!prog)) {
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_INVALID_SHADER_NV);
@@ -1404,6 +1414,7 @@ kk_dispatch_precompiled_shader(struct kk_cmd_buffer *cmd, struct kk_grid grid,
                                 bool pre_gfx, const struct kk_precompiled_shader *prog,
                                 void *data, size_t data_size)
 {
+   KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_STATE, state);
    mtl_compute_encoder *encoder = cs_get_compute(cmd);
    mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
                                     MTL_STAGE_DISPATCH);
@@ -1421,13 +1432,16 @@ kk_dispatch_precompiled_shader(struct kk_cmd_buffer *cmd, struct kk_grid grid,
       .z = prog->info.workgroup_size[2],
    };
 
-   if (grid.mode == KK_GRID_DIRECT)
-      mtl_dispatch_threads(encoder, grid.size, local_size);
-   else if (grid.mode == KK_GRID_INDIRECT_LOCAL)
-      mtl_dispatch_threads_with_indirect_buffer(encoder, grid.addr);
-   else
-      mtl_dispatch_threadgroups_with_indirect_buffer(encoder, grid.addr,
-                                                     local_size);
+   {
+      KK_PERF_ENCODER_SCOPE(kk_cmd_buffer_device(cmd), KK_PERF_ENCODER_DRAW, draw);
+      if (grid.mode == KK_GRID_DIRECT)
+         mtl_dispatch_threads(encoder, grid.size, local_size);
+      else if (grid.mode == KK_GRID_INDIRECT_LOCAL)
+         mtl_dispatch_threads_with_indirect_buffer(encoder, grid.addr);
+      else
+         mtl_dispatch_threadgroups_with_indirect_buffer(encoder, grid.addr,
+                                                        local_size);
+   }
    mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
                                     MTL_STAGE_DISPATCH);
 

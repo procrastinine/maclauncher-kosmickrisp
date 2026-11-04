@@ -302,6 +302,7 @@ struct kk_graphics_state {
    bool is_depth_stencil_dynamic;
    bool is_cull_front_and_back;
    bool need_to_start_render_pass;
+   bool encoder_dirty;
 
    enum kk_dirty dirty;
    uint32_t pipeline_sample_count;
@@ -549,6 +550,14 @@ VkResult kk_cmd_buffer_defer_native_recording(struct kk_cmd_buffer *cmd);
 VkResult kk_cmd_buffer_resume_native_recording(struct kk_cmd_buffer *cmd);
 void kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd,
                                         uint64_t addr);
+
+static inline void
+kk_cmd_buffer_invalidate_gfx_encoder(struct kk_cmd_buffer *cmd)
+{
+   /* Native encoder state is fresh; Vulkan state and uploaded data survive. */
+   cmd->state.gfx.encoder_dirty = true;
+   cmd->uses_heap = false;
+}
 
 static void
 kk_cmd_buffer_dirty_all_gfx(struct kk_cmd_buffer *cmd)
