@@ -1448,19 +1448,26 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
        VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT);
-   static const uint64_t zeros[32] = {0};
-   uint64_t scratch = kk_pool_upload(cmd, zeros, statistics ? 256 : 128, 8).gpu;
+   /* Absent reports use null destinations. Only actual pipeline statistics
+    * and the GS's own dynamic counts need scratch storage. */
+   uint32_t statistics_bytes = statistics ?
+      PIPE_STAT_QUERY_COUNT * sizeof(uint32_t) : 0;
+   uint32_t count_bytes = info->count_words && !info->prefix_sum ?
+      info->count_words * sizeof(uint32_t) : 0;
+   uint64_t scratch = 0;
+   if (statistics_bytes || count_bytes) {
+      struct kk_ptr storage = kk_pool_alloc(cmd, statistics_bytes + count_bytes, 8);
+      if (unlikely(!storage.cpu))
+         return 0;
+      memset(storage.cpu, 0, statistics_bytes + count_bytes);
+      scratch = storage.gpu;
+   }
    for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; ++i) {
-      params.prims_generated_counter[i] = scratch + 8 * i;
-      params.xfb_prims_generated_counter[i] = scratch + 32 + 8 * i;
-      params.xfb_overflow[i] = scratch + 64 + 4 * i;
-      params.xfb_base_original[i] = scratch;
-      params.xfb_offs_ptrs[i] = scratch + 80 + 4 * i;
-      if (gfx->primitives_query[i])
-         params.prims_generated_counter[i] = gfx->primitives_query[i];
+      params.prims_generated_counter[i] = gfx->primitives_query[i];
       if (gfx->xfb_query[i]) {
          params.xfb_prims_generated_counter[i] = gfx->xfb_query[i];
-         params.prims_generated_counter_secondary[i] = gfx->xfb_query[i] + sizeof(uint64_t);
+         params.prims_generated_counter_secondary[i] =
+            gfx->xfb_query[i] + sizeof(uint64_t);
       }
       if (gfx->xfb_enabled) {
          params.xfb_base_original[i] = gfx->xfb[i].addr;
@@ -1468,12 +1475,11 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          params.xfb_offs_ptrs[i] = gfx->xfb_offsets + i * sizeof(uint32_t);
       }
    }
-   params.xfb_any_overflow = scratch + 96;
    for (unsigned i = 0; i < PIPE_STAT_QUERY_COUNT; ++i)
       gfx->per_draw_data.geometry_statistics[i] = statistics ?
-         scratch + 128 + i * sizeof(uint32_t) : 0;
-   if (info->count_words && !info->prefix_sum)
-      params.count_buffer = scratch + 112;
+         scratch + i * sizeof(uint32_t) : 0;
+   if (count_bytes)
+      params.count_buffer = scratch + statistics_bytes;
 
    if (indirect) {
       /* The indirect setup kernel writes the draw and allocates from the

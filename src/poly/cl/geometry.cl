@@ -314,7 +314,8 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
                                                  count_index[i], count_words,
                                                  prefix_sum, unrolled_in_prims);
 
-      *(p->prims_generated_counter[i]) += in_prims[i];
+      if (p->prims_generated_counter[i])
+         *(p->prims_generated_counter[i]) += in_prims[i];
       if (p->prims_generated_counter_secondary[i])
          *(p->prims_generated_counter_secondary[i]) += in_prims[i];
    }
@@ -322,7 +323,11 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
    uint4 prims = in_prims;
    uint emitted_prims = prims[0] + prims[1] + prims[2] + prims[3];
 
-   if (buffers_written) {
+   bool xfb_active = false;
+   poly_foreach_xfb(buffers_written, i)
+      xfb_active |= p->xfb_offs_ptrs[i] != 0;
+
+   if (xfb_active) {
       poly_foreach_xfb(buffers_written, i) {
          uint max_prims =
             setup_xfb_buffer(p, i, stride[i], output_end[i], vertices_per_prim);
@@ -336,11 +341,14 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
       poly_foreach_xfb(streams, i) {
          p->xfb_verts[i] = prims[i] * vertices_per_prim;
 
-         *(p->xfb_overflow[i]) += (bool)overflow[i];
-         *(p->xfb_prims_generated_counter[i]) += prims[i];
+         if (p->xfb_overflow[i])
+            *(p->xfb_overflow[i]) += (bool)overflow[i];
+         if (p->xfb_prims_generated_counter[i])
+            *(p->xfb_prims_generated_counter[i]) += prims[i];
       }
 
-      *(p->xfb_any_overflow) += any(overflow);
+      if (p->xfb_any_overflow)
+         *(p->xfb_any_overflow) += any(overflow);
 
       /* Update XFB counters */
       poly_foreach_xfb(buffers_written, i) {
