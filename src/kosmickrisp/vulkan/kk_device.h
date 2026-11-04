@@ -67,13 +67,17 @@ struct kk_rc_sampler {
 
    /* Reference count for this hardware sampler, protected by the heap mutex */
    uint32_t refcount;
+   bool canonical;
 
    /* Index of this hardware sampler in the hardware sampler heap */
    uint16_t index;
    bool sparse_query_source;
 };
 
+struct kk_sampler_native_cache;
 struct kk_sampler_heap {
+   struct kk_sampler_native_cache *native_cache;
+   uint32_t canonical_count;
    uint32_t indexed_count;
    simple_mtx_t lock;
 

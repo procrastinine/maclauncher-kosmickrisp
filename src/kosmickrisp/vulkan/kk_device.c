@@ -6,6 +6,8 @@
  */
 
 #include "kk_device.h"
+#include "kk_sampler.h"
+#include "kk-sampler-cap-keys.h"
 #include "kk_bo.h"
 #include "kk_sparse.h"
 #include "kk_descriptor_set.h"
@@ -125,6 +127,9 @@ kk_release_compiler(struct kk_device *dev)
 
 DERIVE_HASH_TABLE(mtl_sampler_packed);
 
+static VkResult kk_sampler_cap_reserve(struct kk_device *dev);
+static void kk_destroy_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h);
+
 static VkResult
 kk_init_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h)
 {
@@ -143,7 +148,12 @@ kk_init_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h)
    }
 
    simple_mtx_init(&h->lock, mtx_plain);
-   return VK_SUCCESS;
+   result = kk_sampler_cap_native_init(dev);
+   if (result == VK_SUCCESS)
+      result = kk_sampler_cap_reserve(dev);
+   if (result != VK_SUCCESS)
+      kk_destroy_sampler_heap(dev, h);
+   return result;
 }
 
 static void
@@ -159,6 +169,7 @@ kk_destroy_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h)
    kk_query_table_finish(dev, &h->table);
    ralloc_free(h->ht);
    simple_mtx_destroy(&h->lock);
+   kk_sampler_cap_native_finish(dev);
 }
 
 static VkResult
@@ -181,12 +192,33 @@ kk_sampler_require_index(struct kk_device *dev, struct kk_sampler_heap *h,
 }
 
 static VkResult
+kk_sampler_cap_fallback_locked(struct kk_device *dev, struct kk_sampler_heap *h,
+   const struct mtl_sampler_packed *requested, struct kk_rc_sampler **out, bool needs_index)
+{
+   struct mtl_sampler_packed key;
+   kk_sampler_cap_key(&key, requested);
+   struct hash_entry *entry = _mesa_hash_table_search(h->ht, &key);
+   if (!entry)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   struct kk_rc_sampler *rc = entry->data;
+   if (needs_index) {
+      VkResult result = kk_sampler_require_index(dev, h, rc);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+   ++rc->refcount;
+   *out = rc;
+   return VK_SUCCESS;
+}
+
+static VkResult
 kk_sampler_heap_add_locked(struct kk_device *dev, struct kk_sampler_heap *h,
                            struct mtl_sampler_packed desc,
                            struct kk_rc_sampler **out, bool needs_index)
 {
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
+   kk_sampler_cap_key_normalize(&desc, &desc);
    struct hash_entry *ent = _mesa_hash_table_search(h->ht, &desc);
    if (ent != NULL) {
       *out = ent->data;
@@ -209,6 +241,8 @@ kk_sampler_heap_add_locked(struct kk_device *dev, struct kk_sampler_heap *h,
    mtl_sampler *handle = kk_sampler_create(dev, &desc);
    if (!handle) {
       ralloc_free(rc);
+      if (h->canonical_count)
+         return kk_sampler_cap_fallback_locked(dev, h, &desc, out, needs_index);
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
@@ -233,6 +267,36 @@ kk_sampler_heap_add_locked(struct kk_device *dev, struct kk_sampler_heap *h,
    return VK_SUCCESS;
 }
 
+static VkResult
+kk_sampler_cap_reserve(struct kk_device *dev)
+{
+   struct kk_sampler_heap *h = &dev->samplers;
+   const struct mtl_sampler_packed *keys;
+   uint32_t count = kk_sampler_cap_native_keys(dev, &keys);
+   for (uint32_t i = 0; i < count; ++i) {
+      struct kk_rc_sampler *rc;
+      VkResult result = kk_sampler_heap_add_locked(dev, h, keys[i], &rc, true);
+      if (result != VK_SUCCESS)
+         return result;
+      rc->canonical = true;
+   }
+   h->canonical_count = count;
+   return VK_SUCCESS;
+}
+
+VkResult
+kk_sampler_cap_get_canonical(struct kk_device *dev,
+   const struct mtl_sampler_packed *requested, struct kk_rc_sampler **out, bool native_only)
+{
+   struct mtl_sampler_packed key;
+   kk_sampler_cap_key(&key, requested);
+   struct kk_sampler_heap *h = &dev->samplers;
+   simple_mtx_lock(&h->lock);
+   VkResult result = kk_sampler_cap_fallback_locked(dev, h, &key, out, !native_only);
+   simple_mtx_unlock(&h->lock);
+   return result;
+}
+
 static void kk_sampler_heap_remove_locked(struct kk_device *dev,
    struct kk_sampler_heap *h, struct kk_rc_sampler *rc);
 
@@ -244,7 +308,7 @@ kk_sampler_heap_add(struct kk_device *dev, struct mtl_sampler_packed desc,
 
    simple_mtx_lock(&h->lock);
    VkResult result = kk_sampler_heap_add_locked(dev, h, desc, out, true);
-   if (result == VK_SUCCESS) {
+   if (result == VK_SUCCESS && kk_sampler_cap_keys_equal(&desc, &(*out)->key)) {
       result = kk_sparse_sampler_added(dev, *out);
       if (result != VK_SUCCESS) kk_sampler_heap_remove_locked(dev, h, *out);
    }
@@ -260,7 +324,7 @@ kk_sampler_native_add(struct kk_device *dev, struct mtl_sampler_packed desc,
    struct kk_sampler_heap *h = &dev->samplers;
    simple_mtx_lock(&h->lock);
    VkResult result = kk_sampler_heap_add_locked(dev, h, desc, out, false);
-   if (result == VK_SUCCESS) {
+   if (result == VK_SUCCESS && kk_sampler_cap_keys_equal(&desc, &(*out)->key)) {
       result = kk_sparse_sampler_added(dev, *out);
       if (result != VK_SUCCESS) kk_sampler_heap_remove_locked(dev, h, *out);
    }

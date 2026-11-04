@@ -52,4 +52,12 @@ mtl_sampler *mtl_new_sampler(mtl_device *device,
 /* Sampler utils */
 uint64_t mtl_sampler_get_gpu_resource_id(mtl_sampler *sampler);
 
+/* Validate new raw IDs before they enter retained sampler tables. The caller
+ * serializes this CPU-only scratch through its existing native cache mutex. */
+struct mtl_sampler_id_check;
+struct mtl_sampler_id_check *mtl_sampler_id_check_create(mtl_device *device);
+void mtl_sampler_id_check_destroy(struct mtl_sampler_id_check *check);
+bool mtl_sampler_id_check_matches(struct mtl_sampler_id_check *check,
+                                  mtl_sampler *sampler);
+
 #endif /* MTL_SAMPLER_H */

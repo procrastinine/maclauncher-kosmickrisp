@@ -144,15 +144,16 @@ create_sampler_descriptor(const struct kk_device *dev,
    return descriptor;
 }
 
+#include "kk-sampler-cap-native.h"
+
 mtl_sampler *
 kk_sampler_create(struct kk_device *dev,
                   const struct mtl_sampler_packed *packed)
 {
-   mtl_sampler_descriptor *desc = create_sampler_descriptor(dev, packed);
-   mtl_sampler *sampler = mtl_new_sampler(dev->mtl_handle, desc);
-   mtl_release(desc);
-   return sampler;
+   return kk_sampler_cap_native_create(dev, packed);
 }
+
+#include "kk-sampler-capacity.h"
 
 static VkResult
 kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
@@ -203,7 +204,7 @@ kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
       packed.lod_bias = 0;
       packed.max_anisotropy = 1;
    }
-   result = (native_only ? kk_sampler_native_add : kk_sampler_heap_add)(dev, packed, &sampler->planes[0].hw);
+   result = kk_sampler_cap_add_plane(dev, sampler, 0, packed, native_only);
    if (result != VK_SUCCESS) {
       kk_DestroySampler(device, kk_sampler_to_handle(sampler), pAllocator);
       return result;
@@ -237,7 +238,7 @@ kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
           pCreateInfo->minFilter != chroma_filter) {
          packed.min_filter = packed.mag_filter =
             vk_filter_to_mtl_sampler_min_mag_filter(chroma_filter);
-         result = (native_only ? kk_sampler_native_add : kk_sampler_heap_add)(dev, packed, &sampler->planes[1].hw);
+         result = kk_sampler_cap_add_plane(dev, sampler, 1, packed, native_only);
          if (result != VK_SUCCESS) {
             kk_DestroySampler(device, kk_sampler_to_handle(sampler),
                               pAllocator);
@@ -250,7 +251,7 @@ kk_create_sampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
        * and clamp-to-0 variants. We treat these as planes.
        */
       packed.border_color = MTL_SAMPLER_BORDER_COLOR_TRANSPARENT_BLACK;
-      result = (native_only ? kk_sampler_native_add : kk_sampler_heap_add)(dev, packed, &sampler->planes[1].hw);
+      result = kk_sampler_cap_add_plane(dev, sampler, 1, packed, native_only);
       if (result != VK_SUCCESS) {
          kk_DestroySampler(device, kk_sampler_to_handle(sampler), pAllocator);
          return result;

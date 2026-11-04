@@ -9,6 +9,7 @@
 #define KK_SAMPLER_H 1
 
 #include "kk_device.h"
+#include "kosmickrisp/compiler/kk-sampler-params.h"
 #include "kk_physical_device.h"
 #include "kk_private.h"
 
@@ -25,6 +26,9 @@ struct kk_sampler {
    VkClearColorValue custom_border;
    bool has_border;
    bool native_only;
+   bool is_virtual;
+   uint64_t params_gpu_address;
+   uint16_t plane_filter_bits[2];
 
    uint8_t plane_count;
    uint16_t lod_bias_fp16;
@@ -47,5 +51,14 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_sampler, vk.base, VkSampler,
 VkResult kk_create_heap_sampler(struct kk_device *dev,
    const VkSamplerCreateInfo *info, VkSampler *sampler,
    enum kk_sampler_params_lock_context params_lock_context);
+
+VkResult kk_sampler_cap_native_init(struct kk_device *dev);
+void kk_sampler_cap_native_finish(struct kk_device *dev);
+uint32_t kk_sampler_cap_native_keys(struct kk_device *dev,
+   const struct mtl_sampler_packed **keys);
+VkResult kk_sampler_cap_get_canonical(struct kk_device *dev,
+   const struct mtl_sampler_packed *key, struct kk_rc_sampler **out, bool native_only);
+VkResult kk_sampler_cap_finalize(struct kk_device *dev, struct kk_sampler *sampler,
+   const VkSamplerCreateInfo *info, enum kk_sampler_params_lock_context lock_context);
 
 #endif /* KK_SAMPLER_H */

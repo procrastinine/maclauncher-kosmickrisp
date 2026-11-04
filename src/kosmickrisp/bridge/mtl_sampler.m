@@ -7,6 +7,7 @@
 #include "mtl_sampler.h"
 
 #include <Metal/MTLSampler.h>
+#include "kk-sampler-id-check.h"
 
 mtl_sampler_descriptor *
 mtl_new_sampler_descriptor()
