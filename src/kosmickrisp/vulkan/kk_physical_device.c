@@ -288,7 +288,8 @@ kk_get_device_features(
       .leastRepresentableValueForceUnormRepresentation = true,
       .floatRepresentation = true,
       .depthBiasExact = true,
-      .depthBounds = pdev->info.gpu_apple_family >= 10,
+      /* Apple10 tests natively; earlier families use the depth_bounds entry. */
+      .depthBounds = pdev->info.gpu_apple_family >= 7,
       .depthClamp = true,
       .drawIndirectFirstInstance = true,
       .dualSrcBlend = true,

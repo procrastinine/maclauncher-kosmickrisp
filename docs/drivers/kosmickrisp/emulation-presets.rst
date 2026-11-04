@@ -17,7 +17,7 @@
      - No declared thresholds
    * - ``apple10``
      - Apple10
-     - ``sampler_filter_minmax``
+     - ``sampler_filter_minmax``, ``depth_bounds``
    * - ``apple11``
      - Apple11
-     - ``sampler_filter_minmax``
+     - ``sampler_filter_minmax``, ``depth_bounds``

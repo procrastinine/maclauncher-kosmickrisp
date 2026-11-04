@@ -345,3 +345,12 @@
      - vkd3d-proton requires buffer int64 atomics for SM 6.6 and higher; workgroup int64 atomics provide its optional shared-memory atomic capability. Only actual atomic64 instructions select this implementation.
      - Buffer and workgroup int64 atomics are unavailable; vkd3d-proton cannot advance from SM 6.5 to SM 6.6 and loses AtomicInt64OnGroupSharedSupported. Ordinary shaderInt64 remains independent.
      - ``performance,+atomic64``
+   * - ``depth_bounds``
+     - Depth bounds test on Apple7, Apple8 and Apple9 GPUs.
+       Controls: ``depthBounds``.
+     - native Apple10 / software depth-stencil transaction. Apple10 uses the native Metal depth bounds test. On earlier families, every draw of a pipeline that enables the test, statically or through dynamic state, runs in the per-sample depth/stencil transaction: native coverage capture, a load of the stored depth and stencil, ordered bounds, depth and stencil tests in bounded tile and primitive batches, and replay of the passing samples. Ordinary, Mesh and generated Mesh draws use the same transaction. Pipelines that do not enable the test compile and run unchanged. While the feature is enabled, color and depth/stencil attachment images also receive shader-read usage.
+     - Apple10 and later; emulated on earlier supported families
+     - Off
+     - vkd3d-proton enables depthBounds whenever it is reported, which gives every attachment image shader-read usage and runs each pipeline state object that enables the bounds test through the software transaction.
+     - On Apple7, Apple8 and Apple9, depthBounds is unavailable; vkd3d-proton reports DepthBoundsTestSupported as false, which limits Direct3D 12 to feature level 12_1, and fails creation of pipeline states that enable the depth bounds test.
+     - ``performance,+depth_bounds``

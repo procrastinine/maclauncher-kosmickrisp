@@ -167,11 +167,16 @@ Feature table
      - Off
      - None; DXVK and vkd3d-proton keep their default depth-bias path.
    * - ``depthBounds``
-     - Native: Metal depth bounds test. Not advertised below Apple10.
-     - Apple10; native on Apple10 and later.
-     - —
-     - Always
-     - —
+     - Native with emulated cases: the Metal depth bounds test on Apple10 and
+       later, in every mode. On earlier families, each draw of a pipeline
+       that enables the test runs in the per-sample depth/stencil
+       transaction, which tests the stored depth and discards samples
+       outside the bounds without changing stencil.
+     - Apple10; native on Apple10 and later, emulated on Apple7 to Apple9.
+     - ``depth_bounds``
+     - Off
+     - On Apple7 to Apple9, vkd3d-proton reports DepthBoundsTestSupported as
+       false, which limits Direct3D 12 to feature level 12_1.
    * - ``VK_EXT_provoking_vertex``,
        ``extendedDynamicState3ProvokingVertexMode``
      - Native with emulated cases: when the last vertex is provoking and the

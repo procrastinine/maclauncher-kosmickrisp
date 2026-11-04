@@ -61,7 +61,8 @@ Metal path where that family provides one:
 - Apple10 and later:
 
   - report ``depthBounds`` and use Metal depth bounds testing. Earlier
-    families do not report the feature.
+    families report the feature through the ``depth_bounds`` emulation
+    entry, which is off in the default performance mode.
   - apply ``mipLodBias`` in the Metal sampler. Earlier families apply the bias
     in the shader.
   - use the Metal sampler reduction mode for minimum and maximum filtering
