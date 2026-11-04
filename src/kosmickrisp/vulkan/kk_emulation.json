@@ -106,5 +106,54 @@
     "performance": true,
     "performance_reason": "The macfx-vkd3d translator requires pipelineStatisticsQuery for D3D feature level 11_0; inactive queries retain the default-false shader specialization.",
     "off_consequence": "Core Vulkan pipeline-statistics queries are unavailable. The macfx-vkd3d feature-level 11_0 capability check fails. This entry does not disable shader demote, helper invocation semantics, mesh queries or primitives-generated queries."
+  },
+  {
+    "name": "mesh_shader",
+    "description": "Native object and mesh shaders with virtual task grids and sliced output when required.",
+    "cost_class": "mixed native / virtualized",
+    "cost_note": "Unsliced direct mesh uses one native mesh render call. Virtual task batches add prepare, task and prefix compute followed by mesh rendering; output slicing and retained replay add selected captures and mesh draws. Queries add counters only when used. Per-use GPU instruction count and runtime cost are unmeasured.",
+    "extensions": [
+      "VK_EXT_mesh_shader"
+    ],
+    "features": [
+      "taskShader",
+      "meshShader",
+      "multiviewMeshShader",
+      "primitiveFragmentShadingRateMeshShader",
+      "meshShaderQueries"
+    ],
+    "properties": [
+      "maxTaskWorkGroupTotalCount",
+      "maxTaskWorkGroupCount",
+      "maxTaskWorkGroupInvocations",
+      "maxTaskWorkGroupSize",
+      "maxTaskPayloadSize",
+      "maxTaskSharedMemorySize",
+      "maxTaskPayloadAndSharedMemorySize",
+      "maxMeshWorkGroupTotalCount",
+      "maxMeshWorkGroupCount",
+      "maxMeshWorkGroupInvocations",
+      "maxMeshWorkGroupSize",
+      "maxMeshSharedMemorySize",
+      "maxMeshPayloadAndSharedMemorySize",
+      "maxMeshOutputMemorySize",
+      "maxMeshPayloadAndOutputMemorySize",
+      "maxMeshOutputComponents",
+      "maxMeshOutputVertices",
+      "maxMeshOutputPrimitives",
+      "maxMeshOutputLayers",
+      "maxMeshMultiviewViewCount",
+      "meshOutputPerVertexGranularity",
+      "meshOutputPerPrimitiveGranularity",
+      "maxPreferredTaskWorkGroupInvocations",
+      "maxPreferredMeshWorkGroupInvocations",
+      "prefersLocalInvocationVertexOutput",
+      "prefersLocalInvocationPrimitiveOutput",
+      "prefersCompactVertexOutput",
+      "prefersCompactPrimitiveOutput"
+    ],
+    "performance": true,
+    "performance_reason": "vkd3d-proton requires both meshShader and taskShader for D3D12 MeshTier1; disabling them removes feature-level 12.2 eligibility.",
+    "off_consequence": "D3D12 MeshTier1 and feature-level 12.2 are unavailable; mesh/task Vulkan shaders and mesh queries are unavailable. Lower feature levels remain subject to their other requirements; this entry does not remove a shader-model requirement or a translator device-creation prerequisite."
   }
 ]
