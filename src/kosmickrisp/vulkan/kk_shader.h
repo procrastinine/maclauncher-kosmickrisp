@@ -334,6 +334,7 @@ struct kk_lazy_compute {
    const uint8_t *recipe;
    size_t recipe_size;
    void *own;
+   uint64_t checksum; /* XXH3-64 of the recipe */
    uint32_t required_modes, modes;
 };
 

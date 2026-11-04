@@ -424,6 +424,8 @@ kk_async_compute_device_init(struct kk_device *dev)
 {
    const char *eager = getenv("KK_DEBUG_EAGER_COMPUTE_TRANSLATION");
    dev->eager_compute_translation = eager && *eager && strcmp(eager, "0");
+   const char *fail = getenv("KK_DEBUG_FAIL_COMPUTE_TRANSLATION");
+   dev->fail_compute_translation = fail ? strtoul(fail, NULL, 10) : 0;
    owner_get(dev);
 }
 

@@ -367,6 +367,10 @@ Diagnostics
 - ``KK_DEBUG_EAGER_COMPUTE_TRANSLATION``: a value other than ``0`` translates
   every compute shader during pipeline creation; only the Metal library and
   pipeline compile in the deferred build. It is read at device creation.
+- ``KK_DEBUG_FAIL_COMPUTE_TRANSLATION``: a nonzero workgroup width makes the
+  translation of every compute shader with that workgroup width fail with
+  ``VK_ERROR_OUT_OF_HOST_MEMORY``, to exercise translation failure handling.
+  It is read at device creation.
 - ``MESA_SHADER_CACHE_SHOW_STATS``: in addition to Mesa's shader cache
   statistics, prints one ``KK_SHADER_CACHE_BINDINGS`` line per shader written
   to the cache, with its source hash, embedded sampler count and whether its
@@ -503,10 +507,18 @@ The build stores the translated MSL and shader metadata in the Mesa disk cache
 under a digest of the compiler input. A later build of the same input, in
 this or a later process, restores them and compiles only the Metal library and
 pipeline. In a pipeline cache, such a pipeline is serialized as its compiler
-input whether or not its build has run, so ``vkGetPipelineCacheData`` reports
-the same size before and after the build. A pipeline restored from that data
-in a creation that cannot defer, such as one with creation feedback, restores
-the stored translation or translates during creation.
+input and an XXH3-64 checksum of it, whether or not its build has run, so
+``vkGetPipelineCacheData`` reports the same size before and after the build.
+Pipeline cache data whose compiler input does not match its checksum is
+rejected, and the pipeline compiles from SPIR-V. A pipeline restored from that
+data in a creation that cannot defer, such as one with creation feedback,
+restores the stored translation or translates during creation.
+
+A translation failure in a build is recorded in the Mesa disk cache under a
+checksum of the compiler input. Later creations of that input, fresh or from
+a pipeline cache, translate during creation and return the error from
+``vkCreateComputePipelines``. Builds do not call debug messengers: the
+result of a failed build is reported when the binding thread joins it.
 
 Binding the pipeline compiles it on the binding thread when its
 compile has not started, or waits for the compile in progress and raises the

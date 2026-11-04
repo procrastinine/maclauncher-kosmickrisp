@@ -26,6 +26,10 @@
 #include "kk_async_compute.h"
 #include "kk_atomic64.h"
 #include "util/disk_cache.h"
+#ifndef XXH_INLINE_ALL
+#define XXH_INLINE_ALL
+#endif
+#include "util/xxhash.h"
 #include "vk_alloc.h"
 
 #define KK_LAZY_COMPUTE_MAGIC 0x4b4b4c43u /* "KKLC" */
@@ -56,6 +60,53 @@ kk_lazy_compute_key(struct disk_cache *disk, const void *recipe, size_t size, ui
    _mesa_blake3_compute(recipe, size, input.recipe);
    input.modes = modes;
    disk_cache_compute_key(disk, &input, sizeof(input), key);
+}
+
+/* A recipe whose translation failed in a build is marked in the disk cache,
+ * so later creations of it translate at creation and return the error
+ * there. The marker is keyed by the recipe checksum: a collision only makes
+ * a creation translate at creation. */
+static void
+kk_lazy_compute_failure_key(struct disk_cache *disk, uint64_t checksum, size_t size,
+                            uint32_t modes, cache_key key)
+{
+   struct {
+      char tag[sizeof("KosmicKrisp failed compute 1")];
+      uint64_t checksum, size;
+      uint32_t modes;
+   } input;
+   memset(&input, 0, sizeof(input));
+   memcpy(input.tag, "KosmicKrisp failed compute 1", sizeof(input.tag));
+   input.checksum = checksum;
+   input.size = size;
+   input.modes = modes;
+   disk_cache_compute_key(disk, &input, sizeof(input), key);
+}
+
+static bool
+kk_lazy_compute_failed(struct kk_device *dev, uint64_t checksum, size_t size, uint32_t modes)
+{
+   struct disk_cache *disk = dev->vk.physical->disk_cache;
+   if (!disk)
+      return false;
+   cache_key key;
+   kk_lazy_compute_failure_key(disk, checksum, size, modes, key);
+   size_t length = 0;
+   void *marker = disk_cache_get(disk, key, &length);
+   free(marker);
+   return marker != NULL;
+}
+
+/* Stores a translation (MSL and metadata, never the native pipeline). */
+static void
+kk_lazy_compute_store(struct kk_device *dev, struct disk_cache *disk, const cache_key key,
+                      struct kk_shader *built)
+{
+   struct blob blob;
+   blob_init(&blob);
+   if (kk_shader_serialize_native(&dev->vk, &built->vk, &blob) && !blob.out_of_memory)
+      disk_cache_put(disk, key, blob.data, blob.size, NULL);
+   blob_finish(&blob);
 }
 
 /* The translated shader stored for a recipe; VK_INCOMPLETE when there is
@@ -129,21 +180,23 @@ kk_compile_lazy_compute(struct kk_device *dev, struct kk_shader *shader)
       result = kk_recipe_compile(dev, lazy->recipe, lazy->recipe_size, lazy->required_modes,
                                  lazy->modes, lazy->modes, alloc, &built);
    kk_translate_only = false;
-   if (result != VK_SUCCESS)
-      return result;
-   if (!restored && (built->info.stage != MESA_SHADER_COMPUTE ||
-                     !built->msl_data[MESA_SHADER_COMPUTE].code ||
-                     built->info.indirect_bindable || built->embedded_sampler_count)) {
+   if (result == VK_SUCCESS && !restored &&
+       (built->info.stage != MESA_SHADER_COMPUTE || !built->msl_data[MESA_SHADER_COMPUTE].code ||
+        built->info.indirect_bindable || built->embedded_sampler_count)) {
       kk_shader_destroy(&dev->vk, built, alloc);
-      return VK_ERROR_INVALID_SHADER_NV;
+      result = VK_ERROR_INVALID_SHADER_NV;
    }
-   if (!restored && disk) {
-      struct blob blob;
-      blob_init(&blob);
-      if (kk_shader_serialize_native(&dev->vk, &built->vk, &blob) && !blob.out_of_memory)
-         disk_cache_put(disk, key, blob.data, blob.size, NULL);
-      blob_finish(&blob);
+   if (result != VK_SUCCESS) {
+      if (disk) {
+         cache_key failure;
+         kk_lazy_compute_failure_key(disk, lazy->checksum, lazy->recipe_size, lazy->modes, failure);
+         const int32_t code = result;
+         disk_cache_put(disk, failure, &code, sizeof(code), NULL);
+      }
+      return result;
    }
+   if (!restored && disk)
+      kk_lazy_compute_store(dev, disk, key, built);
    kk_lazy_compute_adopt(shader, built);
    kk_shader_destroy(&dev->vk, built, alloc);
    return kk_compile_async_compute(dev, shader);
@@ -154,7 +207,7 @@ kk_compile_lazy_compute(struct kk_device *dev, struct kk_shader *shader)
  * Returns VK_INCOMPLETE, owning nothing, when the shader must translate now. */
 static VkResult
 kk_lazy_compute_new(struct kk_device *dev, const void *recipe, size_t size, void *own,
-                    uint32_t required_modes, uint32_t modes,
+                    uint64_t checksum, uint32_t required_modes, uint32_t modes,
                     const VkAllocationCallbacks *alloc, struct kk_shader **out)
 {
    if (kk_atomic64_prepare(dev) != VK_SUCCESS)
@@ -163,7 +216,7 @@ kk_lazy_compute_new(struct kk_device *dev, const void *recipe, size_t size, void
    if (!lazy)
       return VK_INCOMPLETE;
    *lazy = (struct kk_lazy_compute) {
-      .recipe = recipe, .recipe_size = size, .own = own,
+      .recipe = recipe, .recipe_size = size, .own = own, .checksum = checksum,
       .required_modes = required_modes, .modes = modes,
    };
    struct kk_shader *shader = vk_shader_zalloc(&dev->vk, &kk_shader_ops, MESA_SHADER_COMPUTE,
@@ -219,8 +272,13 @@ kk_lazy_compute_create(struct kk_device *dev, uint32_t count,
       blob_finish_get_buffer(&blob, &own, &size);
       recipe = own;
    }
+   const uint64_t checksum = XXH3_64bits(recipe, size);
+   if (kk_lazy_compute_failed(dev, checksum, size, always_modes)) {
+      free(own);
+      return VK_INCOMPLETE;
+   }
    struct kk_shader *shader;
-   VkResult result = kk_lazy_compute_new(dev, recipe, size, own, required_modes,
+   VkResult result = kk_lazy_compute_new(dev, recipe, size, own, checksum, required_modes,
                                          always_modes, alloc, &shader);
    if (result != VK_SUCCESS) {
       free(own);
@@ -245,6 +303,7 @@ kk_lazy_compute_serialize(const struct kk_shader *shader, struct blob *blob)
    blob_write_uint32(blob, lazy->required_modes);
    blob_write_uint32(blob, lazy->modes);
    blob_write_uint32(blob, lazy->recipe_size);
+   blob_write_uint64(blob, lazy->checksum);
    blob_write_bytes(blob, lazy->recipe, lazy->recipe_size);
    struct kk_sparse_shader_state *state = shader->sparse;
    blob_write_uint8(blob, state != NULL);
@@ -277,9 +336,13 @@ kk_lazy_compute_deserialize(struct kk_device *dev, struct blob_reader *blob,
    const uint32_t required_modes = blob_read_uint32(blob);
    const uint32_t modes = blob_read_uint32(blob);
    const uint32_t size = blob_read_uint32(blob);
+   const uint64_t checksum = blob_read_uint64(blob);
    const void *recipe = blob_read_bytes(blob, size);
    const uint8_t sparse = blob_read_uint8(blob);
-   if (blob->overrun || !size || sparse > 1 || (required_modes & ~KK_SPARSE_MODES) ||
+   /* Application pipeline cache data is untrusted: a recipe is translated
+    * only when its bytes match the checksum written with it. */
+   if (blob->overrun || !size || XXH3_64bits(recipe, size) != checksum ||
+       sparse > 1 || (required_modes & ~KK_SPARSE_MODES) ||
        (modes & ~required_modes) || (sparse && required_modes == modes) ||
        (!sparse && required_modes != modes))
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
@@ -308,7 +371,8 @@ kk_lazy_compute_deserialize(struct kk_device *dev, struct blob_reader *blob,
    if (result == VK_SUCCESS)
       result = kk_sparse_prepare_pipeline(dev, modes);
    struct kk_shader *shader = NULL;
-   if (result == VK_SUCCESS && kk_defer_compute && !dev->eager_compute_translation) {
+   if (result == VK_SUCCESS && kk_defer_compute && !dev->eager_compute_translation &&
+       !kk_lazy_compute_failed(dev, checksum, size, modes)) {
       void *own = NULL;
       const void *source = state ? state->recipe.data : NULL;
       if (!state) {
@@ -318,7 +382,8 @@ kk_lazy_compute_deserialize(struct kk_device *dev, struct blob_reader *blob,
          source = own;
       }
       if (source) {
-         result = kk_lazy_compute_new(dev, source, size, own, required_modes, modes, alloc, &shader);
+         result = kk_lazy_compute_new(dev, source, size, own, checksum, required_modes, modes,
+                                      alloc, &shader);
          if (result != VK_SUCCESS) {
             free(own);
             shader = NULL;

@@ -168,6 +168,7 @@ struct kk_device {
    /* KK_DEBUG_EAGER_COMPUTE_TRANSLATION: translate compute shaders during
     * pipeline creation, as before lazy translation. Read at device creation. */
    bool eager_compute_translation;
+   uint32_t fail_compute_translation; /* KK_DEBUG_FAIL_COMPUTE_TRANSLATION */
    struct kk_bo *heap;
    struct kk_bo *interlock_guard;
    /* Multisampled shading-rate fragment slots, created on first use. */

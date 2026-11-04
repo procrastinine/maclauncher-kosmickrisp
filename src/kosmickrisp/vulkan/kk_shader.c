@@ -2016,6 +2016,12 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    VkResult result = VK_SUCCESS;
 
    mesa_shader_stage stage = nir->info.stage;
+   /* Failure injection for checks of translation failure handling. */
+   if (unlikely(dev->fail_compute_translation) && stage == MESA_SHADER_COMPUTE &&
+       nir->info.workgroup_size[0] == dev->fail_compute_translation) {
+      ralloc_free(nir);
+      return kk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
    shader = vk_shader_zalloc(&dev->vk, &kk_shader_ops, stage, pAllocator,
                              kk_shader_size(stage));
    if (shader == NULL) {
