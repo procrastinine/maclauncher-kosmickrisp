@@ -52,4 +52,5 @@ nir_def *kk_rt_load_vertex_position(nir_builder *, nir_def *, uint32_t);
 void kk_rt_begin_traversal(nir_builder *, const struct kk_rt_ray_traversal_args *);
 nir_def *kk_rt_build_ray_traversal(nir_builder *, const struct kk_rt_ray_traversal_args *);
 bool kk_nir_lower_ray_queries(nir_shader *shader);
+bool kk_nir_lower_hit_objects(nir_shader *shader);
 #endif

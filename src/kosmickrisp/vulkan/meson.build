@@ -130,6 +130,7 @@ kk_files = [kk_emulation_generated] + files(
   'kk_ray_tracing.h',
   'kk_ray_traversal.c',
   'kk_ray_query.c',
+  'kk_rt_hit_object.c',
   'kk_as_object.c',
   'kk_nir_lower_custom_border.c',
   'kk_nir_lower_descriptors.c',

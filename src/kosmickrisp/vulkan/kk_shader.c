@@ -1006,6 +1006,8 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
    };
    NIR_PASS(_, nir, nir_opt_access, &access_options);
 
+   if (nir->info.hit_objects)
+      NIR_PASS(_, nir, kk_nir_lower_hit_objects);
    if (nir->info.ray_queries)
       NIR_PASS(_, nir, kk_nir_lower_ray_queries);
 
