@@ -34,11 +34,15 @@ struct kk_sampled_image_descriptor {
 static_assert(sizeof(struct kk_sampled_image_descriptor) == 64,
               "kk_sampled_image_descriptor has no holes");
 
+#define KK_TEXEL_BUFFER_RGB32 (1u << 31)
+
 struct kk_storage_image_descriptor {
    uint64_t image_gpu_resource_id;
+   uint32_t texel_offset;
+   uint32_t texel_count;
 };
 
-static_assert(sizeof(struct kk_storage_image_descriptor) == 8,
+static_assert(sizeof(struct kk_storage_image_descriptor) == 16,
               "kk_storage_image_descriptor has no holes");
 
 /* This has to match nir_address_format_64bit_bounded_global */

@@ -237,6 +237,8 @@ write_buffer_view_desc(struct kk_descriptor_set *set,
       assert(view->texel_buffer_gpu_id);
 
       desc.image_gpu_resource_id = view->texel_buffer_gpu_id;
+      desc.texel_offset = view->texel_offset;
+      desc.texel_count = view->vk.elements;
    }
    write_desc(set, binding, elem, &desc, sizeof(desc));
 }

@@ -360,12 +360,47 @@ load_resource_deref_desc(nir_builder *b, unsigned num_components,
                           offset_B, ctx);
 }
 
+/* Preserve logical view bounds before adding the Metal-alignment prefix.
+ * Negative and overflowing coordinates must not access that prefix. */
+static nir_def *
+kk_texel_buffer_coord(nir_builder *b, nir_def *coord, nir_def *metadata)
+{
+   nir_def *word = nir_channel(b, metadata, 0);
+   nir_def *offset = nir_iand_imm(b, word, ~KK_TEXEL_BUFFER_RGB32);
+   nir_def *stride = nir_bcsel(b, nir_ine_imm(b, nir_iand_imm(b, word, KK_TEXEL_BUFFER_RGB32), 0),
+                              nir_imm_int(b, 3), nir_imm_int(b, 1));
+   nir_def *count = nir_channel(b, metadata, 1);
+   nir_def *x = nir_channel(b, coord, 0);
+   nir_def *in_bounds = nir_ult(b, x, count);
+   nir_def *shifted = nir_bcsel(b, in_bounds, nir_iadd(b, nir_imul(b, x, stride), offset),
+                               nir_imm_int(b, -1));
+   return coord->num_components == 1 ? shifted
+                                    : nir_vector_insert_imm(b, coord, shifted, 0);
+}
+
 static bool
 lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
                    const struct lower_descriptors_ctx *ctx)
 {
    b->cursor = nir_before_instr(&intr->instr);
    nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
+
+   if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF) {
+      nir_def *metadata = load_resource_deref_desc(
+         b, 2, 32, deref,
+         offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
+      if (intr->intrinsic == nir_intrinsic_image_deref_size) {
+         nir_def_replace(&intr->def, nir_channel(b, metadata, 1));
+         return true;
+      }
+      if (intr->intrinsic == nir_intrinsic_image_deref_load ||
+          intr->intrinsic == nir_intrinsic_image_deref_sparse_load ||
+          intr->intrinsic == nir_intrinsic_image_deref_store ||
+          intr->intrinsic == nir_intrinsic_image_deref_atomic ||
+          intr->intrinsic == nir_intrinsic_image_deref_atomic_swap)
+         nir_src_rewrite(&intr->src[1],
+                        kk_texel_buffer_coord(b, intr->src[1].ssa, metadata));
+   }
 
    /* Reads and queries use the texture descriptor; writes and atomics PBE. */
    unsigned offs =
@@ -486,6 +521,21 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       plane_ssa ? nir_src_as_uint(nir_src_for_ssa(plane_ssa)) : 0;
    const uint64_t plane_offset_B =
       plane * sizeof(struct kk_sampled_image_descriptor);
+
+   if (tex->sampler_dim == GLSL_SAMPLER_DIM_BUF) {
+      nir_def *metadata = load_resource_deref_desc(
+         b, 2, 32, nir_src_as_deref(nir_src_for_ssa(texture)),
+         offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
+      if (tex->op == nir_texop_txs) {
+         nir_def_replace(&tex->def, nir_channel(b, metadata, 1));
+         return true;
+      }
+      int coord_src = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+      if (coord_src >= 0)
+         nir_src_rewrite(&tex->src[coord_src].src,
+                        kk_texel_buffer_coord(b, tex->src[coord_src].src.ssa,
+                                              metadata));
+   }
 
    /* LOD bias is passed in the descriptor set, rather than embedded into
     * the sampler descriptor. There's no spot in the hardware descriptor,

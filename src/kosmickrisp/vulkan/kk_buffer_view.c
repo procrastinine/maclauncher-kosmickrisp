@@ -76,8 +76,18 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
        view->vk.format == VK_FORMAT_R32_SINT)
       usage |= MTL_TEXTURE_USAGE_SHADER_ATOMIC;
 
+   /* Align relative to the buffer, whose memory binding is already aligned.
+    * A common multiple also handles three-component texels without rounding
+    * a byte prefix to a fractional texel. */
+   uint32_t texel_size = util_format_get_blocksize(p_format);
+   uint32_t alignment = KK_MIN_TEXEL_BUFFER_ALIGNMENT;
+   while (alignment % texel_size)
+      alignment += KK_MIN_TEXEL_BUFFER_ALIGNMENT;
+   VkDeviceSize prefix = view->vk.offset % alignment;
+   view->texel_offset = prefix / texel_size;
+
    struct kk_image_layout layout = {
-      .width_px = view->vk.elements,
+      .width_px = view->vk.elements + view->texel_offset,
       .height_px = 1u,
       .depth_px = 1u,
       .layers = 1u,
@@ -95,13 +105,13 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
             .blue = supported_format->unswizzle.blue,
             .alpha = supported_format->unswizzle.alpha,
          },
-      .linear_stride_B = view->vk.range,
+      .linear_stride_B = view->vk.range + prefix,
    };
    struct kk_buffer *buffer =
       container_of(view->vk.buffer, struct kk_buffer, vk);
    view->mtl_texel_buffer_handle = mtl_new_texture_with_descriptor_linear(
       buffer->metal.handle, &layout,
-      kk_buffer_mtl_offset(buffer, view->vk.offset));
+      kk_buffer_mtl_offset(buffer, view->vk.offset - prefix));
    if (!view->mtl_texel_buffer_handle) {
       vk_buffer_view_destroy(&dev->vk, pAllocator, &view->vk);
       return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
