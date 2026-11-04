@@ -278,6 +278,7 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
    /* Snapshot fields are read only while a saved scope is suspended. */
    cmd->whole_pass.suspended = false;
    cmd->deferred_render_chain = false;
+   cmd->uses_occlusion_queries = false;
    cmd->pending_barrier = (struct kk_barrier_scope){0};
    cmd->closed_encoder_stages = 0;
    cmd->encoder_occlusion = false;
@@ -362,6 +363,10 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
     * next recording, as explicit reset and destruction already do. */
    vk_command_buffer_begin(&cmd->vk, pBeginInfo);
 
+   cmd->uses_occlusion_queries =
+      cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY &&
+      pBeginInfo->pInheritanceInfo &&
+      pBeginInfo->pInheritanceInfo->occlusionQueryEnable;
    cmd->transient_safe = false;
    cmd->transient_candidate = false;
    cmd->transient_preflight_done = false;

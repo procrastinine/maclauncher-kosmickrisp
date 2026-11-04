@@ -221,6 +221,7 @@ rerecord_and_commit_cmd_buffers(struct kk_queue *queue,
       struct kk_cmd_buffer *source =
          container_of(commands[i], struct kk_cmd_buffer, vk);
       rerecord->transient_safe &= source->transient_safe;
+      rerecord->uses_occlusion_queries |= source->uses_occlusion_queries;
    }
    /* Preserve the source-list classification through End's empty replay IR. */
    rerecord->transient_preflight_done = true;

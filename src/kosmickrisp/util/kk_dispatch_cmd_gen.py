@@ -62,6 +62,7 @@ TEMPLATE_C = Template(COPYRIGHT + """\
 #include "kk_device.h"
 #include "kk_cmd_buffer.h"
 #include "kk_perf.h"
+#include "kk_query_pool.h"
 #include "kk_dispatch_cmd.h"
 #include "vk_cmd_enqueue_entrypoints.h"
 
@@ -82,12 +83,17 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
     cmd->deferred_render_chain |= pRenderingInfo->flags &
         (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT);
     kk_cmd_record_rendering_attachments(cmd, pRenderingInfo);
+    % elif e.name in ('CmdBeginQuery', 'CmdBeginQueryIndexedEXT'):
+    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
+    cmd->uses_occlusion_queries |= pool->vk.query_type == VK_QUERY_TYPE_OCCLUSION;
     % elif e.name == 'CmdExecuteCommands':
     for (uint32_t i = 0; i < commandBufferCount &&
-         (!cmd->deferred_render_chain || !cmd->transient_candidate); i++) {
+         (!cmd->deferred_render_chain || !cmd->transient_candidate ||
+          !cmd->uses_occlusion_queries); i++) {
         VK_FROM_HANDLE(kk_cmd_buffer, secondary, pCommandBuffers[i]);
         cmd->deferred_render_chain |= secondary->deferred_render_chain;
         cmd->transient_candidate |= secondary->transient_candidate;
+        cmd->uses_occlusion_queries |= secondary->uses_occlusion_queries;
     }
     % endif
     % if e.return_type == 'void':

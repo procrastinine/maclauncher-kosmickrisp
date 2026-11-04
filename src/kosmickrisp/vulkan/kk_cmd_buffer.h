@@ -408,6 +408,8 @@ struct kk_cmd_buffer {
    struct kk_whole_pass_state whole_pass;
    /* Recorded at rendering/secondary enqueue, consumed without an End scan. */
    bool deferred_render_chain;
+   /* Complete recording, including secondary queries, before native replay. */
+   bool uses_occlusion_queries;
    bool transient_candidate;
    bool transient_preflight_done;
    bool transient_safe;

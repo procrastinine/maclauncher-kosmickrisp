@@ -478,9 +478,11 @@ kk_begin_rendering(VkCommandBuffer commandBuffer,
                render->stencil_att.resolve_mode));
    }
 
-   /* Set global visibility buffer */
-   mtl_render_pass_descriptor_set_visibility_buffer(
-      pass_descriptor, dev->occlusion_queries.bo->map);
+   /* BeginQuery may occur after the first draw. Use the complete recording
+    * summary, not the currently active query, before creating the encoder. */
+   if (cmd->uses_occlusion_queries)
+      mtl_render_pass_descriptor_set_visibility_buffer(
+         pass_descriptor, dev->occlusion_queries.bo->map);
 
    // TODO_KOSMICKRISP Fragment shading rate support goes here if Metal supports
    // it
@@ -1830,7 +1832,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       kk_cmd_bind_root_to_argument_table(cmd, desc->root.addr);
    }
 
-   if (gfx->dirty & KK_DIRTY_OCCLUSION) {
+   if ((gfx->dirty & KK_DIRTY_OCCLUSION) && cmd->uses_occlusion_queries) {
       if (gfx->occlusion.mode != MTL_VISIBILITY_RESULT_MODE_DISABLED)
          cmd->encoder_occlusion = true;
       mtl_set_visibility_result_mode(enc, gfx->occlusion.mode,
