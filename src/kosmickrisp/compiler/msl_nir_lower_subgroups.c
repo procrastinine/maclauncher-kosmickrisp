@@ -8,6 +8,7 @@
 #include "msl_private.h"
 #include "nir.h"
 #include "nir_builder.h"
+#include "kk_quad_control.h"
 
 static bool
 needs_bool_widening(nir_intrinsic_instr *intrin)
@@ -58,6 +59,9 @@ msl_nir_lower_subgroups(nir_shader *nir)
       .subgroup_size = 32,
       .ballot_bit_size = 32,
       .ballot_components = 1,
+      .lower_quad_vote = nir->info.stage == MESA_SHADER_FRAGMENT,
+      .filter = nir->info.stage == MESA_SHADER_FRAGMENT ? kk_quad_control_filter : NULL,
+      .filter_data = nir,
       .lower_subgroup_masks = true,
       .lower_vote_ieq = true,
       .lower_vote_feq = true,
