@@ -167,6 +167,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_shader_untyped_pointers = true,
 #ifdef KK_USE_WSI_PLATFORM
       .KHR_swapchain = true,
+      .KHR_incremental_present = true,
       .KHR_swapchain_maintenance1 = true,
       .KHR_swapchain_mutable_format = true,
 #endif
