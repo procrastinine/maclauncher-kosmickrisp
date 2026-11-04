@@ -567,7 +567,7 @@ kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
 
 /* Lowering for the stage which ends up as the vertex stage on hardware */
 static void
-kk_lower_hw_vs(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
+kk_lower_hw_vs_position(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
                bool is_point)
 {
    if (is_point)
@@ -583,7 +583,13 @@ kk_lower_hw_vs(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
     * add viewport Z transform emulation to the shader */
    if (kk_is_possible_both_depth_clip_clamp(state, false))
       NIR_PASS(_, nir, msl_nir_lower_vs_disabled_depth_clamp_clip);
+}
 
+static void
+kk_lower_hw_vs(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
+               bool is_point)
+{
+   kk_lower_hw_vs_position(nir, state, is_point);
    NIR_PASS(_, nir, msl_nir_vs_io_types);
 }
 
@@ -953,6 +959,7 @@ kk_finish_nir(struct kk_device *dev, nir_shader *nir,
 
 static void
 kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+             bool defer_hw_vs,
              const struct vk_pipeline_robustness_state *rs,
              uint32_t set_layout_count,
              struct vk_descriptor_set_layout *const *set_layouts,
@@ -1114,7 +1121,10 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
          nir->info.stage == MESA_SHADER_TESS_EVAL
             ? nir->info.tess.point_mode
             : state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-      kk_lower_hw_vs(nir, state, is_point);
+      if (defer_hw_vs)
+         NIR_PASS(_, nir, msl_nir_vs_io_types);
+      else
+         kk_lower_hw_vs(nir, state, is_point);
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, msl_nir_fs_io_types);
    }
@@ -1126,6 +1136,7 @@ kk_lower_nir_untracked(struct kk_device *dev, nir_shader *nir, bool emulated_sta
 
 static void
 kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+             bool defer_hw_vs,
              const struct vk_pipeline_robustness_state *rs,
              uint32_t set_layout_count,
              struct vk_descriptor_set_layout *const *set_layouts,
@@ -1135,7 +1146,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
              const uint64_t *embedded, bool depth_bounds)
 {
    KK_PERF_VOID(dev, KK_PERF_NIR,
-      kk_lower_nir_untracked(dev, nir, emulated_stage, rs, set_layout_count,
+      kk_lower_nir_untracked(dev, nir, emulated_stage, defer_hw_vs, rs, set_layout_count,
                             set_layouts, state, features, compile_info, embedded, depth_bounds));
 }
 
@@ -1886,8 +1897,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    }
 
    if (opts->vrs_source) {
-      struct kk_vrs_source *source = kk_vrs_source_capture(dev, opts->vrs_source,
-         per_vertex_map, state, &shader->msl_data[stage]);
+      struct kk_vrs_source *source = kk_vrs_source_capture_linked(dev, opts->vrs_source,
+         per_vertex_map, state, &shader->msl_data[stage], opts->linked_producer);
       ralloc_free(opts->vrs_source);
       if (!source || (vrs_captured_required && !shader->vrs_source)) {
          kk_vrs_source_destroy(dev, source);
@@ -1988,7 +1999,7 @@ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
       .null_uniform_buffer_descriptor = false,
       .null_storage_buffer_descriptor = false,
    };
-   kk_lower_nir(dev, nir, false, &no_robustness, 0u, NULL, state, features, NULL, NULL, false);
+   kk_lower_nir(dev, nir, false, false, &no_robustness, 0u, NULL, state, features, NULL, NULL, false);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    return nir;
@@ -2897,6 +2908,7 @@ kk_forward_gs_primitive_id(nir_shader *gs, nir_shader *fs)
 }
 
 #include "kk_sparse_pipeline.h"
+#include "kk_linked_producer.h"
 
 static void
 kk_finish_fragment_nir_untracked(struct kk_device *dev, nir_shader *fs,
@@ -2999,12 +3011,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       state->mv && state->mv->view_mask;
    poly_layer_replay = poly_layer_replay &&
       kk_poly_layer_alias_possible(state, enabled_features);
-   /* Compile the existing captured sibling for an explicitly enabled VRS
-    * consumer. The ordinary native pair remains selected until begin(). */
-   poly_layer_replay |= layer_producer != MESA_SHADER_NONE &&
-      (enabled_features->pipelineFragmentShadingRate ||
-       enabled_features->primitiveFragmentShadingRate ||
-       enabled_features->attachmentFragmentShadingRate);
+   /* VRS retains linked source below. Device enablement does not select
+    * Layer replay or eagerly compile a captured application sibling. */
    /* Device enablement alone must not create a captured pipeline. The final
     * producer owns primitive rejection; earlier-stage distances are inputs
     * for that producer. Native mesh output performs its own cull test. */
@@ -3030,6 +3038,12 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
        (enabled_features->fragmentShaderPixelInterlock &&
         kk_interlock_multisample_pipeline(state) &&
         kk_interlock_pixel_shader(infos[shader_count - 1u].nir)));
+   nir_shader *deferred_native = NULL;
+   const struct vk_shader_compile_info *deferred_info = NULL;
+   const bool retain_native = dev->vrs && !pixel_candidate && !polygon_capture &&
+      !poly_layer_replay &&
+      kk_vrs_pipeline_can_coarsen(state, enabled_features->primitiveFragmentShadingRate,
+                                 enabled_features->attachmentFragmentShadingRate);
    for (uint32_t step = 0u; step < shader_count; ++step) {
       uint32_t i = pixel_candidate ? (step ? step - 1u : shader_count - 1u) : step;
       const struct vk_shader_compile_info *info = &infos[i];
@@ -3089,7 +3103,11 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
       if (nir->info.stage == MESA_SHADER_FRAGMENT && !nir->info.io_lowered)
          fs_to_finish = nir;
-      kk_lower_nir(dev, nir, emulated_stage, info->robustness,
+      const bool defer_hw_vs = retain_native && !emulated_stage &&
+         info->stage == layer_producer &&
+         (info->stage == MESA_SHADER_VERTEX || info->stage == MESA_SHADER_TESS_EVAL);
+      if (defer_hw_vs) { deferred_native = nir; deferred_info = info; }
+      kk_lower_nir(dev, nir, emulated_stage, defer_hw_vs, info->robustness,
                    info->set_layout_count, info->set_layouts, state, features, info, NULL, depth_bounds);
       if (nir->info.stage == MESA_SHADER_FRAGMENT &&
           (features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS)))
@@ -3287,7 +3305,32 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
       struct kk_per_vertex_map retained_map = per_vertex_map;
       kk_nir_apply_fs_per_vertex_map(retained_fs, &retained_map);
    }
+   struct blob linked_producer;
+   const struct blob *linked = NULL;
+   if (deferred_native) {
+      /* This is the original, twice-linked producer with the canonical map,
+       * not a pre-link reconstruction or a post-MSL copy. Descriptor and
+       * robustness lowering already belongs to this exact stage. */
+      if (retained_fs) {
+         blob_init(&linked_producer);
+         kk_linked_producer_encode(&linked_producer, deferred_native, state,
+            KK_DEBUG(FORCE_ROBUSTNESS) ? &rs_all_supported : vertex_robustness, features,
+            features & BITFIELD_BIT(KK_FEAT_PIPELINE_STATISTICS),
+            features & BITFIELD_BIT(KK_FEAT_GEOMETRY_REPORTS));
+         linked = &linked_producer;
+      }
+      bool point = deferred_native->info.stage == MESA_SHADER_TESS_EVAL
+         ? deferred_native->info.tess.point_mode
+         : state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+      kk_lower_hw_vs_position(deferred_native, state, point);
+      /* Only the native tail's new sysvals remain. Dead resource descriptors
+       * must be removed before the same root-only pass used by native_pair. */
+      NIR_PASS(_, deferred_native, nir_opt_dce);
+      NIR_PASS(_, deferred_native, kk_nir_lower_descriptors, false,
+               deferred_info->robustness, 0, NULL);
+   }
    const struct kk_compile_options compile_options = {
+      .linked_producer = linked,
       .depth_bounds = depth_bounds,
       .pixel_envelope = pixel_envelope,
       .pixel_sample_shading = pixel_sample_shading,
@@ -3333,6 +3376,7 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
             ralloc_free(nir_shaders[j]);
          }
          ralloc_free(retained_fs);
+         if (linked) blob_finish(&linked_producer);
 
          ralloc_free(native_pair[0]);
       ralloc_free(native_pair[1]);
@@ -3342,6 +3386,8 @@ kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
          return result;
       }
    }
+
+   if (linked) blob_finish(&linked_producer);
 
    /* Retain the stage-filtered layout extent in serialized shader info.
     * Graphics stages share one root, including stages lowered through Poly. */

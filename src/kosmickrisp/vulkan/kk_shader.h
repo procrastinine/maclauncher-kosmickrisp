@@ -124,7 +124,7 @@ struct kk_mesh_shader_info {
 };
 
 /* Serialized info may change within padding without changing sizeof. */
-#define KK_SHADER_INFO_CACHE_VERSION 2u
+#define KK_SHADER_INFO_CACHE_VERSION 3u
 
 struct kk_shader_info {
    bool interlock_envelope;

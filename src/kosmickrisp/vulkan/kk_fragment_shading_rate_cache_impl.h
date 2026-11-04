@@ -9,7 +9,7 @@
 #include "kk_fragment_shading_rate_cells_nir.h"
 #include "kk_fragment_shading_rate_shadow_nir.h"
 
-#define KK_VRS_SOURCE_SCHEMA 20u
+#define KK_VRS_SOURCE_SCHEMA 21u
 #define KK_VRS_ARTIFACT_SCHEMA 5u
 #define KK_VRS_KEY_SIZE 48u
 struct kk_vrs_source {
@@ -75,9 +75,10 @@ kk_vrs_source_create(struct kk_device *dev, const blake3_hash fine_key,
         !(data->application_flags & KK_VRS_FREQUENCY_KNOWN)))
       return NULL;
    const void *parts[] = {data->nir, data->interface, data->epilogue,
-                          data->options, data->abi};
+                          data->options, data->abi, data->linked_producer};
    const uint32_t sizes[] = {data->nir_size, data->interface_size,
-                             data->epilogue_size, data->options_size, data->abi_size};
+                             data->epilogue_size, data->options_size, data->abi_size,
+                             data->linked_producer_size};
    size_t size = sizeof(struct kk_vrs_source);
    for (unsigned i = 0; i < ARRAY_SIZE(parts); i++) {
       if ((sizes[i] && !parts[i]) || SIZE_MAX - size < sizes[i]) return NULL;
@@ -90,7 +91,8 @@ kk_vrs_source_create(struct kk_device *dev, const blake3_hash fine_key,
    source->data.result_stride = data->result_stride ? data->result_stride : sizeof(struct kk_vrs_result);
    memcpy(source->fine_key, fine_key, sizeof(source->fine_key));
    void const **dest[] = {&source->data.nir, &source->data.interface,
-      &source->data.epilogue, &source->data.options, &source->data.abi};
+      &source->data.epilogue, &source->data.options, &source->data.abi,
+      &source->data.linked_producer};
    uint8_t *next = source->payload;
    struct mesa_blake3 hash;
    _mesa_blake3_init(&hash);
@@ -172,9 +174,11 @@ kk_vrs_source_serialize(const struct kk_vrs_source *source, struct blob *blob)
    blob_write_uint32(blob, source->data.early_fragment_tests);
    blob_write_uint32(blob, source->data.application_flags);
    const void *parts[] = {source->data.nir, source->data.interface,
-      source->data.epilogue, source->data.options, source->data.abi};
+      source->data.epilogue, source->data.options, source->data.abi,
+      source->data.linked_producer};
    const uint32_t sizes[] = {source->data.nir_size, source->data.interface_size,
-      source->data.epilogue_size, source->data.options_size, source->data.abi_size};
+      source->data.epilogue_size, source->data.options_size, source->data.abi_size,
+      source->data.linked_producer_size};
    for (unsigned i = 0; i < ARRAY_SIZE(parts); i++) {
       blob_write_uint32(blob, sizes[i]);
       blob_write_bytes(blob, parts[i], sizes[i]);
@@ -207,9 +211,10 @@ kk_vrs_source_deserialize_depth(struct kk_device *dev, struct blob_reader *blob,
        data.result_stride > sizeof(struct kk_vrs_result) + FRAG_RESULT_MAX * 8 * 4 * 8)
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    void const **parts[] = {&data.nir, &data.interface, &data.epilogue,
-                           &data.options, &data.abi};
+                           &data.options, &data.abi, &data.linked_producer};
    uint32_t *sizes[] = {&data.nir_size, &data.interface_size,
-                        &data.epilogue_size, &data.options_size, &data.abi_size};
+                        &data.epilogue_size, &data.options_size, &data.abi_size,
+                        &data.linked_producer_size};
    for (unsigned i = 0; i < ARRAY_SIZE(parts); i++) {
       *sizes[i] = blob_read_uint32(blob);
       *parts[i] = blob_read_bytes(blob, *sizes[i]);
@@ -438,9 +443,10 @@ kk_vrs_artifact_framebuffer_reads(const struct kk_vrs_artifact *artifact)
 /* Source is the actual linked, once-lowered callable FS. Runtime embedded
  * bindings retain their original stage and ordinal through the shared root. */
 struct kk_vrs_source *
-kk_vrs_source_capture(struct kk_device *dev, nir_shader *nir,
+kk_vrs_source_capture_linked(struct kk_device *dev, nir_shader *nir,
    const struct kk_per_vertex_map *map,
-   const struct vk_graphics_pipeline_state *state, const struct msl_compile_data *fine)
+   const struct vk_graphics_pipeline_state *state, const struct msl_compile_data *fine,
+   const struct blob *linked_producer)
 {
    if (!fine || !fine->code || !fine->entrypoint_name) return NULL;
    bool sample_frequency;
@@ -494,6 +500,8 @@ kk_vrs_source_capture(struct kk_device *dev, nir_shader *nir,
    _mesa_blake3_final(&hash, fine_code_key);
    struct kk_vrs_source_data data = {
       .nir = code.data, .nir_size = code.size,
+      .linked_producer = linked_producer ? linked_producer->data : NULL,
+      .linked_producer_size = linked_producer ? linked_producer->size : 0,
       .result_stride = kk_nir_vrs_result_stride(nir),
       .uses_per_draw = kk_nir_vrs_uses_per_draw(nir),
       .early_fragment_tests = nir->info.fs.early_fragment_tests,
@@ -508,13 +516,22 @@ kk_vrs_source_capture(struct kk_device *dev, nir_shader *nir,
       .abi = abi.data, .abi_size = abi.size,
    };
    struct kk_vrs_source *source = NULL;
-   if (data.result_stride && !code.out_of_memory && !interface.out_of_memory && !epilogue.out_of_memory &&
+   if ((!linked_producer || (!linked_producer->out_of_memory && linked_producer->size <= UINT32_MAX)) &&
+       data.result_stride && !code.out_of_memory && !interface.out_of_memory && !epilogue.out_of_memory &&
        !options.out_of_memory && !abi.out_of_memory)
       source = kk_vrs_source_create(dev, fine_code_key, &data);
    blob_finish(&code); blob_finish(&interface); blob_finish(&epilogue);
    blob_finish(&options); blob_finish(&abi);
    return source;
 }
+struct kk_vrs_source *
+kk_vrs_source_capture(struct kk_device *dev, nir_shader *nir,
+   const struct kk_per_vertex_map *map,
+   const struct vk_graphics_pipeline_state *state, const struct msl_compile_data *fine)
+{
+   return kk_vrs_source_capture_linked(dev, nir, map, state, fine, NULL);
+}
+
 /* Reconstruct only the immutable emission inputs. The application, fine
  * epilogue, descriptors and actual interface have already been lowered once. */
 static VkResult

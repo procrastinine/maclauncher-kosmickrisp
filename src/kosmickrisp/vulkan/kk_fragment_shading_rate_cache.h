@@ -43,6 +43,10 @@ enum kk_vrs_application_flags {
 struct kk_vrs_source_data {
    const void *nir, *interface, *epilogue, *options, *abi;
    uint32_t nir_size, interface_size, epilogue_size, options_size, abi_size;
+   /* Canonical linked VS/TES packet; owned with the matched fragment source.
+    * Empty for sources without an ordinary retained-producer consumer. */
+   const void *linked_producer;
+   uint32_t linked_producer_size;
    uint32_t result_stride;
    uint32_t uses_per_draw;
    uint32_t early_fragment_tests;
@@ -56,6 +60,10 @@ void kk_vrs_source_destroy(struct kk_device *dev, struct kk_vrs_source *source);
 struct kk_vrs_source *kk_vrs_source_capture(struct kk_device *dev,
    struct nir_shader *nir, const struct kk_per_vertex_map *map,
    const struct vk_graphics_pipeline_state *state, const struct msl_compile_data *fine);
+struct kk_vrs_source *kk_vrs_source_capture_linked(struct kk_device *dev,
+   struct nir_shader *nir, const struct kk_per_vertex_map *map,
+   const struct vk_graphics_pipeline_state *state, const struct msl_compile_data *fine,
+   const struct blob *linked_producer);
 size_t kk_vrs_source_size(const struct kk_vrs_source *source);
 /* Transfer one exact finished retained-reader sibling; shader lifetime owns both. */
 void kk_vrs_source_attach_captured(struct kk_vrs_source *, struct kk_vrs_source *);
