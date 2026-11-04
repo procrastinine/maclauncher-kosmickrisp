@@ -156,7 +156,8 @@ libkk_polygon_clip(global struct poly_geometry_params *geometry,
    for (uint i = 0; i < count; ++i)
       saved[i] = output[i];
    clipped[id] = (uintptr_t)saved | (front ? 1ul : 0ul);
-   counts[id] = count;
+   counts[id] = p->polygon_mode == 2 ? count :
+      p->polygon_mode == 1 ? count * 2 : (count - 2) * 3;
 }
 
 KERNEL(1024)
@@ -177,7 +178,7 @@ libkk_polygon_output_setup(global struct poly_geometry_params *geometry,
    uint count = triangles ? ((global uint *)p->clip_counts)[triangles - 1] : 0;
    /* Extra final slot carries the original polygon's facing to the FS. */
    p->output = (uintptr_t)poly_heap_alloc(heap, count * (p->vertex_stride + 16), 16);
-   p->draw[0] = count * 6;
+   p->draw[0] = count * (p->polygon_mode == 2 ? 6 : 1);
 }
 
 static float
@@ -227,6 +228,12 @@ polygon_depth_bias(global struct poly_geometry_capture *p, uint viewport,
    int exponent = p->depth_is_float ?
       max((int)((as_uint(maximum_z) >> 23) & 255), 1) - 127 : 0;
    int power = exponent - (int)p->depth_mantissa_bits;
+   /* FORCE_UNORM uses mantissa bits plus one on floating-point attachments.
+    * FLOAT uses one unit of framebuffer depth. Vulkan enum values are 1/2. */
+   if (p->depth_bias_representation == 1)
+      power = -(int)(p->depth_mantissa_bits + p->depth_is_float);
+   else if (p->depth_bias_representation == 2)
+      power = 0;
    /* Exact powers of two, including FP32 subnormal spacing, without a libcl
     * math-library call in these standalone precompiled Mesa kernels. */
    uint resolvable_bits = power >= -126 ? (uint)(power + 127) << 23
@@ -247,8 +254,10 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
    uint id = cl_global_id.x;
    global uint *counts = (global uint *)p->clip_counts;
    uint first = id ? counts[id - 1] : 0;
-   uint count = counts[id] - first;
-   if (!count)
+   uint output_count = counts[id] - first;
+   uint count = p->polygon_mode == 2 ? output_count :
+      p->polygon_mode == 1 ? output_count / 2 : output_count / 3 + 2;
+   if (!output_count)
       return;
    uint invocation, stream;
    uint4 vertices;
@@ -269,8 +278,13 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
    uint viewport = (p->outputs & (1ul << VARYING_SLOT_VIEWPORT)) ?
       provoking_output[polygon_slot(p, VARYING_SLOT_VIEWPORT)].x : 0;
    float bias = polygon_depth_bias(p, viewport, polygon, count);
-   for (uint i = 0; i < count; ++i) {
-      struct kk_polygon_vertex vertex = polygon[i];
+   for (uint i = 0; i < output_count; ++i) {
+      /* Triangle fan or boundary line list. No internal fan edges are drawn
+       * in LINE mode, and original flat/provoking values remain unchanged. */
+      uint vertex_index = p->polygon_mode == 2 ? i :
+         p->polygon_mode == 1 ? (i / 2 + i % 2) % count :
+         i % 3 == 0 ? 0 : i / 3 + i % 3;
+      struct kk_polygon_vertex vertex = polygon[vertex_index];
       global uint4 *output = (global uint4 *)(p->output +
          (uint64_t)(first + i) * (p->vertex_stride + 16));
       uint packed = 0;
@@ -292,9 +306,15 @@ libkk_polygon_output(global struct poly_geometry_params *geometry)
          }
          if (slot == VARYING_SLOT_POS) {
             float z = polygon_screen_z(p, viewport, &vertex) + bias;
-            if (p->depth_clamp)
-               z = clamp(z, fmin(p->viewport[viewport][4], p->viewport[viewport][5]),
-                            fmax(p->viewport[viewport][4], p->viewport[viewport][5]));
+            if (p->depth_clamp) {
+               float minimum = p->viewport[viewport][4], maximum = p->viewport[viewport][5];
+               if (p->polygon_mode == 2)
+                  z = clamp(z, fmin(minimum, maximum), fmax(minimum, maximum));
+               else
+                  /* Native clamp follows interpolation, including a polygon
+                   * crossing the viewport depth bound after applying bias. */
+                  z = minimum == maximum ? 0 : (z - minimum) / (maximum - minimum);
+            }
             float4 position = (float4)(vertex.position[0], vertex.position[1],
                                        z * vertex.position[3], vertex.position[3]);
             value = as_uint4(position);

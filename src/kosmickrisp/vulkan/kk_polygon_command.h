@@ -54,7 +54,8 @@ kk_launch_polygon_points(struct kk_cmd_buffer *cmd, struct kk_grid grid,
    libkk_polygon_output_setup(cmd, kk_grid_1d(1), true, geometry_params, kk_heap(cmd));
    libkk_polygon_output(cmd, triangles, true, geometry_params);
    return (struct kk_draw_data){
-      .primitive_type = MTL_PRIMITIVE_TYPE_TRIANGLE,
+      .primitive_type = dyn->rs.polygon_mode == VK_POLYGON_MODE_LINE ?
+         MTL_PRIMITIVE_TYPE_LINE : MTL_PRIMITIVE_TYPE_TRIANGLE,
       .grid = kk_grid_indirect(capture + offsetof(struct poly_geometry_capture, draw)),
    };
 }

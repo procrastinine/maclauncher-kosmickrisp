@@ -41,6 +41,8 @@ struct poly_geometry_capture {
    uint32_t depth_mantissa_bits;
    uint32_t depth_is_float;
    uint32_t depth_bias_enable;
+   uint32_t depth_bias_representation;
+   uint32_t polygon_mode;
 };
 
 #ifndef __OPENCL_VERSION__

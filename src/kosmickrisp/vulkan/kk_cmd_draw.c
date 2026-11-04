@@ -813,7 +813,10 @@ kk_flush_vp_state(struct kk_cmd_buffer *cmd)
       for (unsigned i = 0; i < count; ++i) {
          viewports[i] = (struct mtl_viewport){
             .originX = 0, .originY = height, .width = width, .height = -height,
-            .znear = 0, .zfar = 1,
+            .znear = dyn->rs.depth_clamp_enable &&
+               dyn->rs.polygon_mode != VK_POLYGON_MODE_POINT ? dyn->vp.viewports[i].minDepth : 0,
+            .zfar = dyn->rs.depth_clamp_enable &&
+               dyn->rs.polygon_mode != VK_POLYGON_MODE_POINT ? dyn->vp.viewports[i].maxDepth : 1,
          };
       }
    }
@@ -1436,6 +1439,8 @@ kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
          .depth_bias_slope = dyn->rs.depth_bias.slope_factor,
          .depth_bias_clamp = dyn->rs.depth_bias.clamp,
          .depth_bias_enable = dyn->rs.depth_bias.enable,
+         .depth_bias_representation = dyn->rs.depth_bias.representation,
+         .polygon_mode = dyn->rs.polygon_mode,
          .depth_mantissa_bits = 23, .depth_is_float = true,
          .render_size = {
             MAX2(gfx->render.area.offset.x + gfx->render.area.extent.width, 1),
@@ -2510,7 +2515,15 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
-   bool point = vs->info.polygon_point && dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT;
+   /* Poly clips original triangles before applying bias. Native bias is
+    * disabled while this path is active, including FILL/LINE representations. */
+   bool controlled_bias = dyn->rs.depth_bias.enable &&
+      (dyn->rs.depth_bias.exact || dyn->rs.depth_bias.representation !=
+         VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT);
+   bool point = vs->info.polygon_point &&
+      (dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT || controlled_bias);
+   if (point && BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE))
+      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORTS);
    if (point != gfx->polygon_points) {
       gfx->polygon_points = point;
       BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE);

@@ -220,6 +220,17 @@ kk_hash_graphics_state(struct vk_physical_device *device,
    };
    _mesa_blake3_update(&blake3_ctx, &feature_key, sizeof(feature_key));
 
+   /* Representation changes whether a Poly raster pipeline is required.
+    * Keep ordinary pipeline cache keys while separating controlled pipelines. */
+   if (enabled_features->depthBiasControl && state && state->rs &&
+       (state->rs->depth_bias.enable ||
+        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_ENABLE)) &&
+       (state->rs->depth_bias.exact || state->rs->depth_bias.representation !=
+           VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT ||
+        BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_FACTORS))) {
+      const uint32_t representation_key = 0x44424331;
+      _mesa_blake3_update(&blake3_ctx, &representation_key, sizeof(representation_key));
+   }
    _mesa_blake3_final(&blake3_ctx, blake3_out);
 }
 
@@ -1096,7 +1107,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
    }
 
    gather_shader_info(shader, nir, state);
-   if (stage == MESA_SHADER_FRAGMENT && kk_polygon_possible(state)) {
+   if (stage == MESA_SHADER_FRAGMENT && kk_polygon_possible(dev, state)) {
       shader->info.fs.noperspective_outputs = kk_polygon_noperspective_outputs(nir);
       nir_shader *point_fs = nir_shader_clone(NULL, nir);
       nir_shader_intrinsics_pass(point_fs, kk_polygon_point_coord,
@@ -1187,7 +1198,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
 
       nir_shader *count = NULL, *rast = NULL, *pre_gs = NULL;
       nir_shader *capture = NULL, *capture_xfb = NULL;
-      bool polygon = kk_polygon_possible(state) &&
+      bool polygon = kk_polygon_possible(dev, state) &&
          u_reduced_prim(nir->info.gs.output_primitive) == MESA_PRIM_TRIANGLES;
       NIR_PASS(_, nir, poly_nir_lower_gs_capture, &count, &rast, &pre_gs,
                &shader->info.gs, &shader->info.polygon,
@@ -1673,7 +1684,7 @@ kk_compile_graphics_pipeline_native(struct kk_device *device, struct kk_shader *
 
    /* Layered rendering in Metal requires setting primitive topology class */
    mtl_render_pipeline_descriptor_set_input_primitive_topology(
-      pipeline_descriptor, polygon ? MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE : vs->info.vs.topology);
+      pipeline_descriptor, polygon ? MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED : vs->info.vs.topology);
 
    /* If color attachments are reordered there might be unused / invalid gaps
     * in the array so need to check them all, not just first
@@ -1836,7 +1847,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
 
       /* XFB without an explicit GS gets a Poly passthrough after linking.
        * Keep its producer in compute form before hardware-VS lowering. */
-      emulated_stage |= (nir->xfb_info || kk_polygon_possible(state)) && (nir->info.stage == MESA_SHADER_VERTEX ||
+      emulated_stage |= (nir->xfb_info || kk_polygon_possible(dev, state)) && (nir->info.stage == MESA_SHADER_VERTEX ||
                                          nir->info.stage == MESA_SHADER_TESS_EVAL);
       msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
@@ -1861,7 +1872,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
       xfb |= nir_shaders[i]->xfb_info != NULL;
    }
    uint32_t total_shaders = shader_count;
-   if (!explicit_geometry && (xfb || kk_polygon_possible(state))) {
+   if (!explicit_geometry && (xfb || kk_polygon_possible(dev, state))) {
       nir_shader *producer = NULL;
       unsigned insert = shader_count;
       for (unsigned i = 0; i < shader_count; ++i) {
@@ -1900,7 +1911,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
       nir_builder builder = nir_builder_init_simple_shader(MESA_SHADER_GEOMETRY,
          producer->options, "Poly transform feedback passthrough");
       poly_nir_passthrough_gs(&builder, key);
-      if (kk_polygon_possible(state))
+      if (kk_polygon_possible(dev, state))
          nir_shader_intrinsics_pass(builder.shader, kk_polygon_passthrough_primitive_id,
                                     nir_metadata_control_flow, NULL);
       ralloc_free(key);

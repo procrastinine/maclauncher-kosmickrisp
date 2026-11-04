@@ -4,11 +4,17 @@
  * layout after clipping; all polygon attributes remain constant per point. */
 
 static bool
-kk_polygon_possible(const struct vk_graphics_pipeline_state *state)
+kk_polygon_possible(const struct kk_device *dev, const struct vk_graphics_pipeline_state *state)
 {
    return state && state->rs &&
       (state->rs->polygon_mode == VK_POLYGON_MODE_POINT ||
-       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE));
+       BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE) ||
+       (dev->vk.enabled_features.depthBiasControl &&
+        (state->rs->depth_bias.enable ||
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_ENABLE)) &&
+        (state->rs->depth_bias.exact || state->rs->depth_bias.representation !=
+            VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT ||
+         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_DEPTH_BIAS_FACTORS))));
 }
 
 static uint64_t
@@ -89,7 +95,10 @@ kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
    nir->info.io_lowered = true;
    nir->info.outputs_written = (info->outputs & ~VARYING_BIT_PSIZ) | VARYING_BIT_PNTC;
    nir_def *id = nir_load_vertex_id(&b);
-   nir_def *point = nir_udiv_imm(&b, id, 6);
+   nir_def *mode = kk_polygon_load(&b, 1, 32,
+      offsetof(struct poly_geometry_capture, polygon_mode), 4);
+   nir_def *is_point = nir_ieq_imm(&b, mode, VK_POLYGON_MODE_POINT);
+   nir_def *point = nir_bcsel(&b, is_point, nir_udiv_imm(&b, id, 6), id);
    nir_def *in_point = nir_umod_imm(&b, id, 6);
    unsigned slots = util_bitcount64(info->outputs);
    nir_def *address = nir_iadd(&b,
@@ -138,7 +147,8 @@ kk_polygon_vertex_shader(const struct poly_gs_capture_info *info,
          nir_def *screen = nir_ffma(&b,
             nir_fmul_imm(&b, nir_fadd_imm(&b, ndc, 1), 0.5f),
             nir_channels(&b, vp, 12), nir_channels(&b, vp, 3));
-         screen = nir_fadd(&b, screen, nir_fadd_imm(&b, coord, -0.5f));
+         screen = nir_fadd(&b, screen, nir_bcsel(&b, is_point,
+            nir_fadd_imm(&b, coord, -0.5f), nir_imm_vec2(&b, 0, 0)));
          nir_def *position = nir_fmul(&b,
             nir_fadd_imm(&b, nir_fmul_imm(&b, nir_fdiv(&b, screen, render_size), 2), -1), w);
          value = nir_vec4(&b, nir_channel(&b, position, 0),
