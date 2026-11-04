@@ -206,6 +206,7 @@ void kk_dgc_execute_compute(mtl_compute_encoder *encoder, void *icb,
    if (pipeline && mtl_gpu_timing_on()) mtl_gpu_timing_bind_pipeline(enc, pipeline);
    [enc executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)icb
                  indirectBuffer:range];
+   if (mtl_gpu_timing_on()) mtl_gpu_timing_work(enc, MTL_GPU_TIMING_INDIRECT_DISPATCH, 0, 0, 0);
 }
 void kk_dgc_execute_graphics(mtl_render_encoder *encoder, void *icb,
                              uint64_t range)
@@ -213,6 +214,7 @@ void kk_dgc_execute_graphics(mtl_render_encoder *encoder, void *icb,
    [(id<MTL4RenderCommandEncoder>)encoder
        executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)icb
                 indirectBuffer:range];
+   if (mtl_gpu_timing_on()) mtl_gpu_timing_work(encoder, MTL_GPU_TIMING_DRAW, 0, 0, 0);
 }
 
 mtl_render_pipeline_descriptor *kk_dgc_render_descriptor(mtl_render_pipeline_descriptor *source)

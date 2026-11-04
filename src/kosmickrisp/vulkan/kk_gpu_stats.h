@@ -15,7 +15,7 @@ struct kk_gpu_stats {
    struct kk_gpu_encoder_stat encoders[KK_GPU_STATS_LIMIT];
    struct kk_gpu_pipeline_stat pipelines[KK_GPU_STATS_LIMIT];
    unsigned encoders_count, pipelines_count;
-   uint64_t unavailable, dropped, truncated;
+   uint64_t unavailable, dropped, truncated, zero_work_render, zero_work_compute;
 };
 
 static void
@@ -26,6 +26,11 @@ kk_perf_gpu_encoder(void *data, const struct mtl_gpu_encoder_result *r)
    struct kk_gpu_stats *stats = p->gpu_encoders;
    if (!strcmp(r->kind, "tracking_overflow")) { stats->dropped += r->draws; pthread_mutex_unlock(&p->mutex); return; }
    if (!r->valid) { stats->unavailable++; pthread_mutex_unlock(&p->mutex); return; }
+   if (r->zero_work) {
+      if (r->render) stats->zero_work_render++; else stats->zero_work_compute++;
+      pthread_mutex_unlock(&p->mutex);
+      return;
+   }
    if (r->hashes_truncated) stats->truncated++;
    unsigned i;
    for (i=0; i<stats->encoders_count; ++i) {
@@ -74,7 +79,9 @@ gpu_encoders_flush_locked(struct kk_perf *p)
    fprintf(p->log, ",\"gpu_encoder_scope\":\"synchronous_Metal4_counter_heap_encoder_work_spans\","
       "\"gpu_pipeline_scope\":\"inclusive_encoder_membership_not_independent_shader_time\","
       "\"gpu_encoder_unavailable\":%"PRIu64",\"gpu_encoder_dropped\":%"PRIu64
-      ",\"gpu_encoder_hashes_truncated\":%"PRIu64",\"gpu_encoders\":[",g->unavailable,g->dropped,g->truncated);
+      ",\"gpu_encoder_hashes_truncated\":%"PRIu64",\"gpu_encoder_zero_work_render\":%"PRIu64
+      ",\"gpu_encoder_zero_work_compute\":%"PRIu64",\"gpu_encoders\":[",g->unavailable,g->dropped,g->truncated,
+      g->zero_work_render,g->zero_work_compute);
    for(unsigned i=0;i<MIN2(g->encoders_count,20);++i) {
       struct kk_gpu_encoder_stat *s=&g->encoders[i];
       fprintf(p->log,"%s{\"kind\":\"%s\",\"pipeline_hashes\":[",i?",":"",s->key.kind);

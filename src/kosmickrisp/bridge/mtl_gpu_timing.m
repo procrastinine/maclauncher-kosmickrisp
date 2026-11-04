@@ -16,7 +16,7 @@ static char command_key, library_key, pipeline_key, feedback_key, encoder_key;
  * therefore times encoders through a timestamp arena of at most two heaps, allocated on first
  * use, and each encoder takes a begin/end slot pair (one unit of two entries) that returns to the
  * arena when its record is released. With every slot in use, or after Metal refused a heap, an
- * encoder is reported as unavailable; recording never waits. */
+ * encoder with draws or dispatches is reported as unavailable; recording never waits. */
 #define KK_GPU_TIMING_HEAPS 2
 
 @interface KKGPUConfig : NSObject {
@@ -364,6 +364,15 @@ mtl_gpu_timing_snapshot(mtl_command_buffer **commands, uint32_t count)
    return records;
 }
 
+/* An encoder without draws or dispatches: a render encoder's end timestamp is then never written
+ * and a compute encoder's two timestamps are one value (MTL4 relaxed granularity), so its span is
+ * reported as zero work rather than read. */
+static bool
+zero_work(const KKGPURecord *r)
+{
+   return r->encoder && !r->result.draws && !r->result.dispatches;
+}
+
 void
 mtl_gpu_timing_resolve(void *snapshot, bool success)
 {
@@ -372,7 +381,7 @@ mtl_gpu_timing_resolve(void *snapshot, bool success)
    NSData *data[KK_GPU_TIMING_HEAPS] = { nil };
    uint32_t used[KK_GPU_TIMING_HEAPS] = { 0 };
    for (KKGPURecord *r in (NSArray *)snapshot) {
-      if (!r->has_slot) continue;
+      if (!r->has_slot || zero_work(r)) continue;
       if (!config) config = r->config;
       if (r->config != config) continue; /* One device per submission. */
       used[r->heap_index] = MAX(used[r->heap_index], r->index + 2);
@@ -381,7 +390,9 @@ mtl_gpu_timing_resolve(void *snapshot, bool success)
       @synchronized(r) {
       struct mtl_gpu_encoder_result result = r->result;
       const MTL4TimestampHeapEntry *timestamps = NULL;
-      if (success && !r->overlap && r->ended && r->has_slot && r->config == config && !r->unbound) {
+      result.render = r->render;
+      result.zero_work = zero_work(r);
+      if (!result.zero_work && success && !r->overlap && r->ended && r->has_slot && r->config == config && !r->unbound) {
          const uint32_t heap = r->heap_index;
          @try {
             if (!data[heap])
@@ -391,7 +402,9 @@ mtl_gpu_timing_resolve(void *snapshot, bool success)
             timestamps = (const MTL4TimestampHeapEntry *)data[heap].bytes + r->index;
       }
       if (r->in_flight && !--r->in_flight) r->overlap = false;
-      if (timestamps && r->config->frequency) {
+      if (result.zero_work) {
+         result.valid = success && r->ended && !r->unbound;
+      } else if (timestamps && r->config->frequency) {
          result.valid = timestamps[0].timestamp && timestamps[1].timestamp >= timestamps[0].timestamp;
          if (result.valid) result.ms = (double)(timestamps[1].timestamp - timestamps[0].timestamp) * 1000.0 / r->config->frequency;
       }

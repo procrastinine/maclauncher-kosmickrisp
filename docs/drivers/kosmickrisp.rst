@@ -422,15 +422,24 @@ Mesh, internal meta and blit work is identified; opaque MetalFX and other
 temporal scene callbacks are reported as named groups. Draws, dispatches, blits
 and pipeline binds are attributed in the driver's encoder calls, which test one
 flag when the option is unset; no timestamp heap or samples are created then.
+An indirect command buffer execution counts as one draw or dispatch.
 
 A device times encoders through at most two timestamp heaps of 4,096 entries,
 allocated on first use. Metal allows a process 32 live timestamp heaps of at
 most 4,096 entries, which application timestamp query pools share (see
 `Timestamp queries`_). Each timed encoder holds two entries until its record is
 released, after its submission's feedback or the command buffer's next
-recording. An encoder that starts while all 4,096 entry pairs are held, or
-after Metal refused a heap, is reported as unavailable; recording never waits
-for an entry.
+recording. An encoder with draws or dispatches that starts while all 4,096
+entry pairs are held, or after Metal refused a heap, is reported as
+unavailable; recording never waits for an entry.
+
+An encoder without draws or dispatches has no measured span: Metal writes no
+end timestamp for a render encoder that only loads, clears or stores its
+attachments, and one value for both timestamps of a compute encoder that holds
+only copies and fills. Each interval counts these encoders in
+``gpu_encoder_zero_work_render`` and ``gpu_encoder_zero_work_compute`` instead
+of ``gpu_encoders`` groups or ``gpu_encoder_unavailable``; their GPU time lies
+in the submission ranges of ``gpu_frames``.
 
 Each interval reports the twenty largest ``gpu_encoders`` groups by total
 GPU milliseconds, with source hashes, draw/dispatch/blit counts, target extent,

@@ -12,6 +12,10 @@ struct mtl_gpu_encoder_result {
    uint64_t draws, dispatches, blits;
    double ms;
    bool valid, extent_known, hashes_truncated, pipeline_unknown;
+   /* An encoder without draws or dispatches: a render encoder that only loads, clears or stores
+    * its attachments, or a compute encoder holding only copies and fills. Metal records no span
+    * of GPU work for it, so it is valid with no duration. render tells the two apart. */
+   bool zero_work, render;
 };
 /* Work recorded into a timed encoder. A direct dispatch passes its thread grid. */
 enum mtl_gpu_timing_work {
