@@ -30,7 +30,7 @@ mtl_compiler *mtl_new_compiler(mtl_device *device);
 struct mtl_compiler_cache_ops {
    bool (*available)(void *data);
    void *(*load)(void *data, size_t *size);
-   void (*store)(void *data, const void *bytes, size_t size);
+   bool (*store)(void *data, const void *bytes, size_t size);
    void *(*load_piece)(void *data, const uint8_t id[32], size_t *size);
    /* Complete the piece write before allowing an index to reference it. */
    bool (*store_piece)(void *data, const void *bytes, size_t size, uint8_t id[32]);
@@ -40,7 +40,7 @@ mtl_compiler *mtl_new_cached_compiler(mtl_device *device,
    const struct mtl_compiler_cache_ops *ops, void *data);
 struct mtl_compiler_cache_stats {
    uint64_t lookups, hits, native_compiles, stored_bytes;
-   uint64_t checkpoints, snapshot_ns, capture_wait_ns;
+   uint64_t checkpoints, snapshot_ns, capture_wait_ns, requests;
    bool archive_loaded;
 };
 /* Lifetime totals for this shared native compiler, not one Vulkan device. */

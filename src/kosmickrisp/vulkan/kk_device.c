@@ -84,7 +84,9 @@ kk_init_compile_debug(void)
 /* Own factory inputs, not a physical-device/cache pointer: this compiler is
  * shared across Vulkan devices and can outlive the first physical device. */
 #ifdef ENABLE_SHADER_CACHE
+#include "kk_compiler_cache_index.h"
 struct kk_compiler_cache {
+   uint64_t index_sequence;
    struct disk_cache *disk;
    cache_key key;
    blake3_hash driver_digest;
@@ -118,17 +120,18 @@ kk_compiler_cache_load(void *data, size_t *size)
 {
    struct kk_compiler_cache *cache = data;
    *size = 0;
-   return kk_compiler_cache_init(cache) ? disk_cache_get(cache->disk, cache->key, size) : NULL;
+   return kk_compiler_cache_init(cache)
+      ? kk_compiler_index_load(cache->disk, cache->key, &cache->index_sequence, size)
+      : NULL;
 }
 
-static void
+static bool
 kk_compiler_cache_store(void *data, const void *bytes, size_t size)
 {
    struct kk_compiler_cache *cache = data;
-   if (size && kk_compiler_cache_init(cache)) {
-      disk_cache_put(cache->disk, cache->key, bytes, size, NULL);
-      disk_cache_wait_for_idle(cache->disk);
-   }
+   return kk_compiler_cache_init(cache) &&
+      kk_compiler_index_store(cache->disk, cache->key, &cache->index_sequence,
+                             bytes, size);
 }
 
 static bool

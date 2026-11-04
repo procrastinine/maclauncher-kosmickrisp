@@ -258,8 +258,8 @@ kk_archive_temporary_path(void)
             [piece release];
             NSData *manifest = [NSPropertyListSerialization dataWithPropertyList:index
                format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
-            if (manifest.length) operations.store(cache_data, manifest.bytes, manifest.length);
-            @synchronized(self) { stats.stored_bytes += data.length; stats.checkpoints++; }
+            if (manifest.length && operations.store(cache_data, manifest.bytes, manifest.length))
+               @synchronized(self) { stats.stored_bytes += data.length; stats.checkpoints++; }
          }
       }
    }
@@ -335,6 +335,7 @@ kk_archive_compute(mtl_compiler *compiler, MTL4ComputePipelineDescriptor *descri
 {
    KKPipelineArchive *cache = kk_compiler_archive(compiler);
    if (!cache) return nil;
+   @synchronized(cache) { cache->stats.requests++; }
    for (KKArchivePiece *piece in [cache candidates]) {
       id<MTL4Archive> archive = [cache archiveForPiece:piece];
       if (!archive) continue;
@@ -351,6 +352,7 @@ kk_archive_render(mtl_compiler *compiler, MTL4PipelineDescriptor *descriptor)
 {
    KKPipelineArchive *cache = kk_compiler_archive(compiler);
    if (!cache) return nil;
+   @synchronized(cache) { cache->stats.requests++; }
    for (KKArchivePiece *piece in [cache candidates]) {
       id<MTL4Archive> archive = [cache archiveForPiece:piece];
       if (!archive) continue;
