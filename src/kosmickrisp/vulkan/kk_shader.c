@@ -2368,12 +2368,11 @@ kk_update_dynamic_ds_state(struct kk_device *device,
 static void
 kk_msl_copy(struct msl_compile_data *dst, const struct msl_compile_data *src)
 {
+   /* Requirements belong to the source, including stage specialization.
+    * Copy them together so new compiler outputs survive graphics linking. */
+   *dst = *src;
    dst->code = ralloc_strdup(NULL, src->code);
    dst->entrypoint_name = ralloc_strdup(NULL, src->entrypoint_name);
-   dst->requires_msl41 = src->requires_msl41;
-   dst->uses_matrix_coordinates = src->uses_matrix_coordinates;
-   dst->uses_atomic64_locks = src->uses_atomic64_locks;
-   dst->uses_pipeline_statistics = src->uses_pipeline_statistics;
 }
 
 /* Copies all msl shader data to the vertex and gathers information for pipeline
