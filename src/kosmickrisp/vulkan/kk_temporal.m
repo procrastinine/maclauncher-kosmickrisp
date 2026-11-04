@@ -8,6 +8,7 @@
  * frame's output at the end once it holds a processed frame. Nothing here encodes MetalFX itself. Metal
  * objects are created synchronously. */
 #include "kk_temporal.h"
+#include "kk_temporal_scene.h"
 #include "kk_cmd_buffer.h"
 #include "kk_device.h"
 #include "kk_dispatch_cmd.h"
@@ -30,6 +31,8 @@
 
 struct kk_temporal_pipeline {
    int (*process)(const RSTemporalFrame *, RSTemporalResult *);
+   int (*matrices)(const RSTemporalFrame *, const RSSceneMatrices *);
+   int (*aovs)(const RSTemporalFrame *, const RSSceneAovs *);
    uint32_t (*method)(void);
    void (*release)(void *owner);
 };
@@ -42,6 +45,7 @@ struct kk_temporal_owner {
    double previous_time;
    bool output_valid; /* see kk_temporal_tracked_valid */
    bool reported;
+   bool metadata_reported;
 };
 
 struct kk_temporal {
@@ -54,6 +58,9 @@ struct kk_temporal_record {
    uint32_t feature_type;
    struct kk_temporal_owner *owner;
    RSTemporalFrame frame; /* values; the images are in textures */
+   RSSceneMatrices matrices;
+   uint32_t scene_flags;
+   bool roughness_alias;
    id<MTLTexture> textures[KK_TEMPORAL_IMAGES];
 };
 
@@ -73,6 +80,8 @@ kk_temporal_resolve(void)
    if (!library)
       return;
    kk_temporal_symbols.process = dlsym(library, "rsProcessTemporalFrame");
+   kk_temporal_symbols.matrices = dlsym(library, "rsBindTemporalSceneMatrices");
+   kk_temporal_symbols.aovs = dlsym(library, "rsBindTemporalSceneAovs");
    kk_temporal_symbols.method = dlsym(library, "rsGetTemporalMethod");
    kk_temporal_symbols.release = dlsym(library, "rsReleaseTemporalOwner");
    kk_temporal_loaded = kk_temporal_symbols.process && kk_temporal_symbols.method &&
@@ -269,10 +278,11 @@ kk_temporal_record(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
    if (!info || !kk_temporal_pipeline())
       return;
    if (!cmd->metal.cmd_buf || cmd->interlock_segments || cmd->state.gfx.render_pass_descriptor ||
-       cmd->whole_pass.suspended || !info->frame_id || info->feature_type != KK_TEMPORAL_SUPER_RESOLUTION) {
+       cmd->whole_pass.suspended || !info->frame_id || (info->feature_type != KK_TEMPORAL_SUPER_RESOLUTION &&
+       info->feature_type != KK_TEMPORAL_RAY_RECONSTRUCTION)) {
       mesa_logw("Temporal frame %llu of feature %llu not forwarded: %s", (unsigned long long)info->frame_id,
                 (unsigned long long)info->feature_id,
-                info->feature_type != KK_TEMPORAL_SUPER_RESOLUTION ? "only Super Resolution is forwarded"
+                (info->feature_type != KK_TEMPORAL_SUPER_RESOLUTION && info->feature_type != KK_TEMPORAL_RAY_RECONSTRUCTION) ? "unknown temporal operation"
                 : !info->frame_id                                  ? "no frame identity"
                                                                    : "recorded inside rendering or an interlock segment");
       return;
@@ -311,6 +321,10 @@ kk_temporal_record(struct kk_cmd_buffer *cmd, const VkDependencyInfo *dep)
    }
 
    r->feature_type = info->feature_type;
+   r->matrices = kk_temporal_scene_matrices(info);
+   r->scene_flags = info->flags;
+   r->roughness_alias = info->images[KK_TEMPORAL_NORMALS] != VK_NULL_HANDLE &&
+      info->images[KK_TEMPORAL_NORMALS] == info->images[KK_TEMPORAL_ROUGHNESS];
    r->owner = kk_temporal_owner(t, info);
    if (!r->owner) {
       kk_temporal_record_free(r);
@@ -421,9 +435,16 @@ kk_temporal_encode(const struct kk_temporal_pipeline *pipeline, struct kk_tempor
    owner->previous_time = now;
 
    /* The selected method, or MetalFX, which is what DLSS maps to. */
-   const uint32_t mapped = RS_TEMPORAL_METALFX;
+   const uint32_t mapped = r->feature_type == KK_TEMPORAL_RAY_RECONSTRUCTION ? RS_TEMPORAL_METALFX_DENOISED : RS_TEMPORAL_METALFX;
    const uint32_t selected = pipeline->method();
    f.method = selected ? selected : mapped;
+   void *scene_textures[KK_TEMPORAL_IMAGES];uint32_t widths[KK_TEMPORAL_IMAGES],heights[KK_TEMPORAL_IMAGES];
+   for (unsigned i=0;i<KK_TEMPORAL_IMAGES;i++) {scene_textures[i]=r->textures[i];widths[i]=r->textures[i].width;heights[i]=r->textures[i].height;}
+   RSSceneAovs aovs;const bool has_aovs=kk_temporal_scene_aovs(&f,owner->feature_id,r->feature_type,r->scene_flags,r->roughness_alias,scene_textures,widths,heights,&aovs);
+   int matrices_status=RS_TEMPORAL_OK,aovs_status=RS_TEMPORAL_OK;
+   if(r->matrices.flags)matrices_status=pipeline->matrices?pipeline->matrices(&f,&r->matrices):RS_TEMPORAL_UNAVAILABLE;
+   if(has_aovs)aovs_status=pipeline->aovs?pipeline->aovs(&f,&aovs):RS_TEMPORAL_UNAVAILABLE;
+   if(!owner->metadata_reported&&(matrices_status||aovs_status)){mesa_logw("Temporal scene bindings: matrices %d, AOVs %d",matrices_status,aovs_status);owner->metadata_reported=true;}
    RSTemporalResult result = {.size = sizeof(result), .version = 1};
    int status = pipeline->process(&f, &result);
    if ((status != RS_TEMPORAL_OK || !result.encoded) && status != RS_TEMPORAL_BUSY && f.method != mapped) {

@@ -28,6 +28,7 @@ enum {
    KK_TEMPORAL_MOTION_JITTERED = 0x10,   /* motion vectors include the sample jitter */
    KK_TEMPORAL_HDR = 0x20,               /* linear color */
    KK_TEMPORAL_CAMERA_VALID = 0x40,      /* near_plane, far_plane and vertical_fov are the frame's camera */
+   KK_TEMPORAL_ROUGHNESS_NORMAL_ALPHA = 0x100, /* explicit producer packed-roughness mode */
    KK_TEMPORAL_DEPTH_INFINITE = 0x80,    /* infinite far plane; far_plane is 0 */
 };
 
