@@ -414,7 +414,8 @@ kk_attachment_pipeline_for_formats(struct kk_device *device,
       ? shader->mesh->runtime->virtual->gfx.render : kind == KK_PIPELINE_MESH_CAPTURE
       ? shader->mesh->runtime->retained[0]->gfx.render : kind == KK_PIPELINE_MESH_READER
       ? shader->mesh->runtime->retained[1]->gfx.render : kind == KK_PIPELINE_MESH_LINE
-      ? shader->mesh->runtime->line->gfx.render : kind == KK_PIPELINE_MESH_SLICED
+      ? shader->mesh->runtime->line->gfx.render : kind == KK_PIPELINE_MESH_POINT
+      ? shader->mesh->runtime->point->gfx.render : kind == KK_PIPELINE_MESH_SLICED
       ? shader->mesh->runtime->sliced[0]->gfx.render : kind == KK_PIPELINE_MESH_VIRTUAL_SLICED
       ? shader->mesh->runtime->sliced[1]->gfx.render : kind == KK_PIPELINE_CONSERVATIVE
       ? shader->pipeline.gfx.conservative_render : kind == KK_PIPELINE_POLYGON

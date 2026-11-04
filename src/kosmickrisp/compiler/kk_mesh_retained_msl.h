@@ -2,6 +2,7 @@
 #ifndef KK_MESH_RETAINED_MSL_H
 #define KK_MESH_RETAINED_MSL_H
 #include "kk_mesh_line_msl.h"
+#include "kk_mesh_point_msl.h"
 /* Native final output records preserve position, viewport, clip/cull and
  * primitive-ID members as well as the canonical packet pointer. */
 static void
@@ -68,5 +69,6 @@ kk_mesh_emit_retained_reader(struct nir_to_msl_ctx *ctx)
    P(ctx, "for (uint j = 0; j < %uu; ++j) kk_output.set_index(i * %uu + j, ((device const uint *)(cache + KK_RETAINED_INDICES))[i * %uu + j]);\n", vpp, vpp, vpp);
    P(ctx, "}\nkk_output.set_primitive_count(count->primitives);\n}\n#endif\n");
    if (vpp == 2) kk_mesh_emit_line_reader(ctx, stride);
+   if (vpp == 3 && ctx->mesh.point_reader) kk_mesh_emit_point_reader(ctx, stride);
 }
 #endif

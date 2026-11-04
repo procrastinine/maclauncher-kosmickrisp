@@ -74,6 +74,8 @@ enum kk_pipeline_kind {
    /* Coarse fragment variant of a dynamic shading-rate pipeline. */
    KK_PIPELINE_FSR_COARSE,
    KK_PIPELINE_MESH_LINE,
+   /* Triangle Mesh output read back as points for VK_POLYGON_MODE_POINT. */
+   KK_PIPELINE_MESH_POINT,
    KK_PIPELINE_KIND_COUNT,
 };
 
@@ -122,6 +124,7 @@ struct kk_mesh_shader_info {
    bool sliced;
    bool retained_capture, retained_reader;
    bool line_reader;
+   bool point_reader;
    uint32_t max_vertices;
    uint32_t retained_strides[2];
    struct kk_mesh_retained_field retained_fields[KK_MESH_RETAINED_FIELD_COUNT];
@@ -129,7 +132,7 @@ struct kk_mesh_shader_info {
 };
 
 /* Serialized info may change within padding without changing sizeof. */
-#define KK_SHADER_INFO_CACHE_VERSION 10u
+#define KK_SHADER_INFO_CACHE_VERSION 11u
 
 enum kk_gpl_shader_kind {
    KK_GPL_NONE,
@@ -319,6 +322,7 @@ struct kk_mesh_shader_runtime {
    struct kk_pipeline_handles *sliced[2];
    struct kk_pipeline_handles *retained[2];
    struct kk_pipeline_handles *line;
+   struct kk_pipeline_handles *point;
    struct kk_mesh_fragment_program fragment;
 };
 

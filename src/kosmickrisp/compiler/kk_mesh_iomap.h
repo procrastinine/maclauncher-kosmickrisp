@@ -113,7 +113,7 @@ kk_mesh_native_layout(struct nir_to_msl_ctx *ctx, uint64_t mask, bool vertex)
 
 static void
 kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
-                  bool vertex, bool storage, bool line)
+                  bool vertex, bool storage, const char *extra)
 {
    P(ctx, "struct %s {\n", name);
    ctx->indentlevel++;
@@ -177,9 +177,11 @@ kk_mesh_io_block(struct nir_to_msl_ctx *ctx, const char *name, uint64_t mask,
       P_IND(ctx, "bool kk_retained_culled [[primitive_culled]];\n");
       P(ctx, "#endif\n");
    }
-   if (line) {
-      P_IND(ctx, "float4 kk_line_endpoints [[user(polygon_line_coord)]];\n");
-      P_IND(ctx, "float kk_line_width [[user(polygon_point_coord)]];\n");
+   /* Reader-only members, one newline-terminated member per line. */
+   for (const char *member = extra; member && *member;) {
+      const char *end = strchr(member, '\n');
+      P_IND(ctx, "%.*s\n", (int)(end - member), member);
+      member = end + 1;
    }
    ctx->indentlevel--;
    P(ctx, "};\n");
@@ -197,10 +199,10 @@ kk_mesh_io_blocks(struct nir_to_msl_ctx *ctx)
    ctx->mesh.retained_primitive_stride = kk_mesh_native_layout(ctx,
       written & s->info.per_primitive_outputs, false);
    kk_mesh_io_block(ctx, "MeshVertex",
-      kk_mesh_native_vertex_outputs(s, written & ~s->info.per_primitive_outputs), true, false, false);
-   kk_mesh_io_block(ctx, "MeshPrimitive", written & s->info.per_primitive_outputs, false, false, false);
-   kk_mesh_io_block(ctx, "MeshVertexStorage", written & ~s->info.per_primitive_outputs, true, true, false);
-   kk_mesh_io_block(ctx, "MeshPrimitiveStorage", written & s->info.per_primitive_outputs, false, true, false);
+      kk_mesh_native_vertex_outputs(s, written & ~s->info.per_primitive_outputs), true, false, NULL);
+   kk_mesh_io_block(ctx, "MeshPrimitive", written & s->info.per_primitive_outputs, false, false, NULL);
+   kk_mesh_io_block(ctx, "MeshVertexStorage", written & ~s->info.per_primitive_outputs, true, true, NULL);
+   kk_mesh_io_block(ctx, "MeshPrimitiveStorage", written & s->info.per_primitive_outputs, false, true, NULL);
    if (!ctx->mesh.retained_fields[2][0]) {
       ctx->mesh.retained_fields[2][0] = 4u;
       ctx->mesh.retained_fields[2][2] = nir_type_uint32;
@@ -223,7 +225,55 @@ msl_mesh_line_primitive(struct nir_to_msl_ctx *ctx)
    kk_mesh_io_block(ctx, "LinePrimitive", ctx->shader->info.outputs_written &
       ctx->shader->info.per_primitive_outputs &
       ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
-      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT), false, false, true);
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT), false, false,
+      "float4 kk_line_endpoints [[user(polygon_line_coord)]];\n"
+      "float kk_line_width [[user(polygon_point_coord)]];\n");
+}
+
+/* The point reader's vertex: the native MeshVertex members, which keep their
+ * attributes for the unchanged fragment function, plus a point size. Polygon
+ * point size is 1 (polygonModePointSize is false), so a triangle Mesh shader
+ * needs no PointSize in its retained records. */
+void
+msl_mesh_point_vertex(struct nir_to_msl_ctx *ctx)
+{
+   nir_shader *s = ctx->shader;
+   uint64_t written = (s->info.outputs_written | s->info.outputs_read) &
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_INDICES) &
+      ~BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_COUNT);
+   uint64_t mask = kk_mesh_native_vertex_outputs(s, written & ~s->info.per_primitive_outputs);
+   kk_mesh_io_block(ctx, "PointVertex", mask, true, false,
+      "float kk_point_size [[point_size]];\n");
+   P(ctx, "inline PointVertex kk_mesh_point_vertex(MeshVertex v) {\nPointVertex p;\n");
+   if (ctx->mesh.flat_heap) {
+      mask &= ~(BITFIELD64_MASK(VARYING_SLOT_VAR31 + 1) &
+                ~BITFIELD64_MASK(VARYING_SLOT_VAR0));
+      if (ctx->mesh.projected_basis) {
+         P(ctx, "p.");
+         varying_slot_name(ctx, KK_CANONICAL_PROJECTED_POINT, 0);
+         P(ctx, " = v.");
+         varying_slot_name(ctx, KK_CANONICAL_PROJECTED_POINT, 0);
+         P(ctx, ";\n");
+      }
+   }
+   if (!(mask & VARYING_BIT_POS))
+      P(ctx, "p.position = v.position;\n");
+   u_foreach_bit64(location, mask) {
+      struct io_slot_info info = ctx->outputs_info[location];
+      if (!info.num_components)
+         continue;
+      unsigned components = VARYING_SLOT_INFO[location].scalarized ? info.num_components : 1;
+      for (unsigned c = 0; c < components; ++c) {
+         P(ctx, "p.");
+         varying_slot_name(ctx, location, c);
+         P(ctx, " = v.");
+         varying_slot_name(ctx, location, c);
+         P(ctx, ";\n");
+      }
+   }
+   for (unsigned c = 0; c < s->info.clip_distance_array_size; ++c)
+      P(ctx, "p.gl_ClipDistance[%u] = v.gl_ClipDistance[%u];\n", c, c);
+   P(ctx, "p.kk_point_size = 1.0f;\nreturn p;\n}\n");
 }
 
 void

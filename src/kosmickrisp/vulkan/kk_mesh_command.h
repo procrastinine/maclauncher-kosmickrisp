@@ -1022,15 +1022,17 @@ layered_bc_mesh_done:
       kk_mesh_layer_replay_end(cmd);
 }
 
-/* Select the retained reader only for an actual rectangular/smooth line
- * draw. Bresenham and all triangle/point Mesh shaders keep the native route. */
+/* Select a retained reader only for an actual rectangular/smooth line draw
+ * or a point-mode triangle draw. Bresenham lines, filled and line-mode
+ * triangles and point Mesh shaders keep the native route. */
 static void
 kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct, uint64_t indirect,
    uint64_t count, uint32_t draw_count, uint32_t stride, bool force_virtual)
 {
-   bool selected = kk_mesh_line_selected(cmd) &&
-      !cmd->state.gfx.mesh_retained_consumer.consume;
-   if (selected && !kk_mesh_retained_raster_begin(cmd, kk_mesh_line_consume, NULL)) {
+   kk_mesh_retained_consume consume = kk_mesh_line_selected(cmd) ? kk_mesh_line_consume :
+      kk_mesh_point_selected(cmd) ? kk_mesh_point_consume : NULL;
+   bool selected = consume && !cmd->state.gfx.mesh_retained_consumer.consume;
+   if (selected && !kk_mesh_retained_raster_begin(cmd, consume, NULL)) {
       vk_command_buffer_set_error(&cmd->vk,VK_ERROR_INITIALIZATION_FAILED);
       return;
    }

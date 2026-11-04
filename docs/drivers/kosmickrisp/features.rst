@@ -100,7 +100,8 @@ Feature table
      - —
    * - ``fillModeNonSolid``, ``extendedDynamicState3PolygonMode``
      - Native with emulated cases: line mode uses native wireframe. Point mode
-       expands captured primitives into two triangles per point.
+       expands captured primitives into two triangles per point; Mesh shader
+       triangles draw native points at their vertices.
      - None listed; line mode native on all families.
      - ``polygon_points``
      - On

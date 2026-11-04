@@ -3131,6 +3131,7 @@ kk_mesh_init_msl_info(struct nir_to_msl_ctx *ctx,
       .projected_basis = mesh->projected_basis,
       .flat_heap_offset = mesh->flat_heap_offset,
       .provoking_last = mesh->provoking_last,
+      .point_reader = mesh->point_reader,
    };
    ctx->uses_per_draw_data = ctx->mesh.flat_heap || ctx->mesh.view_mask ||
       msl_gather_uses_per_draw_data(ctx->shader);

@@ -306,6 +306,16 @@ kk_make_feature_key(const struct vk_features *feats)
    return key;
 }
 
+/* Mesh MSL carries the point reader only when the pipeline's polygon mode can
+ * be POINT: absent rasterization state, a static POINT or a dynamic mode. */
+static bool
+kk_mesh_point_possible(const struct vk_graphics_pipeline_state *state)
+{
+   return !state || !state->rs ||
+          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE) ||
+          state->rs->polygon_mode == VK_POLYGON_MODE_POINT;
+}
+
 /* Dynamic or absent rasterization state keeps the first-vertex order.
  * Fragment barycentric and per-vertex users keep it as well (compile options). */
 static bool
@@ -361,6 +371,11 @@ kk_hash_graphics_state(struct vk_physical_device *device,
    if ((stages & VK_SHADER_STAGE_MESH_BIT_EXT) && kk_mesh_static_provoking_last(state)) {
       const uint32_t mesh_provoking_key = 0x4d50564cu;
       _mesa_blake3_update(&blake3_ctx, &mesh_provoking_key, sizeof(mesh_provoking_key));
+   }
+
+   if ((stages & VK_SHADER_STAGE_MESH_BIT_EXT) && kk_mesh_point_possible(state)) {
+      const uint32_t mesh_point_reader = 0x4d505452u;
+      _mesa_blake3_update(&blake3_ctx, &mesh_point_reader, sizeof(mesh_point_reader));
    }
 
    if (state && state->mv && state->mv->view_mask &&
@@ -1615,6 +1630,8 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
                i ? KK_PIPELINE_MESH_READER : KK_PIPELINE_MESH_CAPTURE);
       if (runtime->line)
          kk_mesh_release_pipeline(dev, shader, runtime->line, KK_PIPELINE_MESH_LINE);
+      if (runtime->point)
+         kk_mesh_release_pipeline(dev, shader, runtime->point, KK_PIPELINE_MESH_POINT);
       if (runtime->virtual)
          kk_mesh_release_pipeline(dev, shader, runtime->virtual, KK_PIPELINE_MESH_VIRTUAL);
       for (unsigned i = 0; i < 2; ++i)
@@ -1882,6 +1899,9 @@ kk_compile_msl_options(struct kk_device *dev, nir_shader *nir,
       /* Flat-heap pipelines resolve the provoking vertex from per-draw data. */
       mesh_options.provoking_last = nir->info.stage == MESA_SHADER_MESH &&
          !mesh_options.flat_heap && opts && opts->mesh_provoking_last;
+      mesh_options.point_reader = nir->info.stage == MESA_SHADER_MESH &&
+         nir->info.mesh.primitive_type == MESA_PRIM_TRIANGLES &&
+         kk_mesh_point_possible(state);
       translate_options.mesh = &mesh_options;
    }
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {

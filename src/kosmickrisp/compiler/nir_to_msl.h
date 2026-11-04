@@ -25,6 +25,9 @@ struct kk_mesh_msl_options {
    /* Static last-vertex provoking: each triangle's indices rotate so the
     * provoking vertex comes first, as Metal takes flat values from it. */
    bool provoking_last;
+   /* Triangle output that can be drawn in VK_POLYGON_MODE_POINT carries the
+    * point reader entry. */
+   bool point_reader;
 };
 
 /* Exact linked producer types for native pre-raster triangle attributes.

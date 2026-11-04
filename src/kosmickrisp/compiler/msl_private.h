@@ -37,6 +37,7 @@ struct kk_mesh_msl_info {
    bool flat_heap, projected_basis;
    unsigned flat_heap_offset;
    bool provoking_last;
+   bool point_reader;
 };
 
 struct nir_to_msl_ctx {
@@ -149,6 +150,7 @@ void msl_input_name(struct nir_to_msl_ctx *ctx, unsigned location,
 
 void msl_mesh_line_primitive(struct nir_to_msl_ctx *ctx);
 void msl_mesh_line_copy_primitive(struct nir_to_msl_ctx *ctx);
+void msl_mesh_point_vertex(struct nir_to_msl_ctx *ctx);
 void msl_output_name(struct nir_to_msl_ctx *ctx, unsigned location,
                      unsigned component, bool from_input);
 

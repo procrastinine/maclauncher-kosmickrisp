@@ -49,6 +49,8 @@ struct kk_mesh_fragment_program {
 
 VkResult kk_mesh_get_line_pipeline(struct kk_device *, struct kk_shader *,
    struct kk_pipeline_handles **);
+VkResult kk_mesh_get_point_pipeline(struct kk_device *, struct kk_shader *,
+   struct kk_pipeline_handles **);
 
 struct kk_cmd_buffer;
 /* Begin after resolving the original Mesh executable and binding layer0.

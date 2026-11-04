@@ -83,6 +83,7 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
       retained_mesh.code = ralloc_asprintf(temporary,
          "#define KK_MESH_RETAINED 1\n#define %s 1\n%s",
          info->line_reader ? "KK_MESH_LINE_READER" :
+         info->point_reader ? "KK_MESH_POINT_READER" :
          info->retained_reader ? "KK_MESH_RETAINED_READER" : "KK_MESH_RETAINED_CAPTURE",
          mesh_data->code);
       mesh_data = &retained_mesh;
@@ -101,7 +102,8 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
    mtl_function_descriptor *mesh = NULL, *task = NULL, *fragment = NULL;
    mtl_render_pipeline_descriptor *descriptor = NULL;
    VkResult result = kk_mesh_function(dev, mesh_data,
-      virtual, info->line_reader ? "line" : info->retained_reader ? "retained" : virtual ? "virtual" : NULL, &mesh_lib, &mesh);
+      virtual, info->line_reader ? "line" : info->point_reader ? "point" :
+      info->retained_reader ? "retained" : virtual ? "virtual" : NULL, &mesh_lib, &mesh);
    if (result != VK_SUCCESS)
       goto out;
    if (info->has_task) {
@@ -170,6 +172,7 @@ kk_mesh_build_pipeline(struct kk_device *dev, struct kk_shader *shader,
       result = VK_ERROR_INVALID_SHADER_NV;
    } else {
       unsigned kind = info->line_reader ? KK_PIPELINE_MESH_LINE :
+         info->point_reader ? KK_PIPELINE_MESH_POINT :
          info->retained_reader ? KK_PIPELINE_MESH_READER :
          info->retained_capture ? KK_PIPELINE_MESH_CAPTURE : info->sliced ? (virtual ? KK_PIPELINE_MESH_VIRTUAL_SLICED : KK_PIPELINE_MESH_SLICED) :
          force_virtual ? KK_PIPELINE_MESH_VIRTUAL : KK_PIPELINE_MAIN;
@@ -358,6 +361,43 @@ kk_mesh_get_line_pipeline(struct kk_device *dev, struct kk_shader *shader,
       }
       cached = p_atomic_cmpxchg(&runtime->line, NULL, created);
       if (cached) kk_mesh_release_pipeline(dev, shader, created, KK_PIPELINE_MESH_LINE);
+      else cached = created;
+   }
+   *out = cached;
+   return VK_SUCCESS;
+}
+
+/* The point reader keeps the pipeline's own fragment function: its vertex
+ * and primitive records carry the same attributes as the native output. */
+VkResult
+kk_mesh_get_point_pipeline(struct kk_device *dev, struct kk_shader *shader,
+                           struct kk_pipeline_handles **out)
+{
+   struct kk_mesh_shader_runtime *runtime = kk_mesh_runtime(shader);
+   if (!runtime) return VK_ERROR_OUT_OF_HOST_MEMORY;
+   struct kk_pipeline_handles *cached = p_atomic_read(&runtime->point);
+   if (!cached) {
+      struct kk_pipeline_handles *created = calloc(1, sizeof(*created));
+      if (!created) return VK_ERROR_OUT_OF_HOST_MEMORY;
+      struct kk_mesh_shader_state mesh_state = *shader->mesh;
+      struct kk_shader executable = *shader;
+      executable.mesh = &mesh_state;
+      mesh_state.info.retained_reader = true;
+      mesh_state.info.point_reader = true;
+      mesh_state.info.has_task = false;
+      const struct kk_mesh_fragment_program monolithic = {
+         .monolithic = &shader->msl_data[MESA_SHADER_FRAGMENT],
+      };
+      VkResult result = kk_mesh_build_pipeline(dev, &executable, NULL,
+         &shader->msl_data[MESA_SHADER_MESH],
+         kk_mesh_fragment(shader) ? kk_mesh_fragment(shader) : &monolithic,
+         false, created);
+      if (result != VK_SUCCESS) {
+         kk_mesh_release_pipeline(dev, shader, created, KK_PIPELINE_MESH_POINT);
+         return result;
+      }
+      cached = p_atomic_cmpxchg(&runtime->point, NULL, created);
+      if (cached) kk_mesh_release_pipeline(dev, shader, created, KK_PIPELINE_MESH_POINT);
       else cached = created;
    }
    *out = cached;
