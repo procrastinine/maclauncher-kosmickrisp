@@ -22,6 +22,7 @@
 #include "kosmickrisp/compiler/nir_to_msl.h"
 
 #include "nir_builder.h"
+#include "kk_sliced_3d.h"
 #include "nir_lower_blend.h"
 
 #include "poly/nir/poly_nir.h"
@@ -816,6 +817,8 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
     */
    NIR_PASS(_, nir, kk_nir_lower_descriptors, rs, set_layout_count,
             set_layouts);
+
+   NIR_PASS(_, nir, kk_nir_lower_sliced_3d);
 
    /* KK_WORKAROUND_16 - must be called after kk_nir_lower_descriptors(), which
     * lowers all image intrinsics to be bindless */

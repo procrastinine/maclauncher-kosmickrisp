@@ -16,6 +16,8 @@
 #include "kk_image_view.h"
 #include "kk_physical_device.h"
 #include "kk_sampler.h"
+#define KK_SLICED_3D_DESCRIPTOR
+#include "kk_sliced_3d.h"
 
 #include "util/format/u_format.h"
 #include "util/half_float.h"
@@ -173,6 +175,7 @@ get_storage_image_view_desc(
 
       assert(view->planes[plane].storage_gpu_resource_id);
       desc.image_gpu_resource_id = view->planes[plane].storage_gpu_resource_id;
+      kk_sliced_3d_descriptor(&desc, &view->vk);
    }
 
    assert(sizeof(desc) <= dst_size);
