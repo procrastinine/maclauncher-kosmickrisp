@@ -2074,7 +2074,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
        prev_stage->info.stage == MESA_SHADER_MESH &&
        prev_stage->mesh->info.primitive == MESA_PRIM_LINES &&
        state && state->rs &&
-       (state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
+       (state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR ||
+        state->rs->line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH ||
         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE))) {
       nir_shader *line_fs = nir_shader_clone(NULL, nir);
       kk_mesh_line_fragment(line_fs);

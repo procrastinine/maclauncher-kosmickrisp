@@ -248,6 +248,10 @@ kk_mesh_line_fragment(nir_shader *nir)
    nir_def *width = nir_load_per_primitive_input(&b, 1, 32, nir_imm_int(&b, 0),
       .dest_type = nir_type_float32, .io_semantics.location = VARYING_SLOT_PNTC,
       .io_semantics.num_slots = 1);
+   /* The reader encodes rectangular mode with a negative width. Native
+    * rectangle coverage is binary; only smooth lines attenuate alpha. */
+   nir_def *smooth = nir_flt(&b, nir_imm_float(&b, 0), width);
+   width = nir_fabs(&b, width);
    nir_def *a = nir_trim_vector(&b, ends, 2);
    nir_def *delta = nir_fsub(&b, nir_channels(&b, ends, 0xc), a);
    nir_def *length = nir_fsqrt(&b, nir_fdot2(&b, delta, delta));
@@ -264,7 +268,8 @@ kk_mesh_line_fragment(nir_shader *nir)
       nir_fadd_imm(&b, nir_fmul_imm(&b, width, 0.5f), 0.5f), nir_fabs(&b, perp)));
    nir_def *start = nir_fsat(&b, nir_fadd_imm(&b, along, 0.5f));
    nir_def *end = nir_fsat(&b, nir_fadd_imm(&b, nir_fsub(&b, length, along), 0.5f));
-   nir_def *coverage = nir_fmul(&b, edge, nir_fmul(&b, start, end));
+   nir_def *coverage = nir_bcsel(&b, smooth,
+      nir_fmul(&b, edge, nir_fmul(&b, start, end)), nir_imm_float(&b, 1));
    nir_shader_intrinsics_pass(nir, kk_line_resolve_coverage,
       nir_metadata_control_flow, coverage);
    nir->info.inputs_read |= VARYING_BIT_FOGC | VARYING_BIT_PNTC;

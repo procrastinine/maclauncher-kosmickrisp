@@ -12,7 +12,7 @@ kk_mesh_emit_line_reader(struct nir_to_msl_ctx *ctx, unsigned stride)
    P(ctx, "#ifdef KK_MESH_LINE_READER\n");
    msl_mesh_line_primitive(ctx);
    P(ctx, "using LineOutput = mesh<MeshVertex, LinePrimitive, 256, 128, topology::triangle>;\n");
-   P(ctx, "struct kk_mesh_line_state { float4 viewport[16]; float width; };\n");
+   P(ctx, "struct kk_mesh_line_state { float4 viewport[16]; float width; uint smooth; };\n");
    P(ctx, "[[mesh, max_total_threads_per_threadgroup(1)]] void %s_line(LineOutput output, uint3 group [[threadgroup_position_in_grid]], uint3 grid [[threadgroups_per_grid]], constant kk_mesh_params &params [[buffer(%u)]], constant uint2 *selector [[buffer(%u)]]) {\n",
      get_entrypoint_name(s), KK_ARGUMENT_MESH_PARAMETERS, KK_ARGUMENT_POLY_LAYER_REPLAY);
    P(ctx, "device const uchar *cache = (device const uchar *)params.indirect_count + ulong(group.x + grid.x * (group.y + grid.y * group.z)) * %uu;\n", stride);
@@ -49,9 +49,9 @@ kk_mesh_emit_line_reader(struct nir_to_msl_ctx *ctx, unsigned stride)
    P(ctx,";\nfloat4 vp = state.viewport[min(viewport_index,15u)];\n");
    P(ctx,"float2 sa = (a.position.xy / a.position.w * 0.5f + 0.5f) * vp.zw + vp.xy;\nfloat2 sb = (b.position.xy / b.position.w * 0.5f + 0.5f) * vp.zw + vp.xy;\n");
    P(ctx,"float2 delta = sb - sa; float len = length(delta); float2 tangent = delta / max(len,1.0e-15f); float2 normal = float2(-tangent.y,tangent.x);\n");
-   P(ctx,"primitive.kk_line_endpoints = float4(sa,sb); primitive.kk_line_width = state.width;\n");
+   P(ctx,"primitive.kk_line_endpoints = float4(sa,sb); primitive.kk_line_width = state.smooth ? state.width : -state.width;\n");
    P(ctx,"for (uint corner = 0; corner < 4; ++corner) { bool last = (corner & 2u) != 0; MeshVertex vtx = last ? b : a;\n");
-   P(ctx,"float2 offset = normal * ((corner & 1u) ? 0.5f : -0.5f) * (state.width + 1.0f) + tangent * (last ? 0.5f : -0.5f);\n");
+   P(ctx,"float pad = state.smooth ? 1.0f : 0.0f; float2 offset = normal * ((corner & 1u) ? 0.5f : -0.5f) * (state.width + pad) + tangent * (last ? 0.5f : -0.5f) * pad;\n");
    P(ctx,"vtx.position.xy += offset * 2.0f / vp.zw * vtx.position.w; output.set_vertex(i*4+corner,vtx); }\n");
    P(ctx,"output.set_primitive(i*2,primitive); output.set_primitive(i*2+1,primitive);\nuint base = i*4; const uint corners[6] = {0,2,3,0,3,1}; for (uint c = 0; c < 6; ++c) output.set_index(i*6+c,base+corners[c]);\n}\noutput.set_primitive_count(lines*2);\n}\n#endif\n");
 }

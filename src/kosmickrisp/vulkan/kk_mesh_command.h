@@ -1022,8 +1022,8 @@ layered_bc_mesh_done:
       kk_mesh_layer_replay_end(cmd);
 }
 
-/* Select the retained reader only for an actual smooth-line draw. Native
- * line modes and all triangle/point Mesh shaders retain their native route. */
+/* Select the retained reader only for an actual rectangular/smooth line
+ * draw. Bresenham and all triangle/point Mesh shaders keep the native route. */
 static void
 kk_draw_mesh(struct kk_cmd_buffer *cmd, struct mtl_size direct, uint64_t indirect,
    uint64_t count, uint32_t draw_count, uint32_t stride, bool force_virtual)

@@ -5,6 +5,7 @@
 struct kk_mesh_line_state {
    float viewport[16][4];
    float width;
+   uint32_t smooth;
 };
 
 static VkResult
@@ -17,7 +18,10 @@ kk_mesh_line_consume(struct kk_cmd_buffer *cmd,
    VkResult result = kk_mesh_get_line_pipeline(kk_cmd_buffer_device(cmd), shader, &pipe);
    if (result != VK_SUCCESS) return result;
    const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
-   struct kk_mesh_line_state state = {.width = kk_polygon_line_width(dyn->rs.line.width)};
+   struct kk_mesh_line_state state = {
+      .width = kk_polygon_line_width(dyn->rs.line.width),
+      .smooth = dyn->rs.line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH,
+   };
    for (unsigned i = 0; i < MIN2(dyn->vp.viewport_count,16u); ++i) {
       const VkViewport *vp = &dyn->vp.viewports[i];
       state.viewport[i][0] = vp->x; state.viewport[i][1] = vp->y;
@@ -53,7 +57,7 @@ static bool
 kk_mesh_line_selected(const struct kk_cmd_buffer *cmd)
 {
    return cmd->state.gfx.shader->info.mesh_line &&
-      cmd->vk.dynamic_graphics_state.rs.line.mode ==
-         VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH;
+      (cmd->vk.dynamic_graphics_state.rs.line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR ||
+       cmd->vk.dynamic_graphics_state.rs.line.mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH);
 }
 #endif
