@@ -79,6 +79,10 @@ emit_sysvals(struct nir_to_msl_ctx *ctx, nir_shader *shader)
 
    unsigned i;
    BITSET_FOREACH_SET(i, shader->info.system_values_read, SYSTEM_VALUE_MAX) {
+      if (shader->info.stage == MESA_SHADER_VERTEX &&
+          (i == SYSTEM_VALUE_SUBGROUP_SIZE ||
+           i == SYSTEM_VALUE_SUBGROUP_INVOCATION))
+         continue;
       const char *sysval;
       if (is_frag_with_post_depth_coverage && i == SYSTEM_VALUE_SAMPLE_MASK_IN)
          sysval = sysval_sample_mask_in_post_depth_coverage;
@@ -2530,6 +2534,16 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
    ctx.indentlevel++;
    msl_emit_output_var(&ctx, shader);
    emit_local_vars(&ctx, shader);
+   if (shader->info.stage == MESA_SHADER_VERTEX) {
+      if (BITSET_TEST(shader->info.system_values_read, SYSTEM_VALUE_SUBGROUP_SIZE))
+         P_IND(&ctx, "const uint gl_SubGroupSize = 32u;\n");
+      if (BITSET_TEST(shader->info.system_values_read, SYSTEM_VALUE_SUBGROUP_INVOCATION)) {
+         P_IND(&ctx, "uint kk_active_lanes = (uint)(ulong)simd_active_threads_mask();\n");
+         P_IND(&ctx, "uint kk_active_rank = simd_prefix_exclusive_sum(1u);\n");
+         P_IND(&ctx, "while (kk_active_rank != 0u) { kk_active_lanes &= kk_active_lanes - 1u; --kk_active_rank; }\n");
+         P_IND(&ctx, "const uint gl_SubGroupInvocation = ctz(kk_active_lanes);\n");
+      }
+   }
    predeclare_ssa_values(&ctx, impl);
    foreach_list_typed(nir_cf_node, node, node, &impl->body) {
       cf_node_to_metal(&ctx, node);
