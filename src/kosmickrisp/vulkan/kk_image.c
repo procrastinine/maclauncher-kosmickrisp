@@ -50,9 +50,15 @@ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
 
    if (va_format->filter) {
       features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
-      if (pdev->vk.supported_extensions.EXT_sampler_filter_minmax)
-         features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT;
+
    }
+
+   /* Centered nearest taps preserve every sampleable format, including
+    * integer, normalized, sRGB, compressed and depth values. Native Metal
+    * reduction retains its format-filter capability boundary. */
+   if (pdev->vk.supported_extensions.EXT_sampler_filter_minmax &&
+       (pdev->info.gpu_apple_family < 10 || va_format->filter))
+      features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT;
 
    /* TODO: VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT */
    if (vk_format_has_depth(vk_format)) {

@@ -103,6 +103,9 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
          desc[plane].sampler_lod_bias_fp16 = sampler->lod_bias_fp16;
          desc[plane].sampler_lod_min_fp16 = sampler->lod_min_fp16;
          desc[plane].sampler_lod_max_fp16 = sampler->lod_max_fp16;
+         desc[plane].sampler_reduction_mode = sampler->reduction_mode;
+         desc[plane].sampler_filter_bits = sampler->filter_bits;
+         desc[plane].sampler_address_modes = sampler->address_modes;
          desc[plane].sampler_mipmap_mode = sampler->mipmap_mode;
          desc[plane].sampler_query_lod_bias_fp16 =
             sampler->query_lod_bias_fp16;

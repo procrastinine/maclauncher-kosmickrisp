@@ -503,6 +503,8 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
    }
 }
 
+#include "kk_sampler_minmax.h"
+
 static bool
 lower_tex(nir_builder *b, nir_tex_instr *tex,
           const struct lower_descriptors_ctx *ctx)

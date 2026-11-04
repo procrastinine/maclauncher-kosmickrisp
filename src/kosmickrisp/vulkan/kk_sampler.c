@@ -79,7 +79,7 @@ pack_sampler_info(const struct kk_physical_device *pdev,
 
    enum mtl_sampler_reduction_mode reduction_mode =
       MTL_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE;
-   if (pdev->vk.supported_extensions.EXT_sampler_filter_minmax) {
+   if (pdev->info.gpu_apple_family >= 10) {
       const VkSamplerReductionModeCreateInfo *reduction_info =
          vk_find_struct_const(sampler_info->pNext,
                               SAMPLER_REDUCTION_MODE_CREATE_INFO);
@@ -136,7 +136,7 @@ create_sampler_descriptor(const struct kk_device *dev,
    if (pdev->info.gpu_apple_family >= 10)
       mtl_sampler_descriptor_set_lod_bias(descriptor, packed->lod_bias);
 
-   if (pdev->vk.supported_extensions.EXT_sampler_filter_minmax)
+   if (pdev->info.gpu_apple_family >= 10)
       mtl_sampler_descriptor_set_reduction_mode(descriptor,
                                                 packed->reduction_mode);
 
@@ -176,8 +176,26 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
                           pCreateInfo->borderColor ==
                              VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK);
 
+   sampler->reduction_mode = pdev->info.gpu_apple_family < 10
+                                  ? sampler->vk.reduction_mode : 0;
+   sampler->filter_bits = (pCreateInfo->minFilter == VK_FILTER_LINEAR ? 1 : 0) |
+                          (pCreateInfo->magFilter == VK_FILTER_LINEAR ? 2 : 0);
+   sampler->address_modes = pCreateInfo->addressModeU |
+      (pCreateInfo->addressModeV << 3) | (pCreateInfo->addressModeW << 6) |
+      (pCreateInfo->unnormalizedCoordinates ? 1u << 9 : 0);
+
    struct mtl_sampler_packed packed =
       pack_sampler_info(pdev, pCreateInfo, custom_border);
+   if (sampler->reduction_mode) {
+      packed.min_filter = packed.mag_filter = MTL_SAMPLER_MIN_MAG_FILTER_NEAREST;
+      packed.mip_filter = pCreateInfo->unnormalizedCoordinates
+                             ? MTL_SAMPLER_MIP_FILTER_NOT_MIP_MAPPED
+                             : MTL_SAMPLER_MIP_FILTER_NEAREST;
+      packed.min_lod = 0;
+      packed.max_lod = VK_LOD_CLAMP_NONE;
+      packed.lod_bias = 0;
+      packed.max_anisotropy = 1;
+   }
    result = kk_sampler_heap_add(dev, packed, &sampler->planes[0].hw);
    if (result != VK_SUCCESS) {
       kk_DestroySampler(device, kk_sampler_to_handle(sampler), pAllocator);

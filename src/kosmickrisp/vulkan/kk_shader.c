@@ -181,6 +181,8 @@ kk_make_feature_key(const struct vk_features *feats)
       key |= BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER);
    if (feats->nullDescriptor)
       key |= BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR);
+   if (feats->samplerFilterMinmax)
+      key |= BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX);
    if (feats->minLod)
       key |= BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD);
    return key;
@@ -796,11 +798,15 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
       kk_lower_fs(dev, nir, state);
    }
 
+   if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
+      NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
+
+   if ((features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10)
+      NIR_PASS(_, nir, kk_nir_lower_sampler_minmax, set_layout_count, set_layouts);
+
    if (features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER))
       NIR_PASS(_, nir, kk_nir_lower_custom_border);
 
-   if (features & BITFIELD_BIT(KK_FEAT_IMAGE_VIEW_MIN_LOD))
-      NIR_PASS(_, nir, kk_nir_lower_image_view_min_lod);
 
    /* Descriptor lowering needs to happen after lowering blend since we will
     * generate a nir_intrinsic_load_blend_const_color_rgba which gets lowered by
