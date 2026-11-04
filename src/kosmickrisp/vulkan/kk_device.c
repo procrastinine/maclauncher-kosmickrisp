@@ -705,17 +705,8 @@ VKAPI_ATTR void VKAPI_CALL
 kk_DestroyPipeline(VkDevice device, VkPipeline pipeline,
                     const VkAllocationCallbacks *allocator)
 {
-   if (pipeline != VK_NULL_HANDLE) {
-      struct vk_pipeline *base = vk_pipeline_from_handle(pipeline);
-      if (base->bind_point == VK_PIPELINE_BIND_POINT_COMPUTE && base->ops->get_shader) {
-         struct vk_shader *vk_shader = base->ops->get_shader(base, MESA_SHADER_COMPUTE);
-         if (vk_shader) {
-            struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
-            if (shader->pipeline.compute.pending)
-               kk_async_compute_wait_for_destroy(shader);
-         }
-      }
-   }
+   /* The pipeline holds a shader reference. A pending native build continues
+    * for other references, and the last reference cancels or joins it. */
    vk_common_DestroyPipeline(device, pipeline, allocator);
    VK_FROM_HANDLE(kk_device, dev, device);
    kk_async_compute_drain(dev);

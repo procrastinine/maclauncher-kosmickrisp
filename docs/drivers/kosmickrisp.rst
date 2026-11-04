@@ -417,9 +417,13 @@ Compute pipeline creation
 
 A single compute pipeline created without a native archive hit returns once
 its MSL is generated, including any sparse residency guards. The Metal
-library and pipeline compile on the bounded compiler queue. Binding or
-destroying the pipeline waits for that compile and raises its queue
-priority; a native compile failure loses the device at first use. Creation stays
+library and pipeline compile on the bounded compiler queue. Binding the
+pipeline waits for that compile and raises its queue priority; a native
+compile failure loses the device at first use. Destroying a pipeline does not
+wait. When the last pipeline or pipeline cache reference to the shader is
+destroyed, a compile that has not started is cancelled, and a compile in
+progress is joined and its result discarded. Device destruction does the same
+for every remaining compile. Creation stays
 synchronous for multi-pipeline calls, creation feedback, compile-required and
 early-return failures, statistics and internal-representation capture,
 indirect-bindable pipelines, shaders that use 64-bit atomic locks and sparse

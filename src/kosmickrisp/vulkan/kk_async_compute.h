@@ -13,7 +13,6 @@ bool kk_async_compute_start(struct kk_device *dev, struct kk_shader *shader,
                            VkResult (*compile)(struct kk_device *, struct kk_shader *));
 VkResult kk_async_compute_join(struct kk_shader *shader);
 bool kk_async_compute_serializable(struct kk_shader *shader);
-void kk_async_compute_wait_for_destroy(struct kk_shader *shader);
 void kk_async_compute_shader_finish(struct kk_shader *shader);
 void kk_async_compute_drain(struct kk_device *dev);
 void kk_async_compute_device_finish(struct kk_device *dev);

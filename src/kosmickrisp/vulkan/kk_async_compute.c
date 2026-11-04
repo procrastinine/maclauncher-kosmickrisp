@@ -270,23 +270,21 @@ kk_async_compute_serializable(struct kk_shader *shader)
    return success;
 }
 
-void
-kk_async_compute_wait_for_destroy(struct kk_shader *shader)
-{
-   struct kk_async_compute *job = shader->pipeline.compute.pending;
-   if (!job) return;
-   job_wait(job, "destroy", true);
-   join_shader(shader, "destroy");
-}
-
+/* Called when the last reference to the shader goes away, so no pipeline,
+ * cache or bind can use its native build again. A build that has not entered
+ * its native compile is cancelled without compiling. Only a build already
+ * compiling is joined, and its result is discarded. */
 void
 kk_async_compute_shader_finish(struct kk_shader *shader)
 {
    if (shader->info.stage != MESA_SHADER_COMPUTE) return;
    struct kk_async_compute *job = shader->pipeline.compute.pending;
    if (!job) return;
-   mtl_compiler_task_wait(job->task);
-   kk_async_compute_join(shader);
+   if (!p_atomic_read(&job->ready)) {
+      p_atomic_set(&job->cancel_requested, true);
+      mtl_compiler_task_cancel(job->task);
+   }
+   job_wait(job, "destroy", true);
    shader->pipeline.compute.pending = NULL;
    job_unref(job);
 }
