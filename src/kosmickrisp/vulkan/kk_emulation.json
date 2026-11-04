@@ -376,5 +376,26 @@
     "performance": false,
     "performance_reason": "DXVK and vkd3d-proton treat depth-bias control as optional; disabling it does not lower their shader model or feature level or prevent device creation.",
     "off_consequence": "No D3D shader-model, feature-level or translator-device-creation loss in DXVK or vkd3d-proton; exact and alternate-representation Vulkan depth bias is unavailable and translators retain their default bias path."
+  },
+  {
+    "name": "float64",
+    "description": "Binary64 floating-point arithmetic and comparisons.",
+    "cost_class": "software binary64",
+    "cost_note": "Only actual FP64 operations are lowered to integer and FP32 algorithms; equality uses branchless 32-bit integer operations. FP32 and integer-only shaders emit no FP64 code. Runtime cost is unmeasured.",
+    "extensions": [],
+    "features": [
+      "shaderFloat64",
+      "shaderFmaFloat64"
+    ],
+    "properties": [
+      "shaderSignedZeroInfNanPreserveFloat64",
+      "shaderDenormPreserveFloat64",
+      "shaderDenormFlushToZeroFloat64",
+      "shaderRoundingModeRTEFloat64",
+      "shaderRoundingModeRTZFloat64"
+    ],
+    "performance": false,
+    "performance_reason": "Double precision is an optional D3D11/D3D12 capability; the pinned DXVK and vkd3d-proton SM/FL and device-creation gates do not require it, and Apple family 8 has no native binary64 ALU.",
+    "off_consequence": "D3D11/D3D12 double-precision capabilities and FP64 shader creation are unavailable; the pinned translator SM/FL limits and ordinary device creation are unchanged. Integer64 support is independent."
   }
 ]

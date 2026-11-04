@@ -42,6 +42,25 @@ kk_soft_fp64_bits_call(nir_builder *b, nir_alu_instr *alu,
    return nir_load_deref(b, rd);
 }
 
+/* Equal nonzero doubles have identical bits. Only that case needs a NaN
+ * test, so classifying the second operand and branching on either NaN is
+ * redundant. Keep the comparison in native 32-bit integer operations. */
+static nir_def *
+kk_soft_fp64_equal(nir_builder *b, nir_def *a, nir_def *c)
+{
+   nir_def *al = nir_unpack_64_2x32_split_x(b, a);
+   nir_def *ah = nir_unpack_64_2x32_split_y(b, a);
+   nir_def *cl = nir_unpack_64_2x32_split_x(b, c);
+   nir_def *ch = nir_unpack_64_2x32_split_y(b, c);
+   nir_def *mag_hi = nir_iand_imm(b, ah, 0x7fffffff);
+   nir_def *nan = nir_ior(b, nir_ugt_imm(b, mag_hi, 0x7ff00000),
+      nir_iand(b, nir_ieq_imm(b, mag_hi, 0x7ff00000), nir_ine_imm(b, al, 0)));
+   nir_def *same = nir_iand(b, nir_ieq(b, al, cl), nir_ieq(b, ah, ch));
+   nir_def *zeros = nir_ieq_imm(b,
+      nir_ior(b, nir_ior(b, al, cl), nir_ishl_imm(b, nir_ior(b, ah, ch), 1)), 0);
+   return nir_ior(b, nir_iand(b, same, nir_inot(b, nan)), zeros);
+}
+
 static bool
 kk_soft_fp64_exact(nir_builder *b, nir_instr *instr, void *data)
 {
@@ -77,6 +96,12 @@ kk_soft_fp64_exact(nir_builder *b, nir_instr *instr, void *data)
       default: cmp = nir_fneu(b, a, c); break;
       }
       direct = nir_b2f64(b, cmp);
+   } else if (alu->op == nir_op_feq || alu->op == nir_op_fneu) {
+      nir_def *a = nir_mov_alu(b, alu->src[0], 1);
+      nir_def *c = nir_mov_alu(b, alu->src[1], 1);
+      direct = kk_soft_fp64_equal(b, a, c);
+      if (alu->op == nir_op_fneu)
+         direct = nir_inot(b, direct);
    } else if (alu->op == nir_op_fcanonicalize) {
       direct = nir_mov_alu(b, alu->src[0], 1);
    } else if (alu->op == nir_op_fisnormal) {
