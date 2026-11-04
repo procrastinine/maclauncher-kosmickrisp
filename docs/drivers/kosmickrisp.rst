@@ -1,11 +1,151 @@
 KosmicKrisp
 ###########
 
-KosmicKrisp is a Vulkan conformant implementation for macOS on Apple Silicon
-hardware. It is implemented on top of Metal 4, which requires macOS 26 and up.
+KosmicKrisp is a Vulkan 1.4 driver for Apple GPUs on macOS. It is implemented
+on top of Metal 4. iOS is not supported.
 
-No iOS support is present as of now. However, iOS was taken into consideration
-during development to support A14 Bionic GPUs and upwards.
+System requirements
+*******************
+
+- macOS 26 or later, which provides Metal 4.
+- An Apple GPU that supports the Metal 4 GPU family. The Metal 4 programming
+  model is available from the Apple7 GPU family onward, which begins with the
+  M1 series and the A14 Bionic.
+
+The driver uses the first Metal device that supports the Metal 4 GPU family.
+When no Metal device supports it, the driver reports no physical device.
+
+Shaders compile as Metal Shading Language (MSL) 4.0 unless they require MSL
+4.1, which is available on macOS 27 and later. ``shaderSharedFloat32AtomicAdd``
+is reported only on macOS 27 and later.
+
+Apple GPU families
+******************
+
+Native Metal capability differs by Apple GPU family. Apple's `Metal Feature Set
+Tables <https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf>`__
+(October 23, 2026) assign the families as follows:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 85
+
+   * - Family
+     - GPUs
+   * - Apple7
+     - M1 series, A14 Bionic
+   * - Apple8
+     - M2 series, A15 Bionic, A16 Bionic
+   * - Apple9
+     - M3 series, M4 series, A17 Pro, A18 series
+   * - Apple10
+     - M5 series, A19 series
+   * - Apple11
+     - M6 series
+
+KosmicKrisp determines the family once, when the physical device is created,
+as the highest Apple GPU family the Metal device supports. It uses a native
+Metal path where that family provides one:
+
+- Every supported device is Apple7 or later, so the capabilities gated on
+  Apple7 (cooperative matrices, fragment shader interlock and
+  rasterization-order color attachment access) do not vary by family.
+- Apple8 and later report 64-bit integer image atomics
+  (``VK_EXT_shader_image_atomic_int64``) and storage image and storage texel
+  buffer support for ``R64_UINT`` and ``R64_SINT``, which rely on native 64-bit
+  texture minimum and maximum atomics. Apple7 does not report them.
+- Sparse binding and sparse residency are reported when the device supports
+  placement sparse resources with 64 KiB sparse pages. On macOS 26.4 and later
+  this follows Metal's placement sparse query; earlier macOS 26 releases
+  require Apple8 or later.
+- Apple10 and later:
+
+  - report ``depthBounds`` and use Metal depth bounds testing. Earlier
+    families do not report the feature.
+  - apply ``mipLodBias`` in the Metal sampler. Earlier families apply the bias
+    in the shader.
+  - use the Metal sampler reduction mode for minimum and maximum filtering
+    and report it for formats that support linear filtering. Earlier families
+    compute the reduction in the shader and report it for every sampleable
+    format.
+  - report a maximum 1D, 2D and cube image dimension of 32768. Earlier
+    families report 16384.
+
+- On Apple7 and Apple8 with macOS 26, multisampled pipelines keep Metal's
+  triangle merging for fragment shaders that need full-quad helper
+  invocations or unmerged triangles for barycentrics, because the method that
+  disables merging breaks derivatives in multisampled rendering on those
+  GPUs. Edges shared by merged triangles can then differ from Vulkan
+  rasterization rules.
+- The active Metal workarounds also depend on the family and the macOS
+  version; see :doc:`kosmickrisp/workarounds`.
+
+The feature table lists each feature's implementation and availability:
+
+.. toctree::
+   :maxdepth: 1
+
+   kosmickrisp/features
+
+Performance and conformance
+***************************
+
+KosmicKrisp emulates Vulkan capabilities that Metal does not provide directly,
+using shader lowering, compute passes or captured geometry. Each emulation is
+a named entry. ``KK_EMULATION`` selects which entries the device reports.
+
+Two modes set the starting selection:
+
+``performance``
+   The default. Each entry uses its performance default.
+``conformance``
+   Every entry is enabled.
+
+In performance mode, an entry is off only when turning it off lowers no
+Direct3D shader model or feature level reported by DXVK or vkd3d-proton and
+does not prevent either translator from creating its device. All other entries
+stay on. Ray tracing is the exception: its interfaces are reported only when
+selected explicitly, with ``+ray_tracing`` or ``conformance``.
+
+For example, vkd3d-proton reports shader model 6.2 and later only when FP32
+flush-to-zero, FP32 denormal preservation and independent denormal controls
+are all reported. Disabling either denormal entry limits vkd3d-proton to
+shader model 6.1, so both entries stay on in performance mode.
+
+``KK_EMULATION`` is read once, when the physical device is created. Its value
+is a comma-separated list of tokens. Whitespace around each token is ignored.
+
+- ``performance`` or ``conformance`` as the first token selects the mode.
+  Without either, performance mode applies.
+- ``+name`` enables the entry ``name`` and ``-name`` disables it. Tokens apply
+  in order, so the last token for an entry takes effect.
+- ``-VK_extension_name`` hides that device extension together with its
+  feature and property fields, including their core-version query aliases.
+  Extension hiding applies after entry selection.
+- Any other token, including a mode name after the first position, prints one
+  line to standard error and is ignored.
+
+Examples:
+
+- ``performance,-denorm_preserve`` keeps the performance defaults and disables
+  denormal preservation.
+- ``conformance,-ray_tracing`` enables every entry except ray tracing.
+- ``conformance,-VK_KHR_ray_query`` enables every entry and hides
+  ``VK_KHR_ray_query``.
+
+Disabling an entry removes the extensions, features, properties and format
+features that the entry controls. Disabling an entry can lower the shader
+model, feature level or interfaces available to a translator, as listed in the
+table below. Enabling an entry keeps the support the device otherwise reports
+and adds nothing beyond it; ``+denorm_flush`` leaves FP16 and FP64
+flush-to-zero unsupported. The variable changes only the reported
+capabilities; command recording and shader compilation do not read it.
+
+The table lists each entry's emulated behavior, cost, performance default,
+the reason for that default, the effect of disabling it, and the token that
+enables it in performance mode.
+
+.. include:: kosmickrisp/emulation.rst
 
 Building
 ********
@@ -25,28 +165,29 @@ Requirements
 
 - Xcode and Xcode command line tools
 - Homebrew packages
-   - meson (1.9.1+, can also be installed as a Python package)
+   - meson (1.9.1 or later, also available as a Python package)
    - cmake
    - pkg-config
    - libclc
-   - llvm (20.1.8+, lower versions may work but have not been tested)
+   - llvm (20.1.8 or later)
    - spirv-llvm-translator
-   - spirv-tools (static library preferred which is not included in the package, Vulkan macOS SDK does)
+   - spirv-tools (static library preferred; the Homebrew package does not
+     include it, the Vulkan macOS SDK does)
 
-Users might already have llvm installed, run ``llvm-config --version`` and
-check that the command works and prints at least ``20.1.8``. Otherwise install
-llvm from homebrew and add it to the ``PATH`` (follow homebrew instructions).
+An existing llvm installation can be checked with ``llvm-config --version``,
+which must print at least ``20.1.8``. Otherwise, install llvm from Homebrew and
+add it to the ``PATH`` as the Homebrew instructions describe.
 
 - Python
 - Python packages
    - mako
    - packaging
    - pyyaml
-   - meson (1.9.1+, if not installed through Homebrew)
+   - meson (1.9.1 or later, if not installed through Homebrew)
 
-Since Homebrew manages the Python environment, it is encouraged to create a
-Python virtual environment and install all packages in that environment. To
-create a Python virtual environment (e.g. ``$HOME/venv_mesa``):
+Since Homebrew manages the Python environment, a Python virtual environment
+for these packages is recommended. To create a Python virtual environment
+(e.g. ``$HOME/venv_mesa``):
 
 .. code-block:: sh
 
@@ -73,63 +214,101 @@ used to create a debug build:
 Environment variables
 *********************
 
-KosmicKrisp specific environment variables:
+Capability selection
+====================
 
+- ``KK_EMULATION``: selects emulated capabilities; see
+  `Performance and conformance`_.
+- ``MESA_KK_EXPERIMENTAL``: comma-separated list of experimental
+  capabilities. When unset, ``custom_border`` and ``image_view_min_lod`` are
+  enabled. A set value replaces that default; ``all`` enables every flag.
 
-- ``MESA_KK_DEBUG``: ``msl`` to log all generated Metal Shading Language (MSL) shaders. ``force_robustness`` to force robustness on all shaders.
-- ``MESA_KK_GPU_CAPTURE``: Starts Metal capture at device create and ends it at device destroy. Set to ``1`` to activate.
-- ``MESA_KK_GPU_CAPTURE_DIRECTORY``: Metal capture will be saved to the specified directory. Defaults to Xcode if no path is provided.
-- ``MESA_KK_DISABLE_WORKAROUNDS``: Provide ``all`` to disable all workarounds. Otherwise, provide a comma separated list to disable wanted workarounds e.g. ``1,3,4`` to disable workaround 1, 3 and 4.
-- ``MESA_KK_EXPERIMENTAL``: Enables advertising experimental features which may not provide full correctness or may negatively impact performance when enabled. Provide ``all`` to advertise all listed features.
-  - ``custom_border`` to advertise ``VK_EXT_custom_border_color`` and ``VK_EXT_border_color_swizzle``.
-  - ``image_view_min_lod`` to advertise ``VK_EXT_image_view_min_lod``.
-  - ``optimize_e5r9g9b9`` to use allowGPUOptimizedContents with this format, which causes some CTS tests for vkCmdCopyImage() to fail
+  - ``custom_border`` reports ``VK_EXT_custom_border_color`` and
+    ``VK_EXT_border_color_swizzle``.
+  - ``image_view_min_lod`` reports ``VK_EXT_image_view_min_lod``.
+  - ``optimize_e5b9g9r9`` uses ``allowGPUOptimizedContents`` for
+    ``E5B9G9R9`` images with transfer usage; some conformance tests for
+    ``vkCmdCopyImage`` fail with it.
+  - ``opaque_sync`` implements opaque file descriptor semaphores
+    (``vkCreateSemaphore``, ``vkGetSemaphoreFdKHR`` and
+    ``vkImportSemaphoreFdKHR``) with shared Metal events within the process.
+    Reported external semaphore properties do not change.
 
-Slow but correct features
-*************************
+- ``MESA_KK_DISABLE_WORKAROUNDS``: ``all`` disables all workarounds. Otherwise,
+  a comma-separated list of workaround numbers to disable, e.g. ``1,3,4``.
+  Workarounds are also disabled automatically on macOS versions and GPU
+  families that do not need them. Workaround 2 stays active on Apple10 and
+  later.
 
-``KK_EMULATION`` controls software-backed capability advertisement. It is read
-once at physical-device creation. The default mode, ``performance``, uses each
-entry's performance default. Capabilities required for a D3D shader model,
-feature level or translator device creation remain enabled; an emulation is
-disabled by default only when those requirements remain satisfied.
-``conformance`` retains all implemented capabilities.
+Diagnostics
+===========
 
-An entry is enabled with ``+name`` and disabled with ``-name``; the last override
-for an entry wins. For example, ``performance,-denorm_preserve`` disables
-preservation, and ``conformance,-ray_tracing`` excludes ray tracing. Explicit
-disabling can reduce a consumer's shader model, feature level or available
-interfaces as listed below. Enabling an entry does not add unsupported modes;
-FTZ16 and FTZ64 remain false.
+- ``MESA_KK_DEBUG``: comma-separated debug flags.
 
-``-VK_extension_name`` removes an extension and its associated feature and
-property fields, including promoted query aliases. For example,
-``conformance,-VK_KHR_ray_query`` removes ray-query advertisement. These removals
-apply after named entry selection. Unknown tokens produce one stderr line per
-token and are ignored. The setting changes capability reports; rendering and
-shader compilation do not parse it. Ray tracing requires explicit selection.
+  - ``msl`` logs every generated MSL shader and every native library source
+    with a ``KK_MSL`` header, and prints interlock and mesh dispatch traces to
+    standard error.
+  - ``force_robustness`` compiles every shader with all robustness behaviors
+    enabled.
+  - ``force_per_vertex_buffer`` passes the ``PerVertexKHR`` values of emulated
+    shaders through memory instead of varying slots.
 
-.. include:: kosmickrisp/emulation.rst
+- ``MESA_KK_GPU_CAPTURE``: ``1`` starts a Metal GPU capture at device creation
+  and ends it at device destruction. Internal driver operations carry debug
+  labels in the capture.
+- ``MESA_KK_GPU_CAPTURE_DIRECTORY``: writes the Metal GPU capture to
+  ``<directory>/<process name>.gputrace`` when Metal supports GPU trace
+  documents. Without it, the capture goes to Xcode.
+- ``KK_CAPTURE_DIR``: enables frame capture on request. The directory is
+  created at device creation. When a regular file named ``request`` exists in
+  it at a present, the first swapchain image of that present is written as
+  ``frame-N.ppm`` (8-bit RGB) with metadata in ``frame-N.txt``, where ``N`` is
+  the device's present count. The request file is removed once the frame is
+  written.
+- ``KK_DEBUG_MSL_SALT``: a nonempty value prefixes every MSL source passed to
+  the Metal compiler with a comment containing the base64-encoded value, and
+  adds the value's hash to the shader cache identity. It is read once, at the
+  first device creation.
+- ``MESA_SHADER_CACHE_SHOW_STATS``: in addition to Mesa's shader cache
+  statistics, prints one ``KK_SHADER_CACHE_BINDINGS`` line per shader written
+  to the cache, with its source hash, embedded sampler count and whether its
+  bindings could be serialized.
+- ``KK_PERF_TRACKING`` and the ``KK_PERF_TRACKING_*`` variables: see
+  `Performance tracking`_.
 
-Compile timing
-**************
+Performance tracking
+********************
 
-Built-in compute kernels compile when an operation first needs them. Each
-kernel shares one completed pipeline within the Vulkan device. Native compile
-failures propagate to command recording; a failed kernel is not dispatched.
+Tracking is disabled by default. The variables are read at device creation:
 
-``KK_PERF_TRACKING=1`` enables interval timing records. The output is newline
-separated JSON on stderr, or in the file selected by ``KK_PERF_TRACKING_LOG``.
-``KK_PERF_TRACKING_INTERVAL_MS`` and ``KK_PERF_TRACKING_INTERVAL_FRAMES``
-select the reporting intervals; their defaults are 1000 ms and 60 frames.
+- ``KK_PERF_TRACKING``: any value other than ``0`` or ``false`` enables
+  interval timing records, written as newline-separated JSON.
+- ``KK_PERF_TRACKING_LOG``: appends the records to this file instead of
+  standard error. If the file cannot be opened, an error is printed and
+  records go to standard error.
+- ``KK_PERF_TRACKING_INTERVAL_MS``: time interval between records in
+  milliseconds. The default is 1000.
+- ``KK_PERF_TRACKING_INTERVAL_FRAMES``: frame interval between records. The
+  default is 60. A record is written when either interval elapses.
+- ``KK_PERF_TRACKING_COMPILES``: any value other than ``0`` or ``false`` adds
+  individual shader compile records.
+- ``KK_PERF_TRACKING_SUBMITS``: ``1`` adds ``kk_submit_trace`` records for each
+  queue submission and ``kk_sync_trace`` records for each timeline wait.
+- ``KK_PERF_TRACKING_BARRIERS``: ``1`` adds ``kk_render_pass`` begin and end
+  records with their attachments, and a ``kk_barrier`` record for each
+  barrier.
+- ``KK_PERF_TRACKING_GPU_ENCODERS``: ``1`` adds GPU encoder timing.
 
-With tracking enabled, ``KK_PERF_TRACKING_GPU_ENCODERS=1`` adds GPU encoder
-boundary timestamps using Metal 4 counter heaps. Synchronous CPU resolution
-runs in the existing submission feedback path after GPU completion. Render,
-compute, virtual Mesh, internal meta and blit work is identified; opaque
-MetalFX and other temporal scene callbacks are reported as named groups.
-No timestamp heap or samples are created when the option is unset. Ordinary
-draw and pipeline-bind calls retain their native encoder receiver.
+GPU encoder timing
+==================
+
+``KK_PERF_TRACKING_GPU_ENCODERS=1`` adds GPU encoder boundary timestamps using
+Metal 4 counter heaps. Synchronous CPU resolution runs in the existing
+submission feedback path after GPU completion. Render, compute, virtual Mesh,
+internal meta and blit work is identified; opaque MetalFX and other temporal
+scene callbacks are reported as named groups. No timestamp heap or samples are
+created when the option is unset. Ordinary draw and pipeline-bind calls retain
+their native encoder receiver.
 
 Each interval reports the twenty largest ``gpu_encoders`` groups by total
 GPU milliseconds, with source hashes, draw/dispatch/blit counts, target extent,
@@ -147,20 +326,45 @@ records per command buffer and 1,024 distinct interval aggregation keys.
 ``MESA_KK_DEBUG=msl`` identifies generated and final native-library inputs with
 ``KK_MSL`` headers containing their BLAKE3 hash and source byte length. The same
 hashes appear in GPU records, including generated sibling and internal meta
-sources. MetalFX's private shader source is unavailable and has no invented hash.
+sources. MetalFX's private shader source is unavailable and has no hash.
 
-With tracking enabled, ``KK_PERF_TRACKING_COMPILES=1`` adds individual shader
-compile callback records and generated MSL source sizes and BLAKE3 hashes.
-Each source record carries its enclosing callback ID and shader stage. ID zero
-indicates emission outside a tracked callback. A callback can compile several
-linked stages. Binary deserialization callbacks have a separate origin label;
-they can still perform Metal compilation. Source records cover newly generated
-MSL, including generated helper stages, and do not dump shader contents.
+Compile records
+===============
+
+``KK_PERF_TRACKING_COMPILES`` adds individual shader compile callback records
+and generated MSL source sizes and BLAKE3 hashes. Each source record carries
+its enclosing callback ID and shader stage. ID zero indicates emission outside
+a tracked callback. A callback can compile several linked stages. Binary
+deserialization callbacks have a separate origin label; they can still
+perform Metal compilation. Source records cover newly generated MSL, including
+generated helper stages, and do not dump shader contents.
 
 Stage durations are nested elapsed wall times on the calling thread. They do
 not measure compiler-service CPU usage or attribute asynchronous callback work
 on other threads. Diagnostic logging, source hashing and timing add overhead.
-Tracking is disabled by default.
+
+Shader compilation
+******************
+
+Built-in compute kernels compile when an operation first needs them. Each
+kernel shares one completed pipeline within the Vulkan device. Native compile
+failures propagate to command recording; a failed kernel is not dispatched.
+
+Graphics library reuse
+======================
+
+Each cached compiler retains up to 128 graphics libraries and 8 MiB of
+UTF-16 shader source. Reuse requires identical generated source, including
+any diagnostic salt, and identical language version, math mode and floating
+point function options. Concurrent identical requests share the synchronous
+native compilation. Completed entries are evicted in insertion order; active
+entries are retained until compilation finishes. Requests outside the bounds
+compile without retention. Failed compilations are retried by later requests.
+
+This in-memory reuse applies to vertex and fragment libraries. Function
+constants and render pipeline state remain part of pipeline creation.
+Single-library compute compilation and persistent archive identities do not
+use it.
 
 Metal workarounds
 *****************
@@ -179,18 +383,3 @@ These workarounds can be found in:
    :maxdepth: 1
 
    kosmickrisp/workarounds
-
-Graphics library reuse
-----------------------
-
-Each cached compiler retains up to 128 graphics libraries and 8 MiB of
-UTF-16 shader source. Reuse requires identical generated source, including
-any diagnostic salt, and identical language version, math mode and floating
-point function options. Concurrent identical requests share the synchronous
-native compilation. Completed entries are evicted in insertion order; active
-entries are retained until compilation finishes. Requests outside the bounds
-compile without retention. Failed compilations are retried by later requests.
-
-This in-memory reuse applies to vertex and fragment libraries. Function
-constants and render pipeline state remain part of pipeline creation. Single
-library compute compilation and persistent archive identities are unchanged.
