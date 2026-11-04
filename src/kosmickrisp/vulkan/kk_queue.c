@@ -12,6 +12,7 @@
 #include "kk_entrypoints.h"
 #include "kk_physical_device.h"
 #include "kk_sync.h"
+#include "kk_sparse.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/vk_to_mtl_map.h"
@@ -110,6 +111,8 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
    }
 }
 
+#include "kk_sparse_queue.h"
+
 static VkResult
 rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
                                struct kk_cmd_buffer *cmd)
@@ -167,7 +170,9 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
    kk_device_make_resources_resident(dev);
 
    queue->commits_in_flight++;
-   kk_queue_commit(queue, rerecord, rerecord_commit_callback, commit);
+   mtl_feedback_handler_callback callback = kk_sparse_submission_begin(dev) ?
+      kk_sparse_rerecord_commit_callback : rerecord_commit_callback;
+   kk_queue_commit(queue, rerecord, callback, commit);
 
    mtx_unlock(&queue->mutex);
    return VK_SUCCESS;
@@ -201,18 +206,22 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
     * Otherwise, users are playing with fire. */
    kk_device_make_resources_resident(dev);
 
+   if (vk_queue_submit_has_bind(submit)) {
+      VkResult result = kk_queue_bind_sparse(queue, submit);
+      if (result != VK_SUCCESS) return result;
+   }
    for (uint32_t i = 0; i < submit->command_buffer_count; ++i) {
       struct kk_cmd_buffer *cmd_buffer =
          container_of(submit->command_buffers[i], struct kk_cmd_buffer, vk);
 
       /* Metal's command buffers are one time use, re-record multiple
        * submissions. */
-      if (cmd_buffer->submitted || cmd_buffer->enqueue_commands) {
+      if (cmd_buffer->submitted || cmd_buffer->enqueue_commands || (!cmd_buffer->sparse_guarded && kk_sparse_residency_used(dev))) {
          VkResult result = rerecord_and_commit_cmd_buffer(queue, cmd_buffer);
          if (result != VK_SUCCESS)
             return result;
       } else if (kk_cmd_buffer_has_work(cmd_buffer)) {
-         kk_queue_commit(queue, cmd_buffer, commit_callback, dev);
+         kk_sparse_commit_first(queue, cmd_buffer);
       }
 
       cmd_buffer->submitted = true;

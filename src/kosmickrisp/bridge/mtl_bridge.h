@@ -35,6 +35,7 @@
 #include "mtl_sampler.h"
 #include "mtl_sync.h"
 #include "mtl_texture.h"
+#include "mtl_sparse.h"
 
 mtl_texture *mtl_drawable_get_texture(void *drawable_ptr);
 

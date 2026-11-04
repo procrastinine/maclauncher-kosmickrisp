@@ -96,7 +96,7 @@ static_assert(sizeof(struct kk_storage_image_descriptor) == 16,
 struct kk_buffer_address {
    uint64_t base_addr;
    uint32_t size;
-   uint32_t zero; /* Must be zero! */
+   uint32_t zero; /* Sparse record in descriptor storage; zero in the lowered address. */
 };
 
 static_assert(sizeof(struct kk_buffer_address) == 16,

@@ -150,15 +150,19 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
    };
    struct kk_buffer *buffer =
       container_of(view->vk.buffer, struct kk_buffer, vk);
+   if (buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) {
+      view->sparse_view_pool = mtl_new_sparse_buffer_view(buffer->metal.handle, &layout,
+         kk_buffer_mtl_offset(buffer, view->vk.offset - prefix), &view->texel_buffer_gpu_id);
+   } else
    view->mtl_texel_buffer_handle = mtl_new_texture_with_descriptor_linear(
       buffer->metal.handle, &layout,
       kk_buffer_mtl_offset(buffer, view->vk.offset - prefix));
-   if (!view->mtl_texel_buffer_handle) {
+   if (!view->mtl_texel_buffer_handle && !view->sparse_view_pool) {
       vk_buffer_view_destroy(&dev->vk, pAllocator, &view->vk);
       return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
    }
-   view->texel_buffer_gpu_id =
-      mtl_texture_get_gpu_resource_id(view->mtl_texel_buffer_handle);
+   if (!view->sparse_view_pool)
+      view->texel_buffer_gpu_id = mtl_texture_get_gpu_resource_id(view->mtl_texel_buffer_handle);
 
    if (rgb32)
       view->texel_offset |= KK_TEXEL_BUFFER_RGB32;
@@ -178,6 +182,7 @@ kk_DestroyBufferView(VkDevice _device, VkBufferView bufferView,
    if (!view)
       return;
 
+   if (view->sparse_view_pool) mtl_release(view->sparse_view_pool);
    mtl_release(view->mtl_texel_buffer_handle);
    vk_buffer_view_destroy(&dev->vk, pAllocator, &view->vk);
 }

@@ -12,6 +12,7 @@
 
 #include "kk_device_memory.h"
 #include "kk_image_layout.h"
+#include "kk_sparse.h"
 
 #include "kosmickrisp/bridge/mtl_types.h"
 
@@ -46,6 +47,7 @@ struct kk_heap_image_view;
 
 struct kk_image {
    struct vk_image vk;
+   struct kk_sparse_image *sparse;
    struct kk_heap_image_view *heap_views;
 
    /** True if the planes are bound separately

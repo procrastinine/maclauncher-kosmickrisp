@@ -211,6 +211,9 @@ kk_make_feature_key(const struct vk_features *feats)
    kk_feature_key key = 0;
    if (feats->customBorderColors)
       key |= BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER);
+   /* Cache entries with a replay input cannot alias entries without it.
+    * This bit changes serialization only; the guard bit is selected on use. */
+   if (feats->sparseResidencyBuffer) key |= BITFIELD_BIT(KK_FEAT_SPARSE_REPLAY);
    if (feats->nullDescriptor)
       key |= BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR);
    if (feats->nonSeamlessCubeMap)
@@ -778,7 +781,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
 
    if (compile_info && (compile_info->flags & VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT))
       NIR_PASS(_, nir, kk_nir_prepare_descriptor_heaps,
-               compile_info->embedded_sampler_count, embedded);
+               compile_info->embedded_sampler_count, embedded, features & BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER));
 
    /* Massage IO related variables to please Metal */
    if (nir->info.stage == MESA_SHADER_VERTEX) {
@@ -814,6 +817,11 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
             nir_address_format_32bit_offset);
 
    NIR_PASS(_, nir, nir_lower_memory_model);
+
+   if (features & BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER)) {
+      NIR_PASS(_, nir, kk_nir_lower_sparse_buffer_io, rs, set_layout_count, set_layouts);
+      NIR_PASS(_, nir, kk_nir_finish_sparse_heap_buffers);
+   }
 
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
             nir_address_format_64bit_global);
@@ -878,6 +886,8 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
    NIR_PASS(_, nir, kk_nir_lower_sampler_helpers, set_layout_count, set_layouts,
       (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10,
       features & BITFIELD_BIT(KK_FEAT_CUSTOM_BORDER));
+   NIR_PASS(_, nir, kk_nir_lower_sparse_sample_views, set_layout_count, set_layouts,
+      (features & BITFIELD_BIT(KK_FEAT_SAMPLER_MINMAX)) && pdev->info.gpu_apple_family < 10);
 
 
    /* Descriptor lowering needs to happen after lowering blend since we will
@@ -905,6 +915,8 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
    if (features & BITFIELD_BIT(KK_FEAT_NULL_DESCRIPTOR))
       NIR_PASS(_, nir, kk_nir_lower_null_images);
 
+   NIR_PASS(_, nir, kk_nir_lower_sparse);
+
    kk_lower_compute_derivatives(nir);
    NIR_PASS(_, nir, nir_lower_global_vars_to_local);
 }
@@ -918,6 +930,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
 
    mtl_release(shader->dgc_compute);
+   kk_sparse_shader_finish(shader);
    kk_attachment_pipelines_finish(shader);
    struct kk_pipeline_handles *pipe = &shader->pipeline;
 
@@ -1977,19 +1990,22 @@ kk_forward_gs_primitive_id(nir_shader *gs, nir_shader *fs)
    gs->info.outputs_written |= BITFIELD64_BIT(slot);
 }
 
+#include "kk_sparse_pipeline.h"
+
 static VkResult
-kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+kk_compile_shaders_native(struct vk_device *device, uint32_t shader_count,
                    struct vk_shader_compile_info *infos,
                    const struct vk_graphics_pipeline_state *state,
                    const struct vk_features *enabled_features,
                    const VkAllocationCallbacks *pAllocator,
-                   struct vk_shader **shaders_out)
+                   struct vk_shader **shaders_out, bool sparse_guarded)
 {
    VkResult result = VK_SUCCESS;
    struct kk_device *dev = container_of(device, struct kk_device, vk);
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
    kk_feature_key features = kk_make_feature_key(enabled_features);
+   if (sparse_guarded) features |= BITFIELD_BIT(KK_FEAT_SPARSE_BUFFER);
 
    /* Vulkan doesn't enforce a fragment shader to build pipelines. We may need
     * to create one. */
@@ -2286,7 +2302,7 @@ kk_msl_serialize(const struct msl_compile_data *data, struct blob *blob)
 }
 
 static bool
-kk_shader_serialize(struct vk_device *vk_dev, const struct vk_shader *vk_shader,
+kk_shader_serialize_native(struct vk_device *vk_dev, const struct vk_shader *vk_shader,
                     struct blob *blob)
 {
    struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
@@ -2335,7 +2351,7 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
 }
 
 static VkResult
-kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
+kk_deserialize_shader_native(struct vk_device *vk_dev, struct blob_reader *blob,
                       uint32_t binary_version,
                       const VkAllocationCallbacks *pAllocator,
                       struct vk_shader **shader_out)
@@ -2412,6 +2428,7 @@ fail:
 void
 kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
 {
+   shader = kk_sparse_select_shader(cmd, shader);
    struct kk_descriptor_state *desc = &cmd->state.cs.descriptors;
    /* Meta operations can restore an unbound compute stage. */
    uint32_t push_size = shader ? shader->info.push_size : 0;
@@ -2427,6 +2444,7 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
                             const mesa_shader_stage stage,
                             struct kk_shader *shader)
 {
+   if (stage == MESA_SHADER_VERTEX) shader = kk_sparse_select_shader(cmd, shader);
    cmd->state.shaders[stage] = shader;
    cmd->state.dirty_shaders |= BITFIELD_BIT(stage);
 
@@ -2473,6 +2491,17 @@ kk_cmd_bind_shaders(struct vk_command_buffer *cmd_buffer, uint32_t stage_count,
       else
          kk_cmd_bind_graphics_shader(cmd, stages[i], shader);
    }
+}
+
+void
+kk_sparse_refresh_shader(struct kk_cmd_buffer *cmd, mesa_shader_stage stage)
+{
+   if (!kk_sparse_residency_used(kk_cmd_buffer_device(cmd))) return;
+   struct kk_shader *shader = cmd->state.shaders[stage];
+   struct kk_shader *selected = kk_sparse_select_shader(cmd, shader);
+   if (selected == shader) return;
+   if (stage == MESA_SHADER_VERTEX) kk_cmd_bind_graphics_shader(cmd, stage, selected);
+   else kk_cmd_bind_compute_shader(cmd, selected);
 }
 
 static VkResult

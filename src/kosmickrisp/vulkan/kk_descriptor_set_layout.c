@@ -6,6 +6,7 @@
  */
 
 #include "kk_descriptor_set_layout.h"
+#include "kk_sparse.h"
 
 #include "kk_descriptor_types.h"
 #include "kk_device.h"
@@ -44,6 +45,9 @@ kk_descriptor_stride_align_for_type(
 
    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+      *stride = *alignment = sizeof(struct kk_storage_image_descriptor) +
+                            sizeof(struct kk_sparse_view_descriptor);
+      break;
    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
       *stride = *alignment = sizeof(struct kk_storage_image_descriptor);
       break;

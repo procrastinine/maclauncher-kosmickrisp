@@ -10,6 +10,7 @@
 #include "kk_descriptor_set.h"
 #include "kk_descriptor_set_layout.h"
 #include "kk_shader.h"
+#include "kk_sparse.h"
 
 #include "kosmickrisp/compiler/nir_to_msl.h"
 
@@ -145,8 +146,10 @@ load_descriptor(nir_builder *b, unsigned num_components, unsigned bit_size,
          b, nir_imul_imm(b, index, sizeof(struct kk_buffer_address)),
          kk_root_descriptor_offset(dynamic_buffers));
 
+      nir_def *desc = load_root(b, num_components, bit_size,
+         nir_iadd_imm(b, root_desc_offset, offset_B), offset_B ? 4 : 16);
+      if (offset_B) return desc;
       assert(num_components == 4 && bit_size == 32);
-      nir_def *desc = load_root(b, 4, 32, root_desc_offset, 16);
 
       /* We know a priori that the the .w compnent (offset) is zero */
       return nir_vector_insert_imm(b, desc, nir_imm_int(b, 0), 3);
@@ -184,8 +187,8 @@ load_descriptor(nir_builder *b, unsigned num_components, unsigned bit_size,
          .align_mul = desc_align_mul, .align_offset = desc_align_offset,
          .access = ACCESS_CAN_SPECULATE);
 
-      if (binding_layout->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
-          binding_layout->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+      if (offset_B == 0 && (binding_layout->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+                            binding_layout->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)) {
          /* We know a priori that the the .w compnent (offset) is zero */
          assert(num_components == 4 && bit_size == 32);
          desc = nir_vector_insert_imm(b, desc, nir_imm_int(b, 0), 3);
@@ -451,8 +454,15 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
           intr->intrinsic == nir_intrinsic_image_deref_store ||
           intr->intrinsic == nir_intrinsic_image_deref_atomic ||
           intr->intrinsic == nir_intrinsic_image_deref_atomic_swap)
-         nir_src_rewrite(&intr->src[1],
-                        kk_texel_buffer_coord(b, intr->src[1].ssa, metadata));
+      {
+         nir_def *coord = kk_texel_buffer_coord(b, intr->src[1].ssa, metadata);
+         nir_src_rewrite(&intr->src[1], coord);
+         if (intr->intrinsic == nir_intrinsic_image_deref_sparse_load) {
+            nir_def *residency = load_resource_deref_desc(b, 4, 32, deref,
+               sizeof(struct kk_storage_image_descriptor), ctx);
+            nir_src_rewrite(&intr->src[2], nir_b2i32(b, kk_nir_sparse_buffer_resident(b, residency, coord)));
+         }
+      }
    }
 
    /* Reads and queries use the texture descriptor; writes and atomics PBE. */
@@ -460,6 +470,31 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intr,
       offsetof(struct kk_storage_image_descriptor, image_gpu_resource_id);
 
    nir_def *resource_addr = load_resource_addr(b, 1, 64, deref, offs, ctx);
+
+   bool sparse_array_dimension = nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_1D ||
+                                 nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_2D;
+   nir_def *sparse_descriptor = NULL;
+   if (sparse_array_dimension) {
+      sparse_descriptor = load_resource_deref_desc(b, 2, 64, deref,
+         offsetof(struct kk_storage_image_descriptor, image_gpu_resource_id), ctx);
+      nir_def *descriptor_address = load_resource_addr(b, 1, 64, deref,
+         offsetof(struct kk_storage_image_descriptor, image_gpu_resource_id), ctx);
+      resource_addr = kk_nir_storage_sparse_handle_address(b, descriptor_address,
+         sparse_descriptor, nir_intrinsic_image_array(intr));
+   }
+   if (intr->intrinsic == nir_intrinsic_image_deref_sparse_load &&
+       nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_BUF &&
+       nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_MS) {
+      nir_def *query = load_resource_deref_desc(b, 1, 64, deref,
+         offsetof(struct kk_storage_image_descriptor, texel_offset), ctx);
+      query = sparse_array_dimension ?
+         kk_nir_storage_sparse_descriptor_query(b, sparse_descriptor) :
+         kk_nir_storage_sparse_query_decode(b, query);
+      nir_def *lod = intr->src[3].ssa;
+      resource_addr = kk_nir_sparse_view_address(b, resource_addr, query, &lod, true,
+         sparse_array_dimension && nir_intrinsic_image_array(intr));
+      nir_src_rewrite(&intr->src[3], lod);
+   }
 
    nir_alu_type type;
    if (nir_intrinsic_has_atomic_op(intr)) {
@@ -622,6 +657,7 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
 }
 
 #include "kk_sampler_minmax.h"
+#include "kk_sparse_sample_nir.h"
 #include "kk_non_seamless_cube.h"
 #include "kk-sampler-helpers-nir.h"
 
@@ -665,10 +701,17 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
          return true;
       }
       int coord_src = nir_tex_instr_src_index(tex, nir_tex_src_coord);
-      if (coord_src >= 0)
-         nir_src_rewrite(&tex->src[coord_src].src,
-                        kk_texel_buffer_coord(b, tex->src[coord_src].src.ssa,
-                                              metadata));
+      if (coord_src >= 0) {
+         nir_def *coord = kk_texel_buffer_coord(b, tex->src[coord_src].src.ssa, metadata);
+         nir_src_rewrite(&tex->src[coord_src].src, coord);
+         if (tex->is_sparse) {
+            nir_def *residency = load_resource_deref_desc(b, 4, 32,
+               nir_src_as_deref(nir_src_for_ssa(texture)),
+               sizeof(struct kk_storage_image_descriptor), ctx);
+            nir_tex_instr_add_src(tex, nir_tex_src_backend1,
+               nir_b2i32(b, kk_nir_sparse_buffer_resident(b, residency, coord)));
+         }
+      }
    }
 
    /* LOD bias is passed in the descriptor set, rather than embedded into
@@ -700,6 +743,8 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       nir_def *min = load_resource_deref_desc(
          b, 1, 16, nir_src_as_deref(nir_src_for_ssa(texture)),
          image_plane_offset_B + offs, ctx);
+      if (tex->dest_type == nir_type_uint16)
+         min = nir_iand_imm(b, min, KK_IMAGE_LOD_VALUE_MASK);
 
       nir_def_replace(&tex->def, min);
       return true;
@@ -740,6 +785,20 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
          b, 1, 64, nir_src_as_deref(nir_src_for_ssa(texture)),
          image_id_offset_B + offs, ctx);
 
+      if (tex->is_sparse && tex->op == nir_texop_txf &&
+          tex->sampler_dim != GLSL_SAMPLER_DIM_BUF &&
+          tex->sampler_dim != GLSL_SAMPLER_DIM_MS) {
+         nir_def *query = load_resource_deref_desc(b, 1, 64,
+            nir_src_as_deref(nir_src_for_ssa(texture)),
+            plane_offset_B + offsetof(struct kk_sampled_image_descriptor, aux_word), ctx);
+         int lod_source = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+         nir_def *lod = lod_source >= 0 ? tex->src[lod_source].src.ssa : nir_imm_int(b, 0);
+         resource_addr = kk_nir_sparse_view_address(b, resource_addr, query, &lod, false,
+            tex->is_array && (tex->sampler_dim == GLSL_SAMPLER_DIM_1D ||
+                              tex->sampler_dim == GLSL_SAMPLER_DIM_2D));
+         if (lod_source >= 0) nir_src_rewrite(&tex->src[lod_source].src, lod);
+         else nir_tex_instr_add_src(tex, nir_tex_src_lod, lod);
+      }
       nir_def *handle = NULL;
       if (tex->is_shadow) {
          handle = nir_load_depth_texture_kk(b, 1, 64, resource_addr,
@@ -767,7 +826,8 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
       nir_def *base = tex->src[nir_tex_instr_src_index(tex, nir_tex_src_coord)].src.ssa;
       nir_def *valid = nir_ine_imm(b, base, -1);
       nir_push_if(b, rgb32);
-      nir_def *rgb[4] = {nir_channel(b, &first->def, 0)};
+      nir_def *rgb[5] = {nir_channel(b, &first->def, 0)};
+      if (tex->is_sparse) rgb[4] = nir_channel(b, &first->def, 4);
       for (unsigned c = 1; c < 3; ++c) {
          nir_tex_instr *component = nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
          int coord_src = nir_tex_instr_src_index(component, nir_tex_src_coord);
@@ -775,6 +835,7 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
          nir_builder_instr_insert(b, &component->instr);
          nir_src_rewrite(&component->src[coord_src].src, component_coord);
          rgb[c] = nir_channel(b, &component->def, 0);
+         if (tex->is_sparse) rgb[4] = nir_ior(b, rgb[4], nir_channel(b, &component->def, 4));
       }
       nir_def *one = nir_alu_type_get_base_type(tex->dest_type) == nir_type_float
                        ? nir_imm_floatN_t(b, 1.0, tex->def.bit_size)
@@ -992,10 +1053,14 @@ lower_load_ssbo_descriptor(nir_builder *b, nir_intrinsic_instr *intrin,
       UNREACHABLE("Unknown address mode");
    }
 
+   /* The stored fourth word is a residency index, never a byte offset. */
+   desc = nir_vector_insert_imm(b, desc, nir_imm_int(b, 0), 3);
    nir_def_rewrite_uses(&intrin->def, desc);
 
    return true;
 }
+
+#include "kk_sparse_buffer_nir.h"
 
 static bool
 lower_ssbo_descriptor(nir_builder *b, nir_intrinsic_instr *intr, void *_data)

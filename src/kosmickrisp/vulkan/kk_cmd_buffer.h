@@ -68,6 +68,8 @@ struct kk_root_descriptor_table {
    /* Start index in dynamic_buffers where each set starts */
    uint8_t set_dynamic_buffer_start[KK_MAX_SETS];
 
+   uint64_t sparse_state;
+
    /* Client push constants: upload only the bound pipeline range. */
    uint8_t push[KK_MAX_PUSH_SIZE];
 };
@@ -360,6 +362,7 @@ struct kk_cmd_buffer {
     * enqueueing in the trampolines since they can never be replayed. */
    bool enqueue_commands;
    bool one_time_submit;
+   bool sparse_guarded;
    /* Metal command buffers are single-shot: a resubmission must re-record
     * by replaying the enqueued commands (see rerecord_cmd_buffer). */
    bool submitted;

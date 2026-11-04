@@ -1101,6 +1101,8 @@ global_access_qualifier(struct nir_to_msl_ctx *ctx,
 
 #include "kk_matrix_tile.h"
 
+#include "msl_sparse.h"
+
 static void
 intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
 {
@@ -1125,7 +1127,11 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
    }
    const nir_intrinsic_info *info = &nir_intrinsic_infos[instr->intrinsic];
    if (instrinsic_needs_dest_type(instr)) {
-      P_IND(ctx, "t%d = ", instr->def.index);
+      if (msl_def_has_sparse_residency(&instr->def)) {
+         P_IND(ctx, "auto sparse%d = ", instr->def.index);
+      } else {
+         P_IND(ctx, "t%d = ", instr->def.index);
+      }
    }
    switch (instr->intrinsic) {
    case nir_intrinsic_decl_reg: {
@@ -1163,6 +1169,9 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       }
       src_to_msl(ctx, &instr->src[0]);
       P(ctx, "));\n");
+      break;
+   case nir_intrinsic_is_sparse_resident_zink:
+      P(ctx, "sparse%d.resident();\n", instr->src[0].ssa->index);
       break;
    case nir_intrinsic_load_subgroup_size:
       P(ctx, "gl_SubGroupSize;\n");
@@ -1630,9 +1639,10 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       src_to_msl(ctx, &instr->src[0]);
       P(ctx, ".get_num_mip_levels();\n");
       break;
-   case nir_intrinsic_bindless_image_load:
+   case nir_intrinsic_bindless_image_load: {
+      bool sparse = msl_def_has_sparse_residency(&instr->def);
       src_to_msl(ctx, &instr->src[0]);
-      P(ctx, ".read(");
+      P(ctx, sparse ? ".sparse_read(" : ".read(");
       image_coord_swizzle(ctx, instr);
       if (nir_intrinsic_image_dim(instr) != GLSL_SAMPLER_DIM_BUF) {
          P(ctx, ", ");
@@ -1640,12 +1650,18 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       }
       /* read will always return vec4 and we may try to assign that to an uint
        * which is illegal. */
-      P(ctx, ").");
+      if (sparse) {
+         P(ctx, ");\n");
+         P_IND(ctx, "t%d = sparse%d.value().", instr->def.index, instr->def.index);
+      } else {
+         P(ctx, ").");
+      }
       for (uint32_t i = 0u; i < instr->def.num_components; ++i) {
          P(ctx, "%c", "xyzw"[i]);
       }
       P(ctx, ";\n");
       break;
+   }
    case nir_intrinsic_bindless_image_store:
       P_INDENT(ctx);
       src_to_msl(ctx, &instr->src[0]);
@@ -1865,7 +1881,12 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
    // Projectors have to be lowered away to regular arithmetic
    assert(!nir_tex_get_src(tex, nir_tex_src_projector));
 
-   P_IND(ctx, "t%d = ", tex->def.index);
+   bool sparse = msl_def_has_sparse_residency(&tex->def);
+   if (sparse) {
+      P_IND(ctx, "auto sparse%d = ", tex->def.index);
+   } else {
+      P_IND(ctx, "t%d = ", tex->def.index);
+   }
 
    switch (tex->op) {
    case nir_texop_tex:
@@ -1881,9 +1902,9 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
       nir_src *comparator = nir_tex_get_src(tex, nir_tex_src_comparator);
       src_to_msl(ctx, texhandle);
       if (comparator) {
-         P(ctx, ".sample_compare(");
+         P(ctx, sparse ? ".sparse_sample_compare(" : ".sample_compare(");
       } else {
-         P(ctx, ".sample(");
+         P(ctx, sparse ? ".sparse_sample(" : ".sample(");
       }
       src_to_msl(ctx, sampler);
       P(ctx, ", ");
@@ -1923,7 +1944,7 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
    }
    case nir_texop_txf: {
       src_to_msl(ctx, texhandle);
-      P(ctx, ".read(");
+      P(ctx, sparse ? ".sparse_read(" : ".read(");
       tex_coord_swizzle(ctx, tex);
       nir_src *lod = nir_tex_get_src(tex, nir_tex_src_lod);
       if (lod) {
@@ -1990,9 +2011,9 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
       nir_src *comparator = nir_tex_get_src(tex, nir_tex_src_comparator);
       src_to_msl(ctx, texhandle);
       if (comparator) {
-         P(ctx, ".gather_compare(");
+         P(ctx, sparse ? ".sparse_gather_compare(" : ".gather_compare(");
       } else {
-         P(ctx, ".gather(");
+         P(ctx, sparse ? ".sparse_gather(" : ".gather(");
       }
       src_to_msl(ctx, sampler);
       P(ctx, ", ");
@@ -2059,6 +2080,9 @@ tex_to_msl(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
    }
    default:
       assert(!"Unsupported texture op");
+   }
+   if (sparse) {
+      P_IND(ctx, "t%d = sparse%d.value();\n", tex->def.index, tex->def.index);
    }
 }
 

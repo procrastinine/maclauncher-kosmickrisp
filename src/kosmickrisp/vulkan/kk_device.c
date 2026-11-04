@@ -6,6 +6,7 @@
  */
 
 #include "kk_device.h"
+#include "kk_sparse.h"
 #include "kk_descriptor_set.h"
 #include "kk_dgc.h"
 
@@ -151,6 +152,7 @@ kk_destroy_sampler_heap(struct kk_device *dev, struct kk_sampler_heap *h)
       mtl_release(sampler->handle);
       entry = _mesa_hash_table_next_entry(h->ht, entry);
    }
+   kk_sparse_sample_rows_finish(dev);
    kk_query_table_finish(dev, &h->table);
    ralloc_free(h->ht);
    simple_mtx_destroy(&h->lock);
@@ -228,6 +230,9 @@ kk_sampler_heap_add_locked(struct kk_device *dev, struct kk_sampler_heap *h,
    return VK_SUCCESS;
 }
 
+static void kk_sampler_heap_remove_locked(struct kk_device *dev,
+   struct kk_sampler_heap *h, struct kk_rc_sampler *rc);
+
 VkResult
 kk_sampler_heap_add(struct kk_device *dev, struct mtl_sampler_packed desc,
                     struct kk_rc_sampler **out)
@@ -236,6 +241,10 @@ kk_sampler_heap_add(struct kk_device *dev, struct mtl_sampler_packed desc,
 
    simple_mtx_lock(&h->lock);
    VkResult result = kk_sampler_heap_add_locked(dev, h, desc, out, true);
+   if (result == VK_SUCCESS) {
+      result = kk_sparse_sampler_added(dev, *out);
+      if (result != VK_SUCCESS) kk_sampler_heap_remove_locked(dev, h, *out);
+   }
    simple_mtx_unlock(&h->lock);
 
    return result;
@@ -248,6 +257,10 @@ kk_sampler_native_add(struct kk_device *dev, struct mtl_sampler_packed desc,
    struct kk_sampler_heap *h = &dev->samplers;
    simple_mtx_lock(&h->lock);
    VkResult result = kk_sampler_heap_add_locked(dev, h, desc, out, false);
+   if (result == VK_SUCCESS) {
+      result = kk_sparse_sampler_added(dev, *out);
+      if (result != VK_SUCCESS) kk_sampler_heap_remove_locked(dev, h, *out);
+   }
    simple_mtx_unlock(&h->lock);
    return result;
 }
@@ -260,6 +273,7 @@ kk_sampler_heap_remove_locked(struct kk_device *dev, struct kk_sampler_heap *h,
    rc->refcount--;
 
    if (rc->refcount == 0) {
+      kk_sparse_sampler_removed(dev, rc);
       mtl_release(rc->handle);
       if (rc->index != UINT16_MAX) {
          kk_query_table_remove(dev, &h->table, rc->index);
@@ -398,6 +412,13 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
       memset(dev->atomic64_locks->cpu, 0, 65536 * sizeof(uint32_t));
    }
 
+   result = kk_sparse_device_init(dev);
+   if (result != VK_SUCCESS) {
+      if (dev->atomic64_locks) kk_destroy_bo(dev, dev->atomic64_locks);
+      kk_device_finish_lib(dev);
+      goto fail_sampler_heap;
+   }
+
    if (pdev->settings.gpu_capture_enabled) {
       const char *capture_directory =
          debug_get_option("MESA_KK_GPU_CAPTURE_DIRECTORY", NULL);
@@ -480,6 +501,8 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    while (dev->queue_count > 0)
       kk_queue_finish(dev, &dev->queues[--dev->queue_count]);
+
+   kk_sparse_device_finish(dev);
 
    /* Release the residency set last once all BOs are released. */
    mtl_release(dev->residency_set.handle);

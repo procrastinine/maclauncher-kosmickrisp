@@ -48,6 +48,7 @@ lower(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
    nir_instr *orig = nir_instr_clone(b->shader, &tex->instr);
    nir_builder_instr_insert(b, orig);
    nir_def *clamp_to_1 = &nir_instr_as_tex(orig)->def;
+   nir_def *source_1 = clamp_to_1;
 
    nir_push_if(b, has_custom);
    nir_def *replaced = NULL;
@@ -58,6 +59,12 @@ lower(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
 
       nir_tex_instr *tex_0 = nir_instr_as_tex(clone_instr);
       nir_def *clamp_to_0 = &tex_0->def;
+      nir_def *sparse_status = NULL;
+      if (tex->is_sparse) {
+         sparse_status = nir_ior(b, nir_channel(b, clamp_to_0, 4), nir_channel(b, source_1, 4));
+         clamp_to_0 = nir_trim_vector(b, clamp_to_0, 4);
+      }
+      nir_def *clamp_to_1 = tex->is_sparse ? nir_trim_vector(b, source_1, 4) : source_1;
 
       tex_0->backend_flags |= KK_TEXTURE_FLAG_CLAMP_TO_0;
 
@@ -93,6 +100,9 @@ lower(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
          replaced = nir_bcsel(b, nir_ieq(b, clamp_to_0, clamp_to_1), clamp_to_0,
                               border);
       }
+      if (tex->is_sparse)
+         replaced = nir_vec5(b, nir_channel(b, replaced, 0), nir_channel(b, replaced, 1),
+            nir_channel(b, replaced, 2), nir_channel(b, replaced, 3), sparse_status);
    }
    nir_pop_if(b, NULL);
 
@@ -106,4 +116,16 @@ bool
 kk_nir_lower_custom_border(nir_shader *nir)
 {
    return nir_shader_tex_pass(nir, lower, nir_metadata_none, NULL);
+}
+
+static bool
+kk_lower_sparse_border_tex(nir_builder *b, nir_tex_instr *tex, void *data)
+{
+   return tex->is_sparse && lower(b, tex, data);
+}
+
+bool
+kk_nir_lower_sparse_border(nir_shader *nir)
+{
+   return nir_shader_tex_pass(nir, kk_lower_sparse_border_tex, nir_metadata_none, NULL);
 }

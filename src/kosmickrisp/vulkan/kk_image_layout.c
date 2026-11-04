@@ -81,6 +81,8 @@ kk_image_layout_can_optimize(const struct kk_physical_device *pdev,
                              VkImageUsageFlags2KHR usage, VkImageTiling tiling,
                              VkImageCreateFlags2KHR flags, enum pipe_format format)
 {
+   if (flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
+      return false;
    /* Can only optimize if tiling is optimal */
    if (tiling != VK_IMAGE_TILING_OPTIMAL)
       return false;

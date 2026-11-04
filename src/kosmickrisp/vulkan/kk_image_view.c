@@ -11,6 +11,7 @@
 #include "kk_entrypoints.h"
 #include "kk_format.h"
 #include "kk_image.h"
+#include "kk_sparse.h"
 #include "kk_physical_device.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -185,6 +186,8 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
       }
 
       if (view->vk.usage & VK_IMAGE_USAGE_SAMPLED_BIT) {
+         VkResult result = kk_sparse_image_view_query(dev, view, mtl_handle, &view_layout, false);
+         if (result != VK_SUCCESS) { kk_image_view_finish(dev, view); return result; }
          view->planes[view_plane].mtl_handle_sampled =
             mtl_new_texture_view_with(mtl_handle, &view_layout);
          view->planes[view_plane].sampled_gpu_resource_id =
@@ -210,6 +213,8 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
              view->vk.view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY)
             view_layout.view_type = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
 
+         VkResult result = kk_sparse_image_view_query(dev, view, mtl_handle, &view_layout, true);
+         if (result != VK_SUCCESS) { kk_image_view_finish(dev, view); return result; }
          view->planes[view_plane].mtl_handle_storage =
             mtl_new_texture_view_with(mtl_handle, &view_layout);
          view->planes[view_plane].storage_gpu_resource_id =
@@ -287,6 +292,7 @@ kk_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
          mtl_release(view->planes[plane].mtl_handle_subres);
    }
 
+   kk_sparse_image_view_finish(dev, view);
    vk_image_view_finish(&view->vk);
 }
 

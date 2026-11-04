@@ -4,6 +4,7 @@
 struct kk_heap_nir_context {
    const uint64_t *embedded;
    uint32_t embedded_count;
+   bool sparse_buffers;
 };
 
 static nir_def *
@@ -60,6 +61,11 @@ kk_prepare_heap_instr(nir_builder *b, nir_instr *instr, void *data)
    if (instr->type != nir_instr_type_intrinsic)
       return false;
    nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+   bool buffer = intr->intrinsic == nir_intrinsic_load_heap_descriptor &&
+      (nir_intrinsic_resource_type(intr) & (nir_resource_type_uniform_buffer |
+       nir_resource_type_read_only_storage_buffer | nir_resource_type_read_write_storage_buffer));
+   /* Keep the descriptor identity until sparse IO consumes its record index. */
+   if (buffer && ctx->sparse_buffers) return false;
    if (intr->intrinsic == nir_intrinsic_load_heap_descriptor ||
        intr->intrinsic == nir_intrinsic_load_resource_heap_data) {
       nir_def *address = kk_heap_address(b, intr->src[0].ssa, false);
@@ -67,6 +73,10 @@ kk_prepare_heap_instr(nir_builder *b, nir_instr *instr, void *data)
          intr->def.bit_size, address,
          .align_mul = intr->intrinsic == nir_intrinsic_load_resource_heap_data ? nir_intrinsic_align_mul(intr) : 4,
          .align_offset = intr->intrinsic == nir_intrinsic_load_resource_heap_data ? nir_intrinsic_align_offset(intr) : 0);
+      if (buffer) {
+         assert(value->num_components == 4 && value->bit_size == 32);
+         value = nir_vector_insert_imm(b, value, nir_imm_int(b, 0), 3);
+      }
       nir_def_replace(&intr->def, value);
       return true;
    }
@@ -97,9 +107,17 @@ kk_prepare_heap_instr(nir_builder *b, nir_instr *instr, void *data)
 
 bool
 kk_nir_prepare_descriptor_heaps(nir_shader *nir, uint32_t embedded_count,
-                                 const uint64_t *embedded)
+                                 const uint64_t *embedded, bool sparse_buffers)
 {
-   const struct kk_heap_nir_context ctx = {embedded, embedded_count};
+   const struct kk_heap_nir_context ctx = {embedded, embedded_count, sparse_buffers};
+   return nir_shader_instructions_pass(nir, kk_prepare_heap_instr,
+                                       nir_metadata_control_flow, (void *)&ctx);
+}
+
+bool
+kk_nir_finish_sparse_heap_buffers(nir_shader *nir)
+{
+   const struct kk_heap_nir_context ctx = {0};
    return nir_shader_instructions_pass(nir, kk_prepare_heap_instr,
                                        nir_metadata_control_flow, (void *)&ctx);
 }

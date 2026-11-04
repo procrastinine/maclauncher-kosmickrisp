@@ -5,6 +5,7 @@
  */
 
 #include "mtl_heap.h"
+#include "mtl_sparse.h"
 
 /* TODO_KOSMICKRISP Remove */
 #include "kk_private.h"
@@ -24,6 +25,10 @@ mtl_new_heap(mtl_device *device, uint64_t size,
       descriptor.resourceOptions = (MTLResourceOptions)resource_options;
       descriptor.size = size;
       descriptor.sparsePageSize = MTLSparsePageSize16;
+      if (descriptor.storageMode == MTLStorageModePrivate &&
+          size >= 65536 && size % 65536 == 0 &&
+          mtl_device_supports_placement_sparse(device))
+         descriptor.maxCompatiblePlacementSparsePageSize = MTLSparsePageSize64;
       return [dev newHeapWithDescriptor:descriptor];
    }
 }
@@ -105,3 +110,5 @@ mtl_resource_set_label(mtl_resource *resource, const char *label)
       res.label = @(label);
    }
 }
+
+#include "mtl_sparse_impl.h"

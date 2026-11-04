@@ -22,6 +22,7 @@ kk_get_buffer_format_features(struct kk_physical_device *pdev, VkFormat format);
 struct kk_buffer_view {
    struct vk_buffer_view vk;
    mtl_texture *mtl_texel_buffer_handle;
+   void *sparse_view_pool;
    uint64_t texel_buffer_gpu_id;
    uint32_t texel_offset;
 };

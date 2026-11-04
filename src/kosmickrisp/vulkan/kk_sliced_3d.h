@@ -2,6 +2,7 @@
 /* Mesa's vk_image_view_init normalizes the storage-only slice range, also
  * consumed by NVK and panvk. Metal retains the full native 3D texture. */
 #include <stddef.h>
+#include "kk_sparse.h"
 static_assert(offsetof(struct kk_storage_image_descriptor, texel_offset) ==
               offsetof(struct kk_storage_image_descriptor, image_gpu_resource_id) +
               sizeof(uint64_t), "slice offset follows native texture ID");
@@ -48,6 +49,7 @@ kk_lower_sliced_3d_intrinsic(nir_builder *b, nir_intrinsic_instr *intr,
       offsetof(struct kk_storage_image_descriptor, texel_offset));
    nir_def *range = nir_build_load_global_constant(b, 2, 32, address,
       .align_mul = 8, .access = ACCESS_CAN_SPECULATE);
+   range = kk_nir_storage_sparse_slice_range(b, range);
    nir_def *count = nir_channel(b, range, 1);
    if (intr->intrinsic == nir_intrinsic_bindless_image_size) {
       b->cursor = nir_after_instr(&intr->instr);

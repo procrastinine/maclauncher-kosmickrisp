@@ -427,6 +427,7 @@ infer_types_from_intrinsic(struct hash_table *types, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_barycentric_coord_pixel:
       set_type(types, &instr->def, TYPE_FLOAT);
       break;
+   case nir_intrinsic_is_sparse_resident_zink:
    case nir_intrinsic_load_front_face:
    case nir_intrinsic_elect:
    case nir_intrinsic_load_helper_invocation:

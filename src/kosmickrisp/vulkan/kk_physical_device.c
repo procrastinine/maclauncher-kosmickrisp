@@ -287,6 +287,13 @@ kk_get_device_features(
       .shaderBufferInt64Atomics = true,
       .shaderSharedInt64Atomics = true,
       .shaderResourceMinLod = true,
+      .sparseBinding = pdev->info.placement_sparse,
+      .sparseResidencyBuffer = pdev->info.placement_sparse,
+      .sparseResidencyImage2D = pdev->info.placement_sparse,
+      .sparseResidencyImage3D = pdev->info.placement_sparse,
+      .sparseResidencyAliased = pdev->info.placement_sparse,
+      .shaderResourceResidency = pdev->info.placement_sparse,
+
       .shaderSampledImageArrayDynamicIndexing = true,
       .shaderStorageBufferArrayDynamicIndexing = true,
       .shaderStorageImageArrayDynamicIndexing = true,
@@ -777,9 +784,9 @@ kk_get_device_properties(
       .nonCoherentAtomSize = 64,
 
       /* Vulkan 1.0 sparse properties */
-      .sparseResidencyNonResidentStrict = false,
+      .sparseResidencyNonResidentStrict = pdev->info.placement_sparse,
       .sparseResidencyAlignedMipSize = false,
-      .sparseResidencyStandard2DBlockShape = false,
+      .sparseResidencyStandard2DBlockShape = pdev->info.placement_sparse,
       .sparseResidencyStandard2DMultisampleBlockShape = false,
       .sparseResidencyStandard3DBlockShape = false,
 
@@ -1171,6 +1178,7 @@ get_metal_limits(struct kk_physical_device *pdev)
       mtl_device_max_buffer_length(pdev->mtl_dev_handle);
    pdev->info.max_sampler_count =
       mtl_device_max_argument_buffer_sampler_count(pdev->mtl_dev_handle);
+   pdev->info.placement_sparse = mtl_device_supports_placement_sparse(pdev->mtl_dev_handle);
    pdev->info.gpu_apple_family =
       mtl_device_get_gpu_apple_family(pdev->mtl_dev_handle);
 
@@ -1349,6 +1357,12 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
          VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
       .queue_count = 1,
    };
+   if (pdev->info.placement_sparse) {
+      for (unsigned i = 0; i < pdev->queue_family_count; ++i)
+         if (pdev->queue_families[i].queue_flags &
+             (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT))
+            pdev->queue_families[i].queue_flags |= VK_QUEUE_SPARSE_BINDING_BIT;
+   }
    assert(pdev->queue_family_count <= ARRAY_SIZE(pdev->queue_families));
 
    pdev->sync_binary_type = vk_sync_binary_get_type(&kk_sync_type);

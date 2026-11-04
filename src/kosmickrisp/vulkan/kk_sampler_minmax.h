@@ -74,6 +74,8 @@ kk_minmax_lod(nir_builder *b, nir_tex_instr *tex, nir_def *dx, nir_def *dy)
    for (int i = probe->num_srcs - 1; i >= 0; --i)
       if (probe->src[i].src_type != nir_tex_src_texture_deref &&
           probe->src[i].src_type != nir_tex_src_sampler_deref &&
+          probe->src[i].src_type != nir_tex_src_texture_handle &&
+          probe->src[i].src_type != nir_tex_src_sampler_handle &&
           probe->src[i].src_type != nir_tex_src_coord)
          nir_tex_instr_remove_src(probe, i);
    /* Query coordinates exclude the array index. The never-sampled gradient

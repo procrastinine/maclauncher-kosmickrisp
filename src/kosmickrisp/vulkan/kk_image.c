@@ -229,7 +229,7 @@ kk_image_max_dimension(const struct kk_physical_device *pdev,
       /* Apple10 and later raise the 1D/2D/cube limit to 32768. */
       return pdev->info.gpu_apple_family >= 10 ? 32768 : 16384;
    case VK_IMAGE_TYPE_3D:
-      return 2048;
+      return KK_STORAGE_MAX_3D_DIMENSION;
    default:
       UNREACHABLE("Invalid image type");
    }
@@ -320,9 +320,13 @@ kk_GetPhysicalDeviceImageFormatProperties2(
    if (ycbcr_info && pImageFormatInfo->type != VK_IMAGE_TYPE_2D)
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
-   /* Don't support sparse residency */
-   if ((create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))
-      return VK_ERROR_FORMAT_NOT_SUPPORTED;
+   if (create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) {
+      VkSparseImageFormatProperties props;
+      if (!kk_sparse_image_format_properties(pdev, pImageFormatInfo->format,
+          pImageFormatInfo->type, VK_SAMPLE_COUNT_1_BIT, all_usage,
+          pImageFormatInfo->tiling, create_flags, &props))
+         return VK_ERROR_FORMAT_NOT_SUPPORTED;
+   }
 
    /* From the Vulkan 1.3.279 spec:
     *
@@ -407,6 +411,9 @@ kk_GetPhysicalDeviceImageFormatProperties2(
       if (caps->msaa && (!integer32 || pdev->info.supports_32bit_msaa))
          sampleCounts = pdev->info.supported_sample_counts;
    }
+
+   if (create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
+      sampleCounts = VK_SAMPLE_COUNT_1_BIT;
 
    /* From the Vulkan 1.2.199 spec:
     *
@@ -557,8 +564,17 @@ kk_GetPhysicalDeviceSparseImageFormatProperties2(
    const VkPhysicalDeviceSparseImageFormatInfo2 *pFormatInfo,
    uint32_t *pPropertyCount, VkSparseImageFormatProperties2 *pProperties)
 {
-   *pPropertyCount = 0;
-   return;
+   VK_FROM_HANDLE(kk_physical_device, pdev, physicalDevice);
+   VkSparseImageFormatProperties props;
+   if (!kk_sparse_format_properties(pdev, pFormatInfo->format, pFormatInfo->type,
+       pFormatInfo->samples, pFormatInfo->usage, pFormatInfo->tiling, &props)) {
+      *pPropertyCount = 0;
+      return;
+   }
+   if (!pProperties) { *pPropertyCount = 1; return; }
+   if (!*pPropertyCount) return;
+   *pPropertyCount = 1;
+   pProperties[0].properties = props;
 }
 
 static VkResult
@@ -604,6 +620,8 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
          &image->planes[plane].layout, pCreateInfo->initialLayout);
    }
 
+   if (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
+      return kk_sparse_image_init(dev, image, vk_image_usage_flags(pCreateInfo));
    return VK_SUCCESS;
 }
 
@@ -632,6 +650,7 @@ kk_image_finish(struct kk_device *dev, struct kk_image *image,
                 const VkAllocationCallbacks *pAllocator)
 {
    kk_descriptor_heap_image_finish(dev, image);
+   kk_sparse_image_finish(dev, image);
    for (uint8_t plane = 0; plane < image->plane_count; plane++) {
       kk_image_plane_finish(dev, &image->planes[plane], image->vk.create_flags,
                             pAllocator);
@@ -717,7 +736,8 @@ kk_get_image_memory_requirements(struct kk_device *dev, struct kk_image *image,
       }
    }
 
-   // TODO hope for the best?
+   if (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
+      memory_types = kk_sparse_memory_type_bits(pdev);
 
    uint64_t size_B = 0;
    uint32_t align_B = 0;
@@ -795,7 +815,8 @@ kk_GetImageSparseMemoryRequirements2(
    uint32_t *pSparseMemoryRequirementCount,
    VkSparseImageMemoryRequirements2 *pSparseMemoryRequirements)
 {
-   *pSparseMemoryRequirementCount = 0u;
+   VK_FROM_HANDLE(kk_image, image, pInfo->image);
+   kk_sparse_image_requirements(image, pSparseMemoryRequirementCount, pSparseMemoryRequirements);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -804,7 +825,12 @@ kk_GetDeviceImageSparseMemoryRequirements(
    uint32_t *pSparseMemoryRequirementCount,
    VkSparseImageMemoryRequirements2 *pSparseMemoryRequirements)
 {
-   *pSparseMemoryRequirementCount = 0u;
+   VK_FROM_HANDLE(kk_device, dev, device);
+   struct kk_image image = {0};
+   VkResult result = kk_image_init(dev, &image, pInfo->pCreateInfo);
+   if (result != VK_SUCCESS) { *pSparseMemoryRequirementCount = 0; return; }
+   kk_sparse_image_requirements(&image, pSparseMemoryRequirementCount, pSparseMemoryRequirements);
+   kk_image_finish(dev, &image, NULL);
 }
 
 static void

@@ -172,6 +172,7 @@ static struct kk_dgc_params kk_dgc_state(struct kk_cmd_buffer *cmd,
                   info->indirectCommandsLayout);
    const struct vk_indirect_command_layout *l = &layout->vk;
    bool compute = l->stages & VK_SHADER_STAGE_COMPUTE_BIT;
+   kk_sparse_refresh_shader(state, compute ? MESA_SHADER_COMPUTE : MESA_SHADER_VERTEX);
    struct kk_dgc_params p = kk_dgc_parameters(state, info);
    struct kk_descriptor_state *desc =
        compute ? &state->state.cs.descriptors : &state->state.gfx.descriptors;
@@ -308,6 +309,7 @@ static void kk_dgc_execute_parameters(struct kk_cmd_buffer *cmd,
                                       struct kk_dgc_params p, bool compute)
 {
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   kk_sparse_refresh_shader(cmd, compute ? MESA_SHADER_COMPUTE : MESA_SHADER_VERTEX);
    if (!p.base_root || !p.base_draw || (p.patch_count && !p.patches) ||
        (p.attribute_count && !p.attributes))
       return;

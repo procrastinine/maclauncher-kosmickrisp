@@ -20,6 +20,8 @@ struct kk_heap_buffer_view;
 
 struct kk_buffer {
    struct vk_buffer vk;
+   mtl_buffer *sparse_residency;
+   uint32_t sparse_record;
    struct kk_heap_buffer_view *heap_views;
    struct kk_buffer *heap_next;
    bool heap_registered;
@@ -59,7 +61,7 @@ kk_buffer_descriptor(const struct kk_buffer *buffer, struct kk_addr_range addr_r
    return (struct kk_buffer_address){
       .base_addr = addr_range.addr,
       .size = addr_range.range,
-      .zero = 0,
+      .zero = buffer ? buffer->sparse_record : 0,
    };
 }
 

@@ -6,6 +6,7 @@
  */
 
 #include "kk_buffer.h"
+#include "kk_sparse.h"
 #include "kk_descriptor_set.h"
 
 #include "kk_device.h"
@@ -19,6 +20,8 @@ kk_get_buffer_alignment(const struct kk_physical_device *pdev, uint64_t size,
                         VkBufferUsageFlags2KHR usage_flags,
                         VkBufferCreateFlags create_flags)
 {
+   if (create_flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT)
+      return KK_SPARSE_PAGE_SIZE;
    uint64_t alignment;
    mtl_heap_buffer_size_and_align_with_length(pdev->mtl_dev_handle, &size,
                                               &alignment);
@@ -48,6 +51,13 @@ kk_CreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    kk_descriptor_heap_buffer_bind(dev, buffer);
+   if (pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) {
+      VkResult result = kk_sparse_buffer_init(dev, buffer);
+      if (result != VK_SUCCESS) {
+         vk_buffer_destroy(&dev->vk, pAllocator, &buffer->vk);
+         return result;
+      }
+   }
    *pBuffer = kk_buffer_to_handle(buffer);
 
    return VK_SUCCESS;
@@ -64,6 +74,9 @@ kk_DestroyBuffer(VkDevice device, VkBuffer _buffer,
       return;
 
    kk_descriptor_heap_buffer_finish(dev, buffer);
+   kk_sparse_buffer_finish(dev, buffer);
+   if (buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT)
+      kk_device_remove_buffer_from_residency_set(dev, buffer->metal.handle);
    if (buffer->metal.handle)
       mtl_release(buffer->metal.handle);
 
@@ -85,7 +98,8 @@ kk_GetDeviceBufferMemoryRequirements(
    pMemoryRequirements->memoryRequirements = (VkMemoryRequirements){
       .size = align64(pInfo->pCreateInfo->size, alignment),
       .alignment = alignment,
-      .memoryTypeBits = BITFIELD_MASK(pdev->mem_type_count),
+      .memoryTypeBits = (pInfo->pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) ?
+         kk_sparse_memory_type_bits(pdev) : BITFIELD_MASK(pdev->mem_type_count),
    };
 
    vk_foreach_struct(sType, ext, pMemoryRequirements->pNext) {

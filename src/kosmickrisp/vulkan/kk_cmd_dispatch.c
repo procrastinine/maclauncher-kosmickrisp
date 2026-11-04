@@ -20,6 +20,7 @@
 static void
 kk_flush_compute_state(struct kk_cmd_buffer *cmd)
 {
+   kk_sparse_refresh_shader(cmd, MESA_SHADER_COMPUTE);
    mtl_compute_encoder *encoder = cs_get_compute(cmd);
 
    // Fill Metal argument buffer with descriptor set addresses

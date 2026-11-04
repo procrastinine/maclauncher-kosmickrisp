@@ -2572,6 +2572,7 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
 static void
 kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
+   kk_sparse_refresh_shader(cmd, MESA_SHADER_VERTEX);
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];

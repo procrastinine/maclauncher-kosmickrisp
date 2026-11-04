@@ -31,6 +31,8 @@ enum kk_feature_bit {
    KK_FEAT_SAMPLER_MINMAX,
    KK_FEAT_CONSERVATIVE_RASTER,
    KK_FEAT_NON_SEAMLESS_CUBE,
+   KK_FEAT_SPARSE_BUFFER,
+   KK_FEAT_SPARSE_REPLAY,
    KK_FEAT_COUNT,
 };
 
@@ -39,6 +41,7 @@ static_assert(KK_FEAT_COUNT <= sizeof(kk_feature_key) * CHAR_BIT,
               "shader feature bits fit the shader-cache key");
 
 struct kk_cmd_buffer;
+struct kk_sparse_shader_state;
 
 struct kk_tess_info {
    enum tess_primitive_mode mode : 8;
@@ -181,6 +184,7 @@ struct msl_compile_data {
 
 struct kk_shader {
    struct vk_shader vk;
+   struct kk_sparse_shader_state *sparse;
 
    struct kk_attachment_pipelines *attachment_pipelines;
    mtl_compute_pipeline_state *dgc_compute;
@@ -198,6 +202,9 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,
                                VK_OBJECT_TYPE_SHADER_EXT);
 
 extern const struct vk_device_shader_ops kk_device_shader_ops;
+void kk_sparse_shader_finish(struct kk_shader *shader);
+struct kk_shader *kk_sparse_select_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader);
+void kk_sparse_refresh_shader(struct kk_cmd_buffer *cmd, mesa_shader_stage stage);
 
 static inline nir_address_format
 kk_buffer_addr_format(VkPipelineRobustnessBufferBehaviorEXT robustness)
@@ -224,7 +231,8 @@ bool kk_nir_lower_sampler_minmax(nir_shader *nir,
       uint32_t set_layout_count,
       struct vk_descriptor_set_layout *const *set_layouts);
 
-bool kk_nir_prepare_descriptor_heaps(nir_shader *nir, uint32_t embedded_count, const uint64_t *embedded);
+bool kk_nir_prepare_descriptor_heaps(nir_shader *nir, uint32_t embedded_count, const uint64_t *embedded, bool sparse_buffers);
+bool kk_nir_finish_sparse_heap_buffers(nir_shader *nir);
 
 bool
 kk_nir_lower_descriptors(nir_shader *nir,
@@ -237,6 +245,14 @@ bool kk_nir_add_device_barrier_workaround(nir_shader *nir);
 
 bool kk_nir_lower_poly(struct nir_shader *nir);
 bool kk_nir_lower_null_images(nir_shader *nir);
+bool kk_nir_lower_sparse(nir_shader *nir);
+bool kk_nir_lower_sparse_border(nir_shader *nir);
+bool kk_nir_lower_sparse_sample_views(nir_shader *nir, uint32_t count, struct vk_descriptor_set_layout *const *layouts, bool minmax);
+bool kk_nir_lower_sparse_buffer_io(nir_shader *nir,
+   const struct vk_pipeline_robustness_state *rs, uint32_t count,
+   struct vk_descriptor_set_layout *const *layouts);
+nir_def *kk_nir_sparse_buffer_resident(nir_builder *b, nir_def *metadata, nir_def *coord);
+nir_def *kk_nir_sparse_view_address(nir_builder *b, nir_def *address, nir_def *query_record, nir_def **lod, bool storage, bool query_array);
 
 bool kk_nir_lower_textures(nir_shader *nir);
 

@@ -10,6 +10,7 @@
 #include "kk_bo.h"
 #include "kk_buffer.h"
 #include "kk_buffer_view.h"
+#include "kk_sparse.h"
 #include "kk_descriptor_set_layout.h"
 #include "kk_device.h"
 #include "kk_entrypoints.h"
@@ -68,6 +69,7 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
       VK_FROM_HANDLE(kk_image_view, view, info->imageView);
 
       plane_count = view->plane_count;
+      const uint64_t sparse_query = kk_sparse_image_view_query_address(view, false);
       for (uint8_t plane = 0; plane < plane_count; plane++) {
          if (is_input_attachment) {
             assert(view->planes[plane].input_gpu_resource_id);
@@ -85,10 +87,16 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
             desc[plane].aux_resource_id =
                view->planes[plane].cube_face_gpu_resource_id;
          }
+         if (sparse_query) {
+            assert(view->plane_count == 1);
+            assert(desc[plane].aux_word == 0);
+            desc[plane].aux_word = sparse_query;
+         }
          float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0);
          desc[plane].image_min_lod_fp16 = _mesa_float_to_half(min_lod);
          desc[plane].image_min_lod_uint16 = min_lod;
       }
+      if (sparse_query) desc[0].image_min_lod_uint16 |= KK_IMAGE_QUERY_RECORD_TAG;
       if (view->plane_count > 1) {
          /* Multi-planar images own both auxiliary words. Cube and sparse
           * images retain their words in the single-plane path. */
@@ -195,6 +203,7 @@ get_storage_image_view_desc(
       assert(view->planes[plane].storage_gpu_resource_id);
       desc.image_gpu_resource_id = view->planes[plane].storage_gpu_resource_id;
       kk_sliced_3d_descriptor(&desc, &view->vk);
+      kk_sparse_storage_descriptor(&desc, view);
    }
 
    assert(sizeof(desc) <= dst_size);
@@ -251,16 +260,20 @@ write_buffer_view_desc(struct kk_descriptor_set *set,
                        const VkBufferView bufferView, uint32_t binding,
                        uint32_t elem)
 {
-   struct kk_storage_image_descriptor desc = {};
+   struct {
+      struct kk_storage_image_descriptor image;
+      struct kk_sparse_view_descriptor sparse;
+   } desc = {};
    if (bufferView != VK_NULL_HANDLE) {
       VK_FROM_HANDLE(kk_buffer_view, view, bufferView);
 
       /* An empty view has no native texture. */
       assert(view->texel_buffer_gpu_id || view->vk.elements == 0);
 
-      desc.image_gpu_resource_id = view->texel_buffer_gpu_id;
-      desc.texel_offset = view->texel_offset;
-      desc.texel_count = view->vk.elements;
+      desc.image.image_gpu_resource_id = view->texel_buffer_gpu_id;
+      desc.image.texel_offset = view->texel_offset;
+      desc.image.texel_count = view->vk.elements;
+      desc.sparse = kk_sparse_buffer_view_descriptor(view);
    }
    write_desc(set, binding, elem, &desc, sizeof(desc));
 }

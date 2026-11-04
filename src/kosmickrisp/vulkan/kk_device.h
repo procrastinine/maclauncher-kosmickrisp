@@ -66,6 +66,7 @@ struct kk_rc_sampler {
 
    /* Index of this hardware sampler in the hardware sampler heap */
    uint16_t index;
+   bool sparse_query_source;
 };
 
 struct kk_sampler_heap {
@@ -84,6 +85,9 @@ struct kk_precompiled_cache {
 
 struct kk_device {
    struct vk_device vk;
+   struct kk_sparse_device_state *sparse;
+   uint32_t sparse_residency_used;
+   struct kk_sparse_sample_row *sparse_sample_rows;
    simple_mtx_t descriptor_heap_lock;
    struct kk_heap_sampler *heap_samplers;
    struct kk_heap_metadata_page *heap_metadata_pages;

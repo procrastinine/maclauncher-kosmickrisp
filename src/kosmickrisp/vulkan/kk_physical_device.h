@@ -40,6 +40,7 @@ struct kk_device_info {
    uint32_t max_workgroup_invocations;
    uint32_t max_compute_shared_memory_size;
    uint32_t gpu_apple_family;
+   bool placement_sparse;
    enum mtl_language_version msl_version;
    uint64_t max_buffer_size;
    uint32_t max_sampler_count;
