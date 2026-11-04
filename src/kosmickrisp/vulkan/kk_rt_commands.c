@@ -61,6 +61,9 @@ kk_rt_set_stack_size(struct vk_command_buffer *base, VkDeviceSize size)
 #include "kosmickrisp/bridge/mtl_bridge.h"
 #include "kosmickrisp/bridge/mtl_sampler.h"
 #include "vk_util.h"
+#include "kk_physical_device.h"
+#include "kk_rt_dispatch_plan.h"
+#include "kosmickrisp/bridge/mtl_device.h"
 static struct kk_ptr
 kk_rt_arena(struct kk_cmd_buffer *cmd,uint64_t bytes)
 {
@@ -86,18 +89,29 @@ kk_rt_trace(struct kk_cmd_buffer *cmd,const VkStridedDeviceAddressRegionKHR *ray
    uint64_t bytes,stride=MAX2(pipeline->stack_stride,cmd->state.rt->stack_size);
    if(!kk_rt_u64_add(stride,15,&stride)){vk_command_buffer_set_error(&cmd->vk,VK_ERROR_OUT_OF_DEVICE_MEMORY);return;}
    stride&=~15ull;
-   /* A bounded physical wave grid-strides the execution-time logical launch.
-    * GPU-written Indirect2 dimensions never decide a CPU allocation size. */
-   const uint32_t physical=32;
-   if(!kk_rt_u64_mul(stride,physical,&bytes)){vk_command_buffer_set_error(&cmd->vk,VK_ERROR_OUT_OF_DEVICE_MEMORY);return;}
-   struct kk_ptr stack=kk_rt_arena(cmd,bytes),lanes=kk_pool_alloc(cmd,physical*sizeof(struct kk_rt_lane_state),16);
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   const struct kk_physical_device *pdev = kk_device_physical(dev);
+   uint64_t launches = 0, lane_bytes;
+   uint32_t physical;
+   bool is_indirect = indirect || indirect2;
+   /* Reuse each lane arena across its launches when a full grid would
+    * consume more than one eighth of the device working set. */
+   uint64_t budget = mtl_device_recommended_max_working_set_size(dev->mtl_handle) / 8;
+   if ((!is_indirect && (!kk_rt_u64_mul(width, height, &launches) ||
+                         !kk_rt_u64_mul(launches, depth, &launches))) ||
+       !kk_rt_dispatch_plan(launches, is_indirect, stride, budget,
+                            pdev->info.max_buffer_size, &physical, &bytes, &lane_bytes)) {
+      vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return;
+   }
+   struct kk_ptr stack = kk_rt_arena(cmd, bytes), lanes = kk_rt_arena(cmd, lane_bytes);
    if(!stack.gpu||!lanes.gpu)return;
    struct kk_rt_dispatch_root root={0};root.functions=pipeline->native.function_table_id;
    root.root=desc->root.addr;root.sampler_table=kk_cmd_buffer_device(cmd)->samplers.table.bo->gpu;
    root.stack_base=stack.gpu;root.stack_stride=stride;root.lanes=lanes.gpu;root.physical_count=physical;
    root.indirect_dimensions=indirect;root.indirect2=indirect2;root.dimensions[0]=width;root.dimensions[1]=height;root.dimensions[2]=depth;
    root.function_count=pipeline->function_count;root.program_count=pipeline->program_count;root.group_count=pipeline->group_count;
-   root.control_pc=pipeline->function_count-1;root.traversal_program=pipeline->traversal_program;root.max_trace_depth=31;root.attribute_size=pipeline->attribute_size;
+   root.control_pc=pipeline->function_count-1;root.traversal_program=pipeline->traversal_program;root.max_trace_depth=pipeline->recursion_depth;root.attribute_size=pipeline->attribute_size;
    if(!indirect2){root.raygen=(struct kk_rt_sbt_region){raygen->deviceAddress,raygen->stride,raygen->size};root.miss=(struct kk_rt_sbt_region){miss->deviceAddress,miss->stride,miss->size};root.hit=(struct kk_rt_sbt_region){hit->deviceAddress,hit->stride,hit->size};root.callable=(struct kk_rt_sbt_region){callable->deviceAddress,callable->stride,callable->size};}
    struct kk_ptr functions=kk_rt_arena(cmd,(uint64_t)pipeline->function_count*sizeof(*pipeline->functions));
    struct kk_ptr programs=kk_rt_arena(cmd,(uint64_t)pipeline->program_count*sizeof(struct kk_rt_program_info));

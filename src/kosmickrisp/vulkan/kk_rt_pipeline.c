@@ -201,13 +201,23 @@ kk_rt_pipeline_realize(struct vk_device *device, const struct vk_pipeline *commo
    mtl_residency_set_add_allocation(dev->residency_set.handle, pipeline->native.function_table);
    simple_mtx_unlock(&dev->residency_set.mutex);
    pipeline->function_table_resident = true;
-   uint64_t per_frame;
-   if(!kk_rt_u64_add(pipeline->stack_stride,2*pipeline->attribute_size+sizeof(struct kk_rt_cps_frame),&per_frame)||
-      !kk_rt_u64_mul(per_frame,31*3+3,&pipeline->stack_stride))return VK_ERROR_OUT_OF_HOST_MEMORY;
-   uint64_t common_stack=vk_pipeline_get_rt_stack_size(common),traversal_stack;
-   if(!kk_rt_u64_mul(pipeline->traversal->stack_size,31,&traversal_stack)||
-      !kk_rt_u64_add(common_stack,traversal_stack,&common_stack))return VK_ERROR_OUT_OF_HOST_MEMORY;
-   pipeline->stack_stride=MAX2(pipeline->stack_stride,common_stack);
+   pipeline->recursion_depth = vk_pipeline_get_rt_recursion_depth(common);
+   /* stack_size already includes the CPS frame header. Reserve the actual
+    * pipeline recursion depth, plus callable/parked activations, rather than
+    * charging every launch for the device maximum of 31 trace levels. */
+   uint64_t per_frame, frame_count;
+   if (!kk_rt_u64_add(pipeline->stack_stride, 2 * pipeline->attribute_size, &per_frame) ||
+       !kk_rt_u64_add(per_frame, 15, &per_frame) ||
+       !kk_rt_u64_mul(pipeline->recursion_depth, 3, &frame_count) ||
+       !kk_rt_u64_add(frame_count, 3, &frame_count) ||
+       !kk_rt_u64_mul(per_frame & ~15ull, frame_count, &pipeline->stack_stride))
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   uint64_t common_stack = vk_pipeline_get_rt_stack_size(common), traversal_stack;
+   if (!kk_rt_u64_mul(pipeline->traversal->stack_size + 2 * pipeline->attribute_size,
+                      pipeline->recursion_depth, &traversal_stack) ||
+       !kk_rt_u64_add(common_stack, traversal_stack, &common_stack))
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   pipeline->stack_stride = MAX2(pipeline->stack_stride, common_stack);
    pipeline->dispatch_shader.pipeline.cs = pipeline->native.pipeline;
    return VK_SUCCESS;
 }

@@ -2769,6 +2769,7 @@ struct vk_rt_pipeline {
    VkDeviceSize stack_size;
    VkDeviceSize scratch_size;
    uint32_t ray_queries;
+   uint32_t recursion_depth;
 
    uint8_t dynamic_descriptor_offsets[MESA_VK_MAX_DESCRIPTOR_SETS];
 };
@@ -2796,6 +2797,12 @@ vk_pipeline_get_rt_stage(const struct vk_pipeline *pipeline, uint32_t index)
    const struct vk_rt_pipeline *rt = vk_pipeline_as_rt(pipeline);
    assert(index < rt->stage_count);
    return rt->stages[index].shader;
+}
+
+uint32_t
+vk_pipeline_get_rt_recursion_depth(const struct vk_pipeline *pipeline)
+{
+   return vk_pipeline_as_rt(pipeline)->recursion_depth;
 }
 
 uint32_t
@@ -3858,6 +3865,8 @@ vk_create_rt_pipeline(struct vk_device *device,
       pipeline->groups[pipeline->group_count++] =
          vk_rt_shader_group_from_compile_info(&compile_info.groups[i]);
    }
+
+   pipeline->recursion_depth = pCreateInfo->maxPipelineRayRecursionDepth;
 
    /* Compute final stats */
    for (uint32_t i = 0; i < pipeline->stage_count; i++) {

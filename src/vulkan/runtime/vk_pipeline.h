@@ -247,6 +247,7 @@ struct vk_rt_group_shader_info {
 };
 
 VkDeviceSize vk_pipeline_get_rt_stack_size(const struct vk_pipeline *pipeline);
+uint32_t vk_pipeline_get_rt_recursion_depth(const struct vk_pipeline *pipeline);
 uint32_t vk_pipeline_get_rt_stage_count(const struct vk_pipeline *pipeline);
 const struct vk_shader *vk_pipeline_get_rt_stage(const struct vk_pipeline *pipeline,
                                                 uint32_t index);

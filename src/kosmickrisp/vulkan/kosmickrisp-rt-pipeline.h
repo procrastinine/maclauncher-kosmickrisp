@@ -24,6 +24,7 @@ struct kk_rt_pipeline {
    mtl_function_descriptor *control;
    struct vk_shader *traversal;
    uint32_t traversal_program;
+   uint32_t recursion_depth;
    uint64_t stack_stride;
    uint64_t attribute_size;
    struct kk_rt_group_entry *groups;
