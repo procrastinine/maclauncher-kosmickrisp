@@ -136,8 +136,9 @@ kk_sample_native_value(nir_builder *b, nir_tex_instr *tex,
 
    float constant_bias;
    nir_def *bias;
-   if (kk_sample_constant_metadata(binding, known, KK_SAMPLER_META_QUERY_BIAS,
-                                   false, &constant_bias)) {
+   bool bias_known = kk_sample_constant_metadata(binding, known,
+      KK_SAMPLER_META_QUERY_BIAS, false, &constant_bias);
+   if (bias_known) {
       bias = nir_imm_float16(b, constant_bias);
    } else {
       nir_def *plane = nir_get_tex_src(tex, nir_tex_src_plane);
@@ -149,18 +150,16 @@ kk_sample_native_value(nir_builder *b, nir_tex_instr *tex,
                            sampler_query_lod_bias_fp16), ctx);
    }
    if (tex->op == nir_texop_tex) {
-      /* Keep the frequent zero-bias sample literally implicit, including its
-       * anisotropic native filtering. The flag and bias loads remain runtime
-       * descriptor reads for mutable/UAB bindings. */
-      nir_push_if(b, nir_fneu_imm(b, bias, 0));
-      nir_def *biased = nir_f2f32(b, bias);
-      nir_tex_instr *with_bias = kk_sample_clone(b, tex);
-      with_bias->op = nir_texop_txb;
-      nir_tex_instr_add_src(with_bias, nir_tex_src_bias, biased);
-      nir_push_else(b, NULL);
-      nir_tex_instr *plain = kk_sample_clone(b, tex);
-      nir_pop_if(b, NULL);
-      return nir_if_phi(b, &with_bias->def, &plain->def);
+      /* A mutable native sampler still needs its runtime Metal3 bias. One
+       * implicit-LOD bias sample covers zero and nonzero values without
+       * cloning the native texture operation or its resource loads. */
+      nir_def *value = nir_f2f32(b, bias);
+      nir_tex_instr *native = kk_sample_clone(b, tex);
+      if (!bias_known || constant_bias != 0) {
+         native->op = nir_texop_txb;
+         nir_tex_instr_add_src(native, nir_tex_src_bias, value);
+      }
+      return &native->def;
    }
 
    nir_def *value = nir_f2f32(b, bias);
@@ -184,6 +183,24 @@ kk_sample_native_value(nir_builder *b, nir_tex_instr *tex,
 }
 
 static bool
+kk_sample_prepare_2d(nir_builder *b, nir_tex_instr *tex, unsigned flags, bool lower_native)
+{
+   /* Keep the software FP32-preservation lowering on its original NIR
+    * operations. Hand-written Metal preparation must not bypass that ABI. */
+   if (nir_is_denorm_preserve(b->shader->info.float_controls_execution_mode, 32))
+      return false;
+   bool implicit = tex->op == nir_texop_tex || tex->op == nir_texop_txb;
+   if ((!implicit && tex->op != nir_texop_txl && tex->op != nir_texop_txd) ||
+       tex->sampler_dim != GLSL_SAMPLER_DIM_2D || tex->is_sparse ||
+       (implicit && (tex->sampler_non_uniform || tex->texture_non_uniform)))
+      return false;
+   tex->backend_flags &= ~(KK_SAMPLE_NATIVE_DISPATCH | KK_SAMPLE_LOWER_NATIVE_BIAS);
+   tex->backend_flags |= flags | KK_SAMPLE_EMULATION_ONLY | KK_SAMPLE_PREPARE_2D |
+      (lower_native ? KK_SAMPLE_LOWER_NATIVE_BIAS : 0);
+   return true;
+}
+
+static bool
 kk_sample_native_dispatch(nir_builder *b, nir_tex_instr *tex,
                           struct kk_sample_lower_ctx *ctx,
                           const struct kk_descriptor_set_binding_layout *binding,
@@ -192,6 +209,8 @@ kk_sample_native_dispatch(nir_builder *b, nir_tex_instr *tex,
    bool lower_native = tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS;
    if ((known && known->is_virtual) ||
        (flags & (KK_SAMPLE_MIN | KK_SAMPLE_MAX | KK_SAMPLE_BORDER_KNOWN))) {
+      if (kk_sample_prepare_2d(b, tex, flags, lower_native))
+         return true;
       tex->backend_flags &= ~(KK_SAMPLE_NATIVE_DISPATCH | KK_SAMPLE_LOWER_NATIVE_BIAS);
       kk_sampler_lower_bias_value(b, tex, lower_native);
       bool progress = kk_sample_mark(b, tex, ctx);
@@ -230,9 +249,11 @@ kk_sample_native_dispatch(nir_builder *b, nir_tex_instr *tex,
     * level/gradient candidates carry all their original derivative inputs. */
    nir_push_if(b, emulated);
    nir_tex_instr *slow = kk_sample_clone(b, tex);
-   kk_sampler_lower_bias_value(b, slow, lower_native);
-   kk_sample_mark(b, slow, ctx);
-   slow->backend_flags |= KK_SAMPLE_EMULATION_ONLY;
+   if (!kk_sample_prepare_2d(b, slow, flags, lower_native)) {
+      kk_sampler_lower_bias_value(b, slow, lower_native);
+      kk_sample_mark(b, slow, ctx);
+      slow->backend_flags |= KK_SAMPLE_EMULATION_ONLY;
+   }
    b->cursor = nir_after_instr(&slow->instr);
    nir_push_else(b, NULL);
    nir_def *native = kk_sample_native_value(b, tex, binding, known, &ctx->descriptors);

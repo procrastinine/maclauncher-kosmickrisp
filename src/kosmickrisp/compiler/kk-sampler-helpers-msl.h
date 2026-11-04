@@ -36,10 +36,23 @@ static const nir_tex_src_type kk_sample_args[] = {
 static const char *kk_sample_arg_names[] = {"bias_value", "lod_value", "dx", "dy", "min_lod_value", "offset_value", "compare_value"};
 
 static void
-kk_sample_parameters(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex, bool declaration)
+kk_sample_parameters_mode(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
+                          bool declaration, bool entry)
 {
+   bool prepared = tex->backend_flags & KK_SAMPLE_PREPARE_2D;
+   if (prepared) {
+      if (entry) {
+         P(ctx, declaration ? ", float source_value, float2 source_dx, float2 source_dy, uint operation" : ", source_value, source_dx, source_dy, operation");
+      } else {
+         P(ctx, declaration ? ", float2 dx, float2 dy, float sample_lod, uint operation" : ", dx, dy, sample_lod, operation");
+      }
+   }
    for (unsigned i = 0; i < ARRAY_SIZE(kk_sample_args); ++i) {
       nir_src *src = nir_tex_get_src(tex, kk_sample_args[i]);
+      if (prepared && (kk_sample_args[i] == nir_tex_src_bias ||
+                       kk_sample_args[i] == nir_tex_src_lod ||
+                       kk_sample_args[i] == nir_tex_src_ddx ||
+                       kk_sample_args[i] == nir_tex_src_ddy)) continue;
       if (!src || (kk_sample_args[i] == nir_tex_src_offset && nir_src_is_const(*src))) continue;
       if (declaration) {
          unsigned n = src->ssa->num_components;
@@ -49,6 +62,12 @@ kk_sample_parameters(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex, bool declar
          P(ctx, ", %s", kk_sample_arg_names[i]);
       }
    }
+}
+
+static void
+kk_sample_parameters(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex, bool declaration)
+{
+   kk_sample_parameters_mode(ctx, tex, declaration, false);
 }
 
 static void kk_sample_coord(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex, const char *coord);
@@ -134,7 +153,8 @@ static void
 kk_sample_key(nir_tex_instr *tex, struct kk_msl_sample_key *key)
 {
    memset(key, 0, sizeof(*key));
-   key->signature[0] = tex->op;
+   bool prepared = tex->backend_flags & KK_SAMPLE_PREPARE_2D;
+   key->signature[0] = prepared ? nir_texop_tex : tex->op;
    key->signature[1] = tex->sampler_dim;
    key->signature[2] = tex->is_array;
    key->signature[3] = tex->is_shadow;
@@ -144,6 +164,14 @@ kk_sample_key(nir_tex_instr *tex, struct kk_msl_sample_key *key)
    key->signature[7] = tex->backend_flags;
    for (unsigned i = 0; i < ARRAY_SIZE(kk_sample_args); ++i) {
       nir_src *src = nir_tex_get_src(tex, kk_sample_args[i]);
+      if (prepared && (kk_sample_args[i] == nir_tex_src_bias ||
+                       kk_sample_args[i] == nir_tex_src_lod ||
+                       kk_sample_args[i] == nir_tex_src_ddx ||
+                       kk_sample_args[i] == nir_tex_src_ddy)) {
+         key->arguments[2 * i] = i < 2 ? 1 : 2;
+         key->arguments[2 * i + 1] = 32;
+         continue;
+      }
       if (!src) continue;
       key->arguments[2 * i] = src->ssa->num_components;
       key->arguments[2 * i + 1] = src->ssa->bit_size;
@@ -188,8 +216,8 @@ kk_sample_coord(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex, const char *coor
 }
 
 static void
-kk_sample_native(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
-                  const char *sampler, bool tap)
+kk_sample_native_form(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
+                       const char *sampler, bool tap, bool explicit_level)
 {
    if (tap && (tex->backend_flags & KK_SAMPLE_SPARSE_POINT)) {
       /* Record zero is an ordinary fully resident view. A native gather
@@ -217,8 +245,16 @@ kk_sample_native(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
    if (tap) {
       P(ctx, ", level(float(tap_level))");
    } else {
+      bool prepared = tex->backend_flags & KK_SAMPLE_PREPARE_2D;
+      if (prepared) {
+         P(ctx, explicit_level ? ", level(sample_lod)" : ", gradient2d(dx, dy)");
+      }
       for (unsigned i = 0; i < ARRAY_SIZE(kk_sample_args); ++i) {
          nir_src *src = nir_tex_get_src(tex, kk_sample_args[i]);
+         if (prepared && (kk_sample_args[i] == nir_tex_src_bias ||
+                       kk_sample_args[i] == nir_tex_src_lod ||
+                       kk_sample_args[i] == nir_tex_src_ddx ||
+                       kk_sample_args[i] == nir_tex_src_ddy)) continue;
          if (!src) continue;
          switch (kk_sample_args[i]) {
          case nir_tex_src_bias: P(ctx, ", bias(bias_value)"); break;
@@ -246,6 +282,21 @@ kk_sample_native(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
       }
    }
    P(ctx, ")");
+}
+
+static void
+kk_sample_native(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex,
+                  const char *sampler, bool tap)
+{
+   if (!tap && (tex->backend_flags & KK_SAMPLE_PREPARE_2D)) {
+      P(ctx, "(operation == 1u ? ");
+      kk_sample_native_form(ctx, tex, sampler, false, true);
+      P(ctx, " : ");
+      kk_sample_native_form(ctx, tex, sampler, false, false);
+      P(ctx, ")");
+   } else {
+      kk_sample_native_form(ctx, tex, sampler, tap, false);
+   }
 }
 
 static void
@@ -323,6 +374,7 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
    unsigned dims = tex->sampler_dim == GLSL_SAMPLER_DIM_3D ? 3 :
                    tex->sampler_dim == GLSL_SAMPLER_DIM_1D ? 1 : 2;
    bool reduction = tex->backend_flags & KK_SAMPLE_MINMAX;
+   bool weighted_only = (tex->backend_flags & KK_SAMPLE_PREPARE_2D) && !reduction;
    bool gather = tex->op == nir_texop_tg4;
    bool emulation_only = tex->backend_flags & KK_SAMPLE_EMULATION_ONLY;
    /* Keep one call boundary around descriptor-selected emulation. Native
@@ -369,12 +421,14 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       nir_is_denorm_flush_to_zero(ctx->shader->info.float_controls_execution_mode, 32);
    const char *accum = tex->is_shadow ? "float" : "float4";
    if (kk_sample_has_footprint(tex)) {
+      if (!weighted_only) {
       P(ctx, "static %s kk_reduce_%u(%s a, %s b, uint mode) {\n", type, id, type, type);
       if (flush) P(ctx, "    #pragma METAL fp math_mode(safe)\n");
       P(ctx, "    %s value = mode == 1u ? %s(a, b) : %s(a, b);\n", type, fp ? "fmin" : "min", fp ? "fmax" : "max");
       if (flush && !tex->is_shadow)
          P(ctx, "    value = as_type<%s>(select(as_type<uint4>(value), as_type<uint4>(value) & 0x80000000u, (as_type<uint4>(value) & 0x7f800000u) == 0u));\n", type);
       P(ctx, "    return value;\n}\n");
+      }
       P(ctx, "template<bool Border> static __attribute__((%s)) %s kk_tap_%u(", internal_attribute, type, id);
       kk_sample_texture_param(ctx, tex);
       P(ctx, ", sampler native_sampler, constant SamplerTable &table, constant ushort *metadata, float4 tap_coord, uint tap_level");
@@ -412,7 +466,11 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, "    bool unnormalized = (metadata[23] & 512u) != 0;\n");
       P(ctx, "    float3 p = (unnormalized ? uv : uv * size) - (linear_filter ? 0.5f : 0.0f);\n");
       P(ctx, "    float3 base = floor(p), fraction = p - base; base += texel_offset;\n");
-      P(ctx, "    %s result = %s(0); %s weighted = %s(0); bool first = true;\n", type, type, accum, accum);
+      if (weighted_only) {
+         P(ctx, "    %s weighted = %s(0);\n", accum, accum);
+      } else {
+         P(ctx, "    %s result = %s(0); %s weighted = %s(0); bool first = true;\n", type, type, accum, accum);
+      }
       P(ctx, "    for (uint corner = 0; corner < %uu; ++corner) {\n        float weight = 1.0f; float3 center = base;\n", 1u << dims);
       for (unsigned d = 0; d < dims; ++d)
          P(ctx, "        bool hi%u = (corner & %uu) != 0; weight *= linear_filter ? (hi%u ? fraction.%c : 1.0f - fraction.%c) : (hi%u ? 0.0f : 1.0f); center.%c += hi%u ? 1.5f : 0.5f;\n", d, 1u << d, d, "xyz"[d], "xyz"[d], d, "xyz"[d], d);
@@ -428,8 +486,13 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, "        %s tap = kk_tap_%u<Border>(image, native_sampler, table, metadata, tap_coord, mip", type, id);
       if (tex->is_shadow) P(ctx, ", compare_value");
       kk_sample_sparse_arg(ctx, tex, false);
-      P(ctx, ");\n        if (!linear_filter) return tap;\n        if (mode == 0u) weighted += %s(tap) * weight;\n", accum);
-      P(ctx, "        else result = first ? tap : kk_reduce_%u(result, tap, mode);\n        first = false;\n    }\n    return mode == 0u ? %s(weighted) : result;\n}\n", id, type);
+      P(ctx, ");\n        if (!linear_filter) return tap;\n");
+      if (weighted_only) {
+         P(ctx, "        weighted += %s(tap) * weight;\n    }\n    return %s(weighted);\n}\n", accum, type);
+      } else {
+         P(ctx, "        if (mode == 0u) weighted += %s(tap) * weight;\n", accum);
+         P(ctx, "        else result = first ? tap : kk_reduce_%u(result, tap, mode);\n        first = false;\n    }\n    return mode == 0u ? %s(weighted) : result;\n}\n", id, type);
+      }
 
       P(ctx, "template<bool Border> static __attribute__((%s)) %s kk_reduction_%u(", internal_attribute, type, id);
       kk_sample_texture_param(ctx, tex);
@@ -468,7 +531,11 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, "        %s upper = kk_level_%u<Border>(image, native_sampler, table, metadata, coord, next, linear_filter, mode, texel_offset", type, id);
       if (tex->is_shadow) P(ctx, ", compare_value");
       kk_sample_sparse_arg(ctx, tex, false);
-      P(ctx, ");\n        value = mode == 0u ? %s(mix(%s(value), %s(upper), lod - float(low))) : kk_reduce_%u(value, upper, mode);\n    }\n    return value;\n}\n", type, accum, accum, id);
+      if (weighted_only) {
+         P(ctx, ");\n        value = %s(mix(%s(value), %s(upper), lod - float(low)));\n    }\n    return value;\n}\n", type, accum, accum);
+      } else {
+         P(ctx, ");\n        value = mode == 0u ? %s(mix(%s(value), %s(upper), lod - float(low))) : kk_reduce_%u(value, upper, mode);\n    }\n    return value;\n}\n", type, accum, accum, id);
+      }
    }
    if (kk_sample_has_footprint(tex) &&
        (tex->backend_flags & (KK_SAMPLE_VIRTUAL | KK_SAMPLE_SPARSE))) {
@@ -479,12 +546,19 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, ", float reduction_lod, uint mode");
       kk_sample_sparse_arg(ctx, tex, true);
       P(ctx, ") {\n");
-      if (nir_tex_get_src(tex, nir_tex_src_ddx)) {
-         unsigned gradient_dims = nir_tex_get_src(tex, nir_tex_src_ddx)->ssa->num_components;
+      if (nir_tex_get_src(tex, nir_tex_src_ddx) ||
+          (tex->backend_flags & KK_SAMPLE_PREPARE_2D)) {
+         unsigned gradient_dims = tex->backend_flags & KK_SAMPLE_PREPARE_2D ? 2 :
+            nir_tex_get_src(tex, nir_tex_src_ddx)->ssa->num_components;
          if (tex->backend_flags & KK_SAMPLE_SPARSE) {
             P(ctx, "    kk_sampler_params params = sparse.query_address != 0ul ? sparse.params : kk_sampler_params_from_meta(metadata);\n");
          } else {
             P(ctx, "    constant kk_sampler_params &params = kk_sampler_params_from_meta(metadata);\n");
+         }
+         if (tex->backend_flags & KK_SAMPLE_PREPARE_2D) {
+            P(ctx, "    if (operation == 1u) return kk_reduction_%u<Border>(image, native_sampler, table, metadata, coord", id);
+            kk_sample_parameters(ctx, tex, false);
+            P(ctx, ", reduction_lod, mode);\n");
          }
          /* This is exactly the old count-one case, before any footprint
           * dimensions, lengths or ratios are evaluated. */
@@ -517,14 +591,22 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
          kk_sample_parameters(ctx, tex, false); P(ctx, ", reduction_lod, mode"); kk_sample_sparse_arg(ctx, tex, false); P(ctx, ");\n");
          P(ctx, "    float lod = reduction_lod - log2(ratio);\n");
          P(ctx, "    float3 direction = lx >= ly ? gx : gy;\n");
-         P(ctx, "    %s result = %s(0); %s weighted = %s(0);\n", type, type, accum, accum);
+         if (weighted_only) {
+            P(ctx, "    %s weighted = %s(0);\n", accum, accum);
+         } else {
+            P(ctx, "    %s result = %s(0); %s weighted = %s(0);\n", type, type, accum, accum);
+         }
          P(ctx, "    for (uint tap = 0u; tap < count; ++tap) {\n        float4 sample_coord = coord;\n");
          P(ctx, "        sample_coord.%.*s += direction.%.*s * ((float(tap) + 0.5f) / float(count) - 0.5f);\n", cube ? 3 : dims, "xyz", cube ? 3 : dims, "xyz");
          P(ctx, "        %s value = kk_reduction_%u<Border>(image, native_sampler, table, metadata, sample_coord", type, id);
          kk_sample_parameters(ctx, tex, false);
          P(ctx, ", lod, mode"); kk_sample_sparse_arg(ctx, tex, false);
-         P(ctx, ");\n        if (mode == 0u) weighted += %s(value);\n", accum);
-         P(ctx, "        else result = tap == 0u ? value : kk_reduce_%u(result, value, mode);\n    }\n    return mode == 0u ? %s(weighted / float(count)) : result;\n", id, type);
+         if (weighted_only) {
+            P(ctx, ");\n        weighted += %s(value);\n    }\n    return %s(weighted / float(count));\n", accum, type);
+         } else {
+            P(ctx, ");\n        if (mode == 0u) weighted += %s(value);\n", accum);
+            P(ctx, "        else result = tap == 0u ? value : kk_reduce_%u(result, value, mode);\n    }\n    return mode == 0u ? %s(weighted / float(count)) : result;\n", id, type);
+         }
       } else {
          P(ctx, "    return kk_reduction_%u<Border>(image, native_sampler, table, metadata, coord", id);
          kk_sample_parameters(ctx, tex, false); P(ctx, ", reduction_lod, mode"); kk_sample_sparse_arg(ctx, tex, false); P(ctx, ");\n");
@@ -542,7 +624,7 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
    P(ctx, "static __attribute__((noinline)) %s kk_sample_%u(", type, id);
    kk_sample_texture_param(ctx, tex);
    P(ctx, ", sampler native_sampler, constant SamplerTable &table, ulong address, float4 coord");
-   kk_sample_parameters(ctx, tex, true);
+   kk_sample_parameters_mode(ctx, tex, true, true);
    if (nir_tex_get_src(tex, nir_tex_src_backend2)) P(ctx, ", float reduction_lod");
    kk_sample_sparse_arg(ctx, tex, true);
    P(ctx, ") {\n    constant ushort *metadata = (constant ushort*)address;\n");
@@ -564,6 +646,29 @@ kk_sample_emit_one(struct nir_to_msl_ctx *ctx, struct kk_msl_sample_helper *help
       P(ctx, "    bool border = short(metadata[5]) >= 0;\n");
    } else {
       P(ctx, "    constexpr bool border = false;\n");
+   }
+   if (tex->backend_flags & KK_SAMPLE_PREPARE_2D) {
+      /* Only implicit callers (operation0) require quad derivatives; their
+       * descriptor dispatch is quad-uniform. Explicit callers supply inputs. */
+      P(ctx, "    float2 dx = source_dx, dy = source_dy;\n");
+      P(ctx, "    if (operation == 0u) { dx = dfdx(coord.xy); dy = dfdy(coord.xy); }\n");
+      P(ctx, "    float sampler_bias = kk_sampler_metadata_value(address, %uu, %s);\n",
+        KK_SAMPLER_META_BIAS, tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS ? "true" : "false");
+      if (tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS) {
+         P(ctx, "    float total_bias = (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0 ? sampler_bias + source_value : float(half(sampler_bias) + half(source_value));\n");
+      } else {
+         P(ctx, "    float total_bias = sampler_bias + source_value;\n");
+      }
+      P(ctx, "    float sample_lod = operation == 1u ? total_bias : 0.0f;\n");
+      P(ctx, "    if (operation == 2u) { float scale = exp2(sampler_bias); dx *= scale; dy *= scale; }\n");
+      if (kk_sample_has_footprint(tex)) {
+         P(ctx, "    float reduction_lod = sample_lod;\n");
+         P(ctx, "    if (operation != 1u && ((metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0 || mode != 0u)) {\n");
+         P(ctx, "        float2 size = float2(image.get_width(), image.get_height());\n");
+         P(ctx, "        float2 gx = dx * size, gy = dy * size;\n");
+         P(ctx, "        reduction_lod = log2(fmax(sqrt(gx.x * gx.x + gx.y * gx.y), sqrt(gy.x * gy.x + gy.y * gy.y))) + (operation == 0u ? total_bias : 0.0f);\n    }\n");
+      }
+      P(ctx, "    if (operation == 0u) { float scale = exp2(total_bias); dx *= scale; dy *= scale; }\n");
    }
    if (kk_sample_has_footprint(tex)) {
       P(ctx, tex->backend_flags & KK_SAMPLE_VIRTUAL ? "    bool virtual_sampler = (metadata[22] & KK_SAMPLER_FILTER_VIRTUAL) != 0;\n" : "    constexpr bool virtual_sampler = false;\n");
@@ -737,8 +842,26 @@ kk_sample_emit_call(struct nir_to_msl_ctx *ctx, nir_tex_instr *tex)
    nir_src *coord = nir_tex_get_src(tex, nir_tex_src_coord);src_to_msl(ctx, coord);
    for (unsigned i = coord->ssa->num_components; i < 4; ++i) P(ctx, ", 0.0f");
    P(ctx, ")");
+   bool prepared = tex->backend_flags & KK_SAMPLE_PREPARE_2D;
+   if (prepared) {
+      nir_src *value = nir_tex_get_src(tex, tex->op == nir_texop_txl ?
+                                         nir_tex_src_lod : nir_tex_src_bias);
+      P(ctx, ", ");
+      if (value) src_to_msl(ctx, value); else P(ctx, "0.0f");
+      const nir_tex_src_type gradients[] = {nir_tex_src_ddx, nir_tex_src_ddy};
+      for (unsigned i = 0; i < ARRAY_SIZE(gradients); ++i) {
+         nir_src *gradient = nir_tex_get_src(tex, gradients[i]);
+         P(ctx, ", ");
+         if (gradient) src_to_msl(ctx, gradient); else P(ctx, "float2(0.0f)");
+      }
+      P(ctx, ", %uu", tex->op == nir_texop_txl ? 1u : tex->op == nir_texop_txd ? 2u : 0u);
+   }
    for (unsigned i = 0; i < ARRAY_SIZE(kk_sample_args); ++i) {
       nir_src *src = nir_tex_get_src(tex, kk_sample_args[i]);
+      if (prepared && (kk_sample_args[i] == nir_tex_src_bias ||
+                       kk_sample_args[i] == nir_tex_src_lod ||
+                       kk_sample_args[i] == nir_tex_src_ddx ||
+                       kk_sample_args[i] == nir_tex_src_ddy)) continue;
       if (!src || (kk_sample_args[i] == nir_tex_src_offset && nir_src_is_const(*src))) continue;
       P(ctx, ", ");src_to_msl(ctx, src);
    }

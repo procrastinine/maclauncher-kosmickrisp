@@ -32,6 +32,14 @@ _Static_assert((KK_SAMPLE_EMULATION_ONLY &
                 (KK_SAMPLE_METADATA_MASK | KK_SAMPLE_NATIVE_DISPATCH)) == 0,
                "emulation entry is independent of deferred dispatch metadata");
 
+/* Descriptor-aware 2D sampling shares operation, bias and LOD preparation
+ * in one emulation entry. Implicit callers have quad-uniform selection. */
+#define KK_SAMPLE_PREPARE_2D (1u << 21)
+_Static_assert((KK_SAMPLE_PREPARE_2D &
+                (KK_SAMPLE_METADATA_MASK | KK_SAMPLE_NATIVE_DISPATCH |
+                 KK_SAMPLE_EMULATION_ONLY)) == 0,
+               "2D preparation is independent of sampler metadata selectors");
+
 enum kk_sampler_metadata_value {
    KK_SAMPLER_META_BIAS,
    KK_SAMPLER_META_MIN_LOD,
