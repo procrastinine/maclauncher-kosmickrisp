@@ -434,6 +434,19 @@ deserialization callbacks have a separate origin label; they can still
 perform Metal compilation. Source records cover newly generated MSL, including
 generated helper stages, and do not dump shader contents.
 
+With compile records enabled, ``KK_PERF_TRACKING_BUILD_REASONS=1`` adds
+native library and archive outcomes, exact archive search keys and stable
+function-constant value digests. These identify source-cache misses, native
+archive misses and constant specializations as separate, overlapping facts.
+Joined graphics-library workers retain the enclosing callback identity.
+
+Deferred compute records also carry a build ID from enqueue to shader
+destruction, the source hash and shader-cache key, first bind and first recorded
+dispatch. Cancellation is distinct from successful completion. A
+``completed-unused`` result means the shader was destroyed without a recorded
+dispatch; it is assigned at destruction, since a completed shader can be used
+later. Recorded dispatch does not measure GPU invocation counts.
+
 Stage durations are nested elapsed wall times on the calling thread. They do
 not measure compiler-service CPU usage or attribute asynchronous callback work
 on other threads. Diagnostic logging, source hashing and timing add overhead.
