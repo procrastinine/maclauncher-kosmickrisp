@@ -145,6 +145,7 @@ const modules = [
   './dynamic-depth-bind-once.mjs',
   './retired-replay-pool-walk.mjs',
   './constant-matrix-coordinate-ramp.mjs',
+  './native-vertex-input-layout.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));

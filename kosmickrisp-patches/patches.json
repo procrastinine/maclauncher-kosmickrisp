@@ -8488,6 +8488,52 @@
         ],
         "ctsGroups": []
       }
+    },
+    "native-vertex-input-layout": {
+      "id": "native-vertex-input-layout",
+      "kind": "correction",
+      "title": "Share linked vertex input slots with native raster alternatives",
+      "module": "native-vertex-input-layout.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan graphics pipelines with native raster alternatives"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "kk_native_vbo_input_slot",
+        "kk_lower_vs_vbo_mask",
+        "kk_lower_vs_vbo",
+        "kk_compile_shaders_native"
+      ],
+      "dependencies": [
+        "vertex-input-dynamic-state",
+        "wide-lines",
+        "cull-distance",
+        "native-fragment-finish"
+      ],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Linked vertex input packing",
+          "Native raster alternative compilation"
+        ],
+        "description": "Lower native alternative vertex fetches after linking using the owning shader input mask. Static formats, dynamic metadata and robustness bounds use the same compact root slots as the ordinary draw state."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Native raster alternatives and their owning shaders share a linked vertex input layout."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": [
+          "dEQP-VK.texture.explicit_lod.2d.derivatives.linear_linear_mipmap_linear"
+        ]
+      }
     }
   }
 }
