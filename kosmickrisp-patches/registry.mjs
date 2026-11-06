@@ -153,3 +153,5 @@ export const patchSourceFiles = [
   ...modules.map(file => 'kosmickrisp-patches/' + file.slice(2)),
   ...patches.flatMap(patch => patch.sourceFiles ?? []),
 ];
+
+export const patchEntries = modules.map((file,index)=>({file:file.slice(2),patch:patches[index]}));

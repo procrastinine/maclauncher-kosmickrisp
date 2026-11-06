@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createSourceEditor} from './kosmickrisp-patches/source-editor.mjs';
-import {patches} from './kosmickrisp-patches/registry.mjs';
+import {patchEntries} from './kosmickrisp-patches/registry.mjs';
 import {mesaRevision} from './pins.mjs';
 const root=import.meta.dirname;
 const git=(cwd,...args)=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8',maxBuffer:Infinity}).trim();
@@ -16,14 +16,14 @@ export function generateMesaBranch(source){
  let old='';try{old=git(root,'rev-parse','--verify','--quiet',ref+'^{commit}');}catch{} 
  const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'kosmic-mesa-'));
  try{
-  git(temporary,'init','-q');git(temporary,'fetch','--quiet','--no-tags',source,pin);
+  git(temporary,'init','-q');git(temporary,'fetch','--quiet','--update-shallow','--no-tags','--depth=1',source,pin);
   git(temporary,'checkout','--quiet','--detach',pin);
   git(temporary,'config','user.name','procrastinine');git(temporary,'config','user.email','24549552+procrastinine@users.noreply.github.com');
   const catalog=JSON.parse(fs.readFileSync(new URL('./kosmickrisp-patches/patches.json',import.meta.url)));
   const context=createSourceEditor(source);
-  for(const patch of patches){
-   const entry=Object.values(catalog.patches).find(entry=>entry.id===patch.id);
-   if(!entry)throw Error('Catalog entry missing: '+patch.id);
+  for(const {file:module,patch} of patchEntries){
+   const entry=Object.values(catalog.patches).find(entry=>entry.module===module);
+   if(!entry)throw Error('Catalog entry missing: '+module);
    patch.apply(context);
    for(const [file,content]of context.edits){const target=path.resolve(temporary,file);if(!target.startsWith(temporary+path.sep))throw Error('Invalid adaptation path');fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,content);}
    git(temporary,'add','--all');
@@ -31,7 +31,7 @@ export function generateMesaBranch(source){
    const date=git(source,'show','-s','--format=%cI',pin);
    execFileSync('git',['-C',temporary,'commit','--quiet','--allow-empty','-m',entry.title],{env:{...process.env,GIT_AUTHOR_DATE:date,GIT_COMMITTER_DATE:date}});
   }
-  const head=git(temporary,'rev-parse','HEAD');git(root,'fetch','--quiet','--no-tags',temporary,head);
+  const head=git(temporary,'rev-parse','HEAD');git(root,'fetch','--quiet','--update-shallow','--no-tags','--depth='+String(patchEntries.length+1),temporary,head);
   git(root,'update-ref',ref,head,old||'0'.repeat(40));return head;
  }finally{fs.rmSync(temporary,{recursive:true,force:true});}
 }
