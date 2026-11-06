@@ -44,6 +44,9 @@ struct kk_vrs_source *kk_vrs_source_capture(struct kk_device *dev,
    struct nir_shader *nir, const struct kk_per_vertex_map *map,
    const struct vk_graphics_pipeline_state *state, const struct msl_compile_data *fine);
 size_t kk_vrs_source_size(const struct kk_vrs_source *source);
+/* Transfer one exact finished retained-reader sibling; shader lifetime owns both. */
+void kk_vrs_source_attach_captured(struct kk_vrs_source *, struct kk_vrs_source *);
+struct kk_vrs_source *kk_vrs_source_captured(const struct kk_vrs_source *);
 uint32_t kk_vrs_source_result_stride(const struct kk_vrs_source *source);
 void kk_vrs_source_serialize(const struct kk_vrs_source *source, struct blob *blob);
 VkResult kk_vrs_source_deserialize(struct kk_device *dev,
@@ -76,6 +79,9 @@ VkResult kk_vrs_native_pipelines_create(struct kk_device *dev,
 VkResult kk_vrs_native_pipelines_create_for_raster(struct kk_device *dev,
    mtl_render_pipeline_descriptor *raster_descriptor,
    const struct kk_shader *fragment, struct mtl_vrs_pipelines **out);
+VkResult kk_vrs_captured_pipelines_create(struct kk_device *,
+   mtl_render_pipeline_descriptor *, const struct kk_shader *,
+   struct mtl_vrs_pipelines **out);
 void kk_vrs_artifact_unref(struct kk_device *dev, struct kk_vrs_artifact *artifact);
 mtl_function_descriptor *kk_vrs_artifact_function(const struct kk_vrs_artifact *artifact);
 bool kk_vrs_artifact_framebuffer_reads(const struct kk_vrs_artifact *artifact);

@@ -5544,7 +5544,10 @@
         "kk_vrs_cmd_encode_mesh_job",
         "kk_vrs_cmd_prepare_mesh_job",
         "mtl_vrs_prepare_mesh_job",
-        "kk_vrs_cmd_encode_poly_job"
+        "kk_vrs_cmd_encode_poly_job",
+        "kk_vrs_source_attach_captured",
+        "kk_vrs_source_captured",
+        "kk_vrs_captured_pipelines_create"
       ],
       "dependencies": [
         "compile-shader-options",

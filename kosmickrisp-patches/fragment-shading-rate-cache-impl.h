@@ -7,11 +7,12 @@
 #include "nir_serialize.h"
 #include "kosmickrisp/bridge/mtl_fragment_shading_rate.h"
 
-#define KK_VRS_SOURCE_SCHEMA 5u
+#define KK_VRS_SOURCE_SCHEMA 6u
 #define KK_VRS_ARTIFACT_SCHEMA 2u
 #define KK_VRS_KEY_SIZE 48u
 struct kk_vrs_source {
    struct kk_vrs_source_data data;
+   struct kk_vrs_source *captured;
    struct kk_vrs_artifact *ready[KK_VRS_FRAGMENT_KIND_COUNT];
    uint8_t key[KK_VRS_KEY_SIZE];
    blake3_hash fine_key;
@@ -108,7 +109,20 @@ kk_vrs_source_create(struct kk_device *dev, const blake3_hash fine_key,
 size_t
 kk_vrs_source_size(const struct kk_vrs_source *source)
 {
-   return source ? source->size : 0;
+   return source ? source->size + kk_vrs_source_size(source->captured) : 0;
+}
+
+void
+kk_vrs_source_attach_captured(struct kk_vrs_source *source, struct kk_vrs_source *captured)
+{
+   assert(source && !source->captured && source != captured && (!captured || !captured->captured));
+   source->captured = captured;
+}
+
+struct kk_vrs_source *
+kk_vrs_source_captured(const struct kk_vrs_source *source)
+{
+   return source ? source->captured : NULL;
 }
 
 uint32_t
@@ -133,6 +147,7 @@ void
 kk_vrs_source_destroy(struct kk_device *dev, struct kk_vrs_source *source)
 {
    if (!source) return;
+   kk_vrs_source_destroy(dev, source->captured);
    for (unsigned i = 0; i < KK_VRS_FRAGMENT_KIND_COUNT; i++)
       kk_vrs_artifact_unref(dev, source->ready[i]);
    free(source);
@@ -155,17 +170,18 @@ kk_vrs_source_serialize(const struct kk_vrs_source *source, struct blob *blob)
       blob_write_uint32(blob, sizes[i]);
       blob_write_bytes(blob, parts[i], sizes[i]);
    }
+   kk_vrs_source_serialize(source->captured, blob);
 }
 
-VkResult
-kk_vrs_source_deserialize(struct kk_device *dev, struct blob_reader *blob,
-                          struct kk_vrs_source **out)
+static VkResult
+kk_vrs_source_deserialize_depth(struct kk_device *dev, struct blob_reader *blob,
+                          struct kk_vrs_source **out, unsigned depth)
 {
    *out = NULL;
    uint32_t schema = blob_read_uint32(blob);
    if (blob->overrun) return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    if (!schema) return VK_SUCCESS;
-   if (schema != KK_VRS_SOURCE_SCHEMA || !dev->vrs)
+   if (depth > 1 || schema != KK_VRS_SOURCE_SCHEMA || !dev->vrs)
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
    blake3_hash fine;
    blob_copy_bytes(blob, fine, sizeof(fine));
@@ -188,8 +204,19 @@ kk_vrs_source_deserialize(struct kk_device *dev, struct blob_reader *blob,
    if (blob->overrun || !data.nir_size || !data.interface_size ||
        !data.options_size || !data.abi_size)
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
-   *out = kk_vrs_source_create(dev, fine, &data);
-   return *out ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
+   struct kk_vrs_source *source = kk_vrs_source_create(dev, fine, &data);
+   if (!source) return VK_ERROR_OUT_OF_HOST_MEMORY;
+   VkResult result = kk_vrs_source_deserialize_depth(dev, blob, &source->captured, depth + 1);
+   if (result != VK_SUCCESS) { kk_vrs_source_destroy(dev, source); return result; }
+   *out = source;
+   return VK_SUCCESS;
+}
+
+VkResult
+kk_vrs_source_deserialize(struct kk_device *dev, struct blob_reader *blob,
+                          struct kk_vrs_source **out)
+{
+   return kk_vrs_source_deserialize_depth(dev, blob, out, 0);
 }
 
 static bool
@@ -356,6 +383,7 @@ kk_vrs_source_capture(struct kk_device *dev, nir_shader *nir,
    const struct kk_per_vertex_map *map,
    const struct vk_graphics_pipeline_state *state, const struct msl_compile_data *fine)
 {
+   if (!fine || !fine->code || !fine->entrypoint_name) return NULL;
    struct blob code, interface, epilogue, options, abi;
    blob_init(&code); blob_init(&interface); blob_init(&epilogue);
    blob_init(&options); blob_init(&abi);
@@ -511,34 +539,52 @@ kk_vrs_fragment_get(struct kk_device *dev, struct kk_vrs_source *source,
    return kk_vrs_artifact_get(dev, source, kind, kk_vrs_build_linked_fragment, out);
 }
 
-VkResult
-kk_vrs_native_pipelines_create_for_raster(struct kk_device *dev,
-   mtl_render_pipeline_descriptor *raster_descriptor, const struct kk_shader *fragment,
+static VkResult
+kk_vrs_pipelines_for_source(struct kk_device *dev,
+   mtl_render_pipeline_descriptor *raster_descriptor, struct kk_vrs_source *source,
    struct mtl_vrs_pipelines **out)
 {
    *out = NULL;
-   if (!raster_descriptor || !fragment || !fragment->vrs_source)
+   if (!raster_descriptor || !source)
       return VK_ERROR_FEATURE_NOT_PRESENT;
    struct kk_vrs_artifact *body = NULL, *replay = NULL;
-   VkResult result = kk_vrs_fragment_get(dev, fragment->vrs_source,
+   VkResult result = kk_vrs_fragment_get(dev, source,
                                         KK_VRS_COARSE_BODY, &body);
    if (result != VK_SUCCESS) goto finish;
-   result = kk_vrs_fragment_get(dev, fragment->vrs_source, KK_VRS_FINE_REPLAY, &replay);
+   result = kk_vrs_fragment_get(dev, source, KK_VRS_FINE_REPLAY, &replay);
    if (result != VK_SUCCESS) goto finish;
    /* Each get has released the compilation mutex. Enter the native attachment
     * factory only with the caller's actual producer descriptor and interface. */
    *out = mtl_vrs_new_cached_native_pipelines(dev->mtl_compiler_handle,
       raster_descriptor, body->function, replay->function,
       replay->framebuffer_reads, MAX2(body->version, replay->version),
-      body->math, body->functions, fragment->vrs_source->data.result_stride,
-      fragment->vrs_source->data.uses_per_draw,
-      fragment->vrs_source->data.early_fragment_tests);
+      body->math, body->functions, source->data.result_stride,
+      source->data.uses_per_draw,
+      source->data.early_fragment_tests);
    if (!*out) result = VK_ERROR_INVALID_SHADER_NV;
 finish:
    kk_vrs_artifact_unref(dev, replay);
    kk_vrs_artifact_unref(dev, body);
    return result;
 }
+VkResult
+kk_vrs_native_pipelines_create_for_raster(struct kk_device *dev,
+   mtl_render_pipeline_descriptor *raster_descriptor, const struct kk_shader *fragment,
+   struct mtl_vrs_pipelines **out)
+{
+   return kk_vrs_pipelines_for_source(dev, raster_descriptor,
+      fragment ? fragment->vrs_source : NULL, out);
+}
+
+VkResult
+kk_vrs_captured_pipelines_create(struct kk_device *dev,
+   mtl_render_pipeline_descriptor *raster_descriptor, const struct kk_shader *fragment,
+   struct mtl_vrs_pipelines **out)
+{
+   return kk_vrs_pipelines_for_source(dev, raster_descriptor,
+      fragment ? kk_vrs_source_captured(fragment->vrs_source) : NULL, out);
+}
+
 VkResult
 kk_vrs_native_pipelines_create(struct kk_device *dev,
    const struct kk_shader *producer, const struct kk_shader *fragment,

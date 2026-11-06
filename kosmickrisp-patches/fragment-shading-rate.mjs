@@ -77,6 +77,7 @@ export function apply({edit, edits}) {
     "  'kk_cmd_draw.c',", "  'kk_cmd_draw.c',\n  'kk_fragment_shading_rate_command.c',\n  'kk_fragment_shading_rate_resources.c',"));
   linkedFragmentPhase({edit});
   retainedLinkedSource({edit});
+  retainedCapturedSource({edit});
   edit('src/kosmickrisp/compiler/meson.build', s => s.replace(
     "    'nir_to_msl.c',", "    'nir_to_msl.c',\n    'kk_fragment_shading_rate.c',"));
   edit('src/kosmickrisp/bridge/meson.build', s => s.replace(
@@ -222,6 +223,73 @@ kk_nir_lower_fs_per_vertex_inputs(`);
    *shader_out = shader;
 
    return result;`);
+    return s;
+  });
+}
+
+/* Retain the real captured-reader sibling through its existing finishing path.
+ * This adds source memory only; ordinary Metal variant creation is unchanged. */
+function retainedCapturedSource({edit}) {
+  edit('src/kosmickrisp/vulkan/kk_shader.c', s => {
+    const start = s.indexOf('      bool point_line_effects =');
+    const end = s.indexOf('      shader->info.polygon_point = true;', start);
+    if (start < 0 || end < 0) throw new Error('VRS captured fragment finishing anchors');
+    const body = s.slice(start, end);
+    const helper = `static void
+kk_vrs_finish_captured_fragment(nir_shader *point_fs,
+   const struct kk_shader *prev_stage, const struct vk_graphics_pipeline_state *state,
+   const struct kk_compile_options *opts,
+   const struct vk_pipeline_robustness_state *robustness, bool pixel_envelope)
+{
+${body}}
+
+`;
+    s = s.slice(0, start) + `      kk_vrs_finish_captured_fragment(point_fs, prev_stage, state, opts,
+         robustness, pixel_envelope);
+` + s.slice(end);
+    s = s.replace('static VkResult\nkk_compile_shader(', helper + 'static VkResult\nkk_compile_shader(');
+    s = s.replace('   mesa_shader_stage stage = nir->info.stage;\n   shader =',
+      '   mesa_shader_stage stage = nir->info.stage;\n   bool vrs_captured_required = false;\n   shader =');
+    const old = `      if (kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay)
+         kk_compile_msl(pdev, point_fs, state, &shader->polygon[3]);
+      else
+         ralloc_free(point_fs);`;
+    const replacement = `      if (pixel_envelope || kk_polygon_regular_possible(dev, state) || opts->poly_layer_replay) {
+         vrs_captured_required = dev->vrs && opts->vrs_source && !pixel_envelope;
+         nir_shader *captured = vrs_captured_required ?
+            nir_shader_clone(NULL, opts->vrs_source) : NULL;
+         if (captured) {
+            /* The retained named source predates ordinary DCE. Drop only its
+             * dead descriptor nodes before the one captured-reader finish. */
+            NIR_PASS(_, captured, nir_opt_dce);
+            kk_vrs_finish_captured_fragment(captured, prev_stage, state, opts,
+               robustness, pixel_envelope);
+         }
+         kk_compile_msl(pdev, point_fs, state, &shader->polygon[3]);
+         if (captured) {
+            shader->vrs_source = kk_vrs_source_capture(dev, captured,
+               per_vertex_map, state, &shader->polygon[3]);
+            ralloc_free(captured);
+         }
+      } else {
+         ralloc_free(point_fs);
+      }`;
+    if (!s.includes(old)) throw new Error('VRS actual captured fragment compile anchor');
+    s = s.replace(old, replacement);
+    const root = `   if (opts->vrs_source) {
+      shader->vrs_source = kk_vrs_source_capture(dev, opts->vrs_source,
+         per_vertex_map, state, &shader->msl_data[stage]);
+      ralloc_free(opts->vrs_source);
+      if (!shader->vrs_source) {`;
+    if (!s.includes(root)) throw new Error('VRS captured source ownership anchor');
+    s = s.replace(root, `   if (opts->vrs_source) {
+      struct kk_vrs_source *source = kk_vrs_source_capture(dev, opts->vrs_source,
+         per_vertex_map, state, &shader->msl_data[stage]);
+      ralloc_free(opts->vrs_source);
+      if (!source || (vrs_captured_required && !shader->vrs_source)) {
+         kk_vrs_source_destroy(dev, source);`);
+    s = s.replace('         return VK_ERROR_OUT_OF_HOST_MEMORY;\n      }\n   }\n   *shader_out = shader;',
+      '         return VK_ERROR_OUT_OF_HOST_MEMORY;\n      }\n      kk_vrs_source_attach_captured(source, shader->vrs_source);\n      shader->vrs_source = source;\n   }\n   *shader_out = shader;');
     return s;
   });
 }
