@@ -8448,6 +8448,43 @@
         ],
         "ctsGroups": []
       }
+    },
+    "constant-matrix-coordinate-ramp": {
+      "id": "constant-matrix-coordinate-ramp",
+      "kind": "correction",
+      "title": "Copy constant matrix coordinate defaults",
+      "module": "constant-matrix-coordinate-ramp.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan command recording"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c"
+      ],
+      "functions": [
+        "kk_BeginCommandBuffer"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Command-buffer descriptor-root initialization"
+        ],
+        "description": "Copy the exact binary16 coordinate ramp0..63 into the existing command-owned root instead of converting the same64 constants on every recording. Storage, layout and initialization order remain unchanged."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Command recording initializes the immutable coordinate defaults without repeated floating-point conversion."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [
+          "Cooperative matrix root initialization"
+        ],
+        "ctsGroups": []
+      }
     }
   }
 }

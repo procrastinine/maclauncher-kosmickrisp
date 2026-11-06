@@ -144,6 +144,7 @@ const modules = [
   './replay-autorelease-scope.mjs',
   './dynamic-depth-bind-once.mjs',
   './retired-replay-pool-walk.mjs',
+  './constant-matrix-coordinate-ramp.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));

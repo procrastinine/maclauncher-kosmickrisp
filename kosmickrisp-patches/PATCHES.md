@@ -4,6 +4,7 @@ MacLauncher KosmicKrisp applies the following source adaptations to the Mesa rev
 
 | Module | Kind | Behavior | Existing paths |
 | --- | --- | --- | --- |
+| [constant-matrix-coordinate-ramp](constant-matrix-coordinate-ramp.mjs) | correction | Copy exact immutable coordinate defaults during recording initialization | modifying |
 | [retired-replay-pool-walk](retired-replay-pool-walk.mjs) | correction | Omit the empty pool traversal after individual replay retirement | modifying |
 | [dynamic-depth-bind-once](dynamic-depth-bind-once.mjs) | correction | Bind combined dynamic depth and pipeline state once | modifying |
 | [replay-autorelease-scope](replay-autorelease-scope.mjs) | correction | Share a lexical replay pool and preserve standalone bridge pools | modifying |
