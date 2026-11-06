@@ -14,9 +14,14 @@ export function generateMesaBranch(source){
  if(git(source,'status','--porcelain'))throw Error('Mesa checkout must be clean');
  if(git(root,'worktree','list','--porcelain').includes('branch '+ref+'\n'))throw Error('Generated branch must not be checked out');
  let old='';try{old=git(root,'rev-parse','--verify','--quiet',ref+'^{commit}');}catch{} 
+ let completeLocalHistory=git(root,'rev-parse','--is-shallow-repository')==='false';
+ if(completeLocalHistory)try{git(root,'cat-file','-e',pin+'^{commit}');}catch{completeLocalHistory=false;}
  const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'kosmic-mesa-'));
  try{
-  git(temporary,'init','-q');git(temporary,'fetch','--quiet','--update-shallow','--no-tags','--depth=1',source,pin);
+  git(temporary,'init','-q');
+  // Reuse complete original ancestry locally without restoring a shallow boundary.
+  if(completeLocalHistory)git(temporary,'fetch','--quiet','--no-tags',root,pin);
+  else git(temporary,'fetch','--quiet','--update-shallow','--no-tags','--depth=1',source,pin);
   git(temporary,'checkout','--quiet','--detach',pin);
   git(temporary,'config','user.name','procrastinine');git(temporary,'config','user.email','24549552+procrastinine@users.noreply.github.com');
   const catalog=JSON.parse(fs.readFileSync(new URL('./kosmickrisp-patches/patches.json',import.meta.url)));
@@ -31,7 +36,7 @@ export function generateMesaBranch(source){
    const date=git(source,'show','-s','--format=%cI',pin);
    execFileSync('git',['-C',temporary,'commit','--quiet','--allow-empty','-m',entry.title],{env:{...process.env,GIT_AUTHOR_DATE:date,GIT_COMMITTER_DATE:date}});
   }
-  const head=git(temporary,'rev-parse','HEAD');git(root,'fetch','--quiet','--update-shallow','--no-tags','--depth='+String(patchEntries.length+1),temporary,head);
+  const head=git(temporary,'rev-parse','HEAD');git(root,'fetch','--quiet','--no-tags',...(completeLocalHistory?[]:['--update-shallow','--depth='+String(patchEntries.length+1)]),temporary,head);
   git(root,'update-ref',ref,head,old||'0'.repeat(40));return head;
  }finally{fs.rmSync(temporary,{recursive:true,force:true});}
 }
