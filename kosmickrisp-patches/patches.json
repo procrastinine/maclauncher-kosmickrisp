@@ -7208,7 +7208,9 @@
       "module": "layered-block-views.mjs",
       "extensions": [],
       "featureBits": {},
-      "properties": {},
+      "properties": {
+        "VkPhysicalDeviceMaintenance6Properties.blockTexelViewCompatibleMultipleLayers": true
+      },
       "consumers": [
         "Vulkan applications"
       ],
@@ -7227,7 +7229,8 @@
         "src/kosmickrisp/vulkan/kk_cmd_buffer.h",
         "src/kosmickrisp/vulkan/kk_cmd_draw.c",
         "src/kosmickrisp/vulkan/kk_layered_bc_cube_nir.h",
-        "src/kosmickrisp/vulkan/kk_mesh_command.h"
+        "src/kosmickrisp/vulkan/kk_mesh_command.h",
+        "src/kosmickrisp/vulkan/kk_physical_device.c"
       ],
       "functions": [
         "kk_layered_bc_view_init",

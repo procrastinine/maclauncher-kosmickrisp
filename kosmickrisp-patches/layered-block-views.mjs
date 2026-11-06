@@ -3,6 +3,12 @@ import fs from 'node:fs';
 export const id = 'layered-block-views';
 export const sourceFiles = ['kosmickrisp-layered-bc.h', 'kosmickrisp-layered-bc.c', 'kosmickrisp-layered-bc-nir.h', 'kosmickrisp-layered-bc-render.h', 'kosmickrisp-layered-bc-cube-nir.h'].map(n => 'kosmickrisp-patches/' + n);
 export function apply({edit, edits}) {
+  edit('src/kosmickrisp/vulkan/kk_physical_device.c', s => {
+    const before = '      .blockTexelViewCompatibleMultipleLayers = false,';
+    if (s.split(before).length !== 2)
+      throw Error('layered block views: maintenance6 property anchor');
+    return s.replace(before, '      .blockTexelViewCompatibleMultipleLayers = true,');
+  });
   for (const [source, target] of [
     ['kosmickrisp-layered-bc.h', 'kk_layered_bc.h'],
     ['kosmickrisp-layered-bc.c', 'kk_layered_bc.c'],
