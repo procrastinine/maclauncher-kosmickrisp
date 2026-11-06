@@ -1,0 +1,9 @@
+{
+  "repository": "https://gitlab.freedesktop.org/mesa/mesa.git",
+  "driver": "kosmickrisp",
+  "adaptationVersion": 1,
+  "architecture": "arm64",
+  "minimumMacOS": "26.0",
+  "library": "libvulkan_kosmickrisp.dylib",
+  "gitlink": "sources/mesa"
+}

@@ -1,0 +1,24 @@
+{
+  "repository": "https://github.com/metalsharp/VKD3D-Proton-MacOS.git",
+  "revision": "4e89065e359f9c6c2a78170b045835d6382113d9",
+  "path": "patches/moltenvk/metalsharp-vkmt.diff",
+  "sha256": "eb8c188bbe404a991ceb4a1159301b89d6e143b67aef94a76008980818a6d9e4",
+  "license": "Apache-2.0 (patches directory, per upstream README License section)",
+  "referenceSymbols": [
+    "MVKBuffer::initSparse",
+    "MVKPhysicalDevice::getSparseImageGranularity",
+    "MVKImage::initSparse",
+    "MVKImage::getSparseMappings",
+    "MVKQueueSparseBindSubmission::submitCommandBuffers"
+  ],
+  "adaptations": [
+    "64 KiB placement sparse buffers and textures",
+    "per-layer mip-tail page layout",
+    "opaque sparse image mapping in contiguous rows"
+  ],
+  "differences": [
+    "existing Mesa sparse submission, timeline semaphores and fences",
+    "single existing Metal 4 queue; no cross-queue bridge",
+    "runtime supportsPlacementSparse query where available"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "targetArchitectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "nativeCompilers": [
+    "mesa_clc",
+    "vtn_bindgen2",
+    "kk_clc"
+  ],
+  "nativeCompilerSource": "kosmickrisp-source.json"
+}
