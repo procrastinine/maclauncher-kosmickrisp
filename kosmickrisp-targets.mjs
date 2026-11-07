@@ -190,8 +190,15 @@ export function buildKosmicLoader({source, headersSource, work, architecture = '
         run('cmake', ['--build', build, '--target', 'vulkan', '--parallel', String(jobs)]);
         loaders.push(fs.realpathSync(path.join(build, 'loader/libvulkan.1.dylib')));
     }
-    if (loaders.length === 1) return {loader: loaders[0]};
-    const loader = path.join(work, 'libvulkan.1.dylib');
+    // Sealing reads each packaged library's licence texts from the licenses
+    // folder beside the library's own directory.
+    if (loaders.length === 1) {
+        addLicenses(path.dirname(path.dirname(loaders[0])), 'Vulkan-Loader', source);
+        return {loader: loaders[0]};
+    }
+    const universal = path.join(work, 'loader-universal'), loader = path.join(universal, 'loader/libvulkan.1.dylib');
+    fs.mkdirSync(path.dirname(loader), {recursive: true});
     run('/usr/bin/lipo', ['-create', ...loaders, '-output', loader]);
+    addLicenses(universal, 'Vulkan-Loader', source);
     return {loader};
 }
