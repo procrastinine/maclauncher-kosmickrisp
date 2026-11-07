@@ -23,7 +23,8 @@ export function buildKosmic(options){
  const projected=path.join(work,'source'),build=path.join(work,'build');
  prepareSourceTree(projected,temporary=>{
   fs.cpSync(source,temporary,{recursive:true,filter:file=>path.basename(file)!=='.git'});
-  for(const [file,content] of Object.entries(adaptedKosmicSources(source)))writeChanged(path.join(temporary,file),content);
+  for(const [file,content] of Object.entries(adaptedKosmicSources(source)))
+   if(content===null)fs.rmSync(path.join(temporary,file),{force:true});else writeChanged(path.join(temporary,file),content);
  });
  const environment={...process.env,CC:'/usr/bin/clang',CXX:'/usr/bin/clang++',
   LLVM_CONFIG:path.join(llvm,'bin/llvm-config'),MACOSX_DEPLOYMENT_TARGET:pin.minimumMacOS,

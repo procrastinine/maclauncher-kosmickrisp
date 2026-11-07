@@ -46,6 +46,7 @@ class SourceEdits extends Map {
 
   get(relative) {
     let text = super.get(relative);
+    if (text === null) return undefined;
     if (text === undefined) {
       try {
         text = fs.readFileSync(path.join(this.#sourceRoot, relative), 'utf8');
@@ -62,13 +63,26 @@ class SourceEdits extends Map {
       throw new TypeError(`${relative}: source edit must return text`);
     return super.set(relative, String(text));
   }
+
+  /** A removed file is absent from the adapted source; its entry is null. */
+  remove(relative) {
+    if (this.get(relative) === undefined) throw new Error(`${relative}: no file to remove`);
+    return super.set(relative, null);
+  }
+
+  removed(relative) {
+    return super.get(relative) === null;
+  }
 }
 
 /** Read upstream once per edit and retain each preceding adaptation. */
 export function createSourceEditor(sourceRoot) {
   const base = path.resolve(sourceRoot);
   const edits = new SourceEdits(base);
-  const read = relative => edits.get(relative) ?? fs.readFileSync(path.join(base, relative), 'utf8');
+  const read = relative => {
+    if (edits.removed(relative)) throw new Error(`${relative}: edited after removal`);
+    return edits.get(relative) ?? fs.readFileSync(path.join(base, relative), 'utf8');
+  };
   function edit(relative, apply) {
     const before = new SourceText(read(relative), relative);
     const replace = (from, to) => before.replace(from, to);

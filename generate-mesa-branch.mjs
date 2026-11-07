@@ -30,7 +30,7 @@ export function generateMesaBranch(source){
    const entry=Object.values(catalog.patches).find(entry=>entry.module===module);
    if(!entry)throw Error('Catalog entry missing: '+module);
    patch.apply(context);
-   for(const [file,content]of context.edits){const target=path.resolve(temporary,file);if(!target.startsWith(temporary+path.sep))throw Error('Invalid adaptation path');fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,content);}
+   for(const [file,content]of context.edits){const target=path.resolve(temporary,file);if(!target.startsWith(temporary+path.sep))throw Error('Invalid adaptation path');if(content===null){fs.rmSync(target,{force:true});continue;}fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,content);}
    git(temporary,'add','--all');
    for(const role of ['AUTHOR','COMMITTER'])if(!git(temporary,'var','GIT_'+role+'_IDENT').startsWith('procrastinine <24549552+procrastinine@users.noreply.github.com> '))throw Error('Commit identity differs');
    const date=git(source,'show','-s','--format=%cI',pin);

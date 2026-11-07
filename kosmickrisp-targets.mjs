@@ -105,7 +105,9 @@ export function buildKosmicTargets(options, buildNative) {
     const projected = path.join(work, 'source');
     prepareSourceTree(projected, temporary => {
         fs.cpSync(source, temporary, {recursive: true, filter: file => path.basename(file) !== '.git'});
-        for (const [file, content] of Object.entries(adaptedKosmicSources(source))) writeChanged(path.join(temporary, file), content);
+        for (const [file, content] of Object.entries(adaptedKosmicSources(source)))
+            if (content === null) fs.rmSync(path.join(temporary, file), {force: true});
+            else writeChanged(path.join(temporary, file), content);
     });
     const environment = {...process.env, MACOSX_DEPLOYMENT_TARGET: pin.minimumMacOS,
         ...(options.targetPkgConfigPath ? {PKG_CONFIG_PATH: options.targetPkgConfigPath, PKG_CONFIG_LIBDIR: options.targetPkgConfigPath} : {}),
