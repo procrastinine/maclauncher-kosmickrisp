@@ -19,8 +19,8 @@ export function generateMesaBranch(source){
  const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'kosmic-mesa-'));
  try{
   git(temporary,'init','-q');
-  // Reuse complete original ancestry locally without restoring a shallow boundary.
-  if(completeLocalHistory)git(temporary,'fetch','--quiet','--no-tags',root,pin);
+  // Borrow the complete local Mesa ancestry through an alternate object store instead of copying it.
+  if(completeLocalHistory)fs.writeFileSync(path.join(temporary,'.git/objects/info/alternates'),path.resolve(root,git(root,'rev-parse','--git-common-dir'),'objects')+'\n');
   else git(temporary,'fetch','--quiet','--update-shallow','--no-tags','--depth=1',source,pin);
   git(temporary,'checkout','--quiet','--detach',pin);
   git(temporary,'config','user.name','procrastinine');git(temporary,'config','user.email','24549552+procrastinine@users.noreply.github.com');
