@@ -20120,6 +20120,44 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "report-the-execution-set-pipeline-limit": {
+      "id": "report-the-execution-set-pipeline-limit",
+      "kind": "correction",
+      "title": "Report the execution-set pipeline limit",
+      "module": "report-the-execution-set-pipeline-limit.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Device features"
+      ],
+      "files": [
+        "maclauncher/reference/KOSMICKRISP_DEVICE_GENERATED_COMMANDS.md",
+        "src/kosmickrisp/vulkan/kk_physical_device.c"
+      ],
+      "functions": [
+        "kk_get_device_properties"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Device features"
+        ],
+        "description": "maxIndirectPipelineCount reports the 4,096 pipelines that vkCreateIndirectExecutionSetEXT accepts, which is also the minimum VK_EXT_device_generated_commands requires. No stage is reported for indirect pipeline binding, so execution-set pipeline switching stays outside the advertised profile."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }

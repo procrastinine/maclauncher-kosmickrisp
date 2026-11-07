@@ -400,6 +400,7 @@ const modules = [
   './defer-sparse-guarded-compute-pipeline-builds.mjs',
   './cancel-unstarted-compute-builds-on-destroy.mjs',
   './compile-deferred-builds-at-background-priority.mjs',
+  './report-the-execution-set-pipeline-limit.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));
