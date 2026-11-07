@@ -1,0 +1,9 @@
+# Independent-stage per-vertex interfaces
+
+The independent graphics-stage compiler interface supports per-vertex fragment inputs and interfaces exceeding the native 124-component varying budget. Independently compiled stages use a canonical heap interface. Monolithic and link-time-optimized pipelines retain the compact linked interface; small ordinary shaders retain their native inputs and draw preparation. The exposed vertex-output and fragment-input limits remain 128 components.
+
+`kk_per_vertex_map.canonical_heap` selects the independent producer ABI. Vertex lowering derives the complete producer layout from its own outputs. Fragment lowering accepts a null previous-stage NIR argument and derives its read mask independently. Both stages use fixed native locations for the primitive heap address and perspective/no-perspective basis values, and fixed location-based heap offsets for generic inputs. Position and other native system outputs remain native. Ordinary flat and interpolated generic inputs share the heap, preserving provoking vertices and interpolation modes without native-location collisions.
+
+The fragment map accompanies the compiled shader metadata and selects the matching producer variant. Explicit centroid, sample and offset interpolation includes operations introduced by basis generation; those fragment shaders retain lowered NIR for compilation with the final-link stub. Native interpolation evaluates the requested locations, including partially covered multisample pixels. No arithmetic interpolation approximation is used.
+
+The [canonical adaptation](../../src/kosmickrisp/) extends the [shared transport](kosmickrisp-varyings.md) through the existing `kk_nir_lower_fs_per_vertex_inputs` and `kk_nir_lower_vs_per_vertex_outputs` signatures. The graphics-library compiler owns producer-variant caching and applies this ABI to independent stages without link-time optimization.

@@ -1,0 +1,8 @@
+Sparse resource adaptation references MetalSharp VKD3D-Proton-MacOS.
+MoltenVK modifications in its patches directory retain Apache-2.0, as stated by that project.
+Placement sparse resource allocation, 64 KiB page mapping and per-layer mip-tail layout
+are adapted to the Mesa KosmicKrisp resource and queue owners.
+MoltenVK: Copyright (c) 2015-2026 The Brenwill Workshop Ltd.
+VKD3D-Proton-MacOS modifications: MetalSharp contributors.
+https://github.com/metalsharp/VKD3D-Proton-MacOS
+https://github.com/KhronosGroup/MoltenVK

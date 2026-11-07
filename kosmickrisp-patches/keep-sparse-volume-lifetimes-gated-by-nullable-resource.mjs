@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MIT
+// Keep sparse volume lifetimes gated by nullable resource state
+export const id = "keep-sparse-volume-lifetimes-gated-by-nullable-resource";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/vulkan/kk_device_memory.c", source => source
+    .replace("   if (mem->map)\n      kk_bo_unmap(dev, mem->bo, mem->map, false);\n\n   kk_standard_3d_memory_finish(dev, mem);\n   kk_device_memory_set_priority(dev, mem, 0.0f);\n   if (mem->bo)\n      kk_destroy_bo(dev, mem->bo);\n",
+      () => "   if (mem->map)\n      kk_bo_unmap(dev, mem->bo, mem->map, false);\n\n   if (mem->standard_3d)\n      kk_standard_3d_memory_finish(dev, mem);\n   kk_device_memory_set_priority(dev, mem, 0.0f);\n   if (mem->bo)\n      kk_destroy_bo(dev, mem->bo);\n"));
+  edit("src/kosmickrisp/vulkan/kk_sparse.c", source => source
+    .replace("   if ((image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&\n       image->planes[0].mtl_handle)\n      kk_sparse_residency(dev, image->planes[0].mtl_handle, false);\n   kk_standard_3d_image_finish(dev, image);\n   free(image->sparse); image->sparse = NULL;\n}\n\n",
+      () => "   if ((image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&\n       image->planes[0].mtl_handle)\n      kk_sparse_residency(dev, image->planes[0].mtl_handle, false);\n   if (kk_image_is_standard_3d(image))\n      kk_standard_3d_image_finish(dev, image);\n   free(image->sparse); image->sparse = NULL;\n}\n\n")
+    .replace("      .base_lod = view->vk.base_mip_level, .level_count = view->vk.level_count,\n      .view_type = view->vk.view_type,\n   };\n   VkResult logical = kk_standard_3d_query_initialize(view, storage, layout);\n   if (logical != VK_SUCCESS) return logical;\n   if (storage) {\n      /* The sliced-3D lowering reads the same descriptor prefix after the\n       * sparse load has selected this parent view. Keep its range at +8. */\n",
+      () => "      .base_lod = view->vk.base_mip_level, .level_count = view->vk.level_count,\n      .view_type = view->vk.view_type,\n   };\n   if (kk_image_is_standard_3d(image)) {\n      VkResult logical = kk_standard_3d_query_initialize(view, storage, layout);\n      if (logical != VK_SUCCESS) return logical;\n   }\n   if (storage) {\n      /* The sliced-3D lowering reads the same descriptor prefix after the\n       * sparse load has selected this parent view. Keep its range at +8. */\n")
+    .replace("kk_sparse_image_view_finish(struct kk_device *dev, struct kk_image_view *view)\n{\n   if (!view->sparse) return;\n   kk_standard_3d_query_finish(dev, view);\n   for (unsigned i = 0; i < 2; ++i) {\n      mtl_release(view->sparse->query[i]);\n      mtl_release(view->sparse->alias_query[i]);\n",
+      () => "kk_sparse_image_view_finish(struct kk_device *dev, struct kk_image_view *view)\n{\n   if (!view->sparse) return;\n   if (view->sparse->standard_3d)\n      kk_standard_3d_query_finish(dev, view);\n   for (unsigned i = 0; i < 2; ++i) {\n      mtl_release(view->sparse->query[i]);\n      mtl_release(view->sparse->alias_query[i]);\n"));
+}

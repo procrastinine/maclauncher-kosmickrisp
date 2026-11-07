@@ -1,0 +1,103 @@
+#pragma once
+#ifndef MACFX_VULKAN_SCENE_NATIVE_H
+#define MACFX_VULKAN_SCENE_NATIVE_H
+// Copyright (c) MacLauncher contributors. MIT license.
+#include <stdint.h>
+#if __has_include("temporal-frame.h")
+#include "temporal-frame.h"
+#include "temporal-scene-aovs.h"
+#include "temporal-scene-matrices.h"
+#elif __has_include("macfx-temporal/frame.h")
+#include "macfx-temporal/frame.h"
+#include "macfx-temporal/scene-aovs.h"
+#include "macfx-temporal/scene-matrices.h"
+#else
+#include "../temporal/frame.h"
+#include "../temporal/scene-aovs.h"
+#include "../temporal/scene-matrices.h"
+#endif
+#ifdef __cplusplus
+extern "C" {
+#endif
+struct RSImageColorDescription;
+typedef struct RSVulkanSceneImageV1 RSVulkanSceneImageV1;
+enum RSVulkanSceneImageSlot {
+    RS_VULKAN_SCENE_COLOR=0, RS_VULKAN_SCENE_DEPTH=1,
+    RS_VULKAN_SCENE_MOTION=2, RS_VULKAN_SCENE_OUTPUT=3,
+    RS_VULKAN_SCENE_EXPOSURE=4, RS_VULKAN_SCENE_REACTIVE=5,
+    RS_VULKAN_SCENE_TRANSPARENCY=6,
+    RS_VULKAN_SCENE_AOV_FIRST=7,
+    RS_VULKAN_SCENE_IMAGE_COUNT=RS_VULKAN_SCENE_AOV_FIRST+RS_SCENE_AOV_COUNT
+};
+enum RSVulkanSceneEncoderKind {
+    RS_VULKAN_SCENE_COMPUTE_ENCODER=0, RS_VULKAN_SCENE_BLIT_ENCODER=1
+};
+// Translator-owned dependencies, borrowed only inside encode. End every owned
+// encoder before returning; never submit or wait for a command buffer.
+typedef struct RSVulkanSceneDependenciesV1 {
+    void* scope;
+    void (*before)(void* scope, void* metalEncoder, uint32_t kind);
+    void (*after)(void* scope, void* metalEncoder, uint32_t kind);
+} RSVulkanSceneDependenciesV1;
+typedef struct RSVulkanSceneEncodingV1 {
+    uint32_t size, version;
+    RSTemporalFrame frame;
+    const struct RSImageColorDescription* color;
+    const RSSceneAovs* aovs;
+    const RSSceneMatrices* matrices;
+    double sourceTimeSeconds;
+    RSVulkanSceneDependenciesV1 dependencies;
+    const RSVulkanSceneImageV1* images;
+    uint32_t imageMask;
+} RSVulkanSceneEncodingV1;
+// Explicit native Metal4 opt-in. The V1 prefix and callback layout are unchanged.
+// The actual driver queue and per-submission allocator/residency/resource lease
+// remain alive through matching GPU feedback, failure or abandonment. The
+// result address passed to encode remains stable through that flight's completed
+// callback; repeated recordings use separate result storage and flight leases.
+// Neither the common consumer nor its providers begin/end/submit these commands.
+typedef struct RSVulkanSceneEncodingV2 {
+    RSVulkanSceneEncodingV1 base;
+    void* commandQueue;
+    void* flightStorage;
+    void (*retainFlight)(void*);
+    void (*releaseFlight)(void*);
+} RSVulkanSceneEncodingV2;
+
+enum RSVulkanSceneCompletion {
+    RS_VULKAN_SCENE_GPU_COMPLETED=0,
+    RS_VULKAN_SCENE_GPU_FAILED=1,
+    RS_VULKAN_SCENE_ABANDONED=2
+};
+typedef struct RSVulkanSceneCallbacksV1 {
+    uint32_t size, version;
+    void* storage;
+    void (*retain)(void* storage);
+    void (*release)(void* storage);
+    int (*encode)(void* storage, const RSVulkanSceneEncodingV1*, RSTemporalResult*);
+    void (*completed)(void* storage, uint64_t frameId, uint32_t completion,
+                      const RSTemporalResult*);
+} RSVulkanSceneCallbacksV1;
+// Explicit submission-aware callback extension. Operation API3 negotiates
+// this table; API1/API2 tables and EncodingV2 remain byte-identical. Encode
+// still receives EncodingV2. Accepted submission carries the actual producer
+// queue's event/value, never a guessed future commit or completed frame.
+typedef struct RSVulkanSceneCallbacksV3 {
+    RSVulkanSceneCallbacksV1 base;
+    void (*submitted)(void* storage,uint64_t frameId,const RSTemporalResult*,
+                      uint32_t accepted,void* metalSharedEvent,uint64_t value);
+} RSVulkanSceneCallbacksV3;
+int rsCreateVulkanSceneBoundary3(const RSVulkanSceneCallbacksV3*,RSVulkanSceneCallbacksV3*);
+// Returns one owned reference in output. The caller releases it through the
+// returned callback table. The adapter retains consumer until its last owner
+// retires. Creation prepares no device resources and advances no frame state.
+int rsCreateVulkanSceneBoundary1(const RSVulkanSceneCallbacksV1* consumer,
+                               RSVulkanSceneCallbacksV1* output);
+// V2 requires an explicitly version-2 callback table. An old callback is never
+// invoked with a V2 packet. Its compute dependency encoders are genuine Metal4.
+int rsCreateVulkanSceneBoundary2(const RSVulkanSceneCallbacksV1* consumer,
+                               RSVulkanSceneCallbacksV1* output);
+#ifdef __cplusplus
+}
+#endif
+#endif

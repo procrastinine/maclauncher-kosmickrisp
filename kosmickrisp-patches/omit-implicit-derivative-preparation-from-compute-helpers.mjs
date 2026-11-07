@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Omit implicit derivative preparation from compute helpers
+export const id = "omit-implicit-derivative-preparation-from-compute-helpers";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/compiler/kk-sampler-helpers-msl.h", source => source
+    .replace("      /* Only implicit callers (operation0) require quad derivatives; their\n       * descriptor dispatch is quad-uniform. Explicit callers supply inputs. */\n      P(ctx, \"    float2 dx = source_dx, dy = source_dy;\\n\");\n      P(ctx, \"    if (operation == 0u) { dx = dfdx(coord.xy); dy = dfdy(coord.xy); }\\n\");\n      P(ctx, \"    float sampler_bias = kk_sampler_metadata_value(address, %uu, %s);\\n\",\n        KK_SAMPLER_META_BIAS, tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS ? \"true\" : \"false\");\n      if (tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS) {\n",
+      () => "      /* Only implicit callers (operation0) require quad derivatives; their\n       * descriptor dispatch is quad-uniform. Explicit callers supply inputs. */\n      P(ctx, \"    float2 dx = source_dx, dy = source_dy;\\n\");\n      /* The descriptor pass admits prepared implicit operations only in\n       * fragments. Other stages supply explicit level/gradient operands. */\n      if (ctx->shader->info.stage == MESA_SHADER_FRAGMENT) {\n         P(ctx, \"    if (operation == 0u) { dx = dfdx(coord.xy); dy = dfdy(coord.xy); }\\n\");\n      }\n      P(ctx, \"    float sampler_bias = kk_sampler_metadata_value(address, %uu, %s);\\n\",\n        KK_SAMPLER_META_BIAS, tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS ? \"true\" : \"false\");\n      if (tex->backend_flags & KK_SAMPLE_LOWER_NATIVE_BIAS) {\n"));
+}

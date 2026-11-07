@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Distinguish guest barycentrics from the triangle merge guard
+export const id = "distinguish-guest-barycentrics-from-the-triangle-merge-guard";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/vulkan/kk_barycentric_shader.h", source => source
+    .replace("enum kk_barycentric_input_flags {\n   KK_BARYCENTRIC_INPUT_PER_VERTEX = 1u << 0,\n   KK_BARYCENTRIC_INPUT_FLAT = 1u << 1,\n};\n\n/* Capture the layout before IO lowering removes the input variables. */\n",
+      () => "enum kk_barycentric_input_flags {\n   KK_BARYCENTRIC_INPUT_PER_VERTEX = 1u << 0,\n   KK_BARYCENTRIC_INPUT_FLAT = 1u << 1,\n   KK_BARYCENTRIC_INPUT_COORD = 1u << 2,\n};\n\n/* Capture the layout before IO lowering removes the input variables. */\n")
+    .replace("kk_barycentric_input_flags(nir_shader *fs)\n{\n   unsigned flags = 0;\n   nir_foreach_shader_in_variable(var, fs) {\n      if (var->data.per_vertex)\n         flags |= KK_BARYCENTRIC_INPUT_PER_VERTEX;\n",
+      () => "kk_barycentric_input_flags(nir_shader *fs)\n{\n   unsigned flags = 0;\n   /* This is the original guest interface. Fragment finishing can later add\n    * native coordinates solely to prevent Metal triangle merging; those do\n    * not request guest corner ordering or per-vertex shader replay. */\n   if (BITSET_TEST(fs->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD) ||\n       BITSET_TEST(fs->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD))\n      flags |= KK_BARYCENTRIC_INPUT_COORD;\n   nir_foreach_shader_in_variable(var, fs) {\n      if (var->data.per_vertex)\n         flags |= KK_BARYCENTRIC_INPUT_PER_VERTEX;\n")
+    .replace("       infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT) {\n      nir_shader *fs = infos[shader_count - 1u].nir;\n      force_per_vertex = input_flags & KK_BARYCENTRIC_INPUT_PER_VERTEX;\n      bool flat_inputs = input_flags & KK_BARYCENTRIC_INPUT_FLAT;\n      enum kk_barycentric_usage usage = kk_nir_barycentric_usage(fs);\n      if (usage == KK_BARYCENTRIC_NONE)\n",
+      () => "       infos[shader_count - 1u].stage == MESA_SHADER_FRAGMENT) {\n      nir_shader *fs = infos[shader_count - 1u].nir;\n      force_per_vertex = input_flags & KK_BARYCENTRIC_INPUT_PER_VERTEX;\n      if (!(input_flags & KK_BARYCENTRIC_INPUT_COORD))\n         return force_per_vertex;\n      bool flat_inputs = input_flags & KK_BARYCENTRIC_INPUT_FLAT;\n      enum kk_barycentric_usage usage = kk_nir_barycentric_usage(fs);\n      if (usage == KK_BARYCENTRIC_NONE)\n"));
+}

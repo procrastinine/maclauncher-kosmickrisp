@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Require the actual sampler specialization value
+export const id = "require-the-actual-sampler-specialization-value";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/compiler/nir_to_msl.c", source => source
+    .replace("   if (ctx.uses_sampler_emulation) {\n      P(&ctx, \"constant bool kk_sampler_emulation [[function_constant(%u)]];\\n\",\n        KK_FUNCTION_CONSTANT_SAMPLER_EMULATION);\n      /* Omitted values preserve semantics for callers outside the driver;\n       * driver PSOs always provide their actual monotonic specialization. */\n      P(&ctx, \"constant bool kk_sampler_emulation_active = \"\n              \"is_function_constant_defined(kk_sampler_emulation) ? \"\n              \"kk_sampler_emulation : true;\\n\");\n   } else if (ctx.has_sampler_helpers) {\n      /* Native QueryLOD/cube corrections are base Vulkan work. They need\n       * neither sampler-state specialization nor a runtime device check. */\n",
+      () => "   if (ctx.uses_sampler_emulation) {\n      P(&ctx, \"constant bool kk_sampler_emulation [[function_constant(%u)]];\\n\",\n        KK_FUNCTION_CONSTANT_SAMPLER_EMULATION);\n      /* Required Bool10 is supplied by the actual stage specialization.\n       * The existing C8 validator rejects a descriptor missing this value. */\n      P(&ctx, \"constant bool kk_sampler_emulation_active = kk_sampler_emulation;\\n\");\n   } else if (ctx.has_sampler_helpers) {\n      /* Native QueryLOD/cube corrections are base Vulkan work. They need\n       * neither sampler-state specialization nor a runtime device check. */\n"));
+}
