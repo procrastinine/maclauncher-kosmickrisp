@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import fs from 'node:fs';
-import {addLicense} from '../licenses.mjs';
+import {addLicense} from '../package-licences.mjs';
 import {adaptSoftFp64Library} from './soft-fp64-library.mjs';
 
 export const id = 'soft-fp64';

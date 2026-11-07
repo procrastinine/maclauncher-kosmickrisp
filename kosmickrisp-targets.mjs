@@ -1,6 +1,6 @@
 import {collectSoftFp64License} from './kosmickrisp-patches/soft-fp64.mjs';
 import {mesaRevision} from './pins.mjs';
-import {addLicense, addLicenses} from './licenses.mjs';
+import {addLicense, addLicenses} from './package-licences.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
