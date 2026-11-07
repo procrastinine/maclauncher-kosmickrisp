@@ -4,6 +4,7 @@ MacLauncher KosmicKrisp applies the following source adaptations to the Mesa rev
 
 | Module | Kind | Behavior | Existing paths |
 | --- | --- | --- | --- |
+| [forward-a-temporal-frame-s-reactive-and-transparency](forward-a-temporal-frame-s-reactive-and-transparency.mjs) | compatibility | Forward a temporal frame's reactive and transparency masks | modifying |
 | [report-the-execution-set-pipeline-limit](report-the-execution-set-pipeline-limit.mjs) | correction | Report the execution-set pipeline limit | modifying |
 | [compile-deferred-builds-at-background-priority](compile-deferred-builds-at-background-priority.mjs) | correction | Compile deferred builds at background priority | modifying |
 | [cancel-unstarted-compute-builds-on-destroy](cancel-unstarted-compute-builds-on-destroy.mjs) | correction | Cancel unstarted compute builds on destroy | modifying |

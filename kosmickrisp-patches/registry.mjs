@@ -401,6 +401,7 @@ const modules = [
   './cancel-unstarted-compute-builds-on-destroy.mjs',
   './compile-deferred-builds-at-background-priority.mjs',
   './report-the-execution-set-pipeline-limit.mjs',
+  './forward-a-temporal-frame-s-reactive-and-transparency.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));

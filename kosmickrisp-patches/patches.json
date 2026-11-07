@@ -20158,6 +20158,45 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "forward-a-temporal-frame-s-reactive-and-transparency": {
+      "id": "forward-a-temporal-frame-s-reactive-and-transparency",
+      "kind": "compatibility",
+      "title": "Forward a temporal frame's reactive and transparency masks",
+      "module": "forward-a-temporal-frame-s-reactive-and-transparency.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_temporal.h",
+        "src/kosmickrisp/vulkan/kk_temporal.m"
+      ],
+      "functions": [
+        "kk_temporal_find",
+        "kk_temporal_copy_enqueued",
+        "kk_temporal_record_free",
+        "kk_temporal_record"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "Forward a temporal frame's reactive and transparency masks"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }
