@@ -44,7 +44,7 @@ export function buildKosmic(options){
  fs.mkdirSync(build,{recursive:true});
  run(meson,['setup',...(fs.existsSync(path.join(build,'build.ninja'))?['--reconfigure']:[]),build,projected,...args],{env:environment});
  const jobs=Number(options.jobs||2);
- if(!Number.isInteger(jobs)||jobs<1||jobs>4)throw Error('Kosmic builds use one to four compiler jobs');
+ if(!Number.isInteger(jobs)||jobs<1||jobs>6)throw Error('Kosmic builds use one to six compiler jobs');
  run(ninja,['-C',build,'-j',String(jobs),'src/kosmickrisp/vulkan/'+pin.library],{env:environment});
  addLicense(path.join(build,'src/kosmickrisp'),'Mesa',path.join(source,'docs/license.rst'));
  addLicenses(path.join(build,'src/kosmickrisp'),'Sparse resources',sparseNotices);

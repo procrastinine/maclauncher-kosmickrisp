@@ -115,7 +115,7 @@ export function buildKosmicTargets(options, buildNative) {
         PATH: [path.dirname(meson), ...Object.values(toolFiles).map(file => path.dirname(path.join(nativeBuild, file))), process.env.PATH].join(path.delimiter)};
     const outputs = [];
     const jobs = Number(options.jobs || 2);
-    if (!Number.isInteger(jobs) || jobs < 1 || jobs > 4) throw Error('Kosmic builds use one to four compiler jobs');
+    if (!Number.isInteger(jobs) || jobs < 1 || jobs > 6) throw Error('Kosmic builds use one to six compiler jobs');
     for (const architecture of architectures) {
         const cpu = architecture === 'x64' ? 'x86_64' : 'arm64';
         const cross = path.join(work, architecture === 'x64' ? 'cross.ini' : 'cross-arm64.ini');
