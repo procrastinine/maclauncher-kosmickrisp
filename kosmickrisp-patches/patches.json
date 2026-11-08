@@ -20197,6 +20197,46 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "register-load-snapshots": {
+      "id": "register-load-snapshots",
+      "kind": "correction",
+      "title": "Register load snapshots before Metal emission",
+      "module": "register-load-snapshots.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shaders with register live ranges"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/nir_to_msl.c"
+      ],
+      "functions": [
+        "msl_optimize_nir",
+        "nir_trivialize_registers"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Final NIR register preparation for MSL"
+        ],
+        "description": "Run copy propagation before final register trivialization so an SSA snapshot of a register remains valid across later writes. The emitter can then inline register loads without changing their values."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "The MSL backend preserves register snapshots after its final copy propagation."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [
+          "Finite tessellation-to-geometry readback"
+        ],
+        "ctsGroups": [
+          "dEQP-VK.subgroups.arithmetic.graphics.subgroupadd_dvec3"
+        ]
+      }
     }
   }
 }
