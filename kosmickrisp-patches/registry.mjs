@@ -403,6 +403,7 @@ const modules = [
   './report-the-execution-set-pipeline-limit.mjs',
   './forward-a-temporal-frame-s-reactive-and-transparency.mjs',
   './register-load-snapshots.mjs',
+  './gpl-independent-descriptors.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));

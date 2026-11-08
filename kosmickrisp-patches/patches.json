@@ -20237,6 +20237,19 @@
           "dEQP-VK.subgroups.arithmetic.graphics.subgroupadd_dvec3"
         ]
       }
+    },
+    "gpl-independent-descriptors": {
+      "id": "gpl-independent-descriptors",
+      "kind": "correction",
+      "title": "Populate independent descriptor prefixes",
+      "module": "gpl-independent-descriptors.mjs",
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c"
+      ],
+      "behavior": {
+        "classification": "modifying",
+        "description": "Descriptor binding records the dynamic-buffer prefix for each bound set, including partial set bindings, so independent stages use the final bound offsets."
+      }
     }
   }
 }
