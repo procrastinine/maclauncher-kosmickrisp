@@ -1,6 +1,6 @@
 # Building
 
-The source is Mesa with the adaptations applied as commits. Building requires macOS 26, Xcode command line tools with Metal 4, Meson, Ninja, Python with Mako and PyYAML, pkg-config, glslang, SPIRV-Tools, zstd and expat. The native shader compilers also require LLVM with SPIR-V support and SPIRV-LLVM-Translator. LLVM tools must be on PATH, with LLVM_CONFIG selecting that installation. PKG_CONFIG_PATH selects the dependency installations. No JavaScript runtime is involved.
+The source is Mesa with the adaptations applied as commits. Building requires macOS 26, Xcode command line tools with Metal 4, Meson, Ninja, ccache, Python with Mako and PyYAML, pkg-config, glslang, SPIRV-Tools, zstd and expat. The native shader compilers also require LLVM with SPIR-V support and SPIRV-LLVM-Translator. LLVM tools must be on PATH, with LLVM_CONFIG selecting that installation. PKG_CONFIG_PATH selects the dependency installations. No JavaScript runtime is involved.
 
 ## Apple Silicon
 
@@ -34,16 +34,24 @@ Meson generates `kk_soft_fp64_spv.h` from `src/compiler/glsl/float64.glsl` throu
 
 ## Tests
 
-Mesa unit tests use a separate configuration with `-Dbuild-tests=true` and run with `meson test -C build/tests --print-errorlogs`. The production configurations disable test targets.
+Mesa unit tests use a separate native configuration. The production configurations disable test targets.
 
-Vulkan conformance uses VK-GL-CTS and deqp-runner. The Vulkan CTS binary must match the test case list. The selected driver is supplied through a Vulkan ICD manifest. Expected failures, flakes and skips are maintained in `src/kosmickrisp/ci/`.
+```sh
+meson setup build/tests --native-file maclauncher/arm64.ini -Dbuild-tests=true
+meson test -C build/tests --print-errorlogs
+```
+
+Vulkan conformance uses VK-GL-CTS and deqp-runner. Mesa selects deqp-runner 0.24.0 in its CI dependency configuration. The Vulkan CTS binary must match the test case list. The selected driver is supplied through a Vulkan ICD manifest. Expected failures, flakes and skips are maintained in `src/kosmickrisp/ci/`.
+
+`ICD` names an absolute manifest path, `DEQP_VK` names the CTS executable, `CASELIST` names the selected case list, and `VULKAN_LOADER` names the packaged `libvulkan.1.dylib`. The CTS executable, loader and driver must have matching CPU slices. The explicit CTS loader argument avoids relying on a system Vulkan loader. One worker serializes the selected tests.
 
 ```sh
 VK_DRIVER_FILES="$ICD" deqp-runner run \
-  --deqp "$DEQP_VK" --caselist "$CASELIST" --output results \
+  --deqp "$DEQP_VK" --caselist "$CASELIST" --output results --jobs 1 \
   --baseline src/kosmickrisp/ci/kosmickrisp-fails.txt \
   --flakes src/kosmickrisp/ci/kosmickrisp-flakes.txt \
-  --skips src/kosmickrisp/ci/kosmickrisp-skips.txt
+  --skips src/kosmickrisp/ci/kosmickrisp-skips.txt \
+  -- --deqp-vk-library-path="$VULKAN_LOADER"
 ```
 
 The skip list excludes cases with recorded GPU hangs. Unsupported features remain CTS NotSupported results. A failure expectation records an incorrect result; it does not establish conformance.
