@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MIT
+// Batch indirect Mesh snapshots for pass preparation
+export const id = "batch-indirect-mesh-snapshots-for-pass-preparation";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/libkk/kk_mesh.cl", source => source
+    .replace("KERNEL(1)\nlibkk_mesh_snapshot(global struct kk_mesh_params *p, global uint32_t *out)\n{\n   uint32_t count = p->indirect_count ? *(global uint32_t *)p->indirect_count : p->max_draw_count;\n   out[3] = min(count, p->max_draw_count);\n   global uint32_t *grid = (global uint32_t *)p->indirect_grid;\n   bool active = p->draw_id < out[3] && kk_mesh_draw_enabled(p);\n   out[0] = active ? grid[0] : 0;\n   out[1] = active ? grid[1] : 1;\n   out[2] = active ? grid[2] : 1;\n}\n\nKERNEL(1)\n",
+      () => "KERNEL(1)\nlibkk_mesh_snapshot(global struct kk_mesh_params *p, global uint32_t *out)\n{\n   kk_mesh_snapshot_grid(p, out);\n}\n\nKERNEL(1)\n")
+    .replace("{\n   kk_mesh_prefix_expand(p, grids, range, span, capacity);\n}\n",
+      () => "{\n   kk_mesh_prefix_expand(p, grids, range, span, capacity);\n}\n\n/* Pass preparation: independent records share one dispatch, no cross-lane wait. */\nKERNEL(64)\nlibkk_mesh_snapshot_batch(global struct kk_mesh_params *parameters,\n   global uint32_t *out, uint32_t count)\n{\n   uint32_t i = cl_global_id.x;\n   if (i < count) kk_mesh_snapshot_grid(parameters + i, out + i * 4u);\n}\n"));
+  edit("src/kosmickrisp/libkk/kk_mesh_kernels.h", source => source
+    .replace("   b->mesh_dispatch[2] = g[2];\n}\n\n/* KK_MESH_GLOBAL is global for OpenCL and device for MSL. */\nstatic inline void\nkk_mesh_prepare_batch(KK_MESH_GLOBAL struct kk_mesh_params *p)\n",
+      () => "   b->mesh_dispatch[2] = g[2];\n}\n\n/* One record per logical indirect draw, captured before its render pass.\n * Disabled count/predicate paths never dereference the grid address. */\nstatic inline void\nkk_mesh_snapshot_grid(KK_MESH_GLOBAL const struct kk_mesh_params *p,\n   KK_MESH_GLOBAL uint32_t *out)\n{\n   uint32_t count = p->indirect_count ?\n      *(KK_MESH_GLOBAL const uint32_t *)p->indirect_count : p->max_draw_count;\n   out[3] = count < p->max_draw_count ? count : p->max_draw_count;\n   bool active = p->draw_id < out[3] && kk_mesh_draw_enabled(p);\n   KK_MESH_GLOBAL const uint32_t *grid =\n      (KK_MESH_GLOBAL const uint32_t *)p->indirect_grid;\n   out[0] = active ? grid[0] : 0;\n   out[1] = active ? grid[1] : 1;\n   out[2] = active ? grid[2] : 1;\n}\n\n/* KK_MESH_GLOBAL is global for OpenCL and device for MSL. */\nstatic inline void\nkk_mesh_prepare_batch(KK_MESH_GLOBAL struct kk_mesh_params *p)\n"));
+}

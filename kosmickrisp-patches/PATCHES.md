@@ -4,6 +4,132 @@ MacLauncher KosmicKrisp applies the following source adaptations to the Mesa rev
 
 | Module | Kind | Behavior | Existing paths |
 | --- | --- | --- | --- |
+| [reuse-cached-pending-compute-jobs-in-cache-only](reuse-cached-pending-compute-jobs-in-cache-only.mjs) | correction | Reuse cached pending compute jobs in cache-only creation | modifying |
+| [expose-shader-module-identifiers-through-the-common-cache](expose-shader-module-identifiers-through-the-common-cache.mjs) | capability | Expose shader module identifiers through the common cache path | modifying |
+| [identify-prepared-mesh-scope-shapes-in-msl-diagnostics](identify-prepared-mesh-scope-shapes-in-msl-diagnostics.mjs) | correction | Identify prepared Mesh scope shapes in MSL diagnostics | modifying |
+| [restore-native-mesh-performance-support-on-apple7-and](restore-native-mesh-performance-support-on-apple7-and.mjs) | correction | Restore native Mesh performance support on Apple7 and Apple8 | modifying |
+| [preserve-selected-layered-view-mesh-attachment-replay](preserve-selected-layered-view-mesh-attachment-replay.mjs) | correction | Preserve selected layered-view Mesh attachment replay | modifying |
+| [prepare-mesh-inputs-across-legacy-subpasses](prepare-mesh-inputs-across-legacy-subpasses.mjs) | correction | Prepare Mesh inputs across legacy subpasses | modifying |
+| [prepare-mesh-inputs-in-mixed-raster-passes](prepare-mesh-inputs-in-mixed-raster-passes.mjs) | correction | Prepare Mesh inputs in mixed raster passes | modifying |
+| [prepare-native-mesh-inputs-across-suspended-render-chains](prepare-native-mesh-inputs-across-suspended-render-chains.mjs) | correction | Prepare native Mesh inputs across suspended render chains | modifying |
+| [expose-existing-apple7-image-atomic64-in-performance-mode](expose-existing-apple7-image-atomic64-in-performance-mode.mjs) | capability | Expose existing Apple7 image atomic64 in performance mode | modifying |
+| [defer-only-actual-heap-command-buffers-and-expose](defer-only-actual-heap-command-buffers-and-expose.mjs) | correction | Defer only actual heap command buffers and expose performance heaps | modifying |
+| [keep-unrelated-barriers-in-prepared-mesh-passes](keep-unrelated-barriers-in-prepared-mesh-passes.mjs) | correction | Keep unrelated barriers in prepared Mesh passes | modifying |
+| [retain-pure-graphics-state-in-native-mesh-pass](retain-pure-graphics-state-in-native-mesh-pass.mjs) | correction | Retain pure graphics state in native Mesh pass preparation | modifying |
+| [batch-small-native-mesh-inputs-before-rendering](batch-small-native-mesh-inputs-before-rendering.mjs) | correction | Batch small native Mesh inputs before rendering | modifying |
+| [report-layered-block-views-in-performance-mode](report-layered-block-views-in-performance-mode.mjs) | correction | Report layered block views in performance mode | modifying |
+| [expose-pipeline-local-dynamic-vertex-input-in-performance](expose-pipeline-local-dynamic-vertex-input-in-performance.mjs) | capability | Expose pipeline-local dynamic vertex input in performance mode | modifying |
+| [admit-native-msrtss-passes-in-performance-mode](admit-native-msrtss-passes-in-performance-mode.mjs) | correction | Admit native MSRTSS passes in performance mode | modifying |
+| [enable-shader-local-barycentrics-in-performance-mode](enable-shader-local-barycentrics-in-performance-mode.mjs) | capability | Enable shader-local barycentrics in performance mode | modifying |
+| [share-partial-mask-fsr-samples-at-fine-rate](share-partial-mask-fsr-samples-at-fine-rate.mjs) | correction | Share partial-mask FSR samples at fine rate | modifying |
+| [disperse-bounded-fsr-slot-probes-across-the-table](disperse-bounded-fsr-slot-probes-across-the-table.mjs) | correction | Disperse bounded FSR slot probes across the table | modifying |
+| [retain-fsr-sample-exchange-at-fine-pixel-rates](retain-fsr-sample-exchange-at-fine-pixel-rates.mjs) | correction | Retain FSR sample exchange at fine pixel rates | modifying |
+| [retain-weak-cas-success-for-fsr-slot-ownership](retain-weak-cas-success-for-fsr-slot-ownership.mjs) | correction | Retain weak CAS success for FSR slot ownership | modifying |
+| [read-fsr-slot-outputs-in-each-executing-lane](read-fsr-slot-outputs-in-each-executing-lane.mjs) | correction | Read FSR slot outputs in each executing lane | modifying |
+| [avoid-suppressed-sample-lanes-in-fsr-derivatives](avoid-suppressed-sample-lanes-in-fsr-derivatives.mjs) | correction | Avoid suppressed sample lanes in FSR derivatives | modifying |
+| [merge-quad-presence-views-and-guard-derivative-bases](merge-quad-presence-views-and-guard-derivative-bases.mjs) | correction | Merge quad presence views and guard derivative bases | modifying |
+| [close-the-successful-fsr-claim-branch](close-the-successful-fsr-claim-branch.mjs) | correction | Close the successful FSR claim branch | modifying |
+| [read-fsr-neighbor-inputs-before-the-slot-handshake](read-fsr-neighbor-inputs-before-the-slot-handshake.mjs) | correction | Read FSR neighbor inputs before the slot handshake | modifying |
+| [keep-fsr-lane-views-consistent-across-the-quad](keep-fsr-lane-views-consistent-across-the-quad.mjs) | correction | Keep FSR lane views consistent across the quad | modifying |
+| [describe-the-fsr-slot-presence-word](describe-the-fsr-slot-presence-word.mjs) | correction | Describe the FSR slot presence word | modifying |
+| [choose-the-fsr-real-lane-from-a-slot](choose-the-fsr-real-lane-from-a-slot.mjs) | correction | Choose the FSR real lane from a slot presence handshake (WIP) | modifying |
+| [isolate-non-seamless-cube-specialization-for-performance-mode](isolate-non-seamless-cube-specialization-for-performance-mode.mjs) | correction | Isolate non-seamless cube specialization for performance mode | modifying |
+| [prepare-native-mesh-indirect-inputs-before-rendering](prepare-native-mesh-indirect-inputs-before-rendering.mjs) | correction | Prepare native Mesh indirect inputs before rendering | modifying |
+| [report-mesh-multiview-under-the-selected-family-policy](report-mesh-multiview-under-the-selected-family-policy.mjs) | correction | Report Mesh multiview under the selected family policy | modifying |
+| [clear-multiview-layers-with-a-single-view-meta](clear-multiview-layers-with-a-single-view-meta.mjs) | correction | Clear multiview layers with a single-view meta pipeline | modifying |
+| [route-format-depth-bias-through-native-metal-state](route-format-depth-bias-through-native-metal-state.mjs) | correction | Route FORMAT depth bias through native Metal state | modifying |
+| [batch-indirect-mesh-snapshots-for-pass-preparation](batch-indirect-mesh-snapshots-for-pass-preparation.mjs) | correction | Batch indirect Mesh snapshots for pass preparation | modifying |
+| [defer-multiview-amplification-until-pipeline-selection](defer-multiview-amplification-until-pipeline-selection.mjs) | correction | Defer multiview amplification until pipeline selection | modifying |
+| [reconcile-multiview-amplification-after-mesh-binding](reconcile-multiview-amplification-after-mesh-binding.mjs) | correction | Reconcile multiview amplification after Mesh binding | modifying |
+| [route-device-address-mesh-indirect-commands](route-device-address-mesh-indirect-commands.mjs) | correction | Route device-address Mesh indirect commands | modifying |
+| [describe-exact-mesh-dispatch-costs-by-path](describe-exact-mesh-dispatch-costs-by-path.mjs) | correction | Describe exact Mesh dispatch costs by path | modifying |
+| [select-mesh-shaders-in-performance-mode-on-apple9](select-mesh-shaders-in-performance-mode-on-apple9.mjs) | correction | Select mesh shaders in performance mode on Apple9 and later | modifying |
+| [expand-real-task-output-with-bounded-mesh-continuations](expand-real-task-output-with-bounded-mesh-continuations.mjs) | correction | Expand real Task output with bounded Mesh continuations | modifying |
+| [retain-mesh-continuation-attachments-and-fragment-view-transport](retain-mesh-continuation-attachments-and-fragment-view-transport.mjs) | correction | Retain Mesh continuation attachments and fragment view transport | modifying |
+| [add-exact-task-prefix-expansion-helpers](add-exact-task-prefix-expansion-helpers.mjs) | capability | Add exact Task-prefix expansion helpers | modifying |
+| [hold-mesh-multiview-reporting-for-replay-corrections](hold-mesh-multiview-reporting-for-replay-corrections.mjs) | correction | Hold Mesh multiview reporting for replay corrections | modifying |
+| [keep-constant-records-on-retained-mesh-fragment-copies](keep-constant-records-on-retained-mesh-fragment-copies.mjs) | correction | Keep constant records on retained Mesh fragment copies | modifying |
+| [bound-resident-archive-pieces-by-size-and-sweep](bound-resident-archive-pieces-by-size-and-sweep.mjs) | correction | Bound resident archive pieces by size and sweep exited temporaries | modifying |
+| [key-archive-lookups-by-recorded-function-constant-values](key-archive-lookups-by-recorded-function-constant-values.mjs) | correction | Key archive lookups by recorded function constant values | modifying |
+| [select-multiview-geometry-and-tessellation-in-performance-mode](select-multiview-geometry-and-tessellation-in-performance-mode.mjs) | correction | Select multiview geometry and tessellation in performance mode | modifying |
+| [rotate-mesh-indices-only-for-flat-fragment-inputs](rotate-mesh-indices-only-for-flat-fragment-inputs.mjs) | correction | Rotate Mesh indices only for flat fragment inputs | modifying |
+| [report-mesh-multiview-with-original-view-replay](report-mesh-multiview-with-original-view-replay.mjs) | correction | Report Mesh multiview with original-view replay | modifying |
+| [honor-static-last-vertex-provoking-in-mesh-pipelines](honor-static-last-vertex-provoking-in-mesh-pipelines.mjs) | correction | Honor static last-vertex provoking in Mesh pipelines | modifying |
+| [share-idle-mesh-parameters-and-log-the-selected](share-idle-mesh-parameters-and-log-the-selected.mjs) | correction | Share idle Mesh parameters and log the selected Mesh route | modifying |
+| [bound-live-recording-of-indirect-task-work](bound-live-recording-of-indirect-task-work.mjs) | correction | Bound live recording of indirect Task work | modifying |
+| [widen-mesh-interface-components-before-varying-packing](widen-mesh-interface-components-before-varying-packing.mjs) | correction | Widen Mesh interface components before varying packing | modifying |
+| [keep-ordinary-preserve32-operations-on-native-arithmetic](keep-ordinary-preserve32-operations-on-native-arithmetic.mjs) | correction | Keep ordinary preserve32 operations on native arithmetic | modifying |
+| [require-explicit-selection-for-costly-denormal-preservation](require-explicit-selection-for-costly-denormal-preservation.mjs) | correction | Require explicit selection for costly denormal preservation | modifying |
+| [select-performance-capabilities-by-running-apple-family](select-performance-capabilities-by-running-apple-family.mjs) | correction | Select performance capabilities by running Apple family | modifying |
+| [distinguish-library-diagnostics-from-emitted-shader-stages](distinguish-library-diagnostics-from-emitted-shader-stages.mjs) | correction | Distinguish library diagnostics from emitted shader stages | modifying |
+| [clamp-to-image-view-minimum-lods-only-once](clamp-to-image-view-minimum-lods-only-once.mjs) | correction | Clamp to image view minimum LODs only once the device has one | modifying |
+| [give-alternate-render-passes-separate-slot-table-halves](give-alternate-render-passes-separate-slot-table-halves.mjs) | correction | Give alternate render passes separate slot table halves | modifying |
+| [count-mesh-and-task-statistics-per-invocation](count-mesh-and-task-statistics-per-invocation.mjs) | correction | Count Mesh and task statistics per invocation | modifying |
+| [lower-vector-component-derefs-of-mesh-and-tcs](lower-vector-component-derefs-of-mesh-and-tcs.mjs) | correction | Lower vector component derefs of Mesh and TCS outputs | modifying |
+| [keep-shading-rate-sample-slots-claimed-for-their](keep-shading-rate-sample-slots-claimed-for-their.mjs) | correction | Keep shading-rate sample slots claimed for their render pass | modifying |
+| [key-dynamic-depth-bounds-enables-apart-from-static](key-dynamic-depth-bounds-enables-apart-from-static.mjs) | correction | Key dynamic depth-bounds enables apart from static ones | modifying |
+| [load-the-forwarded-mesh-primitive-id-per-primitive](load-the-forwarded-mesh-primitive-id-per-primitive.mjs) | correction | Load the forwarded Mesh primitive ID per primitive | modifying |
+| [revert-kosmickrisp-wait-for-fragment-slot-publications-up](revert-kosmickrisp-wait-for-fragment-slot-publications-up.mjs) | correction | Revert "kosmickrisp: wait for fragment slot publications up to the earlier limit" | modifying |
+| [wait-for-fragment-slot-publications-up-to-the](wait-for-fragment-slot-publications-up-to-the.mjs) | correction | Wait for fragment slot publications up to the earlier limit | modifying |
+| [declare-mesh-staging-slots-for-each-class-that](declare-mesh-staging-slots-for-each-class-that.mjs) | correction | Declare Mesh staging slots for each class that accesses them | modifying |
+| [draw-dynamic-depth-bounds-pipelines-natively-while-the](draw-dynamic-depth-bounds-pipelines-natively-while-the.mjs) | correction | Draw dynamic depth-bounds pipelines natively while the test is off | modifying |
+| [leave-pointsize-out-of-non-point-mesh-vertex](leave-pointsize-out-of-non-point-mesh-vertex.mjs) | correction | Leave PointSize out of non-point Mesh vertex records | modifying |
+| [begin-the-depth-bounds-transaction-on-generated-mesh](begin-the-depth-bounds-transaction-on-generated-mesh.mjs) | correction | Begin the depth-bounds transaction on generated Mesh sequences | modifying |
+| [bound-mesh-depth-bounds-windows-by-the-slice](bound-mesh-depth-bounds-windows-by-the-slice.mjs) | correction | Bound Mesh depth-bounds windows by the slice's group count | modifying |
+| [keep-fragment-slots-of-overlapping-draws-apart](keep-fragment-slots-of-overlapping-draws-apart.mjs) | correction | Keep fragment slots of overlapping draws apart | modifying |
+| [keep-dynamic-rate-pipelines-with-flat-inputs-on](keep-dynamic-rate-pipelines-with-flat-inputs-on.mjs) | correction | Keep dynamic-rate pipelines with flat inputs on the fine route | modifying |
+| [declare-every-mesh-output-slot-its-intrinsics-access](declare-every-mesh-output-slot-its-intrinsics-access.mjs) | correction | Declare every mesh output slot its intrinsics access | modifying |
+| [saturate-binary64-conversions-to-narrow-integers](saturate-binary64-conversions-to-narrow-integers.mjs) | correction | Saturate binary64 conversions to narrow integers | modifying |
+| [draw-dynamic-rate-pipelines-with-the-fine-fragment](draw-dynamic-rate-pipelines-with-the-fine-fragment.mjs) | correction | Draw dynamic-rate pipelines with the fine fragment shader at 1x1 | modifying |
+| [write-the-default-primitive-rate-only-for-a](write-the-default-primitive-rate-only-for-a.mjs) | correction | Write the default primitive rate only for a fragment shader that reads it | modifying |
+| [upload-the-shading-rate-root-tail-only-when](upload-the-shading-rate-root-tail-only-when.mjs) | correction | Upload the shading-rate root tail only when the fragment reads it | modifying |
+| [keep-outlined-binary64-helpers-in-later-function-passes](keep-outlined-binary64-helpers-in-later-function-passes.mjs) | correction | Keep outlined binary64 helpers in later function passes | modifying |
+| [give-layer-replay-readers-a-zero-position-when](give-layer-replay-readers-a-zero-position-when.mjs) | correction | Give Layer replay readers a zero Position when none is written | modifying |
+| [describe-the-fragment-slots-in-the-shading-rate](describe-the-fragment-slots-in-the-shading-rate.mjs) | correction | Describe the fragment slots in the shading-rate entry | modifying |
+| [run-multisampled-shading-rate-fragments-once-with-separate](run-multisampled-shading-rate-fragments-once-with-separate.mjs) | correction | Run multisampled shading-rate fragments once with separate fragment slots | modifying |
+| [call-software-binary64-operations-as-noinline-helpers](call-software-binary64-operations-as-noinline-helpers.mjs) | correction | Call software binary64 operations as noinline helpers | modifying |
+| [key-the-render-state-of-pipelines-without-a](key-the-render-state-of-pipelines-without-a.mjs) | correction | Key the render state of pipelines without a fragment stage | modifying |
+| [keep-the-input-topology-off-mesh-attachment-variants](keep-the-input-topology-off-mesh-attachment-variants.mjs) | correction | Keep the input topology off mesh attachment variants | modifying |
+| [carry-the-minimum-lod-in-the-level-of](carry-the-minimum-lod-in-the-level-of.mjs) | correction | Carry the minimum LOD in the level of native cube samples | modifying |
+| [declare-function-temporaries-in-mesh-shader-bodies-2](declare-function-temporaries-in-mesh-shader-bodies-2.mjs) | documentation | Declare function temporaries in Mesh shader bodies | additive |
+| [report-apple7-image-atomics-and-placement-sparse-with](report-apple7-image-atomics-and-placement-sparse-with.mjs) | correction | Report Apple7 image atomics and placement sparse with a family selector | modifying |
+| [reuse-the-coarse-engine-rate-combiners-for-quad](reuse-the-coarse-engine-rate-combiners-for-quad.mjs) | correction | Reuse the coarse-engine rate combiners for quad-group shading | modifying |
+| [emulate-vk-khr-fragment-shading-rate-in-conformance](emulate-vk-khr-fragment-shading-rate-in-conformance.mjs) | correction | Emulate VK_KHR_fragment_shading_rate in conformance mode | modifying |
+| [build-mesh-depth-bounds-transaction-executables](build-mesh-depth-bounds-transaction-executables.mjs) | correction | Build Mesh depth-bounds transaction executables | modifying |
+| [run-depth-bounds-transactions-as-ordered-pixel-regions](run-depth-bounds-transactions-as-ordered-pixel-regions.mjs) | correction | Run depth-bounds transactions as ordered pixel regions | modifying |
+| [declare-function-temporaries-in-mesh-shader-bodies](declare-function-temporaries-in-mesh-shader-bodies.mjs) | correction | Declare function temporaries in Mesh shader bodies | modifying |
+| [report-depth-bounds-on-apple7-to-apple9-through](report-depth-bounds-on-apple7-to-apple9-through.mjs) | correction | Report depth bounds on Apple7 to Apple9 through a conformance entry | modifying |
+| [restore-the-stored-depth-bounds-transaction-route](restore-the-stored-depth-bounds-transaction-route.mjs) | correction | Restore the stored-depth bounds transaction route | modifying |
+| [translate-2d-storage-and-block-texel-sparse-images](translate-2d-storage-and-block-texel-sparse-images.mjs) | correction | Translate 2D storage and block-texel sparse images through canonical pages | modifying |
+| [keep-sampled-2d-sparse-textures-at-metal-sparse](keep-sampled-2d-sparse-textures-at-metal-sparse.mjs) | correction | Keep sampled 2D sparse textures at Metal sparse tier 2 | modifying |
+| [name-vkd3d-proton-tiled-tiers-in-the-sparse](name-vkd3d-proton-tiled-tiers-in-the-sparse.mjs) | correction | Name vkd3d-proton tiled tiers in the sparse_translation entry | modifying |
+| [keep-texture-atomics-only-on-atomic-formats-in](keep-texture-atomics-only-on-atomic-formats-in.mjs) | correction | Keep texture atomics only on atomic formats in 3D sparse aliases | modifying |
+| [link-ray-tracing-pipelines-from-a-cold-cache](link-ray-tracing-pipelines-from-a-cold-cache.mjs) | correction | Link ray tracing pipelines from a cold cache and bound ray launches | modifying |
+| [serialize-the-micromap-handles-of-a-bottom-level](serialize-the-micromap-handles-of-a-bottom-level.mjs) | correction | Serialize the micromap handles of a bottom-level structure | modifying |
+| [triangle-hit-kind-and-barycentrics-for-recordfromquery](triangle-hit-kind-and-barycentrics-for-recordfromquery.mjs) | correction | Triangle hit kind and barycentrics for RecordFromQuery | modifying |
+| [hit-objects-in-conformance-mode](hit-objects-in-conformance-mode.mjs) | correction | Hit objects in conformance mode | modifying |
+| [record-traced-hit-objects-in-the-scheduler](record-traced-hit-objects-in-the-scheduler.mjs) | correction | Record traced hit objects in the scheduler | modifying |
+| [execute-hit-objects-through-a-scheduler-action](execute-hit-objects-through-a-scheduler-action.mjs) | correction | Execute hit objects through a scheduler action | modifying |
+| [name-the-ray-tracing-context-fields-that-hit](name-the-ray-tracing-context-fields-that-hit.mjs) | correction | Name the ray tracing context fields that hit objects use | modifying |
+| [lower-hit-object-fields-to-word-loads-and](lower-hit-object-fields-to-word-loads-and.mjs) | correction | Lower hit-object fields to word loads and stores | modifying |
+| [hit-objects-of-spv-ext-shader-invocation-reorder](hit-objects-of-spv-ext-shader-invocation-reorder.mjs) | correction | Hit objects of SPV_EXT_shader_invocation_reorder | modifying |
+| [keep-every-component-of-long-vector-subgroup-rotates](keep-every-component-of-long-vector-subgroup-rotates.mjs) | correction | Keep every component of long-vector subgroup rotates | modifying |
+| [opacity-micromaps-in-conformance-mode](opacity-micromaps-in-conformance-mode.mjs) | correction | Opacity micromaps in conformance mode | modifying |
+| [copy-micromap-build-data-into-queued-as-builds](copy-micromap-build-data-into-queued-as-builds.mjs) | correction | Copy micromap build data into queued AS builds | modifying |
+| [store-long-vector-image-texels-from-their-first](store-long-vector-image-texels-from-their-first.mjs) | correction | Store long-vector image texels from their first four components | modifying |
+| [use-only-the-specified-bits-of-tracerayext-operands](use-only-the-specified-bits-of-tracerayext-operands.mjs) | correction | Use only the specified bits of traceRayEXT operands | modifying |
+| [keep-ray-tracing-scratch-in-the-continuation-frame](keep-ray-tracing-scratch-in-the-continuation-frame.mjs) | correction | Keep ray tracing scratch in the continuation frame | modifying |
+| [emit-shader-call-scope-memory-barriers](emit-shader-call-scope-memory-barriers.mjs) | correction | Emit shader-call scope memory barriers | modifying |
+| [give-undefined-ray-tracing-values-a-zero-value](give-undefined-ray-tracing-values-a-zero-value.mjs) | correction | Give undefined ray tracing values a zero value | modifying |
+| [lower-shader-record-blocks-in-ray-tracing-stages](lower-shader-record-blocks-in-ray-tracing-stages.mjs) | correction | Lower shader record blocks in ray tracing stages | modifying |
+| [size-ray-tracing-frames-for-every-shader-call](size-ray-tracing-frames-for-every-shader-call.mjs) | correction | Size ray tracing frames for every shader call | modifying |
+| [declare-local-variables-in-ray-tracing-visible-functions](declare-local-variables-in-ray-tracing-visible-functions.mjs) | correction | Declare local variables in ray tracing visible functions | modifying |
+| [apply-pipeline-skip-triangle-and-skip-aabb-flags](apply-pipeline-skip-triangle-and-skip-aabb-flags.mjs) | correction | Apply pipeline skip-triangle and skip-AABB flags to traversal | modifying |
+| [keep-zero-direction-slabs-inclusive-in-ray-box](keep-zero-direction-slabs-inclusive-in-ray-box.mjs) | correction | Keep zero-direction slabs inclusive in ray box tests | modifying |
+| [build-sparse-buffer-masks-inline-in-ray-tracing](build-sparse-buffer-masks-inline-in-ray-tracing.mjs) | correction | Build sparse buffer masks inline in ray tracing stages | modifying |
+| [report-pipeline-library-group-handles-with-ray-tracing](report-pipeline-library-group-handles-with-ray-tracing.mjs) | correction | Report pipeline library group handles with ray tracing | modifying |
+| [isolate-failed-ray-launches-and-retain-their-first](isolate-failed-ray-launches-and-retain-their-first.mjs) | correction | Isolate failed ray launches and retain their first error | modifying |
+| [dispatch-independent-ray-tracing-waves-in-parallel](dispatch-independent-ray-tracing-waves-in-parallel.mjs) | correction | Dispatch independent ray tracing waves in parallel | modifying |
 | [forward-a-temporal-frame-s-reactive-and-transparency](forward-a-temporal-frame-s-reactive-and-transparency.mjs) | compatibility | Forward a temporal frame's reactive and transparency masks | modifying |
 | [report-the-execution-set-pipeline-limit](report-the-execution-set-pipeline-limit.mjs) | correction | Report the execution-set pipeline limit | modifying |
 | [compile-deferred-builds-at-background-priority](compile-deferred-builds-at-background-priority.mjs) | correction | Compile deferred builds at background priority | modifying |

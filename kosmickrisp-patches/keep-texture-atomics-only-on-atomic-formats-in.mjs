@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Keep texture atomics only on atomic formats in 3D sparse aliases
+export const id = "keep-texture-atomics-only-on-atomic-formats-in";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/vulkan/kk_standard_sparse_3d_physical.h", source => source
+    .replace("                  layout.depth_px=util_format_get_nblocksz(source->format.pipe,page->shape.depth);\n               }\n               if(!util_format_is_compressed(view->format.pipe))layout.usage|=MTL_TEXTURE_USAGE_SHADER_WRITE;\n               mtl_texture *canonical=view->format.mtl==plane->layout.format.mtl?plane->mtl_handle:NULL;\n               VkResult result=kk_layered_bc_native_alias_init(dev,plane,&layout,0,canonical,NULL,NULL,&format->native);\n               if(result!=VK_SUCCESS){free(format);format=NULL;}\n",
+      () => "                  layout.depth_px=util_format_get_nblocksz(source->format.pipe,page->shape.depth);\n               }\n               if(!util_format_is_compressed(view->format.pipe))layout.usage|=MTL_TEXTURE_USAGE_SHADER_WRITE;\n               /* A typed alias keeps texture atomics only for a format that\n                * supports them; Metal rejects the usage for other formats. */\n               const struct kk_va_format *va=kk_get_va_format(view->format.pipe);\n               if(!va||!va->atomic)layout.usage&=~MTL_TEXTURE_USAGE_SHADER_ATOMIC;\n               mtl_texture *canonical=view->format.mtl==plane->layout.format.mtl?plane->mtl_handle:NULL;\n               VkResult result=kk_layered_bc_native_alias_init(dev,plane,&layout,0,canonical,NULL,NULL,&format->native);\n               if(result!=VK_SUCCESS){free(format);format=NULL;}\n"));
+}
