@@ -530,6 +530,7 @@ const modules = [
   './identify-prepared-mesh-scope-shapes-in-msl-diagnostics.mjs',
   './expose-shader-module-identifiers-through-the-common-cache.mjs',
   './reuse-cached-pending-compute-jobs-in-cache-only.mjs',
+  './describe-the-registry-performance-defaults-for-mesh-apple7.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));

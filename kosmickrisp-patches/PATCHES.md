@@ -4,6 +4,7 @@ MacLauncher KosmicKrisp applies the following source adaptations to the Mesa rev
 
 | Module | Kind | Behavior | Existing paths |
 | --- | --- | --- | --- |
+| [describe-the-registry-performance-defaults-for-mesh-apple7](describe-the-registry-performance-defaults-for-mesh-apple7.mjs) | documentation | Describe the registry performance defaults for Mesh, Apple7 image atomics and barycentrics | modifying |
 | [reuse-cached-pending-compute-jobs-in-cache-only](reuse-cached-pending-compute-jobs-in-cache-only.mjs) | correction | Reuse cached pending compute jobs in cache-only creation | modifying |
 | [expose-shader-module-identifiers-through-the-common-cache](expose-shader-module-identifiers-through-the-common-cache.mjs) | capability | Expose shader module identifiers through the common cache path | modifying |
 | [identify-prepared-mesh-scope-shapes-in-msl-diagnostics](identify-prepared-mesh-scope-shapes-in-msl-diagnostics.mjs) | correction | Identify prepared Mesh scope shapes in MSL diagnostics | modifying |

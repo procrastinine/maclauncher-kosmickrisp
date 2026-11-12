@@ -25714,6 +25714,39 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "describe-the-registry-performance-defaults-for-mesh-apple7": {
+      "id": "describe-the-registry-performance-defaults-for-mesh-apple7",
+      "kind": "documentation",
+      "title": "Describe the registry performance defaults for Mesh, Apple7 image atomics and barycentrics",
+      "module": "describe-the-registry-performance-defaults-for-mesh-apple7.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst"
+      ],
+      "functions": [],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation"
+        ],
+        "description": "The driver documentation now matches kk_emulation.json: Mesh dispatch and fragment barycentrics are selected in performance mode on every Apple GPU family, and the Apple7 image_atomic64 entry is on in performance mode. Only documentation changes; the generated emulation references pass kk_emulation_gen.py --check-docs."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }
