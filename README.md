@@ -35,7 +35,7 @@ The driver emulates Vulkan capabilities that Metal does not provide directly, us
 - `performance`, the default: each entry takes the default selected for the running Apple GPU family. Native paths and bounded compatibility work are on, while software ray tracing, 64-bit floating point, fragment shading rates and the other costly emulations need explicit selection.
 - `conformance`: every entry is on, including ray tracing.
 
-For example, vkd3d-proton reports shader model 6.2 and later only when both 32-bit denormal controls are reported, so `denorm_preserve` and `denorm_flush` stay on in performance mode. Of the 43 entries, 33 are on in performance mode on every Apple GPU family. The others are ray tracing, opacity micromaps, hit objects, 64-bit floating point, fragment shading rates, multisampled storage images, zero-initialized device memory, the FLOAT and FORCE_UNORM depth bias representations, and depth bounds before Apple10.
+For example, vkd3d-proton reports shader model 6.2 and later only when both 32-bit denormal controls are reported, so `denorm_preserve` and `denorm_flush` stay on in performance mode. Of the 46 entries, 36 are on in performance mode on every Apple GPU family. The others are ray tracing, opacity micromaps, hit objects, 64-bit floating point, fragment shading rates, multisampled storage images, the FLOAT and FORCE_UNORM depth bias representations, depth bounds before Apple10, and precise compute timestamps (`precise_timestamps`), which make each timestamp written in a compute encoder wait for the encoder's earlier dispatches and record its own time.
 
 The value is a comma-separated list of tokens, applied from left to right:
 
@@ -85,10 +85,11 @@ Compared with upstream KosmicKrisp at the same Mesa commit, this build adds the 
 - Pipeline, primitive and attachment fragment shading rates up to 2x2 pixels\*
 - Fragment shader interlock, pixel and sample, for rasterizer-ordered views
 - Conservative rasterization with overestimation
-- Wireframe and point fill, and wide, smooth and stippled lines
+- Wireframe and point fill, and wide, rectangular, smooth and stippled lines, including lines from mesh shaders
 - Depth bias control, cull distances and pipeline statistics queries
 - Depth bounds testing on Apple7 to Apple9\*
 - Vertex input dynamic state
+- Graphics pipeline libraries with all four library parts, independent pipeline layouts and independent interpolation decorations
 
 **Resources and memory**
 - Sparse binding and sparse residency for buffers and 2D and 3D images, on Metal devices with placement sparse resources, including 2D storage images and block-texel views of compressed 2D images
@@ -98,6 +99,7 @@ Compared with upstream KosmicKrisp at the same Mesa commit, this build adds the 
 - Image compression control, image alignment control and custom border colors
 - Minimum and maximum sampler filtering on every Apple GPU
 - External memory through file descriptors
+- Explicitly zero-initialized device memory
 
 **Shaders**
 - 64-bit floating point\*, computed in software with IEEE binary64 rounding
@@ -106,6 +108,7 @@ Compared with upstream KosmicKrisp at the same Mesa commit, this build adds the 
 - 8-bit floating point and cooperative matrices
 - Compute shader derivatives, fragment barycentrics and quad control
 - Shader module identifiers and cache-only pipeline creation
+- Mixed Float16 dot products with Float32 accumulation
 - Subgroup operations in vertex, tessellation and geometry shaders
 
 **Ray tracing**\*
