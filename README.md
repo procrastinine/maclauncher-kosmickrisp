@@ -26,16 +26,16 @@ DXVK and vkd3d-proton derive a game's highest Direct3D feature level from the dr
 | 12_1 | Rasterizer-ordered views, through pixel interlock, and conservative rasterization tier 1 |
 | 12_2 | vkd3d-proton only: shader model 6.5, ray tracing tier 1.1, variable shading rate tier 2, mesh shader tier 1, sampler feedback, tiled resources tier 3, conservative rasterization tier 3, resource binding tier 3 and further options |
 
-With this driver, vkd3d-proton reports feature level 12_1 for Direct3D 12 and DXVK reports a maximum of 12_1 for Direct3D 11. Feature level 12_0 needs sparse residency, which the driver exposes where Metal supports placement sparse resources. Feature level 12_2 also needs variable shading rate tier 2, which vkd3d-proton implements through `VK_KHR_fragment_shading_rate`. The driver does not expose that extension, so vkd3d-proton reports at most 12_1 in both modes described below, including when ray tracing is selected. DXVK offers no level above 12_1.
+With this driver, vkd3d-proton reports feature level 12_1 and shader model 6.8 for Direct3D 12 in performance mode, and feature level 12_2 and shader model 6.9 in conformance mode; both modes are described below. Feature level 12_0 needs sparse residency, which the driver exposes where Metal supports placement sparse resources. Feature level 12_2 also needs ray tracing and variable shading rate tier 2, which vkd3d-proton implements through `VK_KHR_fragment_shading_rate`. Performance mode reports neither. DXVK reports a maximum of 12_1 for Direct3D 11 and offers no higher level.
 
 ## Performance and conformance modes
 
 The driver emulates Vulkan capabilities that Metal does not provide directly, using shader lowering, compute passes or captured geometry. Each emulation is a named entry, and the `KK_EMULATION` environment variable selects which entries the device reports. It is read once, when the Vulkan physical device is created.
 
-- `performance`, the default: an entry is off only when turning it off lowers no Direct3D shader model or feature level that DXVK or vkd3d-proton reports and does not stop either translator from creating its device. Ray tracing and fragment barycentrics are also off.
+- `performance`, the default: each entry takes the default selected for the running Apple GPU family. Native paths and bounded compatibility work are on, while software ray tracing, 64-bit floating point, fragment shading rates and the other costly emulations need explicit selection.
 - `conformance`: every entry is on, including ray tracing.
 
-For example, vkd3d-proton reports shader model 6.2 and later only when both 32-bit denormal controls are reported, so `denorm_preserve` and `denorm_flush` stay on in performance mode. Of the 35 entries, 23 are on in performance mode.
+For example, vkd3d-proton reports shader model 6.2 and later only when both 32-bit denormal controls are reported, so `denorm_preserve` and `denorm_flush` stay on in performance mode. Of the 43 entries, 33 are on in performance mode on every Apple GPU family. The others are ray tracing, opacity micromaps, hit objects, 64-bit floating point, fragment shading rates, multisampled storage images, zero-initialized device memory, the FLOAT and FORCE_UNORM depth bias representations, and depth bounds before Apple10.
 
 The value is a comma-separated list of tokens, applied from left to right:
 
@@ -48,7 +48,7 @@ The value is a comma-separated list of tokens, applied from left to right:
 | `-VK_extension_name` | Hides that device extension. |
 | Any other token | Prints a warning and is ignored. |
 
-An entry can name the first Apple GPU family on which Metal provides its behavior natively. On that family and later, the entry takes the native path and stays reported in every mode. In this version only `sampler_filter_minmax` declares one, Apple10, and performance mode already enables it. `apple10` and `apple11` therefore re-enable it after `-sampler_filter_minmax`, for example `performance,-sampler_filter_minmax,apple10`, while `apple7` to `apple9` enable nothing. A preset never adds capabilities that only the hardware provides, such as 64-bit image atomics.
+An entry can name the first Apple GPU family on which Metal provides its behavior natively. On that family and later, the entry takes the native path and stays reported in every mode. In this version, `depth_bias_control` and `shader_module_identifier` declare Apple7, `image_atomic64` declares Apple8, and `sampler_filter_minmax` and `depth_bounds` declare Apple10. A preset enables every entry whose family is at or below the one it names. On an Apple7 to Apple9 device, `apple10` therefore enables the emulated `depth_bounds`, and it re-enables `sampler_filter_minmax` after `-sampler_filter_minmax`, for example `performance,-sampler_filter_minmax,apple10`.
 
 More examples:
 
@@ -70,9 +70,10 @@ Apple's [Metal Feature Set Tables](https://developer.apple.com/metal/Metal-Featu
 
 The driver reads the family once, when the Vulkan device is created, and takes a native Metal path where the family provides one:
 
-- Apple8 (M2) and later report 64-bit integer image atomics (`VK_EXT_shader_image_atomic_int64`). Apple7 does not.
-- Apple9 (M3) and later report task and mesh shader stages for device-generated commands, which use Metal indirect command buffers with mesh draws.
-- Apple10 (M5) and later use Metal directly for sampler LOD bias and minimum and maximum sampler filtering, which earlier families compute in the shader. They also report depth bounds testing, and 1D, 2D and cube images reach 32,768 pixels instead of 16,384.
+- 64-bit integer image atomics (`VK_EXT_shader_image_atomic_int64`) take a hashed lock for each operation. Apple8 (M2) and later publish each result with a native 64-bit texture minimum or maximum. Apple7 (M1) has no 64-bit texture atomics, so it reads and writes the two 32-bit words of the texel under the lock.
+- Apple7 and Apple8 render direct mesh draws with native Metal mesh pipelines and prepare indirect mesh inputs before each rendering scope. Apple9 (M3) and later also report task and mesh shader stages for device-generated commands, which use Metal indirect command buffers with mesh draws.
+- On macOS 26 releases before 26.4, sparse binding and sparse residency are reported on Apple7 and later. From macOS 26.4 they follow Metal's placement sparse query.
+- Apple10 (M5) and later use Metal directly for sampler LOD bias and minimum and maximum sampler filtering, which earlier families compute in the shader. They also use Metal's depth bounds test, which earlier families run in a per-sample depth and stencil transaction when `KK_EMULATION` selects `depth_bounds`. 1D, 2D and cube images reach 32,768 pixels instead of 16,384.
 
 ## Features
 
@@ -80,31 +81,35 @@ Compared with upstream KosmicKrisp at the same Mesa commit, this build adds the 
 
 **Rasterization and geometry**
 - Transform feedback with geometry streams, and primitives-generated queries
-- Geometry, tessellation and mesh shaders, and multiview together with geometry and tessellation shaders\*
+- Geometry, tessellation and mesh shaders, and multiview together with geometry and tessellation shaders
+- Pipeline, primitive and attachment fragment shading rates up to 2x2 pixels\*
 - Fragment shader interlock, pixel and sample, for rasterizer-ordered views
 - Conservative rasterization with overestimation
 - Wireframe and point fill, and wide, smooth and stippled lines
-- Depth bias control\*, cull distances and pipeline statistics queries
+- Depth bias control, cull distances and pipeline statistics queries
+- Depth bounds testing on Apple7 to Apple9\*
+- Vertex input dynamic state
 
 **Resources and memory**
-- Sparse binding and sparse residency for buffers and 2D and 3D images, on Metal devices with placement sparse resources
-- Descriptor heaps\*, device-generated commands and device address commands
-- Multisampled storage images\*, and multisampled rendering to single-sampled images\*
-- Dynamic rendering with unused attachments, sliced views of 3D images and non-seamless cube maps\*
+- Sparse binding and sparse residency for buffers and 2D and 3D images, on Metal devices with placement sparse resources, including 2D storage images and block-texel views of compressed 2D images
+- Descriptor heaps, device-generated commands and device address commands
+- Multisampled storage images\*, and multisampled rendering to single-sampled images
+- Dynamic rendering with unused attachments, sliced views of 3D images and non-seamless cube maps
 - Image compression control, image alignment control and custom border colors
 - Minimum and maximum sampler filtering on every Apple GPU
 - External memory through file descriptors
 
 **Shaders**
 - 64-bit floating point\*, computed in software with IEEE binary64 rounding
-- 64-bit integer atomics on buffers and shared memory, and on images on Apple8 and later
+- 64-bit integer atomics on buffers, shared memory and images
 - Independent float controls for each bit width
 - 8-bit floating point and cooperative matrices
-- Compute shader derivatives, fragment barycentrics\* and quad control
+- Compute shader derivatives, fragment barycentrics and quad control
+- Shader module identifiers and cache-only pipeline creation
 - Subgroup operations in vertex, tessellation and geometry shaders
 
 **Ray tracing**\*
-- Acceleration structures, ray queries and ray tracing pipelines, built and traversed in compute passes without Metal ray tracing
+- Acceleration structures, ray queries and ray tracing pipelines, built and traversed in compute passes without Metal ray tracing, with opacity micromaps and hit objects
 
 **Presentation**
 - Headless surfaces, incremental present and presentation timing
