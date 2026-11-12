@@ -2,6 +2,3 @@
 	path = sources/mesa
 	url = https://gitlab.freedesktop.org/mesa/mesa.git
 
-[submodule "sources/maclauncher"]
-	path = sources/maclauncher
-	url = https://github.com/procrastinine/maclauncher.git

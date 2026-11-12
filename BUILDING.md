@@ -1,2 +1,1 @@
-
-Shared source and licence helpers come from the exact `sources/maclauncher` Gitlink. Initialize that submodule before using the source producers.
+The source producers read the exact `sources/mesa` Gitlink and files of this repository, including the source-tree helper (`source-files.mjs`) and the licence helper (`package-licences.mjs`). The loader recipe builds the Vulkan-Loader checkout that its caller names.
