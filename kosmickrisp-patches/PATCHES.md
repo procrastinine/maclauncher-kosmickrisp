@@ -4,6 +4,7 @@ MacLauncher KosmicKrisp applies the following source adaptations to the Mesa rev
 
 | Module | Kind | Behavior | Existing paths |
 | --- | --- | --- | --- |
+| [reuse-one-bounded-ray-tracing-launch-arena-per](reuse-one-bounded-ray-tracing-launch-arena-per.mjs) | correction | Reuse one bounded ray-tracing launch arena per command buffer | modifying |
 | [describe-kosmickrisp-archive-temporary-files](describe-kosmickrisp-archive-temporary-files.mjs) | documentation | Describe KosmicKrisp archive temporary files | modifying |
 | [leave-no-pipeline-archive-temporaries-behind](leave-no-pipeline-archive-temporaries-behind.mjs) | correction | Leave no pipeline archive temporaries behind | modifying |
 | [report-the-memory-budget-from-the-usage-reported](report-the-memory-budget-from-the-usage-reported.mjs) | correction | Report the memory budget from the usage reported beside it | modifying |

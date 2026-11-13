@@ -637,6 +637,7 @@ const modules = [
   './report-the-memory-budget-from-the-usage-reported.mjs',
   './leave-no-pipeline-archive-temporaries-behind.mjs',
   './describe-kosmickrisp-archive-temporary-files.mjs',
+  './reuse-one-bounded-ray-tracing-launch-arena-per.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));

@@ -30382,6 +30382,47 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "reuse-one-bounded-ray-tracing-launch-arena-per": {
+      "id": "reuse-one-bounded-ray-tracing-launch-arena-per",
+      "kind": "correction",
+      "title": "Reuse one bounded ray-tracing launch arena per command buffer",
+      "module": "reuse-one-bounded-ray-tracing-launch-arena-per.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Ray tracing",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_rt_commands.c",
+        "src/kosmickrisp/vulkan/kosmickrisp-rt-commands.h"
+      ],
+      "functions": [
+        "kk_rt_trace"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Ray tracing",
+          "Vulkan driver"
+        ],
+        "description": "Each vkCmdTraceRaysKHR allocated its own per-lane stack and lane-state arena for the whole grid, up to 1/8 of the device working set, and kept it until the command buffer was reset. A 768x432 launch with a 16 KiB pipeline stack took 5.2 GiB, so a command buffer with four launches held 20.9 GiB, and frames in flight exhausted the device-local heap."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }
