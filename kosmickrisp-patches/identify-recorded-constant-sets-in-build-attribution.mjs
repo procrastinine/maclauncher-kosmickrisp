@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Identify recorded constant sets in build attribution
+export const id = "identify-recorded-constant-sets-in-build-attribution";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/bridge/mtl_pipeline_archive.h", source => source
+    .replace("static void\nkk_archive_trace(const char *event, NSData *key, id descriptor)\n{\n   if (kk_compile_trace.event)\n      kk_compile_trace.event(kk_compile_trace.data, event,\n         key.length == 32 ? key.bytes : NULL,\n         descriptor && kk_constant_record(descriptor).count != 0);\n}\n\nstatic char kk_archive_association, kk_library_hint_association;\n",
+      () => "static void\nkk_archive_trace(const char *event, NSData *key, id descriptor)\n{\n   if (!kk_compile_trace.event) return;\n   NSDictionary *constants = descriptor ? kk_constant_record(descriptor) : nil;\n   if (constants.count) {\n      NSMutableArray *entries = [NSMutableArray arrayWithCapacity:constants.count];\n      for (NSString *name in [constants.allKeys sortedArrayUsingSelector:@selector(compare:)])\n         [entries addObject:@[name, constants[name]]];\n      NSData *bytes = [NSPropertyListSerialization dataWithPropertyList:entries\n         format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];\n      if (bytes) {\n         blake3_hash digest;\n         _mesa_blake3_compute(bytes.bytes, bytes.length, digest);\n         kk_compile_trace.event(kk_compile_trace.data, \"specialization-values\", digest, true);\n      }\n   }\n   kk_compile_trace.event(kk_compile_trace.data, event,\n      key.length == 32 ? key.bytes : NULL, constants.count != 0);\n}\n\nstatic char kk_archive_association, kk_library_hint_association;\n"));
+}

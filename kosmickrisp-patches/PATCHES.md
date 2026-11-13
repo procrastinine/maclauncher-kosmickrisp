@@ -4,6 +4,112 @@ MacLauncher KosmicKrisp applies the following source adaptations to the Mesa rev
 
 | Module | Kind | Behavior | Existing paths |
 | --- | --- | --- | --- |
+| [describe-kosmickrisp-archive-temporary-files](describe-kosmickrisp-archive-temporary-files.mjs) | documentation | Describe KosmicKrisp archive temporary files | modifying |
+| [leave-no-pipeline-archive-temporaries-behind](leave-no-pipeline-archive-temporaries-behind.mjs) | correction | Leave no pipeline archive temporaries behind | modifying |
+| [report-the-memory-budget-from-the-usage-reported](report-the-memory-budget-from-the-usage-reported.mjs) | correction | Report the memory budget from the usage reported beside it | modifying |
+| [count-free-memory-in-kernel-pages-on-macos](count-free-memory-in-kernel-pages-on-macos.mjs) | correction | Count free memory in kernel pages on macOS | modifying |
+| [scan-for-stale-archive-temporaries-once-per-process](scan-for-stale-archive-temporaries-once-per-process.mjs) | correction | Scan for stale archive temporaries once per process | modifying |
+| [give-each-native-mesh-slice-its-own-render](give-each-native-mesh-slice-its-own-render.mjs) | correction | Give each native Mesh slice its own render encoder | modifying |
+| [keep-capture-manager-initialization-on-capture-paths](keep-capture-manager-initialization-on-capture-paths.mjs) | correction | Keep capture-manager initialization on capture paths | modifying |
+| [preserve-sample-only-image-format-capabilities](preserve-sample-only-image-format-capabilities.mjs) | correction | Preserve sample-only image format capabilities | modifying |
+| [separate-fragment-helper-guards-from-the-indirect-spill](separate-fragment-helper-guards-from-the-indirect-spill.mjs) | correction | Separate fragment helper guards from the indirect spill workaround | modifying |
+| [retain-native-minimum-lod-eligibility-in-subresource-views](retain-native-minimum-lod-eligibility-in-subresource-views.mjs) | correction | Retain native minimum-LOD eligibility in subresource views | modifying |
+| [preserve-timestamp-queries-when-gpu-capture-is-requested](preserve-timestamp-queries-when-gpu-capture-is-requested.mjs) | correction | Preserve timestamp queries when GPU capture is requested | modifying |
+| [use-constant-address-space-for-load-global-constant](use-constant-address-space-for-load-global-constant.mjs) | correction | Use constant address space for load_global_constant_offset | modifying |
+| [support-new-m6-texel-buffer-formats](support-new-m6-texel-buffer-formats.mjs) | capability | Support new M6 texel buffer formats | modifying |
+| [support-native-vk-ext-image-view-min-lod](support-native-vk-ext-image-view-min-lod.mjs) | capability | Support native VK_EXT_image_view_min_lod on M6+ | modifying |
+| [work-around-compute-dispatch-spilling-issue-on-m1](work-around-compute-dispatch-spilling-issue-on-m1.mjs) | correction | Work around compute dispatch spilling issue on M1/2 | modifying |
+| [disable-kk-workaround-10-on-m3](disable-kk-workaround-10-on-m3.mjs) | correction | Disable KK_WORKAROUND_10 on M3+ | modifying |
+| [narrow-wa14-to-constant-sources](narrow-wa14-to-constant-sources.mjs) | correction | Narrow WA14 to constant sources | modifying |
+| [fix-disabling-all-workarounds](fix-disabling-all-workarounds.mjs) | correction | Fix disabling all workarounds | modifying |
+| [expose-linear-filtering-for-32bit-float-formats-if](expose-linear-filtering-for-32bit-float-formats-if.mjs) | capability | Expose linear filtering for 32bit float formats if supported | modifying |
+| [fix-input-attachment-view-creation-to-handle-base](fix-input-attachment-view-creation-to-handle-base.mjs) | correction | Fix input attachment view creation to handle base array/mip offsets | modifying |
+| [push-debug-utils-to-command-buffer-if-no](push-debug-utils-to-command-buffer-if-no.mjs) | correction | Push debug utils to command buffer if no encoder is active | modifying |
+| [add-command-buffer-debug-group-functions-to-bridge](add-command-buffer-debug-group-functions-to-bridge.mjs) | capability | Add command buffer debug group functions to bridge | modifying |
+| [allow-controling-xcode-captures-using-debug-utils](allow-controling-xcode-captures-using-debug-utils.mjs) | correction | Allow controling XCode captures using debug utils | modifying |
+| [align-index-buffers-to-4-bytes-on-macos](align-index-buffers-to-4-bytes-on-macos.mjs) | correction | Align index buffers to 4 bytes on macOS 26 | modifying |
+| [preserve-compressed-sparse-mip-data-through-canonical-pages](preserve-compressed-sparse-mip-data-through-canonical-pages.mjs) | correction | Preserve compressed sparse mip data through canonical pages | modifying |
+| [strip-unread-residency-checks-from-the-main-geometry](strip-unread-residency-checks-from-the-main-geometry.mjs) | correction | Strip unread residency checks from the main geometry program | modifying |
+| [publish-lazily-built-polygon-pipelines-with-acquire-ordering](publish-lazily-built-polygon-pipelines-with-acquire-ordering.mjs) | correction | Publish lazily built polygon pipelines with acquire ordering | modifying |
+| [report-failed-pipeline-builds-with-results-their-calls](report-failed-pipeline-builds-with-results-their-calls.mjs) | correction | Report failed pipeline builds with results their calls allow | modifying |
+| [fail-recordings-that-reach-a-missing-compute-pipeline](fail-recordings-that-reach-a-missing-compute-pipeline.mjs) | correction | Fail recordings that reach a missing compute pipeline | modifying |
+| [order-copies-and-dispatches-behind-partial-area-pass](order-copies-and-dispatches-behind-partial-area-pass.mjs) | correction | Order copies and dispatches behind partial-area pass stores | modifying |
+| [compile-heap-and-device-address-residency-guards-lazily](compile-heap-and-device-address-residency-guards-lazily.mjs) | correction | Compile heap and device-address residency guards lazily | modifying |
+| [give-mesh-point-mode-points-their-triangle-s](give-mesh-point-mode-points-their-triangle-s.mjs) | correction | Give Mesh point-mode points their triangle's facing | modifying |
+| [report-encoders-without-draws-or-dispatches-as-zero](report-encoders-without-draws-or-dispatches-as-zero.mjs) | correction | Report encoders without draws or dispatches as zero-work spans | modifying |
+| [keep-compute-timestamps-valid-in-performance-mode](keep-compute-timestamps-valid-in-performance-mode.mjs) | correction | Keep compute timestamps valid in performance mode | modifying |
+| [sample-each-render-stage-once-per-render-encoder](sample-each-render-stage-once-per-render-encoder.mjs) | correction | Sample each render stage once per render encoder | modifying |
+| [log-query-pool-creation-that-runs-out-of](log-query-pool-creation-that-runs-out-of.mjs) | correction | Log query pool creation that runs out of memory | modifying |
+| [release-timestamp-heaps-a-failed-request-added](release-timestamp-heaps-a-failed-request-added.mjs) | correction | Release timestamp heaps a failed request added | modifying |
+| [take-timestamp-query-entries-from-shared-heaps](take-timestamp-query-entries-from-shared-heaps.mjs) | correction | Take timestamp query entries from shared heaps | modifying |
+| [stop-gpu-encoder-results-reaching-a-destroyed-performance](stop-gpu-encoder-results-reaching-a-destroyed-performance.mjs) | correction | Stop GPU encoder results reaching a destroyed performance tracker | modifying |
+| [time-gpu-encoders-through-device-timestamp-slots-without](time-gpu-encoders-through-device-timestamp-slots-without.mjs) | correction | Time GPU encoders through device timestamp slots without an encoder proxy | modifying |
+| [read-mesh-per-vertex-fragment-inputs-from-the](read-mesh-per-vertex-fragment-inputs-from-the.mjs) | correction | Read Mesh per-vertex fragment inputs from the per-vertex heap | modifying |
+| [select-mesh-index-order-from-a-dynamic-provoking](select-mesh-index-order-from-a-dynamic-provoking.mjs) | correction | Select Mesh index order from a dynamic provoking mode | modifying |
+| [draw-default-mode-lines-one-sub-pixel-step](draw-default-mode-lines-one-sub-pixel-step.mjs) | correction | Draw default-mode lines one sub-pixel step lower | modifying |
+| [record-creation-flags-and-feedback-in-pipeline-creation](record-creation-flags-and-feedback-in-pipeline-creation.mjs) | correction | Record creation flags and feedback in pipeline creation records | modifying |
+| [defer-builds-of-compute-shaders-restored-by-cache](defer-builds-of-compute-shaders-restored-by-cache.mjs) | correction | Defer builds of compute shaders restored by cache-only creation | modifying |
+| [order-partial-area-render-passes-behind-earlier-passes](order-partial-area-render-passes-behind-earlier-passes.mjs) | correction | Order partial-area render passes behind earlier passes | modifying |
+| [order-meta-render-passes-that-load-earlier-meta](order-meta-render-passes-that-load-earlier-meta.mjs) | correction | Order meta render passes that load earlier meta stores | modifying |
+| [sample-the-clamp-to-0-border-plane-of](sample-the-clamp-to-0-border-plane-of.mjs) | correction | Sample the clamp-to-0 border plane of heap samplers | modifying |
+| [draw-mesh-points-of-size-1-without-a](draw-mesh-points-of-size-1-without-a.mjs) | correction | Draw Mesh points of size 1 without a point size write | modifying |
+| [honor-static-last-vertex-provoking-for-mesh-lines](honor-static-last-vertex-provoking-for-mesh-lines.mjs) | correction | Honor static last-vertex provoking for Mesh lines | modifying |
+| [key-mesh-shaders-by-polygon-and-line-rasterization](key-mesh-shaders-by-polygon-and-line-rasterization.mjs) | correction | Key Mesh shaders by polygon and line rasterization mode | modifying |
+| [draw-a-point-mode-mesh-triangle-s-own](draw-a-point-mode-mesh-triangle-s-own.mjs) | correction | Draw a point-mode Mesh triangle's own vertices as points | modifying |
+| [time-creation-feedback-with-a-nanosecond-clock-on](time-creation-feedback-with-a-nanosecond-clock-on.mjs) | correction | Time creation feedback with a nanosecond clock on Apple | modifying |
+| [release-a-lazily-translated-shader-s-msl-after](release-a-lazily-translated-shader-s-msl-after.mjs) | correction | Release a lazily translated shader's MSL after its build | modifying |
+| [store-translations-made-by-synchronous-compute-restores](store-translations-made-by-synchronous-compute-restores.mjs) | correction | Store translations made by synchronous compute restores | modifying |
+| [check-stored-compute-recipes-and-remember-failed-translations](check-stored-compute-recipes-and-remember-failed-translations.mjs) | correction | Check stored compute recipes and remember failed translations | modifying |
+| [never-call-debug-messengers-from-compute-builds](never-call-debug-messengers-from-compute-builds.mjs) | correction | Never call debug messengers from compute builds | modifying |
+| [merge-the-newest-stored-first-bind-set-in](merge-the-newest-stored-first-bind-set-in.mjs) | correction | Merge the newest stored first-bind set in every store | modifying |
+| [translate-compute-shaders-in-their-deferred-build](translate-compute-shaders-in-their-deferred-build.mjs) | correction | Translate compute shaders in their deferred build | modifying |
+| [keep-sparse-sampler-helpers-textures-by-value](keep-sparse-sampler-helpers-textures-by-value.mjs) | correction | Keep sparse sampler helpers' textures by value | modifying |
+| [pass-textures-to-sampler-helpers-by-const-reference](pass-textures-to-sampler-helpers-by-const-reference.mjs) | correction | Pass textures to sampler helpers by const reference | modifying |
+| [keep-the-compute-route-for-a-gs-that](keep-the-compute-route-for-a-gs-that.mjs) | correction | Keep the compute route for a GS that completes no primitive | modifying |
+| [draw-only-a-polygon-s-own-vertices-in](draw-only-a-polygon-s-own-vertices-in.mjs) | correction | Draw only a polygon's own vertices in point mode | modifying |
+| [write-the-sampler-lod-bias-into-sampled-descriptors](write-the-sampler-lod-bias-into-sampled-descriptors.mjs) | correction | Write the sampler LOD bias into sampled descriptors again | modifying |
+| [route-array-lod-queries-without-reading-a-layer](route-array-lod-queries-without-reading-a-layer.mjs) | correction | Route array LOD queries without reading a layer | modifying |
+| [cover-no-polygon-output-when-its-heap-allocation](cover-no-polygon-output-when-its-heap-allocation.mjs) | correction | Cover no polygon output when its heap allocation fails | modifying |
+| [run-and-draw-nothing-when-the-draw-heap](run-and-draw-nothing-when-the-draw-heap.mjs) | correction | Run and draw nothing when the draw heap is full | modifying |
+| [report-why-a-device-was-lost](report-why-a-device-was-lost.mjs) | correction | Report why a device was lost | modifying |
+| [compile-both-stages-of-a-library-pair-in](compile-both-stages-of-a-library-pair-in.mjs) | correction | Compile both stages of a library pair in parallel during loads | modifying |
+| [load-predicted-builds-at-device-creation-and-promote](load-predicted-builds-at-device-creation-and-promote.mjs) | correction | Load predicted builds at device creation and promote early ones | modifying |
+| [start-predicted-builds-from-an-empty-set-under](start-predicted-builds-from-an-empty-set-under.mjs) | correction | Start predicted builds from an empty set under a new MSL salt | modifying |
+| [start-builds-the-application-bound-in-an-earlier](start-builds-the-application-bound-in-an-earlier.mjs) | correction | Start builds the application bound in an earlier run at once | modifying |
+| [keep-the-metal-pipeline-archive-across-driver-updates](keep-the-metal-pipeline-archive-across-driver-updates.mjs) | correction | Keep the Metal pipeline archive across driver updates | modifying |
+| [destroy-a-compute-shader-without-waiting-for-its](destroy-a-compute-shader-without-waiting-for-its.mjs) | correction | Destroy a compute shader without waiting for its build | modifying |
+| [outline-scalar-fp64-operations-from-vector-sources](outline-scalar-fp64-operations-from-vector-sources.mjs) | correction | Outline scalar FP64 operations from vector sources | modifying |
+| [start-deferred-builds-only-after-demand-compiles-go](start-deferred-builds-only-after-demand-compiles-go.mjs) | correction | Start deferred builds only after demand compiles go quiet | modifying |
+| [let-the-teardown-recapture-ignore-an-archive-drain](let-the-teardown-recapture-ignore-an-archive-drain.mjs) | correction | Let the teardown recapture ignore an archive drain | modifying |
+| [open-recorded-archive-pieces-in-the-background-at](open-recorded-archive-pieces-in-the-background-at.mjs) | correction | Open recorded archive pieces in the background at index load | modifying |
+| [cache-compute-shaders-whose-native-build-is-still](cache-compute-shaders-whose-native-build-is-still.mjs) | correction | Cache compute shaders whose native build is still pending | modifying |
+| [defer-native-builds-of-compute-shaders-restored-from](defer-native-builds-of-compute-shaders-restored-from.mjs) | correction | Defer native builds of compute shaders restored from the cache | modifying |
+| [checkpoint-pipeline-archives-during-a-sustained-compile-load](checkpoint-pipeline-archives-during-a-sustained-compile-load.mjs) | correction | Checkpoint pipeline archives during a sustained compile load | modifying |
+| [key-the-in-process-mtllibrary-cache-by-source](key-the-in-process-mtllibrary-cache-by-source.mjs) | correction | Key the in-process MTLLibrary cache by source digest | modifying |
+| [set-shader-module-identifiers-once-in-the-device](set-shader-module-identifiers-once-in-the-device.mjs) | correction | Set shader module identifiers once in the device tables | modifying |
+| [isolate-multisample-fsr-slots-by-view](isolate-multisample-fsr-slots-by-view.mjs) | correction | Isolate multisample FSR slots by view | modifying |
+| [retry-a-failed-capturing-pipeline-compile-without-the](retry-a-failed-capturing-pipeline-compile-without-the.mjs) | correction | Retry a failed capturing pipeline compile without the serializer | modifying |
+| [apply-conditional-rendering-to-indirect-byte-count-draws](apply-conditional-rendering-to-indirect-byte-count-draws.mjs) | correction | Apply conditional rendering to indirect byte-count draws | modifying |
+| [keep-the-begin-rendering-clear-outside-conditional-rendering](keep-the-begin-rendering-clear-outside-conditional-rendering.mjs) | correction | Keep the begin-rendering clear outside conditional rendering | modifying |
+| [report-eight-mesh-multiview-views](report-eight-mesh-multiview-views.mjs) | correction | Report eight Mesh multiview views | modifying |
+| [read-layer-0-in-mesh-input-capture-without](read-layer-0-in-mesh-input-capture-without.mjs) | correction | Read Layer 0 in Mesh input capture without a Layer output | modifying |
+| [apply-alternate-depth-bias-through-retained-mesh-capture](apply-alternate-depth-bias-through-retained-mesh-capture.mjs) | correction | Apply alternate depth bias through retained Mesh capture | modifying |
+| [use-bounded-mesh-rectangles-for-rectangular-line-mode](use-bounded-mesh-rectangles-for-rectangular-line-mode.mjs) | correction | Use bounded Mesh rectangles for rectangular line mode | modifying |
+| [render-smooth-mesh-lines-through-bounded-retained-rectangles](render-smooth-mesh-lines-through-bounded-retained-rectangles.mjs) | correction | Render smooth Mesh lines through bounded retained rectangles | modifying |
+| [prepare-fragment-rate-lowering-after-buffer-and-io](prepare-fragment-rate-lowering-after-buffer-and-io.mjs) | correction | Prepare fragment-rate lowering after buffer and IO passes | modifying |
+| [add-graphics-pipeline-libraries-with-heap-replay-from](add-graphics-pipeline-libraries-with-heap-replay-from.mjs) | capability | Add graphics pipeline libraries with heap replay from recorded commands | modifying |
+| [allow-coarse-reads-of-input-attachment-textures](allow-coarse-reads-of-input-attachment-textures.mjs) | correction | Allow coarse reads of input attachment textures | modifying |
+| [retain-sample-exchange-when-fragment-rates-must-be](retain-sample-exchange-when-fragment-rates-must-be.mjs) | correction | Retain sample exchange when fragment rates must be fine | modifying |
+| [load-mesh-fragment-rates-from-per-primitive-inputs](load-mesh-fragment-rates-from-per-primitive-inputs.mjs) | correction | Load mesh fragment rates from per-primitive inputs | modifying |
+| [keep-reason-fields-behind-explicit-diagnostic-opt-in](keep-reason-fields-behind-explicit-diagnostic-opt-in.mjs) | correction | Keep reason fields behind explicit diagnostic opt-in | modifying |
+| [preserve-optimized-zero-initialized-images](preserve-optimized-zero-initialized-images.mjs) | correction | Preserve optimized zero-initialized images | modifying |
+| [identify-the-mapped-image-in-build-reason-records](identify-the-mapped-image-in-build-reason-records.mjs) | correction | Identify the mapped image in build reason records | modifying |
+| [describe-optional-build-reason-records](describe-optional-build-reason-records.mjs) | documentation | Describe optional build reason records | modifying |
+| [identify-recorded-constant-sets-in-build-attribution](identify-recorded-constant-sets-in-build-attribution.mjs) | correction | Identify recorded constant sets in build attribution | modifying |
+| [attribute-deferred-builds-and-native-cache-outcomes](attribute-deferred-builds-and-native-cache-outcomes.mjs) | correction | Attribute deferred builds and native cache outcomes | modifying |
+| [let-unused-deferred-compute-jobs-reach-cancellation](let-unused-deferred-compute-jobs-reach-cancellation.mjs) | correction | Let unused deferred compute jobs reach cancellation | modifying |
+| [preserve-half-input-rounding-in-mixed-dot-products](preserve-half-input-rounding-in-mixed-dot-products.mjs) | correction | Preserve half-input rounding in mixed dot products | modifying |
+| [support-half-input-dot-products-with-float-accumulation](support-half-input-dot-products-with-float-accumulation.mjs) | capability | Support half-input dot products with float accumulation | modifying |
 | [describe-the-registry-performance-defaults-for-mesh-apple7](describe-the-registry-performance-defaults-for-mesh-apple7.mjs) | documentation | Describe the registry performance defaults for Mesh, Apple7 image atomics and barycentrics | modifying |
 | [reuse-cached-pending-compute-jobs-in-cache-only](reuse-cached-pending-compute-jobs-in-cache-only.mjs) | correction | Reuse cached pending compute jobs in cache-only creation | modifying |
 | [expose-shader-module-identifiers-through-the-common-cache](expose-shader-module-identifiers-through-the-common-cache.mjs) | capability | Expose shader module identifiers through the common cache path | modifying |

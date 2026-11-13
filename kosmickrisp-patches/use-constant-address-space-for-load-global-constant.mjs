@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Use constant address space for load_global_constant_offset
+export const id = "use-constant-address-space-for-load-global-constant";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/compiler/nir_to_msl.c", source => source
+    .replace("      break;\n   }\n   case nir_intrinsic_load_global_constant_offset: {\n      enum gl_access_qualifier access = nir_intrinsic_access(instr);\n      const char *type = msl_type_for_def(ctx->types, &instr->def);\n      const char *qualifier = global_access_qualifier(ctx, access);\n      if (access & ACCESS_ATOMIC) {\n         assert(instr->num_components == 1u &&\n                \"We can only do single component with atomics\");\n         P(ctx, \"atomic_load_explicit((%s atomic_%s*)(\", qualifier, type);\n         src_to_msl(ctx, &instr->src[0]);\n         P(ctx, \"+\");\n         src_to_msl(ctx, &instr->src[1]);\n         P(ctx, \", memory_order_relaxed);\\n\");\n      } else {\n         src_to_packed_load_offset(ctx, &instr->src[0], &instr->src[1],\n                                   qualifier,\n                                   msl_type_for_def(ctx->types, &instr->def),\n                                   instr->def.num_components);\n      }\n      P(ctx, \";\\n\");\n      break;\n   }\n",
+      () => "      break;\n   }\n   case nir_intrinsic_load_global_constant_offset: {\n      src_to_packed_load_offset(ctx, &instr->src[0], &instr->src[1], \"constant\",\n                                msl_type_for_def(ctx->types, &instr->def),\n                                instr->def.num_components);\n      P(ctx, \";\\n\");\n      break;\n   }\n"));
+}

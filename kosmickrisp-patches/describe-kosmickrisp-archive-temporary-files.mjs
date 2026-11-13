@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Describe KosmicKrisp archive temporary files
+export const id = "describe-kosmickrisp-archive-temporary-files";
+export function apply({edit, edits}) {
+  edit("docs/drivers/kosmickrisp.rst", source => source
+    .replace("Native pipeline archives share Mesa's disk-cache namespace and storage\nbudget. Checkpoint journals retain all referenced archive pieces. Up to eight\nopened archive objects are retained in an in-memory least-recently-used set;\nactive requests retain their own archive and backing file.\n\nLookup hints combine shader-library source hashes and compiler options with\nselected resolved compute, render, mesh or tile pipeline state. Each\n",
+      () => "Native pipeline archives share Mesa's disk-cache namespace and storage\nbudget. Checkpoint journals retain all referenced archive pieces. Up to eight\nopened archive objects are retained in an in-memory least-recently-used set;\nactive requests retain their own archive.\n\nAn archive piece is opened from a ``kk-metal-<pid>-<random>`` file in the user\ntemporary directory, and the file is unlinked as soon as the archive is open,\nso its storage ends with the process. Checkpoint snapshots use the same names\nand are removed once read. The first archive load in a process removes\n``kk-metal-`` names whose owner process has exited, including names that\ncontinue after the owner field, and names without an owner field once they are\na day old.\n\nLookup hints combine shader-library source hashes and compiler options with\nselected resolved compute, render, mesh or tile pipeline state. Each\n"));
+}

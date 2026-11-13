@@ -25747,6 +25747,4641 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "support-half-input-dot-products-with-float-accumulation": {
+      "id": "support-half-input-dot-products-with-float-accumulation",
+      "kind": "capability",
+      "title": "Support half-input dot products with float accumulation",
+      "module": "support-half-input-dot-products-with-float-accumulation.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan shader compilation",
+        "Vulkan driver",
+        "Device features"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/emulation-performance-families.rst",
+        "docs/drivers/kosmickrisp/emulation.rst",
+        "src/kosmickrisp/compiler/kk_mixed_float_dot.h",
+        "src/kosmickrisp/compiler/nir_to_msl.c",
+        "src/kosmickrisp/vulkan/kk_emulation.json",
+        "src/kosmickrisp/vulkan/kk_physical_device.c"
+      ],
+      "functions": [
+        "alu_fp_math_mode_pragma",
+        "msl_preprocess_nir",
+        "kk_get_device_extensions",
+        "kk_get_device_features"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan shader compilation",
+          "Vulkan driver",
+          "Device features"
+        ],
+        "description": "Lower requested mixed Float16 dot products to Float32 conversions and two native FMAs before float-control legalization. Expose Float16AccFloat32 in both modes on Apple7-11; keep the other mixed formats unreported."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "preserve-half-input-rounding-in-mixed-dot-products": {
+      "id": "preserve-half-input-rounding-in-mixed-dot-products",
+      "kind": "correction",
+      "title": "Preserve half-input rounding in mixed dot products",
+      "module": "preserve-half-input-rounding-in-mixed-dot-products.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/kk_mixed_float_dot.h"
+      ],
+      "functions": [
+        "kk_lower_mixed_float_dot"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "Keep widening conversions exact so inexact algebraic optimization cannot eliminate source half rounding. The existing MSL safe math scope preserves this boundary without restricting the mixed operation's FMAs."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "let-unused-deferred-compute-jobs-reach-cancellation": {
+      "id": "let-unused-deferred-compute-jobs-reach-cancellation",
+      "kind": "correction",
+      "title": "Let unused deferred compute jobs reach cancellation",
+      "module": "let-unused-deferred-compute-jobs-reach-cancellation.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan queues and presentation"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_async_compute.c"
+      ],
+      "functions": [
+        "job_result",
+        "kk_async_compute_drain",
+        "kk_async_compute_serializable"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan queues and presentation"
+        ],
+        "description": "Borrow the shader cache object through the existing task-retirement join instead of retaining the shader from its own pending job. The owning reference kept the last external release from destroying the shader, so otherwise unneeded queued native compiles could not be cancelled. Successful builds still serialize through the same common codec and store the same key; destruction waits through that publication before freeing the shader."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "attribute-deferred-builds-and-native-cache-outcomes": {
+      "id": "attribute-deferred-builds-and-native-cache-outcomes",
+      "kind": "correction",
+      "title": "Attribute deferred builds and native cache outcomes",
+      "module": "attribute-deferred-builds-and-native-cache-outcomes.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver",
+        "Vulkan pipelines",
+        "Vulkan queues and presentation",
+        "Vulkan command recording"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_compiler.h",
+        "src/kosmickrisp/bridge/mtl_compiler.m",
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h",
+        "src/kosmickrisp/bridge/stubs/mtl_compiler.c",
+        "src/kosmickrisp/vulkan/kk_async_compute.c",
+        "src/kosmickrisp/vulkan/kk_async_compute.h",
+        "src/kosmickrisp/vulkan/kk_cmd_dispatch.c",
+        "src/kosmickrisp/vulkan/kk_perf.c",
+        "src/kosmickrisp/vulkan/kk_perf.h"
+      ],
+      "functions": [
+        "kk_library_work_execute",
+        "mtl_new_library_pair",
+        "kk_cached_library",
+        "kk_archive_compute",
+        "kk_archive_render",
+        "mtl_compiler_foreground_end",
+        "job_execute",
+        "kk_async_compute_start",
+        "kk_async_compute_join",
+        "kk_async_compute_serializable",
+        "kk_async_compute_shader_finish",
+        "kk_flush_compute_state",
+        "kk_perf_create",
+        "kk_perf_async_join",
+        "kk_perf_compile_begin",
+        "kk_perf_compile_end"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver",
+          "Vulkan pipelines",
+          "Vulkan queues and presentation",
+          "Vulkan command recording"
+        ],
+        "description": "Extend opt-in compile records with exact archive keys, native hit or miss outcomes, specialization and stable deferred-build IDs. Record actual first dispatch separately from first bind, and mark cancelled or completed-unused only when the shader lifetime retires. Carry the trace through joined graphics library workers. Without tracking, compute dispatch keeps the existing disabled-tracking branch and shader code remains unchanged."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "identify-recorded-constant-sets-in-build-attribution": {
+      "id": "identify-recorded-constant-sets-in-build-attribution",
+      "kind": "correction",
+      "title": "Identify recorded constant sets in build attribution",
+      "module": "identify-recorded-constant-sets-in-build-attribution.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h"
+      ],
+      "functions": [
+        "kk_archive_trace"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "Emit a stable stage/index/type/value digest beside the verified archive key only when build attribution is enabled. Counts can distinguish different specialization values of the same source from repeated requests for the same values without changing archive lookup identity."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "describe-optional-build-reason-records": {
+      "id": "describe-optional-build-reason-records",
+      "kind": "documentation",
+      "title": "Describe optional build reason records",
+      "module": "describe-optional-build-reason-records.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst"
+      ],
+      "functions": [],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation"
+        ],
+        "description": "Generated-by: LLM"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "identify-the-mapped-image-in-build-reason-records": {
+      "id": "identify-the-mapped-image-in-build-reason-records",
+      "kind": "correction",
+      "title": "Identify the mapped image in build reason records",
+      "module": "identify-the-mapped-image-in-build-reason-records.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_perf.c"
+      ],
+      "functions": [
+        "positive_option",
+        "kk_perf_create"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver"
+        ],
+        "description": "Record the actual loaded driver image and process for attributed devices. A launch environment can be overridden by a runtime serialized argument, so the requested ICD path alone is not driver provenance. Emit this only with build-reason tracking enabled."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "preserve-optimized-zero-initialized-images": {
+      "id": "preserve-optimized-zero-initialized-images",
+      "kind": "correction",
+      "title": "Preserve optimized zero-initialized images",
+      "module": "preserve-optimized-zero-initialized-images.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan command recording",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/emulation-performance-families.rst",
+        "docs/drivers/kosmickrisp/emulation.rst",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.h",
+        "src/kosmickrisp/vulkan/kk_cmd_meta.c",
+        "src/kosmickrisp/vulkan/kk_emulation.json",
+        "src/kosmickrisp/vulkan/kk_image_layout.c",
+        "src/kosmickrisp/vulkan/kk_zero_init.h",
+        "src/kosmickrisp/vulkan/kk_zero_init_image.h"
+      ],
+      "functions": [
+        "kk_cmd_release_resources",
+        "kk_cmd_pipeline_barriers",
+        "kk_meta_resolve_rendering",
+        "kk_meta_expand_msrtss",
+        "kk_image_layout_init",
+        "kk_zero_init_features",
+        "kk_zero_init_optimized_layout"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan command recording",
+          "Vulkan driver"
+        ],
+        "description": "Initialize uncompressed optimal images with native clears or bounded zero-buffer blits when leaving the initial ZERO_INITIALIZED layout. Preserve render-pass state and ordinary compression eligibility, and expose explicit zero allocation in performance mode on Apple7-11. Block-compressed zero images retain raw native storage."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "keep-reason-fields-behind-explicit-diagnostic-opt-in": {
+      "id": "keep-reason-fields-behind-explicit-diagnostic-opt-in",
+      "kind": "correction",
+      "title": "Keep reason fields behind explicit diagnostic opt-in",
+      "module": "keep-reason-fields-behind-explicit-diagnostic-opt-in.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_perf.c"
+      ],
+      "functions": [
+        "kk_perf_compile_end"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "Retain the original compile JSON when only legacy compile tracking is enabled. Emit build IDs and reason fields only when both compile details and build-reason tracking are explicitly requested; ordinary operation creates no tracker."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "load-mesh-fragment-rates-from-per-primitive-inputs": {
+      "id": "load-mesh-fragment-rates-from-per-primitive-inputs",
+      "kind": "correction",
+      "title": "Load mesh fragment rates from per-primitive inputs",
+      "module": "load-mesh-fragment-rates-from-per-primitive-inputs.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_nir_lower_fsr.c"
+      ],
+      "functions": [
+        "fsr_setup"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "Use the per-primitive input intrinsic for Mesh PrimitiveShadingRateKHR so varying linking preserves its record class. Vertex-produced rates retain their existing input intrinsic."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "retain-sample-exchange-when-fragment-rates-must-be": {
+      "id": "retain-sample-exchange-when-fragment-rates-must-be",
+      "kind": "correction",
+      "title": "Retain sample exchange when fragment rates must be fine",
+      "module": "retain-sample-exchange-when-fragment-rates-must-be.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_nir_lower_fsr.c",
+        "src/kosmickrisp/vulkan/kk_nir_lower_fsr.h",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "kk_nir_fsr_supported",
+        "kk_lower_fs_rate"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation",
+          "Vulkan pipelines"
+        ],
+        "description": "Keep a forced 1x1 sample-exchange path for memory-writing shaders with depth, stencil or sample-mask IO and for static conservative rasterization or custom sample locations. Reject these interfaces for coarse pixels while retaining shared outputs and side effects across covered samples."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "allow-coarse-reads-of-input-attachment-textures": {
+      "id": "allow-coarse-reads-of-input-attachment-textures",
+      "kind": "correction",
+      "title": "Allow coarse reads of input attachment textures",
+      "module": "allow-coarse-reads-of-input-attachment-textures.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_nir_lower_fsr.c"
+      ],
+      "functions": [
+        "kk_nir_fsr_supported"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "Subpass textures retain uses_fbfetch_output metadata after input attachment lowering. Permit those texture reads through quad-rate lowering so they use the coarse fragment coordinates and broadcast value. Continue rejecting actual framebuffer output reads in the intrinsic scan."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "add-graphics-pipeline-libraries-with-heap-replay-from": {
+      "id": "add-graphics-pipeline-libraries-with-heap-replay-from",
+      "kind": "capability",
+      "title": "Add graphics pipeline libraries with heap replay from recorded commands",
+      "module": "add-graphics-pipeline-libraries-with-heap-replay-from.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Vulkan pipelines",
+        "Vulkan shader compilation",
+        "Device features"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "docs/drivers/kosmickrisp/emulation-performance-families.rst",
+        "docs/drivers/kosmickrisp/emulation.rst",
+        "docs/drivers/kosmickrisp/features.rst",
+        "src/kosmickrisp/bridge/mtl_compiler.h",
+        "src/kosmickrisp/bridge/mtl_compiler.m",
+        "src/kosmickrisp/bridge/mtl_function_constants.h",
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h",
+        "src/kosmickrisp/compiler/msl_iomap.c",
+        "src/kosmickrisp/compiler/msl_private.h",
+        "src/kosmickrisp/compiler/nir_to_msl.c",
+        "src/kosmickrisp/compiler/nir_to_msl.h",
+        "src/kosmickrisp/vulkan/kk-writable-msaa-nir.h",
+        "src/kosmickrisp/vulkan/kk_emulation.c",
+        "src/kosmickrisp/vulkan/kk_emulation.json",
+        "src/kosmickrisp/vulkan/kk_emulation_gen.py",
+        "src/kosmickrisp/vulkan/kk_gpl_pipeline.h",
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_shader.h",
+        "src/kosmickrisp/vulkan/kk_sparse_pipeline.h",
+        "src/vulkan/runtime/vk_pipeline.c",
+        "src/vulkan/runtime/vk_pipeline.h",
+        "src/vulkan/runtime/vk_shader.h"
+      ],
+      "functions": [
+        "mtl_new_library",
+        "mtl_render_pipeline_descriptor_set_fragment_shader",
+        "mtl_specialize_pipeline_statistics",
+        "mtl_statistics_render_descriptor",
+        "mtl_sampler_emulation_render_descriptor",
+        "kk_prepare_function_constants",
+        "kk_prepare_render_function_constants",
+        "kk_remember_library_hint",
+        "kk_function_hint",
+        "kk_pipeline_hint",
+        "kk_archive_remove_stale_temporaries",
+        "kk_cached_library",
+        "vs_output_block",
+        "msl_nir_gather_io_info",
+        "msl_gather_io_info",
+        "msl_emit_io_blocks",
+        "msl_emit_output_var",
+        "msl_output_name",
+        "msl_input_name",
+        "msl_input_num_components",
+        "msl_output_num_components",
+        "get_entrypoint_name",
+        "emit_sysvals",
+        "emit_inputs",
+        "output_type",
+        "intrinsic_to_msl",
+        "nir_to_msl",
+        "kk_lower_msaa_fetch",
+        "kk_emulation_apply",
+        "generate",
+        "kk_get_device_extensions",
+        "kk_get_device_features",
+        "kk_get_device_properties",
+        "kk_populate_fs_key",
+        "kk_hash_graphics_state",
+        "lower_subpass_dim",
+        "kk_lower_fs",
+        "kk_lower_nir_untracked",
+        "kk_shader_destroy",
+        "kk_compile_msl_options",
+        "kk_compile_shader",
+        "gather_graphics_pipeline_create_info",
+        "kk_compile_graphics_prerender",
+        "kk_compile_graphics_pipeline_native_body",
+        "kk_finish_fragment_nir",
+        "kk_shader_serialize_native",
+        "kk_msl_deserialize",
+        "kk_deserialize_shader_native_inner",
+        "kk_compile_nir_shader",
+        "kk_compile_shaders_untracked",
+        "vk_pipeline_stage_finish",
+        "vk_pipeline_stage_clone",
+        "vk_pipeline_stage_copy_non_shaders",
+        "vk_graphics_pipeline_destroy",
+        "vk_graphics_pipeline_cmd_bind",
+        "vk_get_graphics_pipeline_compile_info",
+        "vk_partition_graphics_pipeline_shaders",
+        "vk_graphics_pipeline_compile_shaders",
+        "vk_graphics_pipeline_get_executable_properties",
+        "vk_graphics_pipeline_executable_shader",
+        "vk_graphics_pipeline_get_shader",
+        "vk_pipeline_get_dynamic_graphics_state",
+        "vk_create_graphics_pipeline",
+        "vk_pipeline_get_shader"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Vulkan pipelines",
+          "Vulkan shader compilation",
+          "Device features"
+        ],
+        "description": "Exposes VK_EXT_graphics_pipeline_library with VK_KHR_pipeline_library in both modes on Apple7-11, with all four library parts, independent pipeline layouts and independent interpolation decorations. Vertex and fragment stages compile before final pipeline creation, eligible pipelines link native stage bodies, and other pipelines use the retained canonical sources. Shader module identifiers and cache-only creation go through the common pipeline cache. Descriptor heap replay is selected from the commands a command buffer actually records."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "prepare-fragment-rate-lowering-after-buffer-and-io": {
+      "id": "prepare-fragment-rate-lowering-after-buffer-and-io",
+      "kind": "correction",
+      "title": "Prepare fragment-rate lowering after buffer and IO passes",
+      "module": "prepare-fragment-rate-lowering-after-buffer-and-io.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_conservative_nir.h",
+        "src/kosmickrisp/vulkan/kk_nir_lower_fsr.c",
+        "src/kosmickrisp/vulkan/kk_nir_lower_fsr.h",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "kk_conservative_fs_intrinsic",
+        "fsr_is_output",
+        "kk_nir_lower_fsr",
+        "fsr_late",
+        "kk_nir_lower_fsr_late",
+        "kk_lower_fs_rate",
+        "kk_compile_msl_options"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation",
+          "Vulkan pipelines"
+        ],
+        "description": "Inline existing helpers before the single-entry fragment-rate transform and refresh system-value metadata after IO lowering. Preserve the fragment-rate primitive identity until conservative raster variants replace physical row-triangle IDs with their shared primitive packet identity."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "render-smooth-mesh-lines-through-bounded-retained-rectangles": {
+      "id": "render-smooth-mesh-lines-through-bounded-retained-rectangles",
+      "kind": "correction",
+      "title": "Render smooth Mesh lines through bounded retained rectangles",
+      "module": "render-smooth-mesh-lines-through-bounded-retained-rectangles.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation",
+        "Vulkan driver",
+        "Vulkan command recording",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/kk_mesh_iomap.h",
+        "src/kosmickrisp/compiler/kk_mesh_line_msl.h",
+        "src/kosmickrisp/compiler/kk_mesh_retained_msl.h",
+        "src/kosmickrisp/compiler/msl_private.h",
+        "src/kosmickrisp/vulkan/kk_lines_nir.h",
+        "src/kosmickrisp/vulkan/kk_mesh_command.h",
+        "src/kosmickrisp/vulkan/kk_mesh_line_draw.h",
+        "src/kosmickrisp/vulkan/kk_mesh_pipeline.h",
+        "src/kosmickrisp/vulkan/kk_mesh_pipeline_api.h",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_shader.h",
+        "src/kosmickrisp/vulkan/kk_unused_attachments.h"
+      ],
+      "functions": [
+        "kk_mesh_io_block",
+        "kk_mesh_io_blocks",
+        "kk_mesh_emit_retained_reader",
+        "msl_input_name",
+        "kk_line_fragment",
+        "kk_draw_mesh",
+        "kk_mesh_build_pipeline",
+        "kk_lower_fs",
+        "kk_shader_destroy",
+        "kk_compile_shader",
+        "gather_graphics_pipeline_create_info",
+        "kk_record_render_descriptor",
+        "kk_shader_serialize_native",
+        "kk_deserialize_shader_native_inner",
+        "kk_attachment_pipeline_for_formats",
+        "kk_attachment_pipeline"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation",
+          "Vulkan driver",
+          "Vulkan command recording",
+          "Vulkan pipelines"
+        ],
+        "description": "Keep native Mesh output for ordinary line modes. Smooth draws capture application output once, replay at most 64 lines per reader group as padded rectangles, and apply analytic alpha coverage before blending. Preserve native primitive attributes and attachment selection, and serialize the optional fragment variant with a new shader cache version."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "use-bounded-mesh-rectangles-for-rectangular-line-mode": {
+      "id": "use-bounded-mesh-rectangles-for-rectangular-line-mode",
+      "kind": "correction",
+      "title": "Use bounded Mesh rectangles for rectangular line mode",
+      "module": "use-bounded-mesh-rectangles-for-rectangular-line-mode.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation",
+        "Vulkan driver",
+        "Vulkan command recording",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/kk_mesh_line_msl.h",
+        "src/kosmickrisp/vulkan/kk_lines_nir.h",
+        "src/kosmickrisp/vulkan/kk_mesh_command.h",
+        "src/kosmickrisp/vulkan/kk_mesh_line_draw.h",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_shader.h"
+      ],
+      "functions": [
+        "kk_mesh_emit_line_reader",
+        "kk_mesh_line_fragment",
+        "kk_mesh_line_consume",
+        "kk_mesh_line_selected",
+        "kk_compile_shader"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation",
+          "Vulkan driver",
+          "Vulkan command recording",
+          "Vulkan pipelines"
+        ],
+        "description": "Metal native lines cover samples outside the Vulkan rectangle. Select the retained reader for rectangular mode with no endpoint or edge padding and binary coverage. Preserve analytic alpha for smooth lines and native Bresenham output. Version the optional reader and fragment ABI for shader-cache reuse."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "apply-alternate-depth-bias-through-retained-mesh-capture": {
+      "id": "apply-alternate-depth-bias-through-retained-mesh-capture",
+      "kind": "correction",
+      "title": "Apply alternate depth bias through retained Mesh capture",
+      "module": "apply-alternate-depth-bias-through-retained-mesh-capture.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver",
+        "Vulkan command recording",
+        "Vulkan shader compilation",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_depth_bias_control.h",
+        "src/kosmickrisp/vulkan/kk_depth_bounds.h",
+        "src/kosmickrisp/vulkan/kk_depth_bounds_mesh_draw.h",
+        "src/kosmickrisp/vulkan/kk_depth_bounds_mesh_nir.h",
+        "src/kosmickrisp/vulkan/kk_depth_bounds_mesh_pipeline.h",
+        "src/kosmickrisp/vulkan/kk_interlock_device.h",
+        "src/kosmickrisp/vulkan/kk_interlock_shader.h",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_sparse_pipeline.h"
+      ],
+      "functions": [
+        "kk_depth_bias_control_flags",
+        "kk_depth_bounds_emulated",
+        "kk_depth_bounds_selected",
+        "kk_depth_bounds_dynamic_enable",
+        "kk_depth_bounds_record_mesh_batch",
+        "kk_depth_bounds_mesh_parameters",
+        "kk_depth_bounds_mesh_capture_job",
+        "kk_interlock_device_init",
+        "kk_interlock_compile_fragment",
+        "kk_depth_bounds_route",
+        "kk_compile_shaders_bounds_routes"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver",
+          "Vulkan command recording",
+          "Vulkan shader compilation",
+          "Vulkan pipelines"
+        ],
+        "description": "Route alternate Mesh depth-bias representations through the existing captured depth/stencil transaction. Apply FORCE_UNORM or FLOAT units, slope and clamp to captured window depth after clipping, and suppress native bias during alternate capture. Keep native siblings for dynamic FORMAT or disabled bias and retain the performance-mode feature policy."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "read-layer-0-in-mesh-input-capture-without": {
+      "id": "read-layer-0-in-mesh-input-capture-without",
+      "kind": "correction",
+      "title": "Read Layer 0 in Mesh input capture without a Layer output",
+      "module": "read-layer-0-in-mesh-input-capture-without.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_interlock_shader.h"
+      ],
+      "functions": [
+        "kk_interlock_trim_native_output",
+        "kk_interlock_compile_fragment"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "A Mesh producer that writes no Layer and uses no view mask declares no render_target_array_index, so the input capture's Layer read had no rasterized source and could reject every captured sample after other Mesh work had run. Read the constant Layer that the retained capture already records, which is Vulkan's default Layer 0."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "report-eight-mesh-multiview-views": {
+      "id": "report-eight-mesh-multiview-views",
+      "kind": "correction",
+      "title": "Report eight Mesh multiview views",
+      "module": "report-eight-mesh-multiview-views.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Device features",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "maclauncher/reference/KOSMICKRISP_GRAPHICS_STAGES.md",
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_private.h"
+      ],
+      "functions": [
+        "kk_get_device_properties"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Device features",
+          "Vulkan driver"
+        ],
+        "description": "Mesh multiview replays the complete Mesh draw once per view. Report maxMeshMultiviewViewCount = 8, which covers D3D12 view instancing (four views) and matches RADV. A count of 32 made dEQP-VK.mesh_shader.ext.properties.max_view_index build its view mask as (1u << 32) - 1, which the compiled test evaluates to an empty mask, so only layer 0 was drawn. Other multiview draws keep 32 views."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "keep-the-begin-rendering-clear-outside-conditional-rendering": {
+      "id": "keep-the-begin-rendering-clear-outside-conditional-rendering",
+      "kind": "correction",
+      "title": "Keep the begin-rendering clear outside conditional rendering",
+      "module": "keep-the-begin-rendering-clear-outside-conditional-rendering.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan command recording"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_draw.c"
+      ],
+      "functions": [
+        "kk_begin_rendering"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan command recording"
+        ],
+        "description": "A multiview pass whose view mask does not equal its layer count loads its attachments and applies the clear with vkCmdClearAttachments. When conditional rendering was already active, that internal clear was discarded with the draws, leaving the attachment uncleared. Attachment load operations are not subject to conditional rendering, so suspend the predicate for that clear only."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "apply-conditional-rendering-to-indirect-byte-count-draws": {
+      "id": "apply-conditional-rendering-to-indirect-byte-count-draws",
+      "kind": "correction",
+      "title": "Apply conditional rendering to indirect byte-count draws",
+      "module": "apply-conditional-rendering-to-indirect-byte-count-draws.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan command recording"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_draw.c"
+      ],
+      "functions": [
+        "kk_CmdDrawIndirectByteCount2EXT"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan command recording"
+        ],
+        "description": "vkCmdDrawIndirectByteCountEXT built its indirect draw without the conditional-rendering predicate, so the draw and its transform feedback writes ran while the condition was zero. Use the same predicate fields as the other indirect draws."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "retry-a-failed-capturing-pipeline-compile-without-the": {
+      "id": "retry-a-failed-capturing-pipeline-compile-without-the",
+      "kind": "correction",
+      "title": "Retry a failed capturing pipeline compile without the serializer",
+      "module": "retry-a-failed-capturing-pipeline-compile-without-the.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/workarounds.rst",
+        "src/kosmickrisp/bridge/mtl_compiler.h",
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h",
+        "src/kosmickrisp/bridge/stubs/mtl_compiler.c"
+      ],
+      "functions": [
+        "mtl_compiler_cache_record_pipeline_descriptor",
+        "mtl_compiler_cache_recapture",
+        "kk_archive_bypass_compiler"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Vulkan pipelines"
+        ],
+        "description": "With the shader cache enabled, Apple's Mesh compiler crashes while capturing Mesh pipelines whose per-vertex outputs reach the maximum output size (MTLCompilerService in AGCLLVMUserMeshShaderSW::getBasePointer on Apple8), so pipeline creation returned VK_ERROR_INVALID_SHADER_NV. The same descriptor compiles on a compiler without a pipeline data set serializer. On macOS 27 and later, repeat a failed capturing call once on the existing second compiler; the pipeline is then not archived. The successful path is unchanged."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "isolate-multisample-fsr-slots-by-view": {
+      "id": "isolate-multisample-fsr-slots-by-view",
+      "kind": "correction",
+      "title": "Isolate multisample FSR slots by view",
+      "module": "isolate-multisample-fsr-slots-by-view.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_nir_lower_fsr.c",
+        "src/kosmickrisp/vulkan/kk_nir_lower_fsr.h",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "fsr_slot_fence",
+        "fsr_claim",
+        "kk_lower_fs_rate"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation",
+          "Vulkan pipelines"
+        ],
+        "description": "Corresponding fragments from amplified views previously shared the same slot identity, allowing their sample-presence and output handshakes to interfere. Partition each render-pass epoch half by ViewIndex, using the existing native or replayed multiview transport. Non-multiview generated NIR is unchanged and the slot allocation retains its existing size."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "set-shader-module-identifiers-once-in-the-device": {
+      "id": "set-shader-module-identifiers-once-in-the-device",
+      "kind": "correction",
+      "title": "Set shader module identifiers once in the device tables",
+      "module": "set-shader-module-identifiers-once-in-the-device.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Device features"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_physical_device.c"
+      ],
+      "functions": [
+        "kk_get_device_extensions",
+        "kk_get_device_features"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Device features"
+        ],
+        "description": "The extension table and the feature table each set EXT_shader_module_identifier and shaderModuleIdentifier twice, because two merged changes both added them. Remove the second assignment of each; the values are unchanged."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "key-the-in-process-mtllibrary-cache-by-source": {
+      "id": "key-the-in-process-mtllibrary-cache-by-source",
+      "kind": "correction",
+      "title": "Key the in-process MTLLibrary cache by source digest",
+      "module": "key-the-in-process-mtllibrary-cache-by-source.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h"
+      ],
+      "functions": [
+        "kk_carry_constant_record",
+        "kk_remember_library_hint",
+        "kk_archive_remove_stale_temporaries",
+        "kk_archive_add_hint",
+        "kk_cached_library"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "The library cache compared full MSL text and bounded retained source to 64 MB. Translated DX12 shaders average about 200 KB, so the bound held roughly 300 libraries and evicted ones that later pipelines requested again: Deep Rock Galactic's first load compiled at least 50 identical sources a second time, 22 to 58 s after the first compile (median 344 ms each with Metal's own cache warm)."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "checkpoint-pipeline-archives-during-a-sustained-compile-load": {
+      "id": "checkpoint-pipeline-archives-during-a-sustained-compile-load",
+      "kind": "correction",
+      "title": "Checkpoint pipeline archives during a sustained compile load",
+      "module": "checkpoint-pipeline-archives-during-a-sustained-compile-load.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h"
+      ],
+      "functions": [
+        "kk_archive_remove_stale_temporaries",
+        "kk_archive_add_hint",
+        "mtl_compiler_cache_begin_pipeline",
+        "mtl_compiler_cache_recapture"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "A checkpoint snapshot needs the capture gate exclusively, and took it only with trywrlock. While a first load keeps 7 to 11 pipeline compiles in flight, some capture always holds the gate shared, so Deep Rock Galactic's first load stored no archive piece for its first 96 s: a forced quit or crash before then kept no pipeline binaries at all."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "defer-native-builds-of-compute-shaders-restored-from": {
+      "id": "defer-native-builds-of-compute-shaders-restored-from",
+      "kind": "correction",
+      "title": "Defer native builds of compute shaders restored from the cache",
+      "module": "defer-native-builds-of-compute-shaders-restored-from.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "kk_deserialize_shader_native_inner"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "A freshly compiled compute pipeline moves its Metal library and pipeline build to the compiler queue, but a pipeline-cache hit compiled both on the vkCreateComputePipelines thread. On a warm launch every compute shader that was built natively in an earlier run therefore blocked creation, while the uncached ones returned at once."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "cache-compute-shaders-whose-native-build-is-still": {
+      "id": "cache-compute-shaders-whose-native-build-is-still",
+      "kind": "correction",
+      "title": "Cache compute shaders whose native build is still pending",
+      "module": "cache-compute-shaders-whose-native-build-is-still.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver",
+        "Vulkan queues and presentation"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_compiler.h",
+        "src/kosmickrisp/bridge/mtl_compiler.m",
+        "src/kosmickrisp/bridge/stubs/mtl_compiler.c",
+        "src/kosmickrisp/vulkan/kk_async_compute.c",
+        "src/kosmickrisp/vulkan/kk_device.c"
+      ],
+      "functions": [
+        "mtl_compiler_foreground_end",
+        "mtl_compiler_task_raise_end",
+        "mtl_compiler_set_trace",
+        "job_unref",
+        "job_result",
+        "kk_async_compute_dispatch",
+        "kk_async_compute_serializable",
+        "kk_compiler_cache_store_piece",
+        "kk_new_compiler"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver",
+          "Vulkan queues and presentation"
+        ],
+        "description": "A deferred compute shader refused serialization until its native build finished, then stored itself from the build. Deep Rock Galactic creates about 2,100 compute pipelines before its title screen and the queue builds only those it reaches, so about 1,900 were never stored and every launch repeated their NIR and MSL translation (51 ms median each, 128 s of CPU on the creating threads in the first load)."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "open-recorded-archive-pieces-in-the-background-at": {
+      "id": "open-recorded-archive-pieces-in-the-background-at",
+      "kind": "correction",
+      "title": "Open recorded archive pieces in the background at index load",
+      "module": "open-recorded-archive-pieces-in-the-background-at.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h"
+      ],
+      "functions": [
+        "kk_archive_add_hint"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "The first lookup that needed a piece read it from the disk cache, wrote it to a temporary file and opened it on the compiling thread, while every other compile needing the same piece waited on it (Deep Rock Galactic: 87 ms read plus 32 ms open per 18 MB piece). On a warm launch that wait sat in front of the first pipeline of every piece."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "let-the-teardown-recapture-ignore-an-archive-drain": {
+      "id": "let-the-teardown-recapture-ignore-an-archive-drain",
+      "kind": "correction",
+      "title": "Let the teardown recapture ignore an archive drain",
+      "module": "let-the-teardown-recapture-ignore-an-archive-drain.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h"
+      ],
+      "functions": [
+        "mtl_compiler_cache_recapture"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "Per-compile recapture batches stop while a checkpoint drains the capture gate. The unbounded recapture made at compiler teardown runs after the last client, so stopping there would drop bypassed pipelines from the final snapshot if a drain happened to be in progress. It now captures everything left regardless."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "start-deferred-builds-only-after-demand-compiles-go": {
+      "id": "start-deferred-builds-only-after-demand-compiles-go",
+      "kind": "correction",
+      "title": "Start deferred builds only after demand compiles go quiet",
+      "module": "start-deferred-builds-only-after-demand-compiles-go.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_compiler.m"
+      ],
+      "functions": [
+        "kk_pin_worker_image",
+        "mtl_compiler_foreground_begin",
+        "mtl_compiler_foreground_end"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "Deferred compute builds were held only while a demand compile was in flight, so the seven queue workers started them in the gaps between graphics compiles and kept seven background-QoS builds running through Deep Rock Galactic's whole first load (about 11 s per pipeline, most of them later destroyed unused or cancelled). A compiler-only check on an M2 Max showed seven background-QoS compiles slowing the same foreground compile load by about a third while finishing one compile themselves."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "outline-scalar-fp64-operations-from-vector-sources": {
+      "id": "outline-scalar-fp64-operations-from-vector-sources",
+      "kind": "correction",
+      "title": "Outline scalar FP64 operations from vector sources",
+      "module": "outline-scalar-fp64-operations-from-vector-sources.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/kk_soft_fp64.h"
+      ],
+      "functions": [
+        "kk_soft_fp64_outline_op"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "ALU scalarization leaves a vector source with a component swizzle. The outlining filter checked the source SSA width rather than the scalar operand consumed by the instruction, so vector reductions kept inlining software binary64 arithmetic instead of calling its existing helper."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "destroy-a-compute-shader-without-waiting-for-its": {
+      "id": "destroy-a-compute-shader-without-waiting-for-its",
+      "kind": "correction",
+      "title": "Destroy a compute shader without waiting for its build",
+      "module": "destroy-a-compute-shader-without-waiting-for-its.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan queues and presentation",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_async_compute.c",
+        "src/kosmickrisp/vulkan/kk_async_compute.h",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "job_cleanup",
+        "kk_async_compute_drain",
+        "job_wait",
+        "join_shader",
+        "kk_async_compute_serializable",
+        "kk_async_compute_shader_finish",
+        "kk_shader_destroy"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan queues and presentation",
+          "Vulkan pipelines"
+        ],
+        "description": "When the last reference to a compute shader went away while its deferred native build was compiling, destruction joined the build on the API thread, which blocked vkDestroyPipeline for the rest of that compile. The shader and a copy of the allocation callbacks now move to the build instead: a queued build is cancelled without compiling, a compiling build finishes and its result is discarded, and the first drain on an API thread after the build retires (pipeline creation, pipeline destruction or device destruction) destroys the shader. A shader whose build already retired is destroyed at once, as before."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "keep-the-metal-pipeline-archive-across-driver-updates": {
+      "id": "keep-the-metal-pipeline-archive-across-driver-updates",
+      "kind": "correction",
+      "title": "Keep the Metal pipeline archive across driver updates",
+      "module": "keep-the-metal-pipeline-archive-across-driver-updates.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Device features"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/workarounds.rst",
+        "src/kosmickrisp/bridge/mtl_device.h",
+        "src/kosmickrisp/bridge/mtl_device.m",
+        "src/kosmickrisp/bridge/stubs/mtl_device.c",
+        "src/kosmickrisp/vulkan/kk_compiler_cache.h",
+        "src/kosmickrisp/vulkan/kk_device.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.h"
+      ],
+      "functions": [
+        "mtl_device_get_registry_id",
+        "kk_init_compile_debug",
+        "kk_new_compiler",
+        "kk_create_disk_cache",
+        "kk_physical_device_init_pipeline_cache"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Device features"
+        ],
+        "description": "The archive's disk namespace included the driver build hash, so the first launch after every driver update compiled every pipeline again even when the generated MSL was unchanged. The archive holds Metal's binaries for the MSL and descriptors the driver generates, and every index hint is a digest of that MSL, its compile options and the pipeline descriptor, so its namespace is now keyed on the device settings that select generated code plus an archive format tag. The index identity adds the Metal framework version and the OS version with build next to the kernel version it already had. A pipeline with unchanged MSL and descriptor keeps its binary across a driver update; changed MSL, a changed descriptor, or an OS or Metal update misses. The per-build pipeline cache, which stores translated shaders, keeps its build-keyed namespace."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "start-builds-the-application-bound-in-an-earlier": {
+      "id": "start-builds-the-application-bound-in-an-earlier",
+      "kind": "correction",
+      "title": "Start builds the application bound in an earlier run at once",
+      "module": "start-builds-the-application-bound-in-an-earlier.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver",
+        "Vulkan queues and presentation"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_compiler.h",
+        "src/kosmickrisp/bridge/mtl_compiler.m",
+        "src/kosmickrisp/bridge/stubs/mtl_compiler.c",
+        "src/kosmickrisp/vulkan/kk_async_compute.c"
+      ],
+      "functions": [
+        "mtl_compiler_submit",
+        "kk_pin_worker_image",
+        "kk_foreground_cleanup",
+        "kk_compiler_submit",
+        "mtl_new_library_pair",
+        "kk_async_compute_drain",
+        "kk_async_compute_start",
+        "kk_async_compute_join",
+        "kk_async_compute_device_finish"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver",
+          "Vulkan queues and presentation"
+        ],
+        "description": "A deferred compute build waits while demand compiles run, so a pipeline bound during a load found its build unstarted and compiled it on the binding thread: in a DRG cold run every one of 23 bind-time waits was such a compile (6.5 s summed, up to 848 ms), each queued 10 to 30 s before its bind behind about 2,100 builds that were never bound."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "start-predicted-builds-from-an-empty-set-under": {
+      "id": "start-predicted-builds-from-an-empty-set-under",
+      "kind": "correction",
+      "title": "Start predicted builds from an empty set under a new MSL salt",
+      "module": "start-predicted-builds-from-an-empty-set-under.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan queues and presentation"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_async_compute.c"
+      ],
+      "functions": [
+        "bound_thread_main"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan queues and presentation"
+        ],
+        "description": "KK_DEBUG_MSL_SALT is applied when Metal compiles a library, so the digests of the generated MSL do not change with it and a salted cold run loaded the first binds of earlier runs. The stored set is now keyed on the salt as well, so a fresh salt starts with nothing predicted, as it starts with an empty Metal cache."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "load-predicted-builds-at-device-creation-and-promote": {
+      "id": "load-predicted-builds-at-device-creation-and-promote",
+      "kind": "correction",
+      "title": "Load predicted builds at device creation and promote early ones",
+      "module": "load-predicted-builds-at-device-creation-and-promote.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver",
+        "Vulkan queues and presentation"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_compiler.h",
+        "src/kosmickrisp/bridge/mtl_compiler.m",
+        "src/kosmickrisp/bridge/stubs/mtl_compiler.c",
+        "src/kosmickrisp/vulkan/kk_async_compute.c",
+        "src/kosmickrisp/vulkan/kk_async_compute.h",
+        "src/kosmickrisp/vulkan/kk_device.c"
+      ],
+      "functions": [
+        "mtl_compiler_submit_predicted",
+        "kk_pin_worker_image",
+        "kk_foreground_cleanup",
+        "kk_compiler_submit",
+        "mtl_compiler_task_cancel",
+        "bound_store",
+        "bound_thread_main",
+        "kk_async_compute_start",
+        "kk_async_compute_drain",
+        "kk_CreateDevice"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver",
+          "Vulkan queues and presentation"
+        ],
+        "description": "The stored set of bound builds loaded at the first deferred build, so builds created in the application's opening burst, before the set was published, were never predicted. The bound-set thread now starts at device creation. Every deferred build is identified when it is created, and when the set is published the thread starts any already queued build in it on a predicted-build worker (mtl_compiler_task_prestart runs the payload there unless a worker or waiter has entered it). A deferred operation whose payload already ran elsewhere returns without waiting for the quiet period. Device creation only starts the thread."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "compile-both-stages-of-a-library-pair-in": {
+      "id": "compile-both-stages-of-a-library-pair-in",
+      "kind": "correction",
+      "title": "Compile both stages of a library pair in parallel during loads",
+      "module": "compile-both-stages-of-a-library-pair-in.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_compiler.m"
+      ],
+      "functions": [
+        "kk_foreground_cleanup",
+        "kk_compile_queue",
+        "kk_compiler_submit",
+        "mtl_compiler_task_prestart"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "A graphics pipeline's vertex and fragment libraries compile as a pair: the vertex stage on a compile-queue worker, the fragment stage on the caller. The vertex stage was refused whenever any deferred build was queued, and deferred compute builds stay queued through loads and gameplay, so every pair compiled its two stages one after the other on the calling thread (a DRG cold load: 697 graphics pipelines, 420 to 1,300 ms per pair)."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "report-why-a-device-was-lost": {
+      "id": "report-why-a-device-was-lost",
+      "kind": "correction",
+      "title": "Report why a device was lost",
+      "module": "report-why-a-device-was-lost.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver",
+        "Vulkan queues and presentation"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/vk_to_mtl_map.c",
+        "src/kosmickrisp/vulkan/kk_queue.c",
+        "src/kosmickrisp/vulkan/kk_sparse.c",
+        "src/vulkan/runtime/vk_device.c"
+      ],
+      "functions": [
+        "mtl_command_queue_error_to_string",
+        "check_device_lost",
+        "kk_sparse_mapping_complete",
+        "_vk_device_set_lost"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver",
+          "Vulkan queues and presentation"
+        ],
+        "description": "Release builds dropped every vk_device_set_lost message unless the application installed a debug callback, so no CTS record of a lost device named the Metal error, its message or how long the failed work ran on the GPU. The runtime now writes the reason once to the Mesa log when the device is first lost, and the command queue and sparse mapping completions include the Metal error code and the failed work's GPU time, which separates a fault from a timeout."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "run-and-draw-nothing-when-the-draw-heap": {
+      "id": "run-and-draw-nothing-when-the-draw-heap",
+      "kind": "correction",
+      "title": "Run and draw nothing when the draw heap is full",
+      "module": "run-and-draw-nothing-when-the-draw-heap.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/libkk/kk_draws.cl",
+        "src/kosmickrisp/libkk/kk_geometry.cl",
+        "src/kosmickrisp/libkk/kk_tessellation.cl",
+        "src/poly/cl/restart.h",
+        "src/poly/geometry.h"
+      ],
+      "functions": [
+        "libkk_unroll_restart",
+        "libkk_prefix_sum_tess",
+        "libkk_tess_setup_indirect",
+        "poly_setup_unroll_for_draw",
+        "poly_unroll_geometry_strips",
+        "static_assert",
+        "poly_heap_alloc_offs",
+        "poly_heap_alloc",
+        "poly_gs_setup_indirect_inner"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation",
+          "Vulkan driver"
+        ],
+        "description": "KosmicKrisp lowers the heap-overflow abort to a return from the invocation. The setup kernels write their dispatch and draw sizes into reused pool memory, so an overflow left the tessellation, geometry and unrolled draws running with stale sizes through missing buffers."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "cover-no-polygon-output-when-its-heap-allocation": {
+      "id": "cover-no-polygon-output-when-its-heap-allocation",
+      "kind": "correction",
+      "title": "Cover no polygon output when its heap allocation fails",
+      "module": "cover-no-polygon-output-when-its-heap-allocation.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/libkk/kk_conservative.cl",
+        "src/kosmickrisp/libkk/kk_interlock_source.cl",
+        "src/kosmickrisp/libkk/kk_polygon.cl"
+      ],
+      "functions": [
+        "libkk_conservative_output_setup",
+        "libkk_interlock_source_output_setup",
+        "libkk_polygon_output_setup"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "The polygon-mode, conservative-rasterization and interlock-source output setups set the output pointer and draw count after an aborting allocation. On overflow the output pass then wrote through a stale pointer and the draw used a stale count."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "route-array-lod-queries-without-reading-a-layer": {
+      "id": "route-array-lod-queries-without-reading-a-layer",
+      "kind": "correction",
+      "title": "Route array LOD queries without reading a layer",
+      "module": "route-array-lod-queries-without-reading-a-layer.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_layered_bc_nir.h"
+      ],
+      "functions": [
+        "kk_layered_bc_instruction"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "The layered block-compressed routing pass read the array index from the third coordinate component of every 2D-array texture instruction. An LOD query's coordinate has no array index, so for textureQueryLod on 1D and 2D arrays the pass extracted a component past the end of the vector and inserted a replacement there. The resulting invalid NIR crashed the compiler in copy propagation."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "write-the-sampler-lod-bias-into-sampled-descriptors": {
+      "id": "write-the-sampler-lod-bias-into-sampled-descriptors",
+      "kind": "correction",
+      "title": "Write the sampler LOD bias into sampled descriptors again",
+      "module": "write-the-sampler-lod-bias-into-sampled-descriptors.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_descriptor_set.c"
+      ],
+      "functions": [
+        "get_sampled_image_view_desc"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "ae53b863c34 stopped writing sampler_query_lod_bias_fp16 when the sampler record pointer took over the other numeric sampler fields. Byte 40 is not one of the pointer chunks, and two readers still take the bias from it: the native Metal3 sample path for explicit-LOD and implicit samples with a mutable sampler, and the sampler metadata reader for pointer-tagged native samplers. Both read zero, so mipLodBias was ignored on Apple GPU families below 10, for example in textureLod in compute shaders."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "draw-only-a-polygon-s-own-vertices-in": {
+      "id": "draw-only-a-polygon-s-own-vertices-in",
+      "kind": "correction",
+      "title": "Draw only a polygon's own vertices in point mode",
+      "module": "draw-only-a-polygon-s-own-vertices-in.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/libkk/kk_polygon.cl",
+        "src/kosmickrisp/libkk/kk_polygon.h"
+      ],
+      "functions": [
+        "polygon_clip_primitive",
+        "libkk_polygon_output",
+        "kk_polygon_clip"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation",
+          "Vulkan driver"
+        ],
+        "description": "VK_POLYGON_MODE_POINT drew every vertex of the clipped polygon, including vertices that clipping created on the clip-volume boundary. A triangle larger than the viewport therefore drew points in the viewport corners, where hardware with guard-band clipping draws nothing."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "keep-the-compute-route-for-a-gs-that": {
+      "id": "keep-the-compute-route-for-a-gs-that",
+      "kind": "correction",
+      "title": "Keep the compute route for a GS that completes no primitive",
+      "module": "keep-the-compute-route-for-a-gs-that.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_gs_mesh_nir.h",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "kk_gs_mesh_lower_gs",
+        "kk_compile_gs_mesh"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation",
+          "Vulkan pipelines"
+        ],
+        "description": "A geometry shader that emits vertices but never completes an output primitive, such as a line strip with one vertex, lowered to a mesh body that writes no vertex and no primitive. Building that render pipeline at the first draw failed in the Metal compiler service, and recording ended with VK_ERROR_INVALID_SHADER_NV."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "pass-textures-to-sampler-helpers-by-const-reference": {
+      "id": "pass-textures-to-sampler-helpers-by-const-reference",
+      "kind": "correction",
+      "title": "Pass textures to sampler helpers by const reference",
+      "module": "pass-textures-to-sampler-helpers-by-const-reference.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/kk-sampler-helpers-msl.h"
+      ],
+      "functions": [
+        "kk_sample_sparse_tap",
+        "kk_sample_native",
+        "kk_sample_texture_param"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "Copy-initializing a texture parameter makes Metal's front end instantiate the texture type's memory_coherence_device counterpart for constructor overload resolution. Each instantiation costs about 40 ms per texture type and library. Sampler helpers now take \"const thread T &image\", and the sparse query texture is declared and then assigned like the body's texture values. Shader bodies, helper bodies and the compiled function sets are unchanged."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "keep-sparse-sampler-helpers-textures-by-value": {
+      "id": "keep-sparse-sampler-helpers-textures-by-value",
+      "kind": "correction",
+      "title": "Keep sparse sampler helpers' textures by value",
+      "module": "keep-sparse-sampler-helpers-textures-by-value.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/kk-sampler-helpers-msl.h"
+      ],
+      "functions": [
+        "kk_sample_sparse_tap",
+        "kk_sample_native",
+        "kk_sample_texture_param"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "Sparse sampler helpers take the texture by value again, and the sparse query texture is copy-initialized as before. With the texture passed by const reference, sparseTextureLod sampling took 17 to 26 percent more GPU time. Non-sparse helpers keep the const reference and its library compile-time saving."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "translate-compute-shaders-in-their-deferred-build": {
+      "id": "translate-compute-shaders-in-their-deferred-build",
+      "kind": "correction",
+      "title": "Translate compute shaders in their deferred build",
+      "module": "translate-compute-shaders-in-their-deferred-build.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan queues and presentation",
+        "Vulkan driver",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_async_compute.c",
+        "src/kosmickrisp/vulkan/kk_atomic64.c",
+        "src/kosmickrisp/vulkan/kk_atomic64.h",
+        "src/kosmickrisp/vulkan/kk_device.h",
+        "src/kosmickrisp/vulkan/kk_lazy_compute.h",
+        "src/kosmickrisp/vulkan/kk_perf.c",
+        "src/kosmickrisp/vulkan/kk_perf.h",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_shader.h",
+        "src/kosmickrisp/vulkan/kk_sparse_pipeline.h"
+      ],
+      "functions": [
+        "bound_id_compare",
+        "job_identify",
+        "kk_async_compute_device_init",
+        "kk_async_compute_start",
+        "kk_atomic64_address",
+        "kk_atomic64_finish_device",
+        "kk_perf_build_queued",
+        "kk_shader_destroy",
+        "kk_compile_shaders_native",
+        "kk_deserialize_shader_native_inner",
+        "kk_deserialize_shader_native",
+        "kk_sparse_write_layout",
+        "kk_sparse_read_layout",
+        "kk_sparse_pipeline_modes",
+        "kk_sparse_capture_pipeline",
+        "kk_sparse_shader_finish",
+        "kk_sparse_compile_variant",
+        "kk_compile_shaders_sparse",
+        "kk_shader_serialize",
+        "kk_deserialize_shader_untracked",
+        "kk_deserialize_shader"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan queues and presentation",
+          "Vulkan driver",
+          "Vulkan pipelines"
+        ],
+        "description": "A compute pipeline created for a deferred build now keeps its compiler input (the preprocessed NIR, layouts and immutable sampler parameters by value, push constant ranges, robustness, features and residency classes) and returns without lowering NIR or generating MSL. Its build translates that input, then compiles the Metal library and pipeline, under the same quiet gate, prediction and promotion. The first bind joins it as before. Translation in the build uses the default allocator, so the device allocator and application callbacks stay on API threads; the first deferred creation allocates the 64-bit atomic lock table for those builds."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "merge-the-newest-stored-first-bind-set-in": {
+      "id": "merge-the-newest-stored-first-bind-set-in",
+      "kind": "correction",
+      "title": "Merge the newest stored first-bind set in every store",
+      "module": "merge-the-newest-stored-first-bind-set-in.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan queues and presentation"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_async_compute.c"
+      ],
+      "functions": [
+        "job_record_bind",
+        "bound_store"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan queues and presentation"
+        ],
+        "description": "All devices of an application store their first binds in one two-slot journal, and a load takes the record with the highest sequence. Each device numbered its stores from the record it loaded and wrote only that set plus its own binds. When short-lived devices stored while a long-lived device ran, as CTS cases do beside the default device, the long-lived device wrote a lower sequence than theirs, so the next run loaded a newer record without its binds. In a conformance CTS pass the default device's 91 bound builds were stored at sequence 3 behind a 2-build record at sequence 4, and the next pass predicted 2 builds."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "never-call-debug-messengers-from-compute-builds": {
+      "id": "never-call-debug-messengers-from-compute-builds",
+      "kind": "correction",
+      "title": "Never call debug messengers from compute builds",
+      "module": "never-call-debug-messengers-from-compute-builds.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan queues and presentation",
+        "Vulkan driver",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_async_compute.c",
+        "src/kosmickrisp/vulkan/kk_private.h",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "job_execute",
+        "join_shader",
+        "kk_compile_shader",
+        "kk_compile_shaders_native",
+        "kk_deserialize_shader_native_inner"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan queues and presentation",
+          "Vulkan driver",
+          "Vulkan pipelines"
+        ],
+        "description": "A deferred compute build runs on a compiler thread. Errors on its path (restoring a stored translation, translating, compiling the native shader) went through vk_error, which calls the application's VK_EXT_debug_utils messengers on that thread; under Wine they are PE callbacks on a thread Wine did not create."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "check-stored-compute-recipes-and-remember-failed-translations": {
+      "id": "check-stored-compute-recipes-and-remember-failed-translations",
+      "kind": "correction",
+      "title": "Check stored compute recipes and remember failed translations",
+      "module": "check-stored-compute-recipes-and-remember-failed-translations.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan queues and presentation",
+        "Vulkan driver",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_async_compute.c",
+        "src/kosmickrisp/vulkan/kk_device.h",
+        "src/kosmickrisp/vulkan/kk_lazy_compute.h",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_shader.h"
+      ],
+      "functions": [
+        "kk_async_compute_device_init",
+        "kk_lazy_compute_key",
+        "kk_compile_lazy_compute",
+        "kk_lazy_compute_new",
+        "kk_lazy_compute_create",
+        "kk_lazy_compute_serialize",
+        "kk_lazy_compute_deserialize",
+        "kk_compile_shader"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan queues and presentation",
+          "Vulkan driver",
+          "Vulkan pipelines"
+        ],
+        "description": "A lazily created compute shader is serialized as its compiler input, and a pipeline cache restore handed that input to nir_deserialize on a compiler thread after checking only the header, so corrupted application pipeline cache data reached the translator. The serialized form now carries an XXH3-64 of the input; data that does not match is rejected, and Mesa compiles the pipeline from SPIR-V."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "store-translations-made-by-synchronous-compute-restores": {
+      "id": "store-translations-made-by-synchronous-compute-restores",
+      "kind": "correction",
+      "title": "Store translations made by synchronous compute restores",
+      "module": "store-translations-made-by-synchronous-compute-restores.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_lazy_compute.h"
+      ],
+      "functions": [
+        "kk_lazy_compute_deserialize"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver"
+        ],
+        "description": "A lazily created compute pipeline restored from a pipeline cache in a creation that cannot defer, such as one with creation feedback, translated its stored compiler input during creation but did not store the translation, so every later build or restore of that input translated it again. That translation is now stored like a build's, and later builds and restores reuse it."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "release-a-lazily-translated-shader-s-msl-after": {
+      "id": "release-a-lazily-translated-shader-s-msl-after",
+      "kind": "correction",
+      "title": "Release a lazily translated shader's MSL after its build",
+      "module": "release-a-lazily-translated-shader-s-msl-after.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan command recording",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_dgc.h",
+        "src/kosmickrisp/vulkan/kk_dgc.m",
+        "src/kosmickrisp/vulkan/kk_lazy_compute.h"
+      ],
+      "functions": [
+        "kk_compile_indirect_compute_pipeline",
+        "kk_dgc_get_compute_pipeline",
+        "kk_lazy_compute_adopt",
+        "kk_compile_lazy_compute",
+        "kk_lazy_compute_serialize",
+        "kk_lazy_compute_deserialize"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan command recording",
+          "Vulkan driver"
+        ],
+        "description": "A compute shader translated in its deferred build kept its MSL until it was destroyed, although nothing reads it once the native pipeline is built: binds use the pipeline, sampler emulation variants specialize the retained Metal function, serialization writes the recipe, and prediction identifies the build by its recipe. With every deferred build of a load completed, the MSL of all of them stayed resident (a game cache with 2160 compute shaders measured about 220 KB of MSL per shader at the median)."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "time-creation-feedback-with-a-nanosecond-clock-on": {
+      "id": "time-creation-feedback-with-a-nanosecond-clock-on",
+      "kind": "correction",
+      "title": "Time creation feedback with a nanosecond clock on Apple",
+      "module": "time-creation-feedback-with-a-nanosecond-clock-on.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/vulkan/runtime/vk_pipeline.c"
+      ],
+      "functions": [
+        "vk_graphics_pipeline_compile_shaders",
+        "vk_create_graphics_pipeline",
+        "vk_create_compute_pipeline",
+        "vk_pipeline_compile_rt_shader",
+        "vk_create_rt_pipeline"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "On Apple platforms os_time_get_nano() reads CLOCK_MONOTONIC, which advances in whole microseconds, so a pipeline created from a cache in less than a microsecond reported a creation feedback duration of zero nanoseconds, which CTS reports as a quality warning. In a check that creates 8 compute pipelines 100 times each from an application cache, 138 of the 800 durations were zero."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "draw-a-point-mode-mesh-triangle-s-own": {
+      "id": "draw-a-point-mode-mesh-triangle-s-own",
+      "kind": "correction",
+      "title": "Draw a point-mode Mesh triangle's own vertices as points",
+      "module": "draw-a-point-mode-mesh-triangle-s-own.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan shader compilation",
+        "Vulkan driver",
+        "Vulkan command recording",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/emulation-performance-families.rst",
+        "docs/drivers/kosmickrisp/emulation.rst",
+        "docs/drivers/kosmickrisp/features.rst",
+        "src/kosmickrisp/compiler/kk_mesh_iomap.h",
+        "src/kosmickrisp/compiler/kk_mesh_point_msl.h",
+        "src/kosmickrisp/compiler/kk_mesh_retained_msl.h",
+        "src/kosmickrisp/compiler/msl_private.h",
+        "src/kosmickrisp/compiler/nir_to_msl.c",
+        "src/kosmickrisp/compiler/nir_to_msl.h",
+        "src/kosmickrisp/vulkan/kk_emulation.json",
+        "src/kosmickrisp/vulkan/kk_mesh_command.h",
+        "src/kosmickrisp/vulkan/kk_mesh_line_draw.h",
+        "src/kosmickrisp/vulkan/kk_mesh_pipeline.h",
+        "src/kosmickrisp/vulkan/kk_mesh_pipeline_api.h",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_shader.h",
+        "src/kosmickrisp/vulkan/kk_unused_attachments.h"
+      ],
+      "functions": [
+        "kk_mesh_io_block",
+        "kk_mesh_io_blocks",
+        "msl_mesh_line_primitive",
+        "kk_mesh_emit_retained_reader",
+        "msl_mesh_line_copy_primitive",
+        "kk_mesh_init_msl_info",
+        "kk_draw_mesh",
+        "kk_mesh_line_consume",
+        "kk_mesh_build_pipeline",
+        "kk_mesh_get_line_pipeline",
+        "kk_make_feature_key",
+        "kk_hash_graphics_state",
+        "kk_shader_destroy",
+        "kk_compile_msl_options",
+        "kk_attachment_pipeline_for_formats"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan shader compilation",
+          "Vulkan driver",
+          "Vulkan command recording",
+          "Vulkan pipelines"
+        ],
+        "description": "A triangle Mesh pipeline in VK_POLYGON_MODE_POINT drew filled triangles: the Mesh draw had only the native route and the rectangular line reader."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "key-mesh-shaders-by-polygon-and-line-rasterization": {
+      "id": "key-mesh-shaders-by-polygon-and-line-rasterization",
+      "kind": "correction",
+      "title": "Key Mesh shaders by polygon and line rasterization mode",
+      "module": "key-mesh-shaders-by-polygon-and-line-rasterization.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "kk_hash_graphics_state"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "A Mesh pipeline's fragment shader depends on the line rasterization mode: the Mesh line variant and its alpha coverage are compiled only for a static RECTANGULAR or SMOOTH mode or a dynamic one. The graphics-state key hashed polygon and line modes only with input assembly state, which Mesh pipelines do not have. A static-BRESENHAM Mesh pipeline and a dynamic line-mode pipeline with the same shaders therefore shared one key. When the static one compiled first, the dynamic one reused shaders without the line variant, and its SMOOTH draws took the native route with no partial coverage."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "honor-static-last-vertex-provoking-for-mesh-lines": {
+      "id": "honor-static-last-vertex-provoking-for-mesh-lines",
+      "kind": "correction",
+      "title": "Honor static last-vertex provoking for Mesh lines",
+      "module": "honor-static-last-vertex-provoking-for-mesh-lines.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan shader compilation",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/features.rst",
+        "src/kosmickrisp/compiler/kk_mesh_msl.h",
+        "src/kosmickrisp/compiler/nir_to_msl.h",
+        "src/kosmickrisp/vulkan/kk_shader.h"
+      ],
+      "functions": [
+        "kk_mesh_emit_copy_outputs"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan shader compilation",
+          "Vulkan pipelines"
+        ],
+        "description": "Metal takes flat values from the first vertex of each primitive. A Mesh pipeline with a static last-vertex provoking mode and flat fragment inputs rotated each triangle's indices, but wrote lines in their original order, so a line's flat outputs came from its first vertex under VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "draw-mesh-points-of-size-1-without-a": {
+      "id": "draw-mesh-points-of-size-1-without-a",
+      "kind": "correction",
+      "title": "Draw Mesh points of size 1 without a point size write",
+      "module": "draw-mesh-points-of-size-1-without-a.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/kk_mesh_iomap.h",
+        "src/kosmickrisp/compiler/kk_mesh_msl.h",
+        "src/kosmickrisp/compiler/msl_private.h"
+      ],
+      "functions": [
+        "kk_mesh_native_layout",
+        "kk_mesh_io_block",
+        "kk_mesh_emit_copy_outputs",
+        "kk_mesh_native_vertex_outputs"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "A Mesh shader with point output that does not write gl_PointSize draws points of size 1.0 (VK_KHR_maintenance5). Its native Metal vertex had no [[point_size]] member, so the point size was undefined and the point was not drawn."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "sample-the-clamp-to-0-border-plane-of": {
+      "id": "sample-the-clamp-to-0-border-plane-of",
+      "kind": "correction",
+      "title": "Sample the clamp-to-0 border plane of heap samplers",
+      "module": "sample-the-clamp-to-0-border-plane-of.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/kk-sampler-helper-flags.h",
+        "src/kosmickrisp/compiler/kk-sampler-helpers-msl.h",
+        "src/kosmickrisp/vulkan/kk-sampler-helpers-nir.h"
+      ],
+      "functions": [
+        "kk_sample_border",
+        "kk_sample_mark"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "Descriptor-heap samplers are native-only: their planes have no sampler-table slot, the record stores clamp_0_sampler_index_or_negative as 0, and the clamp-to-0 plane is the record's aux_word resource ID. The shared border helper sampled table.handles[metadata[5]] for every sampler, so heap samplers took the clamp-to-0 tap from table slot 0 (a clamp-to-edge point sampler) and returned a blend of the edge texel and the border instead of the border color."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "order-meta-render-passes-that-load-earlier-meta": {
+      "id": "order-meta-render-passes-that-load-earlier-meta",
+      "kind": "correction",
+      "title": "Order meta render passes that load earlier meta stores",
+      "module": "order-meta-render-passes-that-load-earlier-meta.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan command recording"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.h",
+        "src/kosmickrisp/vulkan/kk_cmd_draw.c",
+        "src/kosmickrisp/vulkan/kk_cmd_meta.c"
+      ],
+      "functions": [
+        "kk_reset_cmd_buffer_internal",
+        "kk_begin_rendering",
+        "kk_meta_begin",
+        "kk_meta_end"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan command recording"
+        ],
+        "description": "vk_meta blits and resolves record one render pass per region with no dependency between them, and a render pass end is unordered. Regions smaller than the attachment force a whole-tile load and store, so a later region's pass could load a tile before an earlier region's store reached it and write the stale tile back, losing that region."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "order-partial-area-render-passes-behind-earlier-passes": {
+      "id": "order-partial-area-render-passes-behind-earlier-passes",
+      "kind": "correction",
+      "title": "Order partial-area render passes behind earlier passes",
+      "module": "order-partial-area-render-passes-behind-earlier-passes.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan command recording"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.h",
+        "src/kosmickrisp/vulkan/kk_cmd_draw.c",
+        "src/kosmickrisp/vulkan/kk_cmd_meta.c"
+      ],
+      "functions": [
+        "kk_reset_cmd_buffer_internal",
+        "kk_begin_rendering",
+        "kk_meta_begin",
+        "kk_meta_end"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan command recording"
+        ],
+        "description": "A render pass whose render area does not cover its attachments loads and stores whole tiles, including pixels outside the render area. Vulkan needs no barrier between passes that write disjoint areas of one attachment, and a pass end is unordered, so a later partial-area pass could load a tile before an earlier pass's store reached it and write the stale tile back. Atlas passes (shadow or texture atlas tiles drawn as separate passes) lose earlier tiles this way, as vk_meta blit and resolve regions did."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "defer-builds-of-compute-shaders-restored-by-cache": {
+      "id": "defer-builds-of-compute-shaders-restored-by-cache",
+      "kind": "correction",
+      "title": "Defer builds of compute shaders restored by cache-only creation",
+      "module": "defer-builds-of-compute-shaders-restored-by-cache.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan queues and presentation"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_async_compute.c"
+      ],
+      "functions": [
+        "kk_async_compute_can_defer"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan queues and presentation"
+        ],
+        "description": "A creation with VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT compiles nothing on a miss, but it counted as a creation that cannot defer. A stored compute recipe that such a creation restored from the Mesa disk cache was therefore translated and its Metal library and pipeline compiled on the creating thread. vkd3d-proton sets that flag when it creates a compute pipeline from a stored shader module identifier, which is how it reloads pipelines from its disk cache. On Deep Rock Galactic's second launch, 1948 compute shaders were translated and 2091 compiled natively during creation; the first launch had deferred the same shaders."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "record-creation-flags-and-feedback-in-pipeline-creation": {
+      "id": "record-creation-flags-and-feedback-in-pipeline-creation",
+      "kind": "correction",
+      "title": "Record creation flags and feedback in pipeline creation records",
+      "module": "record-creation-flags-and-feedback-in-pipeline-creation.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_perf.c"
+      ],
+      "functions": [
+        "kk_perf_pipeline_begin",
+        "kk_perf_CreateGraphicsPipelines_detailed",
+        "kk_perf_CreateComputePipelines_detailed"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver"
+        ],
+        "description": "With KK_PERF_TRACKING_COMPILES, each kk_pipeline_create begin record now carries the union of the call's pipeline creation flags and whether any create info chains creation feedback. Both decide whether a compute shader restored during creation builds on the creating thread, so a trace shows which creations kept their builds synchronous. The fields are computed only in the perf layer's detailed creation wrappers, which are installed only when KK_PERF_TRACKING is set; creation without tracking is unchanged."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "draw-default-mode-lines-one-sub-pixel-step": {
+      "id": "draw-default-mode-lines-one-sub-pixel-step",
+      "kind": "correction",
+      "title": "Draw default-mode lines one sub-pixel step lower",
+      "module": "draw-default-mode-lines-one-sub-pixel-step.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan command recording",
+        "Device features"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/features.rst",
+        "src/kosmickrisp/vulkan/kk_cmd_draw.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.h"
+      ],
+      "functions": [
+        "kk_CmdBindVertexBuffers3KHR",
+        "kk_flush_vp_state",
+        "kk_flush_dynamic_state",
+        "kk_get_device_properties"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan command recording",
+          "Device features"
+        ],
+        "description": "Metal places a line endpoint that lies exactly on a pixel row boundary in the row above it, so a line drawn downward starts one row early and leaves out its last row; mesh_shader.ext.misc.max_lines then misses its final row. Native lines in the default (non-strict) mode now take a viewport origin one sub-pixel step lower, which puts such an endpoint in the row below. Upward lines take the one-pixel deviation the Bresenham line rules permit. Bresenham, rectangular, smooth and expanded lines keep their rasterization."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "select-mesh-index-order-from-a-dynamic-provoking": {
+      "id": "select-mesh-index-order-from-a-dynamic-provoking",
+      "kind": "correction",
+      "title": "Select Mesh index order from a dynamic provoking mode",
+      "module": "select-mesh-index-order-from-a-dynamic-provoking.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan shader compilation",
+        "Vulkan driver",
+        "Vulkan command recording",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/features.rst",
+        "src/kosmickrisp/compiler/kk_mesh_msl.h",
+        "src/kosmickrisp/compiler/msl_private.h",
+        "src/kosmickrisp/compiler/nir_to_msl.c",
+        "src/kosmickrisp/compiler/nir_to_msl.h",
+        "src/kosmickrisp/vulkan/kk_compile_options.h",
+        "src/kosmickrisp/vulkan/kk_dgc_mesh_draw.h",
+        "src/kosmickrisp/vulkan/kk_mesh_command.h",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_shader.h"
+      ],
+      "functions": [
+        "kk_mesh_emit_copy_outputs",
+        "kk_mesh_init_msl_info",
+        "kk_dgc_mesh_prepare",
+        "kk_mesh_bind_draw",
+        "kk_mesh_static_provoking_last",
+        "kk_hash_graphics_state",
+        "kk_compile_msl_options",
+        "kk_compile_shader",
+        "kk_compile_shaders_native"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan shader compilation",
+          "Vulkan driver",
+          "Vulkan command recording",
+          "Vulkan pipelines"
+        ],
+        "description": "A Mesh pipeline with a dynamic provoking vertex mode kept the first-vertex index order, so a draw with the last-vertex mode took flat values from the first vertex. When its fragment stage reads flat inputs and no barycentric coordinates or per-vertex inputs, the Mesh shader now reads the mode from per-draw data and writes each triangle's and line's indices in the last-vertex order (as a static last-vertex pipeline does) or in the original order. The draw sets that word only for such pipelines, which also stay off the device-generated Mesh fast path; other pipelines are unchanged."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "read-mesh-per-vertex-fragment-inputs-from-the": {
+      "id": "read-mesh-per-vertex-fragment-inputs-from-the",
+      "kind": "correction",
+      "title": "Read Mesh per-vertex fragment inputs from the per-vertex heap",
+      "module": "read-mesh-per-vertex-fragment-inputs-from-the.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_nir_lower_per_vertex.c",
+        "src/kosmickrisp/vulkan/kk_nir_lower_per_vertex.h",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "kk_nir_lower_vs_per_vertex_outputs",
+        "kk_nir_lower_mesh_flat_inputs",
+        "kk_compile_shaders_native"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation",
+          "Vulkan pipelines"
+        ],
+        "description": "A fragment shader reading pervertexEXT inputs after a Mesh stage kept load_per_vertex_input whenever its interface was small enough to skip packing. Native pre-raster vertex values only exist for vertex-to-fragment pipelines, so the input reached MSL translation without a type and pipeline creation failed. Such inputs now always take the canonical per-vertex heap route that larger Mesh interfaces already use. The decision comes from the input flags gathered before IO lowering, so other pipelines see no change."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "time-gpu-encoders-through-device-timestamp-slots-without": {
+      "id": "time-gpu-encoders-through-device-timestamp-slots-without",
+      "kind": "correction",
+      "title": "Time GPU encoders through device timestamp slots without an encoder proxy",
+      "module": "time-gpu-encoders-through-device-timestamp-slots-without.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Vulkan command recording"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/bridge/mtl_encoder.m",
+        "src/kosmickrisp/bridge/mtl_gpu_timing.h",
+        "src/kosmickrisp/bridge/mtl_gpu_timing.m",
+        "src/kosmickrisp/bridge/mtl_mesh.m",
+        "src/kosmickrisp/bridge/stubs/mtl_gpu_timing.c",
+        "src/kosmickrisp/vulkan/kk_dgc.m",
+        "src/kosmickrisp/vulkan/kk_dgc_mesh_bridge.h",
+        "src/kosmickrisp/vulkan/kk_dgc_pipeline_bridge.h",
+        "src/kosmickrisp/vulkan/kk_gpu_stats.h"
+      ],
+      "functions": [
+        "mtl_end_encoding",
+        "mtl_new_compute_command_encoder",
+        "mtl_fill_buffer",
+        "mtl_copy_from_buffer_to_buffer",
+        "mtl_copy_from_buffer_to_texture",
+        "mtl_copy_from_texture_to_buffer",
+        "mtl_copy_from_texture_to_texture",
+        "mtl_compute_set_pipeline_state",
+        "mtl_dispatch_threads",
+        "mtl_dispatch_threadgroups",
+        "mtl_dispatch_threadgroups_with_indirect_buffer",
+        "mtl_dispatch_threads_with_indirect_buffer",
+        "mtl_new_render_command_encoder_with_descriptor",
+        "mtl_render_set_pipeline_state",
+        "mtl_draw_primitives",
+        "mtl_draw_indexed_primitives",
+        "mtl_draw_primitives_indirect",
+        "mtl_draw_indexed_primitives_indirect",
+        "mtl_gpu_timing_encoder_begin",
+        "mtl_gpu_timing_configure",
+        "mtl_gpu_timing_attach_command",
+        "new_record",
+        "end_record",
+        "mtl_gpu_timing_encoder_wrap",
+        "mtl_gpu_timing_external_begin",
+        "mtl_gpu_timing_resolve",
+        "mtl_draw_mesh_threadgroups",
+        "mtl_draw_mesh_threadgroups_indirect",
+        "kk_dgc_encode",
+        "kk_dgc_execute_compute",
+        "kk_dgc_mesh_encode",
+        "kk_dgc_pipeline_encode",
+        "gpu_encoders_flush_locked"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Vulkan command recording"
+        ],
+        "description": "KK_PERF_TRACKING_GPU_ENCODERS created one Metal 4 timestamp counter heap for every encoder, wrapped every timed encoder in an NSProxy that forwarded each encoder call through NSInvocation, and wrote command buffer timestamps around the encoder."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "stop-gpu-encoder-results-reaching-a-destroyed-performance": {
+      "id": "stop-gpu-encoder-results-reaching-a-destroyed-performance",
+      "kind": "correction",
+      "title": "Stop GPU encoder results reaching a destroyed performance tracker",
+      "module": "stop-gpu-encoder-results-reaching-a-destroyed-performance.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_gpu_timing.h",
+        "src/kosmickrisp/bridge/mtl_gpu_timing.m",
+        "src/kosmickrisp/bridge/stubs/mtl_gpu_timing.c",
+        "src/kosmickrisp/vulkan/kk_perf.c"
+      ],
+      "functions": [
+        "mtl_gpu_timing_configure",
+        "mtl_gpu_timing_resolve",
+        "mtl_gpu_timing_encoder_begin",
+        "kk_perf_destroy"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "Encoder timing records are retained by their submissions' feedback handlers and resolved there after GPU completion. Each delivery calls kk_perf_gpu_encoder with the kk_perf the device configured. kk_perf_destroy freed that kk_perf and only released the timing configuration, which the records keep alive, so any delivery after the free wrote into freed memory. Destruction waits for the queue's own completion callbacks, which run after delivery in the same handler, so this took a handler that destruction does not wait for."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "take-timestamp-query-entries-from-shared-heaps": {
+      "id": "take-timestamp-query-entries-from-shared-heaps",
+      "kind": "correction",
+      "title": "Take timestamp query entries from shared heaps",
+      "module": "take-timestamp-query-entries-from-shared-heaps.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/bridge/meson.build",
+        "src/kosmickrisp/bridge/mtl_gpu_timing.m",
+        "src/kosmickrisp/bridge/mtl_timestamp_arena.c",
+        "src/kosmickrisp/bridge/mtl_timestamp_arena.h",
+        "src/kosmickrisp/vulkan/kk_device.c",
+        "src/kosmickrisp/vulkan/kk_device.h",
+        "src/kosmickrisp/vulkan/kk_query_pool.c",
+        "src/kosmickrisp/vulkan/kk_query_pool.h",
+        "src/kosmickrisp/vulkan/kk_timestamp_heaps.h"
+      ],
+      "functions": [
+        "files",
+        "slot_index",
+        "mtl_gpu_timing_configure",
+        "new_record",
+        "write_encoder_timestamp",
+        "end_record",
+        "mtl_gpu_timing_resolve",
+        "kk_CreateDevice",
+        "kk_DestroyDevice",
+        "kk_DestroyQueryPool",
+        "kk_CmdWriteTimestamp2",
+        "kk_timestamp_alloc_heaps",
+        "kk_timestamp_query_heap"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver"
+        ],
+        "description": "AGX allows a process 32 live timestamp counter heaps, and every timestamp query pool held at least one of them. vkCreateQueryPool therefore returned VK_ERROR_OUT_OF_DEVICE_MEMORY at the 33rd live pool whatever its size, and sooner after large pools: a 65536-query pool took 16 heaps. vkd3d-proton creates one pool per D3D12 timestamp query heap, so a D3D12 application with about 30 live timestamp heaps could not create more. A pool larger than 4096 queries also first created a series of heaps Metal rejected, from twice its size down to 4097, to find the heap size."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "release-timestamp-heaps-a-failed-request-added": {
+      "id": "release-timestamp-heaps-a-failed-request-added",
+      "kind": "correction",
+      "title": "Release timestamp heaps a failed request added",
+      "module": "release-timestamp-heaps-a-failed-request-added.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_timestamp_arena.c"
+      ],
+      "functions": [
+        "mtl_timestamp_arena_take"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "A timestamp query pool larger than the entries Metal could still provide made the arena create heaps until Metal refused one, and the arena kept them. One oversized vkCreateQueryPool could then hold every timestamp heap the process may create. The arena now settles its heap size with its first heap, refuses a request beyond the heaps it may still add, and releases the heaps a failed request added."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "log-query-pool-creation-that-runs-out-of": {
+      "id": "log-query-pool-creation-that-runs-out-of",
+      "kind": "correction",
+      "title": "Log query pool creation that runs out of memory",
+      "module": "log-query-pool-creation-that-runs-out-of.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_query_pool.c"
+      ],
+      "functions": [
+        "host_zero_queries",
+        "kk_CreateQueryPool"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "vkCreateQueryPool returned VK_ERROR_OUT_OF_HOST_MEMORY or VK_ERROR_OUT_OF_DEVICE_MEMORY without a trace, so a game that ran out of timestamp heap entries or query memory left nothing in its log. Each such failure now writes one warning naming the query count, the query type and what ran out."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "sample-each-render-stage-once-per-render-encoder": {
+      "id": "sample-each-render-stage-once-per-render-encoder",
+      "kind": "correction",
+      "title": "Sample each render stage once per render encoder",
+      "module": "sample-each-render-stage-once-per-render-encoder.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan command recording",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.h",
+        "src/kosmickrisp/vulkan/kk_query_pool.c"
+      ],
+      "functions": [
+        "kk_CmdWriteTimestamp2"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan command recording",
+          "Vulkan driver"
+        ],
+        "description": "Metal samples each render stage once per render encoder, and an encoder records only about eight timestamp writes; later entries stay 0. A timestamp reused its stage's sample only within its own query pool, so a render pass that wrote timestamps for several pools could pass that number and read 0."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "keep-compute-timestamps-valid-in-performance-mode": {
+      "id": "keep-compute-timestamps-valid-in-performance-mode",
+      "kind": "correction",
+      "title": "Keep compute timestamps valid in performance mode",
+      "module": "keep-compute-timestamps-valid-in-performance-mode.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Vulkan command recording",
+        "Device features"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "docs/drivers/kosmickrisp/emulation-performance-families.rst",
+        "docs/drivers/kosmickrisp/emulation.rst",
+        "docs/drivers/kosmickrisp/features.rst",
+        "src/kosmickrisp/bridge/mtl_encoder.h",
+        "src/kosmickrisp/bridge/mtl_encoder.m",
+        "src/kosmickrisp/bridge/stubs/mtl_encoder.c",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.h",
+        "src/kosmickrisp/vulkan/kk_emulation.c",
+        "src/kosmickrisp/vulkan/kk_emulation.h",
+        "src/kosmickrisp/vulkan/kk_emulation.json",
+        "src/kosmickrisp/vulkan/kk_emulation_gen.py",
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.h",
+        "src/kosmickrisp/vulkan/kk_query_pool.c"
+      ],
+      "functions": [
+        "mtl_compute_write_timestamp",
+        "mtl_draw_indexed_primitives_indirect",
+        "kk_cmd_release_resources",
+        "cs_end_internal",
+        "kk_emulation_apply",
+        "documentation",
+        "main",
+        "kk_enumerate_physical_devices",
+        "kk_CmdWriteTimestamp2"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Vulkan command recording",
+          "Device features"
+        ],
+        "description": "A relaxed timestamp in a Metal 4 compute encoder takes one value for the whole encoder, and the encoder records only its first four; later entries keep their previous contents. vkCmdWriteTimestamp outside a render pass therefore gave the first four writes in a compute encoder one value and the rest 0, or an earlier timestamp left in the entry."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "report-encoders-without-draws-or-dispatches-as-zero": {
+      "id": "report-encoders-without-draws-or-dispatches-as-zero",
+      "kind": "correction",
+      "title": "Report encoders without draws or dispatches as zero-work spans",
+      "module": "report-encoders-without-draws-or-dispatches-as-zero.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Vulkan command recording"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/bridge/mtl_gpu_timing.h",
+        "src/kosmickrisp/bridge/mtl_gpu_timing.m",
+        "src/kosmickrisp/vulkan/kk_dgc.m",
+        "src/kosmickrisp/vulkan/kk_gpu_stats.h"
+      ],
+      "functions": [
+        "mtl_gpu_timing_snapshot",
+        "mtl_gpu_timing_resolve",
+        "kk_dgc_execute_compute",
+        "kk_dgc_execute_graphics",
+        "kk_perf_gpu_encoder",
+        "gpu_encoders_flush_locked"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Vulkan command recording"
+        ],
+        "description": "Metal writes no end timestamp for a render encoder that only loads, clears or stores its attachments, and one value for both timestamps of a compute encoder holding only copies and fills. GPU encoder timing therefore counted draw-less render encoders as unavailable and tabled copy/fill-only compute encoders as measured 0 ms groups."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "give-mesh-point-mode-points-their-triangle-s": {
+      "id": "give-mesh-point-mode-points-their-triangle-s",
+      "kind": "correction",
+      "title": "Give Mesh point-mode points their triangle's facing",
+      "module": "give-mesh-point-mode-points-their-triangle-s.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan shader compilation",
+        "Vulkan driver",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/emulation-performance-families.rst",
+        "docs/drivers/kosmickrisp/emulation.rst",
+        "docs/drivers/kosmickrisp/features.rst",
+        "src/kosmickrisp/compiler/kk_mesh_iomap.h",
+        "src/kosmickrisp/compiler/kk_mesh_point_msl.h",
+        "src/kosmickrisp/compiler/msl_iomap.c",
+        "src/kosmickrisp/compiler/msl_private.h",
+        "src/kosmickrisp/compiler/nir_to_msl.h",
+        "src/kosmickrisp/vulkan/kk_emulation.json",
+        "src/kosmickrisp/vulkan/kk_lines_nir.h",
+        "src/kosmickrisp/vulkan/kk_mesh_pipeline.h",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_shader.h"
+      ],
+      "functions": [
+        "msl_mesh_line_primitive",
+        "kk_mesh_emit_point_reader",
+        "msl_mesh_line_copy_primitive",
+        "kk_mesh_line_fragment",
+        "kk_mesh_get_line_pipeline",
+        "kk_mesh_get_point_pipeline",
+        "kk_compile_shader",
+        "gather_graphics_pipeline_create_info",
+        "kk_shader_serialize_native",
+        "kk_deserialize_shader_native_inner"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan shader compilation",
+          "Vulkan driver",
+          "Vulkan pipelines"
+        ],
+        "description": "A triangle Mesh pipeline in VK_POLYGON_MODE_POINT draws each triangle's own vertices as native Metal points, which are always front facing. The point reader already computes the triangle's facing for culling; it now also writes it into a per-primitive attribute. A fragment shader that reads gl_FrontFacing gets a variant that reads this attribute instead, and the point pipeline uses that variant. Fragment shaders that do not read the facing, and every non-point draw, are unchanged."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "compile-heap-and-device-address-residency-guards-lazily": {
+      "id": "compile-heap-and-device-address-residency-guards-lazily",
+      "kind": "correction",
+      "title": "Compile heap and device-address residency guards lazily",
+      "module": "compile-heap-and-device-address-residency-guards-lazily.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_sparse.c",
+        "src/kosmickrisp/vulkan/kk_sparse_pipeline.h"
+      ],
+      "functions": [
+        "kk_sparse_prepare_pipeline",
+        "kk_sparse_pipeline_modes",
+        "kk_compile_shaders_sparse"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Vulkan pipelines"
+        ],
+        "description": "Shaders using descriptor heaps, descriptor buffers or buffer device addresses compiled buffer and 3D image residency guards at creation on every device that enables the sparse residency features, so a translator that uses descriptor heaps or device addresses, such as vkd3d-proton, compiled them into almost every shader whether or not the application ever created a residency resource. Every guarded buffer access also loaded the device's residency table pointer before its ordinary result was used."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "order-copies-and-dispatches-behind-partial-area-pass": {
+      "id": "order-copies-and-dispatches-behind-partial-area-pass",
+      "kind": "correction",
+      "title": "Order copies and dispatches behind partial-area pass stores",
+      "module": "order-copies-and-dispatches-behind-partial-area-pass.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan command recording"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.h",
+        "src/kosmickrisp/vulkan/kk_cmd_draw.c"
+      ],
+      "functions": [
+        "kk_reset_cmd_buffer_internal",
+        "cs_get_compute_internal",
+        "kk_CmdEndRendering2KHR"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan command recording"
+        ],
+        "description": "A render pass whose render area does not cover its attachments stores whole tiles, including pixels outside the render area, and its end is unordered. Vulkan needs no barrier between that pass and a later copy, clear or dispatch that writes a disjoint region of the same image, so the pass's store of the stale tile could land after the later write and replace it. Copy and compute work that comes before a partial-area pass is already ordered: starting the render encoder closes the open compute encoder with a barrier to all later stages."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "fail-recordings-that-reach-a-missing-compute-pipeline": {
+      "id": "fail-recordings-that-reach-a-missing-compute-pipeline",
+      "kind": "correction",
+      "title": "Fail recordings that reach a missing compute pipeline",
+      "module": "fail-recordings-that-reach-a-missing-compute-pipeline.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_compiler.m",
+        "src/kosmickrisp/vulkan/kk_shader.h",
+        "src/kosmickrisp/vulkan/kk_unused_attachments.h"
+      ],
+      "functions": [
+        "mtl_copy_render_pipeline_descriptor_with_fragment",
+        "mtl_new_compute_pipeline_state",
+        "mtl_new_render_pipeline",
+        "kk_cmd_sampler_compute_pipeline_used",
+        "kk_cmd_sampler_compute_pipeline"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver",
+          "Vulkan pipelines"
+        ],
+        "description": "Every dispatch site that takes its native pipeline through kk_cmd_sampler_compute_pipeline (tessellation, geometry, polygon, Mesh task and compute dispatches) skipped its work when that pipeline was NULL. With sampler emulation the helper already set the command buffer error; without it the NULL was returned with no error, so the draw or dispatch disappeared and the command buffer still ended successfully. A missing pipeline now sets VK_ERROR_INVALID_SHADER_NV on the command buffer and logs one line per command buffer."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "report-failed-pipeline-builds-with-results-their-calls": {
+      "id": "report-failed-pipeline-builds-with-results-their-calls",
+      "kind": "correction",
+      "title": "Report failed pipeline builds with results their calls allow",
+      "module": "report-failed-pipeline-builds-with-results-their-calls.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan queues and presentation",
+        "Vulkan pipelines",
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_async_compute.c",
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_unused_attachments.h"
+      ],
+      "functions": [
+        "join_shader",
+        "kk_cmd_bind_compute_shader_selected",
+        "kk_cmd_sampler_compute_pipeline_used",
+        "kk_cmd_compute_pipeline_missing"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan queues and presentation",
+          "Vulkan pipelines",
+          "Vulkan driver"
+        ],
+        "description": "A recording that reached a missing compute pipeline or a failed sampler emulation variant ended with VK_ERROR_INVALID_SHADER_NV, and a compute pipeline whose background build failed marked the whole device lost, so vkEndCommandBuffer returned VK_ERROR_DEVICE_LOST and every later call failed. Neither is a result vkEndCommandBuffer can return, and applications and translators branch on these codes."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "publish-lazily-built-polygon-pipelines-with-acquire-ordering": {
+      "id": "publish-lazily-built-polygon-pipelines-with-acquire-ordering",
+      "kind": "correction",
+      "title": "Publish lazily built polygon pipelines with acquire ordering",
+      "module": "publish-lazily-built-polygon-pipelines-with-acquire-ordering.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "kk_compile_graphics_prerender",
+        "kk_compile_polygon_once",
+        "kk_shader_ensure_fsr_coarse",
+        "kk_shader_ensure_polygon"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "The polygon, FSR coarse and geometry-Mesh pipelines of a shader are built on the first draw that needs them, under a util_call_once. Command buffers recorded on other threads then read the handles that build wrote: the pre-render compute pipelines and their count, the polygon capture and transform-feedback pipelines and the render pipelines. The fast path of util_call_once_data reads its flag with relaxed ordering, so on arm64 a thread that saw the build as done was not ordered after its writes and could read a stale count or NULL handle. The build now ends with a release store of a published flag, and each caller loads it with acquire; a stale unset read goes through the C11 call_once on the completed flag, which returns at once and synchronizes. A draw pays one acquire load; nothing waits that did not wait before."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "strip-unread-residency-checks-from-the-main-geometry": {
+      "id": "strip-unread-residency-checks-from-the-main-geometry",
+      "kind": "correction",
+      "title": "Strip unread residency checks from the main geometry program",
+      "module": "strip-unread-residency-checks-from-the-main-geometry.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines",
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_shader.c",
+        "src/kosmickrisp/vulkan/kk_shader.h",
+        "src/kosmickrisp/vulkan/kk_sparse_buffer_nir.h"
+      ],
+      "functions": [
+        "kk_compile_shader",
+        "kk_nir_lower_sparse_buffer_io",
+        "kk_sparse_access_mask",
+        "kk_sparse_buffer_io"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines",
+          "Vulkan shader compilation"
+        ],
+        "description": "Creating one sparse-residency buffer turns on residency guards for every later pipeline on the device. A guarded store or atomic computes its mask through the __kk_sparse_buffer_access helper, a call. Poly's geometry lowering removes application stores from the main geometry program and then the atomics whose results are unused, since another geometry program performs them; dead code elimination never removes a call, so the mask call of a removed store kept the store's address in use. When that address came from an atomic, as in"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "preserve-compressed-sparse-mip-data-through-canonical-pages": {
+      "id": "preserve-compressed-sparse-mip-data-through-canonical-pages",
+      "kind": "correction",
+      "title": "Preserve compressed sparse mip data through canonical pages",
+      "module": "preserve-compressed-sparse-mip-data-through-canonical-pages.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "docs/drivers/kosmickrisp/emulation-performance-families.rst",
+        "docs/drivers/kosmickrisp/emulation.rst",
+        "src/kosmickrisp/vulkan/kk_emulation.json",
+        "src/kosmickrisp/vulkan/kk_sparse.c",
+        "src/kosmickrisp/vulkan/kk_sparse_pipeline.h",
+        "src/kosmickrisp/vulkan/kk_standard_sparse_3d_meta.h"
+      ],
+      "functions": [
+        "kk_sparse_image_init",
+        "kk_sparse_pipeline_modes",
+        "kk_standard_3d_copy_image_to_buffer",
+        "kk_standard_3d_copy_image"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Vulkan pipelines"
+        ],
+        "description": "Metal's non-ASTC sparse mip levels can share the wrong storage between blits and sampling. Use canonical pages for compressed 2D residency images without cube compatibility, retaining the bound memory identity. ASTC and cube-compatible images keep their native sampled path."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "align-index-buffers-to-4-bytes-on-macos": {
+      "id": "align-index-buffers-to-4-bytes-on-macos",
+      "kind": "correction",
+      "title": "Align index buffers to 4 bytes on macOS 26",
+      "module": "align-index-buffers-to-4-bytes-on-macos.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan command recording"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_draw.c"
+      ],
+      "functions": [
+        "kk_sanitize_index_range"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan command recording"
+        ],
+        "description": "macOS 26 has a bug where it will ignore the last index if the addr + range are not 4 byte aligned. The change rounds up the range when not 4 byte aligned so the last index is not dropped. The additional bytes are never read."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "allow-controling-xcode-captures-using-debug-utils": {
+      "id": "allow-controling-xcode-captures-using-debug-utils",
+      "kind": "correction",
+      "title": "Allow controling XCode captures using debug utils",
+      "module": "allow-controling-xcode-captures-using-debug-utils.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan command recording",
+        "Vulkan driver",
+        "Device features"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c",
+        "src/kosmickrisp/vulkan/kk_device.c",
+        "src/kosmickrisp/vulkan/kk_device.h",
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.h"
+      ],
+      "functions": [
+        "kk_CmdInsertDebugUtilsLabelEXT",
+        "kk_CreateDevice",
+        "kk_DestroyDevice",
+        "kk_parse_environment_options"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan command recording",
+          "Vulkan driver",
+          "Device features"
+        ],
+        "description": "Signed-off-by: Robin Kertels <robin.kertels@gmail.com> Reviewed-by: Aitor Camacho <aitor@lunarg.com> Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/44565>"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "add-command-buffer-debug-group-functions-to-bridge": {
+      "id": "add-command-buffer-debug-group-functions-to-bridge",
+      "kind": "capability",
+      "title": "Add command buffer debug group functions to bridge",
+      "module": "add-command-buffer-debug-group-functions-to-bridge.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_command_buffer.h",
+        "src/kosmickrisp/bridge/mtl_command_buffer.m",
+        "src/kosmickrisp/bridge/stubs/mtl_command_buffer.c"
+      ],
+      "functions": [
+        "mtl_command_buffer_set_label"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "Signed-off-by: Robin Kertels <robin.kertels@gmail.com> Reviewed-by: Aitor Camacho <aitor@lunarg.com> Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/44565>"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "push-debug-utils-to-command-buffer-if-no": {
+      "id": "push-debug-utils-to-command-buffer-if-no",
+      "kind": "correction",
+      "title": "Push debug utils to command buffer if no encoder is active",
+      "module": "push-debug-utils-to-command-buffer-if-no.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan command recording"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c"
+      ],
+      "functions": [
+        "kk_CmdBeginDebugUtilsLabelEXT",
+        "kk_CmdEndDebugUtilsLabelEXT"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan command recording"
+        ],
+        "description": "Signed-off-by: Robin Kertels <robin.kertels@gmail.com> Reviewed-by: Aitor Camacho <aitor@lunarg.com> Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/44565>"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "fix-input-attachment-view-creation-to-handle-base": {
+      "id": "fix-input-attachment-view-creation-to-handle-base",
+      "kind": "correction",
+      "title": "Fix input attachment view creation to handle base array/mip offsets",
+      "module": "fix-input-attachment-view-creation-to-handle-base.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_image_view.c"
+      ],
+      "functions": [
+        "kk_image_view_init"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "Reviewed-by: squidbus <squidbus@proton.me> Signed-off-by: Aitor Camacho <aitor@lunarg.com> Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45789>"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "expose-linear-filtering-for-32bit-float-formats-if": {
+      "id": "expose-linear-filtering-for-32bit-float-formats-if",
+      "kind": "capability",
+      "title": "Expose linear filtering for 32bit float formats if supported",
+      "module": "expose-linear-filtering-for-32bit-float-formats-if.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver",
+        "Device features"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_device.h",
+        "src/kosmickrisp/bridge/mtl_device.m",
+        "src/kosmickrisp/bridge/stubs/mtl_device.c",
+        "src/kosmickrisp/vulkan/kk_image.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.h"
+      ],
+      "functions": [
+        "mtl_device_max_argument_buffer_sampler_count",
+        "kk_get_image_plane_format_features",
+        "get_metal_limits"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver",
+          "Device features"
+        ],
+        "description": "Reviewed-by: squidbus <squidbus@proton.me> Signed-off-by: Aitor Camacho <aitor@lunarg.com> Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45854>"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "fix-disabling-all-workarounds": {
+      "id": "fix-disabling-all-workarounds",
+      "kind": "correction",
+      "title": "Fix disabling all workarounds",
+      "module": "fix-disabling-all-workarounds.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Device features"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_physical_device.c"
+      ],
+      "functions": [
+        "kk_parse_environment_options"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Device features"
+        ],
+        "description": "M5+ will re-enable certain workarounds without an early return."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "narrow-wa14-to-constant-sources": {
+      "id": "narrow-wa14-to-constant-sources",
+      "kind": "correction",
+      "title": "Narrow WA14 to constant sources",
+      "module": "narrow-wa14-to-constant-sources.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/nir_to_msl.c"
+      ],
+      "functions": [
+        "alu_funclike_precise",
+        "alu_to_msl"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "Require a constant operand before adding workaround 14 to multiply and lerp emission."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "disable-kk-workaround-10-on-m3": {
+      "id": "disable-kk-workaround-10-on-m3",
+      "kind": "correction",
+      "title": "Disable KK_WORKAROUND_10 on M3+",
+      "module": "disable-kk-workaround-10-on-m3.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Device features"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/workarounds.rst",
+        "src/kosmickrisp/vulkan/kk_physical_device.c"
+      ],
+      "functions": [
+        "kk_parse_environment_options"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Device features"
+        ],
+        "description": "The solution destination is updated. It is disabled only for M3+."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "work-around-compute-dispatch-spilling-issue-on-m1": {
+      "id": "work-around-compute-dispatch-spilling-issue-on-m1",
+      "kind": "correction",
+      "title": "Work around compute dispatch spilling issue on M1/2",
+      "module": "work-around-compute-dispatch-spilling-issue-on-m1.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Vulkan shader compilation",
+        "Vulkan command recording",
+        "Device features",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/workarounds.rst",
+        "src/kosmickrisp/bridge/mtl_encoder.h",
+        "src/kosmickrisp/bridge/mtl_encoder.m",
+        "src/kosmickrisp/bridge/stubs/mtl_encoder.c",
+        "src/kosmickrisp/clc/kk_clc.c",
+        "src/kosmickrisp/compiler/nir_to_msl.c",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c",
+        "src/kosmickrisp/vulkan/kk_cmd_draw.c",
+        "src/kosmickrisp/vulkan/kk_compile_options.h",
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "mtl_compute_set_argument_table",
+        "main",
+        "emit_inputs",
+        "nir_to_msl",
+        "kk_dispatch_precomp",
+        "kk_pre_gs_pipeline",
+        "kk_launch_gs_prerast",
+        "kk_parse_environment_options",
+        "kk_lower_fs",
+        "kk_compile_msl_options",
+        "kk_compile_shader",
+        "kk_compile_shaders_native"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Vulkan shader compilation",
+          "Vulkan command recording",
+          "Device features",
+          "Vulkan pipelines"
+        ],
+        "description": "Fixes Vulkan CTS tests: dEQP-VK.clipping.*vert_tess_geom* dEQP-VK.tessellation.geometry_interaction.*"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "support-native-vk-ext-image-view-min-lod": {
+      "id": "support-native-vk-ext-image-view-min-lod",
+      "kind": "capability",
+      "title": "Support native VK_EXT_image_view_min_lod on M6+",
+      "module": "support-native-vk-ext-image-view-min-lod.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Device features",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/bridge/mtl_texture.h",
+        "src/kosmickrisp/bridge/mtl_texture.m",
+        "src/kosmickrisp/bridge/stubs/mtl_texture.c",
+        "src/kosmickrisp/vulkan/kk_image_layout.h",
+        "src/kosmickrisp/vulkan/kk_image_view.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.h",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "mtl_texture_first_mipmap_in_tail",
+        "mtl_texture_swizzle",
+        "mtl_new_texture_view_with",
+        "mtl_new_texture_view_with_no_swizzle",
+        "kk_image_view_init",
+        "kk_get_device_extensions",
+        "get_metal_limits",
+        "kk_make_feature_key",
+        "kk_hash_graphics_state",
+        "kk_compile_unlinked_native_stage",
+        "kk_compile_fragment_body",
+        "kk_compile_preraster_body",
+        "kk_compile_shaders_native"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Device features",
+          "Vulkan pipelines"
+        ],
+        "description": "M6 introduces support for specifying a minLOD on a texture view, so we can support and advertise this extension without emulation."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "support-new-m6-texel-buffer-formats": {
+      "id": "support-new-m6-texel-buffer-formats",
+      "kind": "capability",
+      "title": "Support new M6 texel buffer formats",
+      "module": "support-new-m6-texel-buffer-formats.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_format.h",
+        "src/kosmickrisp/vulkan/kk_buffer_view.c",
+        "src/kosmickrisp/vulkan/kk_format.c",
+        "src/kosmickrisp/vulkan/kk_format.h",
+        "src/kosmickrisp/vulkan/kk_image.c"
+      ],
+      "functions": [
+        "kk_get_buffer_format_features",
+        "kk_host_texel_buffer_format",
+        "kk_get_image_plane_format_features"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "M6+ supports 24, 48, and 96-bit RGB texel buffers."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "use-constant-address-space-for-load-global-constant": {
+      "id": "use-constant-address-space-for-load-global-constant",
+      "kind": "correction",
+      "title": "Use constant address space for load_global_constant_offset",
+      "module": "use-constant-address-space-for-load-global-constant.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan shader compilation"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/nir_to_msl.c"
+      ],
+      "functions": [
+        "intrinsic_to_msl"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan shader compilation"
+        ],
+        "description": "load_global_constant_offset should have used \"constant\" qualifier instead of \"device\" from the very beginning. Having workaround 6 applied to constant offsetted loads results in Metal hangs, mostly observed in multisampled samples like Sascha's."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "preserve-timestamp-queries-when-gpu-capture-is-requested": {
+      "id": "preserve-timestamp-queries-when-gpu-capture-is-requested",
+      "kind": "correction",
+      "title": "Preserve timestamp queries when GPU capture is requested",
+      "module": "preserve-timestamp-queries-when-gpu-capture-is-requested.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver",
+        "Vulkan command recording"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/bridge/mtl_device.h",
+        "src/kosmickrisp/bridge/mtl_device.m",
+        "src/kosmickrisp/bridge/stubs/mtl_device.c",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c",
+        "src/kosmickrisp/vulkan/kk_device.c",
+        "src/kosmickrisp/vulkan/kk_device.h"
+      ],
+      "functions": [
+        "mtl_device_create",
+        "mtl_start_gpu_capture",
+        "mtl_stop_gpu_capture",
+        "mtl_new_timestamp_counter_heap",
+        "kk_CmdInsertDebugUtilsLabelEXT",
+        "kk_CreateDevice",
+        "kk_DestroyDevice"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver",
+          "Vulkan command recording"
+        ],
+        "description": "Metal GPU captures cannot contain timestamp counter heaps. Coordinate capture ownership and actual heap lifetimes in the shared bridge, so capture requests are declined while heaps are live and allocating a counter heap ends a capture first. Query pools and encoder timing keep their real values and shared arenas."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "retain-native-minimum-lod-eligibility-in-subresource-views": {
+      "id": "retain-native-minimum-lod-eligibility-in-subresource-views",
+      "kind": "correction",
+      "title": "Retain native minimum-LOD eligibility in subresource views",
+      "module": "retain-native-minimum-lod-eligibility-in-subresource-views.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp/features.rst",
+        "src/kosmickrisp/vulkan/kk_image_view.c"
+      ],
+      "functions": [
+        "kk_image_view_init"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver"
+        ],
+        "description": "Rebase the already selected native clamp when a compressed image view gets its own base texture. Preserve zero on devices that use shader minimum LOD. Describe native Apple11 minimum LOD and RGB texel-buffer capabilities."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "separate-fragment-helper-guards-from-the-indirect-spill": {
+      "id": "separate-fragment-helper-guards-from-the-indirect-spill",
+      "kind": "correction",
+      "title": "Separate fragment helper guards from the indirect spill workaround",
+      "module": "separate-fragment-helper-guards-from-the-indirect-spill.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Device features",
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "kk_physical_device_init_pipeline_cache",
+        "kk_compile_fragment_body"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Device features",
+          "Vulkan pipelines"
+        ],
+        "description": "Retain triangle-merge lowering for standalone fragment shaders regardless of the indirect compute spill setting. Remove the obsolete triangle-merge cache diagnostic keyed by the upstream workaround number. Workaround 19 now refers only to indirect geometry compute dispatches in every compile route."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "preserve-sample-only-image-format-capabilities": {
+      "id": "preserve-sample-only-image-format-capabilities",
+      "kind": "correction",
+      "title": "Preserve sample-only image format capabilities",
+      "module": "preserve-sample-only-image-format-capabilities.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan driver"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_format.c",
+        "src/kosmickrisp/vulkan/kk_format.h",
+        "src/kosmickrisp/vulkan/kk_image.c"
+      ],
+      "functions": [
+        "kk_host_texel_buffer_format",
+        "kk_get_image_plane_format_features"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan driver"
+        ],
+        "description": "Mark the new native RGB8/RGB16 texture-buffer formats explicitly as buffer only. An empty image-operation bitset also describes existing sample-only BGRA integer formats and does not mean that image sampling is unavailable. Preserve those capabilities while rejecting buffer-only formats as images."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "keep-capture-manager-initialization-on-capture-paths": {
+      "id": "keep-capture-manager-initialization-on-capture-paths",
+      "kind": "correction",
+      "title": "Keep capture-manager initialization on capture paths",
+      "module": "keep-capture-manager-initialization-on-capture-paths.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/bridge/mtl_device.m"
+      ],
+      "functions": [
+        "mtl_start_gpu_capture",
+        "mtl_stop_gpu_capture",
+        "mtl_new_timestamp_counter_heap"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver"
+        ],
+        "description": "Use the private lifetime class as the capture-state lock. Ordinary counter heap creation, heap destruction and device destruction no longer initialize Metal's capture manager. Capture requests still serialize against actual heap lifetimes, and creating a heap ends an owned capture."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "give-each-native-mesh-slice-its-own-render": {
+      "id": "give-each-native-mesh-slice-its-own-render",
+      "kind": "correction",
+      "title": "Give each native Mesh slice its own render encoder",
+      "module": "give-each-native-mesh-slice-its-own-render.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/kosmickrisp/vulkan/kk_mesh_command.h"
+      ],
+      "functions": [
+        "kk_mesh_render_retained",
+        "kk_mesh_render_slices"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver"
+        ],
+        "description": "A native Mesh draw larger than one physical span (2,097,152 groups) runs as indirect slices. All slices of a draw shared one render encoder, so a direct 8x8x65535 grid binned about 4.2M points in a single pass. When two such draws ran back to back, the GPU faulted partway through the second (Metal queue timeout after 0.081 s of GPU time, GPU restart). This made mesh_shader.ext.misc.many_mesh_work_groups_y/_z fail or lose the device in about half of the runs where they followed another large draw."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "scan-for-stale-archive-temporaries-once-per-process": {
+      "id": "scan-for-stale-archive-temporaries-once-per-process",
+      "kind": "correction",
+      "title": "Scan for stale archive temporaries once per process",
+      "module": "scan-for-stale-archive-temporaries-once-per-process.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h"
+      ],
+      "functions": [
+        "kk_archive_add_hint"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "Every pipeline-archive load queued its own background scan of the whole temporary directory for kk-metal- files left by exited processes. A process that creates many devices queued one scan per device. Those scans filled the background-priority workers that deferred shader compiles also run on, so a submit that joined a compile waited behind them for seconds."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "count-free-memory-in-kernel-pages-on-macos": {
+      "id": "count-free-memory-in-kernel-pages-on-macos",
+      "kind": "correction",
+      "title": "Count free memory in kernel pages on macOS",
+      "module": "count-free-memory-in-kernel-pages-on-macos.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation",
+        "Vulkan driver"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst",
+        "src/util/os_misc.c"
+      ],
+      "functions": [
+        "os_get_available_system_memory"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation",
+          "Vulkan driver"
+        ],
+        "description": "host_statistics64 counts pages of the kernel's page size. The Apple branch of os_get_available_system_memory multiplied those counts by the compile-time PAGE_SIZE, which is 4 KiB in x86_64 code. In an x86_64 process translated by Rosetta on a 16 KiB-page kernel it reported a quarter of the free memory, so KosmicKrisp's VK_EXT_memory_budget heap budget was a quarter of what the system could provide. Multiply by vm_kernel_page_size, a variable the system sets at process start, so the call adds no system call."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "report-the-memory-budget-from-the-usage-reported": {
+      "id": "report-the-memory-budget-from-the-usage-reported",
+      "kind": "correction",
+      "title": "Report the memory budget from the usage reported beside it",
+      "module": "report-the-memory-budget-from-the-usage-reported.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Device features"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_physical_device.c",
+        "src/kosmickrisp/vulkan/kk_physical_device.h"
+      ],
+      "functions": [
+        "kk_get_sysmem_heap_budget",
+        "kk_GetPhysicalDeviceMemoryProperties2"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Device features"
+        ],
+        "description": "The memory budget query read Metal's current allocated size twice, once for the budget and once for the usage, and read the recommended working set size again for the clamp. Read the usage once and compute the budget from that value and from the heap size the driver reports, so the budget is never computed from an older usage than the one returned with it. Each query makes two fewer Metal property reads."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "leave-no-pipeline-archive-temporaries-behind": {
+      "id": "leave-no-pipeline-archive-temporaries-behind",
+      "kind": "correction",
+      "title": "Leave no pipeline archive temporaries behind",
+      "module": "leave-no-pipeline-archive-temporaries-behind.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Vulkan pipelines"
+      ],
+      "files": [
+        "src/kosmickrisp/bridge/mtl_pipeline_archive.h"
+      ],
+      "functions": [
+        "kk_archive_now",
+        "kk_archive_remove_stale_temporaries",
+        "kk_archive_add_hint"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Vulkan pipelines"
+        ],
+        "description": "Each resident archive piece kept a kk-metal-<pid>-<random> file in the user temporary directory until the archive was released, so a process that exited without destroying its device left every resident piece behind. Atomic writes added kk-metal-<pid>-<random>.sb-<hex>-<random> names when interrupted, and the stale scan skipped any name with more than two dash-separated fields, so those stayed forever. The scan itself ran at background priority through NSFileManager and was still listing a large temporary directory when short processes exited."
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
+    },
+    "describe-kosmickrisp-archive-temporary-files": {
+      "id": "describe-kosmickrisp-archive-temporary-files",
+      "kind": "documentation",
+      "title": "Describe KosmicKrisp archive temporary files",
+      "module": "describe-kosmickrisp-archive-temporary-files.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "Driver documentation"
+      ],
+      "files": [
+        "docs/drivers/kosmickrisp.rst"
+      ],
+      "functions": [],
+      "dependencies": [],
+      "behavior": {
+        "classification": "modifying",
+        "existingPaths": [
+          "Driver documentation"
+        ],
+        "description": "Generated-by: LLM"
+      },
+      "upstream": {
+        "retirementConditions": [
+          "Upstream KosmicKrisp provides equivalent behavior at the selected Mesa revision."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }

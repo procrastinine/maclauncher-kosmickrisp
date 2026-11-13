@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Load mesh fragment rates from per-primitive inputs
+export const id = "load-mesh-fragment-rates-from-per-primitive-inputs";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/vulkan/kk_nir_lower_fsr.c", source => source
+    .replace("   if (opts->primitive_rate) {\n      nir_io_semantics io = {.location = VARYING_SLOT_PRIMITIVE_SHADING_RATE,\n                             .num_slots = 1};\n      primitive = nir_iand_imm(b, nir_load_input(b, 1, 32, nir_imm_int(b, 0),\n         .base = 0, .component = 0, .dest_type = nir_type_int32,\n         .io_semantics = io), 0xf);\n      b->shader->info.inputs_read |= VARYING_BIT_PRIMITIVE_SHADING_RATE;\n      if (opts->primitive_rate_per_primitive)\n         b->shader->info.per_primitive_inputs |= VARYING_BIT_PRIMITIVE_SHADING_RATE;\n",
+      () => "   if (opts->primitive_rate) {\n      nir_io_semantics io = {.location = VARYING_SLOT_PRIMITIVE_SHADING_RATE,\n                             .num_slots = 1};\n      nir_def *input = opts->primitive_rate_per_primitive\n         ? nir_load_per_primitive_input(b, 1, 32, nir_imm_int(b, 0),\n              .base = 0, .component = 0, .dest_type = nir_type_int32,\n              .io_semantics = io)\n         : nir_load_input(b, 1, 32, nir_imm_int(b, 0),\n              .base = 0, .component = 0, .dest_type = nir_type_int32,\n              .io_semantics = io);\n      primitive = nir_iand_imm(b, input, 0xf);\n      b->shader->info.inputs_read |= VARYING_BIT_PRIMITIVE_SHADING_RATE;\n      if (opts->primitive_rate_per_primitive)\n         b->shader->info.per_primitive_inputs |= VARYING_BIT_PRIMITIVE_SHADING_RATE;\n"));
+}

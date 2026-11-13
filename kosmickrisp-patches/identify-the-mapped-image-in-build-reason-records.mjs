@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MIT
+// Identify the mapped image in build reason records
+export const id = "identify-the-mapped-image-in-build-reason-records";
+export function apply({edit, edits}) {
+  edit("docs/drivers/kosmickrisp.rst", source => source
+    .replace("\nWith compile records enabled, ``KK_PERF_TRACKING_BUILD_REASONS=1`` adds\nnative library and archive outcomes, exact archive search keys and stable\nfunction-constant value digests. These identify source-cache misses, native\narchive misses and constant specializations as separate, overlapping facts.\nJoined graphics-library workers retain the enclosing callback identity.\n\n",
+      () => "\nWith compile records enabled, ``KK_PERF_TRACKING_BUILD_REASONS=1`` adds\nnative library and archive outcomes, exact archive search keys and stable\nfunction-constant value digests. Each attributed device also identifies the\nmapped driver image. These identify source-cache misses, native\narchive misses and constant specializations as separate, overlapping facts.\nJoined graphics-library workers retain the enclosing callback identity.\n\n"));
+  edit("src/kosmickrisp/vulkan/kk_perf.c", source => source
+    .replace("#include \"util/os_time.h\"\n#include \"util/mesa-blake3.h\"\n#include <errno.h>\n#include <inttypes.h>\n#include <math.h>\n#include <pthread.h>\n",
+      () => "#include \"util/os_time.h\"\n#include \"util/mesa-blake3.h\"\n#include <errno.h>\n#include <dlfcn.h>\n#include <unistd.h>\n#include <inttypes.h>\n#include <math.h>\n#include <pthread.h>\n")
+    .replace("   return !errno && !*end && value && value <= UINT32_MAX ? value : fallback;\n}\n\nstruct kk_perf *\nkk_perf_create(void)\n{\n",
+      () => "   return !errno && !*end && value && value <= UINT32_MAX ? value : fallback;\n}\n\n/* A counts-only run must identify the mapped image, not merely its requested\n * environment. Paths are data and can contain JSON metacharacters. */\nstatic void\nkk_perf_image_string(FILE *log, const char *text)\n{\n   fputc('\"', log);\n   for (const unsigned char *p = (const unsigned char *)text; *p; ++p) {\n      if (*p == '\"' || *p == '\\\\') fputc('\\\\', log);\n      if (*p < 32) fprintf(log, \"\\\\u%04x\", *p);\n      else fputc(*p, log);\n   }\n   fputc('\"', log);\n}\n\nstruct kk_perf *\nkk_perf_create(void)\n{\n")
+    .replace("   p->created = p->interval_start = kk_perf_now();\n   /* Acknowledge enabled tracking before any native device-init compile. */\n   flush_locked(p, kk_perf_now(), false);\n   return p;\n}\n\n",
+      () => "   p->created = p->interval_start = kk_perf_now();\n   /* Acknowledge enabled tracking before any native device-init compile. */\n   flush_locked(p, kk_perf_now(), false);\n   if (p->build_reasons) {\n      Dl_info image = {0};\n      dladdr((const void *)kk_perf_create, &image);\n      fprintf(p->log, \"{\\\"kk_build_origin\\\":1,\\\"device\\\":\\\"%p\\\",\\\"pid\\\":%d,\\\"image\\\":\",\n              (void *)p, (int)getpid());\n      kk_perf_image_string(p->log, image.dli_fname ? image.dli_fname : \"\");\n      fprintf(p->log, \"}\\n\");\n      fflush(p->log);\n   }\n   return p;\n}\n\n"));
+}

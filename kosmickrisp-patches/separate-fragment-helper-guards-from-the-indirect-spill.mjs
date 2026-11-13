@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: MIT
+// Separate fragment helper guards from the indirect spill workaround
+export const id = "separate-fragment-helper-guards-from-the-indirect-spill";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/vulkan/kk_physical_device.c", source => source
+    .replace("                          sizeof(pdev->settings.apple_family_override));\n   }\n\n   /* Keep diagnostic shaders out of default application pipeline caches and\n    * shader binaries. Disk/native caches also key the workaround mask. */\n   if (pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)) {\n      static const char diagnostic[] = \"triangle-merge-disabled\";\n      _mesa_blake3_update(&blake3_ctx, diagnostic, sizeof(diagnostic));\n   }\n\n   blake3_hash domain;\n   _mesa_blake3_final(&blake3_ctx, domain);\n   kk_archive_cache_digest(domain, pdev->archive_cache_digest);\n",
+      () => "                          sizeof(pdev->settings.apple_family_override));\n   }\n\n   blake3_hash domain;\n   _mesa_blake3_final(&blake3_ctx, domain);\n   kk_archive_cache_digest(domain, pdev->archive_cache_digest);\n"));
+  edit("src/kosmickrisp/vulkan/kk_shader.c", source => source
+    .replace("   /* One sample is owned/known here, so the ordinary multi-sample Metal\n    * derivative limitation does not apply. Keep the same quad and discard\n    * workarounds as the joint compiler, before final resource lowering. */\n   if ((nir->info.fs.needs_full_quad_helper_invocations ||\n        nir->info.fs.needs_coarse_quad_helper_invocations) &&\n       !(kk_device_physical(dev)->settings.disabled_workarounds & BITFIELD64_BIT(19)))\n      NIR_PASS(_, nir, msl_disable_triangle_merge);\n   kk_finish_fs_invocation_workarounds(dev, nir);\n   kk_finish_nir(dev, nir, info->robustness, info->set_layout_count,\n",
+      () => "   /* One sample is owned/known here, so the ordinary multi-sample Metal\n    * derivative limitation does not apply. Keep the same quad and discard\n    * workarounds as the joint compiler, before final resource lowering. */\n   if (nir->info.fs.needs_full_quad_helper_invocations ||\n       nir->info.fs.needs_coarse_quad_helper_invocations)\n      NIR_PASS(_, nir, msl_disable_triangle_merge);\n   kk_finish_fs_invocation_workarounds(dev, nir);\n   kk_finish_nir(dev, nir, info->robustness, info->set_layout_count,\n"));
+}

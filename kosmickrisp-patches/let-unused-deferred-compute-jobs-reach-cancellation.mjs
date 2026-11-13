@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: MIT
+// Let unused deferred compute jobs reach cancellation
+export const id = "let-unused-deferred-compute-jobs-reach-cancellation";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/vulkan/kk_async_compute.c", source => source
+    .replace("   struct kk_async_compute_owner *owner;\n   VkResult (*compile)(struct kk_device *, struct kk_shader *);\n   void *task;\n   struct vk_pipeline_cache_object *cache_object;\n   struct blob cache_blob;\n   struct kk_perf_compile_scope scope;\n",
+      () => "   struct kk_async_compute_owner *owner;\n   VkResult (*compile)(struct kk_device *, struct kk_shader *);\n   void *task;\n   /* Borrowed from shader: destruction joins task retirement before freeing\n    * the shader or its embedded cache object. An owning reference here would\n    * prevent that destruction from cancelling an otherwise unneeded job. */\n   struct vk_pipeline_cache_object *cache_object;\n   struct blob cache_blob;\n   struct kk_perf_compile_scope scope;\n")
+    .replace("   /* Release publication covers the native handle and all function metadata. */\n   p_atomic_set(&job->ready, true);\n   struct vk_pipeline_cache_object *object = job->cache_object;\n   pthread_mutex_unlock(&job->mutex);\n   if (job->dev->perf) {\n      job->scope.cancelled = p_atomic_read(&job->cancel_requested);\n",
+      () => "   /* Release publication covers the native handle and all function metadata. */\n   p_atomic_set(&job->ready, true);\n   struct vk_pipeline_cache_object *object = job->cache_object;\n   job->cache_object = NULL;\n   pthread_mutex_unlock(&job->mutex);\n   if (job->dev->perf) {\n      job->scope.cancelled = p_atomic_read(&job->cancel_requested);\n")
+    .replace("   pthread_mutex_unlock(&owner->mutex);\n   while (job) {\n      struct kk_async_compute *next = job->next;\n      if (job->cache_object)\n         vk_pipeline_cache_object_unref(&dev->vk, job->cache_object);\n      job_unref(job);\n      job = next;\n   }\n",
+      () => "   pthread_mutex_unlock(&owner->mutex);\n   while (job) {\n      struct kk_async_compute *next = job->next;\n      job_unref(job);\n      job = next;\n   }\n")
+    .replace("   if (!ready && !job->cache_object && !job->dev->vk.disable_internal_cache) {\n      struct vk_pipeline_cache_object *object = &shader->vk.pipeline.cache_obj;\n      if (object->ops && object->key_data)\n         job->cache_object = vk_pipeline_cache_object_ref(object);\n   }\n   bool success = ready && job->result == VK_SUCCESS;\n   pthread_mutex_unlock(&job->mutex);\n",
+      () => "   if (!ready && !job->cache_object && !job->dev->vk.disable_internal_cache) {\n      struct vk_pipeline_cache_object *object = &shader->vk.pipeline.cache_obj;\n      if (object->ops && object->key_data)\n         job->cache_object = object;\n   }\n   bool success = ready && job->result == VK_SUCCESS;\n   pthread_mutex_unlock(&job->mutex);\n"));
+}

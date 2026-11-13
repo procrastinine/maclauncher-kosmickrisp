@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: MIT
+// Key Mesh shaders by polygon and line rasterization mode
+export const id = "key-mesh-shaders-by-polygon-and-line-rasterization";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/vulkan/kk_shader.c", source => source
+    .replace("   }\n\n   /* Serialized producer topology is pipeline state, including when the\n    * same shader body is reused by different raster classes. */\n   if (state && state->rs && state->ia) {\n      const uint32_t raster_key[] = {\n         state->ia->primitive_topology, state->rs->polygon_mode, state->rs->line.mode,\n         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE),\n",
+      () => "   }\n\n   /* Serialized producer topology is pipeline state, including when the\n    * same shader body is reused by different raster classes. Mesh pipelines\n    * have no input assembly, but their fragment variants follow the same\n    * polygon and line modes; a Mesh marker takes the topology's place. */\n   if (state && state->rs &&\n       (state->ia || (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT))) {\n      const uint32_t raster_key[] = {\n         state->ia->primitive_topology, state->rs->polygon_mode, state->rs->line.mode,\n         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE),\n")
+    .replace("   if (state && state->rs &&\n       (state->ia || (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT))) {\n      const uint32_t raster_key[] = {\n         state->ia->primitive_topology, state->rs->polygon_mode, state->rs->line.mode,\n         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE),\n         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE),\n      };\n",
+      () => "   if (state && state->rs &&\n       (state->ia || (state->shader_stages & VK_SHADER_STAGE_MESH_BIT_EXT))) {\n      const uint32_t raster_key[] = {\n         state->ia ? state->ia->primitive_topology : 0x4d455348u /* MESH */,\n         state->rs->polygon_mode, state->rs->line.mode,\n         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_POLYGON_MODE),\n         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_RS_LINE_MODE),\n      };\n"));
+}

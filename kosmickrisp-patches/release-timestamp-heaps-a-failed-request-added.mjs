@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Release timestamp heaps a failed request added
+export const id = "release-timestamp-heaps-a-failed-request-added";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/bridge/mtl_timestamp_arena.c", source => source
+    .replace("      return false;\n\n   simple_mtx_lock(&arena->lock);\n   /* A request beyond every heap the arena may still add fails without adding them. */\n   const bool fits =\n      !arena->units_per_heap ||\n      count - MIN2(count, arena->free_count) <=\n",
+      () => "      return false;\n\n   simple_mtx_lock(&arena->lock);\n   const uint32_t heaps_before = arena->heap_count;\n   /* The first heap settles the heap size. A request beyond every heap the\n    * arena may still add then fails without adding them. */\n   if (!arena->units_per_heap && arena->free_count < count)\n      add_heap(arena);\n   const bool fits =\n      !arena->units_per_heap ||\n      count - MIN2(count, arena->free_count) <=\n")
+    .replace("   if (!arena->units_per_heap && arena->free_count < count)\n      add_heap(arena);\n   const bool fits =\n      !arena->units_per_heap ||\n      count - MIN2(count, arena->free_count) <=\n         (uint64_t)(arena->max_heaps - arena->heap_count) * arena->units_per_heap;\n   while (fits && arena->free_count < count && add_heap(arena))\n",
+      () => "   if (!arena->units_per_heap && arena->free_count < count)\n      add_heap(arena);\n   const bool fits =\n      arena->units_per_heap &&\n      count - MIN2(count, arena->free_count) <=\n         (uint64_t)(arena->max_heaps - arena->heap_count) * arena->units_per_heap;\n   while (fits && arena->free_count < count && add_heap(arena))\n")
+    .replace("   if (taken) {\n      for (uint32_t i = 0; i < count; ++i)\n         units[i] = arena->free_units[--arena->free_count];\n   }\n   simple_mtx_unlock(&arena->lock);\n   return taken;\n",
+      () => "   if (taken) {\n      for (uint32_t i = 0; i < count; ++i)\n         units[i] = arena->free_units[--arena->free_count];\n   } else {\n      /* Release the heaps this request added, so a request Metal cannot hold\n       * leaves the process's heaps to other users. Their units are the top of\n       * the free list. */\n      while (arena->heap_count > heaps_before) {\n         arena->free_count -= arena->units_per_heap;\n         mtl_release(arena->heaps[--arena->heap_count]);\n      }\n   }\n   simple_mtx_unlock(&arena->lock);\n   return taken;\n"));
+}

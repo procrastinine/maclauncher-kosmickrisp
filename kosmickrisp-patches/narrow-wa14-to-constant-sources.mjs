@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Narrow WA14 to constant sources
+export const id = "narrow-wa14-to-constant-sources";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/compiler/nir_to_msl.c", source => source
+    .replace("      alu_src_to_msl(ctx, instr, 1);                                           \\\n   } while (0)\n\nstatic void\nalu_fcmp_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,\n                const char *op)\n",
+      () => "      alu_src_to_msl(ctx, instr, 1);                                           \\\n   } while (0)\n\nstatic bool\nalu_has_const_src(const nir_alu_instr *instr, unsigned count)\n{\n   for (unsigned i = 0; i < count; i++)\n      if (nir_src_is_const(instr->src[i].src))\n         return true;\n   return false;\n}\n\nstatic void\nalu_fcmp_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,\n                const char *op)\n")
+    .replace("   case nir_op_fmul:\n      if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) && msl_has_buf0(ctx) &&\n          (nir_alu_instr_is_inf_preserve(instr) ||\n           nir_alu_instr_is_nan_preserve(instr))) {\n         if (ctx->buf0_guard) {\n            /* select() keeps the guard a single selection, without the\n             * branch a conditional expression produces. */\n",
+      () => "   case nir_op_fmul:\n      if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) && msl_has_buf0(ctx) &&\n          (nir_alu_instr_is_inf_preserve(instr) ||\n           nir_alu_instr_is_nan_preserve(instr)) && alu_has_const_src(instr, 2)) {\n         if (ctx->buf0_guard) {\n            /* select() keeps the guard a single selection, without the\n             * branch a conditional expression produces. */\n")
+    .replace("         bool guard = !(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&\n                      msl_has_buf0(ctx) &&\n                      (nir_alu_instr_is_inf_preserve(instr) ||\n                       nir_alu_instr_is_nan_preserve(instr));\n         if (guard && ctx->buf0_guard) {\n            P(ctx, \"select(\");\n            alu_src_to_msl(ctx, instr, 2);\n",
+      () => "         bool guard = !(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&\n                      msl_has_buf0(ctx) &&\n                      (nir_alu_instr_is_inf_preserve(instr) ||\n                       nir_alu_instr_is_nan_preserve(instr)) && alu_has_const_src(instr, 3);\n         if (guard && ctx->buf0_guard) {\n            P(ctx, \"select(\");\n            alu_src_to_msl(ctx, instr, 2);\n"));
+}

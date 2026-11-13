@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: MIT
+// Keep reason fields behind explicit diagnostic opt-in
+export const id = "keep-reason-fields-behind-explicit-diagnostic-opt-in";
+export function apply({edit, edits}) {
+  edit("src/kosmickrisp/vulkan/kk_perf.c", source => source
+    .replace("   for (unsigned i = 0; i < KK_PERF_METRIC_COUNT; i++)\n      fprintf(p->log, \"%s\\\"%s\\\":{\\\"count\\\":%\"PRIu64\",\\\"total_ms\\\":%.6f}\",\n              i ? \",\" : \"\", names[i], scope->count[i], scope->ns[i]/1e6);\n   fprintf(p->log, \"},\\\"build_id\\\":%\"PRIu64\",\\\"build_reasons\\\":{\"\n      \"\\\"cache-key-miss\\\":%s,\\\"archive-miss\\\":%u,\\\"archive-hit\\\":%u,\"\n      \"\\\"library-miss\\\":%u,\\\"library-hit\\\":%u,\\\"specialization\\\":%s,\\\"cancelled\\\":%s}}\\n\",\n",
+      () => "   for (unsigned i = 0; i < KK_PERF_METRIC_COUNT; i++)\n      fprintf(p->log, \"%s\\\"%s\\\":{\\\"count\\\":%\"PRIu64\",\\\"total_ms\\\":%.6f}\",\n              i ? \",\" : \"\", names[i], scope->count[i], scope->ns[i]/1e6);\n   if (p->build_reasons)\n   fprintf(p->log, \"},\\\"build_id\\\":%\"PRIu64\",\\\"build_reasons\\\":{\"\n      \"\\\"cache-key-miss\\\":%s,\\\"archive-miss\\\":%u,\\\"archive-hit\\\":%u,\"\n      \"\\\"library-miss\\\":%u,\\\"library-hit\\\":%u,\\\"specialization\\\":%s,\\\"cancelled\\\":%s}}\\n\",\n")
+    .replace("      scope->build_id, binary ? \"false\" : \"true\", scope->archive_misses,\n      scope->archive_hits, scope->library_misses, scope->library_hits,\n      scope->specialized ? \"true\" : \"false\", scope->cancelled ? \"true\" : \"false\");\n   fflush(p->log);\n   pthread_mutex_unlock(&p->mutex);\n}\n",
+      () => "      scope->build_id, binary ? \"false\" : \"true\", scope->archive_misses,\n      scope->archive_hits, scope->library_misses, scope->library_hits,\n      scope->specialized ? \"true\" : \"false\", scope->cancelled ? \"true\" : \"false\");\n   else\n      fprintf(p->log, \"}}\\n\");\n   fflush(p->log);\n   pthread_mutex_unlock(&p->mutex);\n}\n"));
+}
