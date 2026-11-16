@@ -5,7 +5,7 @@
 // See steamac-NOTICE.txt, steamac-LICENSE.txt and steamac-MIT.txt.
 // Hash all graphics state a pipeline's shaders are built from
 export const id = "hash-all-graphics-state-a-pipeline-s-shaders-are";
-export const sourceFiles = ['kosmickrisp-patches/steamac-NOTICE.txt', 'kosmickrisp-patches/steamac-LICENSE.txt', 'kosmickrisp-patches/steamac-MIT.txt'];
+export const sourceFiles = ['kosmickrisp-patches/steamac-licenses.mjs', 'kosmickrisp-patches/steamac-NOTICE.txt', 'kosmickrisp-patches/steamac-LICENSE.txt', 'kosmickrisp-patches/steamac-MIT.txt'];
 export function apply({edit, edits}) {
   edit("src/kosmickrisp/vulkan/kk_shader.c", source => source
     .replace("   uint8_t depth_input_att;\n   uint8_t stencil_input_att;\n};\n\nstatic void\n",

@@ -1,3 +1,4 @@
+import {collectSteamacLicenses} from './kosmickrisp-patches/steamac-licenses.mjs';
 import {collectSoftFp64License} from './kosmickrisp-patches/soft-fp64.mjs';
 import {mesaRevision} from './pins.mjs';
 import {addLicense, addLicenses} from './package-licences.mjs';
@@ -159,6 +160,7 @@ objcpp_link_args = ['-arch', '${cpu}', '-mmacosx-version-min=${pin.minimumMacOS}
         run(ninja, ['-C', build, '-j', String(jobs), 'src/kosmickrisp/vulkan/' + pin.library], {env: environment});
         addLicense(path.join(build, 'src/kosmickrisp'), 'Mesa', path.join(source, 'docs/license.rst'));
         addLicenses(path.join(build, 'src/kosmickrisp'), 'Sparse resources', sparseNotices);
+ collectSteamacLicenses(path.join(build, 'src/kosmickrisp'));
  collectSoftFp64License(path.join(build, 'src/kosmickrisp'));
         outputs.push(path.join(build, 'src/kosmickrisp/vulkan', pin.library));
     }
