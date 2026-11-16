@@ -30568,6 +30568,49 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "bound-timestamp-batches-and-coalesce-adjacent-resolves": {
+      "id": "bound-timestamp-batches-and-coalesce-adjacent-resolves",
+      "kind": "correction",
+      "title": "Bound timestamp batches and coalesce adjacent resolves",
+      "module": "bound-timestamp-batches-and-coalesce-adjacent-resolves.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "DXVK",
+        "vkd3d-proton"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.c",
+        "src/kosmickrisp/vulkan/kk_cmd_buffer.h",
+        "src/kosmickrisp/vulkan/kk_query_pool.c"
+      ],
+      "functions": [
+        "kk_cmd_count_ts_writes",
+        "kk_queue_timestamp_resolve",
+        "kk_mesh_split_command_buffer",
+        "kk_CmdWriteTimestamp2"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "correction",
+        "existingPaths": [
+          "precise and relaxed timestamp queries",
+          "native command-buffer splitting"
+        ],
+        "description": "Coalesces consecutive native sample and destination ranges; limits timestamp destinations outside render passes to 16384 per native command buffer through the existing ordered split. Reused samples retain individual destination resolves."
+      },
+      "upstream": {
+        "mergeRequests": [],
+        "retirementConditions": [
+          "Upstream batches adjacent counter-heap resolves and bounds native timestamp command storage with preserved query availability."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }

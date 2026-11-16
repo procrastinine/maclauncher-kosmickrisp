@@ -642,6 +642,7 @@ const modules = [
   './emit-deeply-nested-selections-as-guarded-siblings.mjs',
   './stop-compressed-copy-extents-at-the-destination.mjs',
   './escape-nir-source-object-indices-past-20-bits.mjs',
+  './bound-timestamp-batches-and-coalesce-adjacent-resolves.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));
