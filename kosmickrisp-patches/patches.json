@@ -30655,6 +30655,49 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "late-temporal-scenes": {
+      "id": "late-temporal-scenes",
+      "kind": "compatibility",
+      "title": "Forward late temporal scenes by feature and frame identity",
+      "module": "late-temporal-scenes.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "MacLauncher graphics pipeline",
+        "vkd3d-proton"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_temporal.h",
+        "src/kosmickrisp/vulkan/kk_temporal.m"
+      ],
+      "functions": [
+        "kk_temporal_unforwarded",
+        "kk_temporal_record_late",
+        "kk_temporal_encode_late"
+      ],
+      "dependencies": [
+        "forward-temporal-frames-to-maclauncher-s-graphics-pipeline"
+      ],
+      "behavior": {
+        "classification": "compatibility",
+        "existingPaths": [
+          "temporal scene forwarding",
+          "Metal swapchain presentation"
+        ],
+        "description": "Retain and forward camera and HUD image attachments supplied after a temporal evaluation in their command order, using the existing feature owner and frame identity."
+      },
+      "upstream": {
+        "mergeRequests": [],
+        "retirementConditions": [
+          "Retain and forward camera and HUD image attachments supplied after a temporal evaluation in their command order, using the existing feature owner and frame identity."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }
