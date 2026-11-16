@@ -30698,6 +30698,49 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "opaque-swapchain-composition": {
+      "id": "opaque-swapchain-composition",
+      "kind": "correction",
+      "title": "Publish opaque swapchain composition on the Metal layer",
+      "module": "opaque-swapchain-composition.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "MacLauncher graphics pipeline",
+        "vkd3d-proton"
+      ],
+      "files": [
+        "src/vulkan/wsi/wsi_common_metal.c",
+        "src/vulkan/wsi/wsi_common_metal_layer.h",
+        "src/vulkan/wsi/wsi_common_metal_layer.m"
+      ],
+      "functions": [
+        "wsi_metal_surface_create_swapchain",
+        "wsi_metal_layer_set_opaque_composition"
+      ],
+      "dependencies": [
+        "metal-display-timing"
+      ],
+      "behavior": {
+        "classification": "correction",
+        "existingPaths": [
+          "temporal scene forwarding",
+          "Metal swapchain presentation"
+        ],
+        "description": "Expose the swapchain composition state separately from the Metal layer opaque property while preserving opaque image blits and the Metal presentation workaround."
+      },
+      "upstream": {
+        "mergeRequests": [],
+        "retirementConditions": [
+          "Expose the swapchain composition state separately from the Metal layer opaque property while preserving opaque image blits and the Metal presentation workaround."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }

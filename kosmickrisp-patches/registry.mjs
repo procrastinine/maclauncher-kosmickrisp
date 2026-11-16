@@ -644,6 +644,7 @@ const modules = [
   './escape-nir-source-object-indices-past-20-bits.mjs',
   './bound-timestamp-batches-and-coalesce-adjacent-resolves.mjs',
   './give-independent-geometry-effects-one-ordinary-owner.mjs',
+  './opaque-swapchain-composition.mjs',
   './late-temporal-scenes.mjs',
 ];
 
