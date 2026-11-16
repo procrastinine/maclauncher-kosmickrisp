@@ -640,6 +640,7 @@ const modules = [
   './reuse-one-bounded-ray-tracing-launch-arena-per.mjs',
   './hash-all-graphics-state-a-pipeline-s-shaders-are.mjs',
   './emit-deeply-nested-selections-as-guarded-siblings.mjs',
+  './stop-compressed-copy-extents-at-the-destination.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));

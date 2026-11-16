@@ -30496,6 +30496,42 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "stop-compressed-copy-extents-at-the-destination": {
+      "id": "stop-compressed-copy-extents-at-the-destination",
+      "kind": "correction",
+      "title": "Stop compressed-copy extents at the destination mip edge",
+      "module": "stop-compressed-copy-extents-at-the-destination.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "DXVK",
+        "vkd3d-proton"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_cmd_copy.c"
+      ],
+      "functions": [],
+      "dependencies": [],
+      "behavior": {
+        "classification": "correction",
+        "existingPaths": [
+          "graphics and compute pipeline creation",
+          "Vulkan image copies"
+        ],
+        "description": "Stop compressed-copy extents at the destination mip edge. Adapted from steamac patch 0071."
+      },
+      "upstream": {
+        "mergeRequests": [],
+        "retirementConditions": [
+          "Stop compressed-copy extents at the destination mip edge in the selected upstream source."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }
