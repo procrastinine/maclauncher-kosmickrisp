@@ -30459,6 +30459,43 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "emit-deeply-nested-selections-as-guarded-siblings": {
+      "id": "emit-deeply-nested-selections-as-guarded-siblings",
+      "kind": "correction",
+      "title": "Emit deeply nested selections as guarded siblings",
+      "module": "emit-deeply-nested-selections-as-guarded-siblings.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "DXVK",
+        "vkd3d-proton"
+      ],
+      "files": [
+        "src/kosmickrisp/compiler/msl_private.h",
+        "src/kosmickrisp/compiler/nir_to_msl.c"
+      ],
+      "functions": [],
+      "dependencies": [],
+      "behavior": {
+        "classification": "correction",
+        "existingPaths": [
+          "graphics and compute pipeline creation",
+          "Vulkan image copies"
+        ],
+        "description": "Emit deeply nested selections as guarded siblings. Adapted from steamac patch 0090."
+      },
+      "upstream": {
+        "mergeRequests": [],
+        "retirementConditions": [
+          "Emit deeply nested selections as guarded siblings in the selected upstream source."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }

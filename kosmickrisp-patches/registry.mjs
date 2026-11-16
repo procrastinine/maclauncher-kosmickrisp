@@ -639,6 +639,7 @@ const modules = [
   './describe-kosmickrisp-archive-temporary-files.mjs',
   './reuse-one-bounded-ray-tracing-launch-arena-per.mjs',
   './hash-all-graphics-state-a-pipeline-s-shaders-are.mjs',
+  './emit-deeply-nested-selections-as-guarded-siblings.mjs',
 ];
 
 export const patches = await Promise.all(modules.map(file => import(file)));
