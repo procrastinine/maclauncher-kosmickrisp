@@ -30423,6 +30423,42 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "hash-all-graphics-state-a-pipeline-s-shaders-are": {
+      "id": "hash-all-graphics-state-a-pipeline-s-shaders-are",
+      "kind": "correction",
+      "title": "Hash all graphics state a pipeline's shaders are built from",
+      "module": "hash-all-graphics-state-a-pipeline-s-shaders-are.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "DXVK",
+        "vkd3d-proton"
+      ],
+      "files": [
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [],
+      "dependencies": [],
+      "behavior": {
+        "classification": "correction",
+        "existingPaths": [
+          "graphics and compute pipeline creation",
+          "Vulkan image copies"
+        ],
+        "description": "Hash all graphics state a pipeline's shaders are built from. Adapted from steamac patch 0054."
+      },
+      "upstream": {
+        "mergeRequests": [],
+        "retirementConditions": [
+          "Hash all graphics state a pipeline's shaders are built from in the selected upstream source."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }
