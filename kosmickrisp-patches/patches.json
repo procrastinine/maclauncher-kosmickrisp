@@ -30611,6 +30611,50 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "give-independent-geometry-effects-one-ordinary-owner": {
+      "id": "give-independent-geometry-effects-one-ordinary-owner",
+      "kind": "correction",
+      "title": "Give independent geometry effects one ordinary invocation owner",
+      "module": "give-independent-geometry-effects-one-ordinary-owner.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "DXVK",
+        "vkd3d-proton"
+      ],
+      "files": [
+        "src/poly/nir/poly_nir.h",
+        "src/poly/nir/poly_nir_lower_gs.c",
+        "src/kosmickrisp/vulkan/kk_shader.c"
+      ],
+      "functions": [
+        "poly_nir_lower_gs_capture",
+        "clone_without_side_effects",
+        "create_geometry_count_shader",
+        "kk_compile_shader"
+      ],
+      "dependencies": [],
+      "behavior": {
+        "classification": "correction",
+        "existingPaths": [
+          "Poly ordinary geometry shader lowering",
+          "capture/interlock geometry shader lowering",
+          "sparse buffer residency guards"
+        ],
+        "description": "Keeps output-independent application memory effects in the ordinary main invocation and removes them from count/raster clones. Capture/interlock retains its own original-invocation owner. Output-dependent atomics or mutable loads preserve the existing lowering."
+      },
+      "upstream": {
+        "mergeRequests": [],
+        "retirementConditions": [
+          "Equivalent single-owner geometry effects for independent outputs, including sparse guard cleanup and capture/interlock routing."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }
