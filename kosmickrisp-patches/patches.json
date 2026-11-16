@@ -30532,6 +30532,42 @@
         "gpuFixtures": [],
         "ctsGroups": []
       }
+    },
+    "escape-nir-source-object-indices-past-20-bits": {
+      "id": "escape-nir-source-object-indices-past-20-bits",
+      "kind": "correction",
+      "title": "Escape NIR source object indices past 20 bits",
+      "module": "escape-nir-source-object-indices-past-20-bits.mjs",
+      "extensions": [],
+      "featureBits": {},
+      "properties": {},
+      "consumers": [
+        "DXVK",
+        "vkd3d-proton"
+      ],
+      "files": [
+        "src/compiler/nir/nir_serialize.c"
+      ],
+      "functions": [],
+      "dependencies": [],
+      "behavior": {
+        "classification": "correction",
+        "existingPaths": [
+          "graphics and compute pipeline creation",
+          "Vulkan image copies"
+        ],
+        "description": "Escape NIR source object indices past 20 bits. Adapted from steamac patch 0080."
+      },
+      "upstream": {
+        "mergeRequests": [],
+        "retirementConditions": [
+          "Escape NIR source object indices past 20 bits in the selected upstream source."
+        ]
+      },
+      "verification": {
+        "gpuFixtures": [],
+        "ctsGroups": []
+      }
     }
   }
 }
