@@ -4,6 +4,12 @@ MacLauncher KosmicKrisp applies the following source adaptations to the Mesa rev
 
 | Module | Kind | Behavior | Existing paths |
 | --- | --- | --- | --- |
+| [give-independent-geometry-effects-one-ordinary-owner](give-independent-geometry-effects-one-ordinary-owner.mjs) | correction | Give independent geometry effects one ordinary invocation owner | modifying |
+| [bound-timestamp-batches-and-coalesce-adjacent-resolves](bound-timestamp-batches-and-coalesce-adjacent-resolves.mjs) | correction | Bound timestamp batches and coalesce adjacent resolves | modifying |
+| [escape-nir-source-object-indices-past-20-bits](escape-nir-source-object-indices-past-20-bits.mjs) | correction | Escape NIR source object indices past 20 bits | modifying |
+| [stop-compressed-copy-extents-at-the-destination](stop-compressed-copy-extents-at-the-destination.mjs) | correction | Stop compressed-copy extents at the destination mip edge | modifying |
+| [emit-deeply-nested-selections-as-guarded-siblings](emit-deeply-nested-selections-as-guarded-siblings.mjs) | correction | Emit deeply nested selections as guarded siblings | modifying |
+| [hash-all-graphics-state-a-pipeline-s-shaders-are](hash-all-graphics-state-a-pipeline-s-shaders-are.mjs) | correction | Hash all graphics state a pipeline's shaders are built from | modifying |
 | [reuse-one-bounded-ray-tracing-launch-arena-per](reuse-one-bounded-ray-tracing-launch-arena-per.mjs) | correction | Reuse one bounded ray-tracing launch arena per command buffer | modifying |
 | [describe-kosmickrisp-archive-temporary-files](describe-kosmickrisp-archive-temporary-files.mjs) | documentation | Describe KosmicKrisp archive temporary files | modifying |
 | [leave-no-pipeline-archive-temporaries-behind](leave-no-pipeline-archive-temporaries-behind.mjs) | correction | Leave no pipeline archive temporaries behind | modifying |
